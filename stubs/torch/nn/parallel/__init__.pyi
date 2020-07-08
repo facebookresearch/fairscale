@@ -1,0 +1,7 @@
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+
+from .data_parallel import DataParallel as DataParallel, data_parallel as data_parallel
+from .distributed import DistributedDataParallel as DistributedDataParallel
+from .parallel_apply import parallel_apply as parallel_apply
+from .replicate import replicate as replicate
+from .scatter_gather import gather as gather, scatter as scatter

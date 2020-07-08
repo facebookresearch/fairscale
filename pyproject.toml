@@ -1,0 +1,18 @@
+[build-system]
+requires = [
+    "setuptools >= 40.6.2",
+    "wheel >= 0.30.0"
+]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 120
+exclude = '''
+/(
+    \.git
+  | \.mypy_cache
+  | \.pytest_cache
+  | build
+  | stubs
+)/
+'''
