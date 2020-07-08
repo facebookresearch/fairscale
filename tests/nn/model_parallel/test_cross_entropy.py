@@ -13,18 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from commons import set_random_seed
-from commons import IdentityLayer
-from commons import print_separator
-from commons import initialize_distributed
-from mpu.cross_entropy import vocab_parallel_cross_entropy
-import mpu
-import torch.nn.functional as F
 import torch
-import random
-import sys
+import torch.nn.functional as F
 
-sys.path.append("../..")
+from fairscale.nn.model_parallel import initialize as mpu
+from fairscale.nn.model_parallel.cross_entropy import vocab_parallel_cross_entropy
+from fairscale.nn.model_parallel.mappings import scatter_to_model_parallel_region
+from tests.nn.model_parallel.commons import IdentityLayer, dist_init, set_random_seed, spawn_for_all_world_sizes
 
 
 def torch_cross_entropy(batch_size, seq_length, vocab_size, logits_scale, seed):
@@ -41,14 +36,15 @@ def mpu_cross_entropy(batch_size, seq_length, vocab_size, logits_scale, seed):
     set_random_seed(seed)
     identity = IdentityLayer((batch_size, seq_length, vocab_size), scale=logits_scale).cuda()
     logits = identity()
-    logits_parallel = mpu.scatter_to_model_parallel_region(logits)
+    logits_parallel = scatter_to_model_parallel_region(logits)
     target = torch.cuda.LongTensor(size=(batch_size, seq_length)).random_(0, vocab_size)
     loss = vocab_parallel_cross_entropy(logits_parallel, target).mean()
     loss.backward()
     return loss, identity.weight.grad
 
 
-def test_cross_entropy(model_parallel_size):
+def run_test_cross_entropy(rank, model_parallel_size):
+    dist_init(rank, model_parallel_size)
 
     if torch.distributed.get_rank() == 0:
         print("> testing cross entropy with model parallel size {} ...".format(model_parallel_size))
@@ -82,13 +78,5 @@ def test_cross_entropy(model_parallel_size):
         print(">> passed the test :-)")
 
 
-if __name__ == "__main__":
-
-    initialize_distributed()
-    world_size = torch.distributed.get_world_size()
-
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        print_separator("test cross entropy")
-        test_cross_entropy(model_parallel_size)
-        model_parallel_size *= 2
+def test_cross_entropy():
+    spawn_for_all_world_sizes(run_test_cross_entropy)

@@ -3,6 +3,7 @@ fairscale is a PyTorch extension library for high performance and large scale tr
 
 fairscale supports:
 * pipeline parallelism (fairscale.nn.Pipe)
+* tensor parallelism (fairscale.nn.model_parallel)
 * optimizer state sharding (fairscale.optim.oss)
 
 ## Examples

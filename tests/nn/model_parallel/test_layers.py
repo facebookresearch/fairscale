@@ -13,21 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from mpu import layers
-from commons import set_random_seed
-from commons import print_separator
-from commons import initialize_distributed
-import mpu
-from torch.nn.parameter import Parameter
-import torch.nn.init as init
 import torch
-import random
-import sys
+from torch import nn
+import torch.nn.init as init
+from torch.nn.parameter import Parameter
 
-sys.path.append("../..")
+from fairscale.nn.model_parallel import initialize as mpu
+from fairscale.nn.model_parallel import layers
+from fairscale.nn.pipe import Pipe
+from tests.nn.model_parallel.commons import dist_init, get_world_sizes, set_random_seed, spawn_for_all_world_sizes
 
 
-def test_parallel_embedding(model_parallel_size):
+def run_test_parallel_embedding(rank, model_parallel_size):
+    dist_init(rank, model_parallel_size)
 
     if torch.distributed.get_rank() == 0:
         print("> testing parallel embedding with model parallel size {} ...".format(model_parallel_size))
@@ -96,11 +94,12 @@ def test_parallel_embedding(model_parallel_size):
         print(">> passed the test :-)")
 
 
-def test_initialize_affine_weight(model_parallel_size):
+def run_test_initialize_affine_weight(rank, model_parallel_size):
+    dist_init(rank, model_parallel_size)
 
     mpu.initialize_model_parallel(model_parallel_size)
     if torch.distributed.get_rank() == 0:
-        print("> testing initialize_affine_weight with model parallel " "size: {}".format(model_parallel_size))
+        print("> testing initialize_affine_weight with model parallel size: {}".format(model_parallel_size))
     model_parallel_size = mpu.get_model_parallel_world_size()
 
     seed = 12345
@@ -126,8 +125,9 @@ def test_initialize_affine_weight(model_parallel_size):
     error = weight.sub(my_weight).abs().max()
     torch.distributed.barrier()
     print(
-        "   column parallel max error (should be zero) on global rank "
-        "{}: {}".format(torch.distributed.get_rank(), error)
+        "   column parallel max error (should be zero) on global rank {}: {}".format(
+            torch.distributed.get_rank(), error
+        )
     )
     assert error < 1.0e-6
 
@@ -136,7 +136,7 @@ def test_initialize_affine_weight(model_parallel_size):
     # ------------
     weight = torch.empty(output_size, input_size_coeff)
     set_random_seed(seed)
-    mpu.layers._initialize_affine_weight(weight, output_size, input_size, input_size_coeff, 1, torch.nn.init.normal_)
+    layers._initialize_affine_weight(weight, output_size, input_size, input_size_coeff, 1, torch.nn.init.normal_)
     # Target.
     set_random_seed(seed)
     master_weight = torch.empty(output_size, input_size)
@@ -148,8 +148,7 @@ def test_initialize_affine_weight(model_parallel_size):
     error = weight.sub(my_weight).abs().max()
     torch.distributed.barrier()
     print(
-        "   row parallel max error (should be zero) on global rank "
-        "{}: {}".format(torch.distributed.get_rank(), error)
+        "   row parallel max error (should be zero) on global rank {}: {}".format(torch.distributed.get_rank(), error)
     )
     assert error < 1.0e-6
 
@@ -171,11 +170,12 @@ class IdentityLayer2D(torch.nn.Module):
         return self.weight
 
 
-def test_column_parallel_linear(model_parallel_size):
+def run_test_column_parallel_linear(rank, model_parallel_size):
+    dist_init(rank, model_parallel_size)
 
     mpu.initialize_model_parallel(model_parallel_size)
     if torch.distributed.get_rank() == 0:
-        print("> testing ColumnParallelLinear with model parallel " "size: {}".format(model_parallel_size))
+        print("> testing ColumnParallelLinear with model parallel size: {}".format(model_parallel_size))
     model_parallel_size = mpu.get_model_parallel_world_size()
 
     seed = 12345
@@ -188,7 +188,7 @@ def test_column_parallel_linear(model_parallel_size):
 
     # Network
     identity_layer = IdentityLayer2D(batch_size, input_size).cuda()
-    linear_layer = mpu.ColumnParallelLinear(input_size, output_size, keep_master_weight_for_test=True).cuda()
+    linear_layer = layers.ColumnParallelLinear(input_size, output_size, keep_master_weight_for_test=True).cuda()
     loss_weight = torch.randn([batch_size, output_size]).cuda()
     # Forward
     input_ = identity_layer()
@@ -231,11 +231,12 @@ def test_column_parallel_linear(model_parallel_size):
         print(" >> passed the test :-)")
 
 
-def test_row_parallel_linear(model_parallel_size):
+def run_test_row_parallel_linear(rank, model_parallel_size):
+    dist_init(rank, model_parallel_size)
 
     mpu.initialize_model_parallel(model_parallel_size)
     if torch.distributed.get_rank() == 0:
-        print("> testing RowParallelLinear with model parallel " "size: {}".format(model_parallel_size))
+        print("> testing RowParallelLinear with model parallel size: {}".format(model_parallel_size))
     model_parallel_size = mpu.get_model_parallel_world_size()
 
     seed = 12345
@@ -248,7 +249,7 @@ def test_row_parallel_linear(model_parallel_size):
 
     # Network
     identity_layer = IdentityLayer2D(batch_size, input_size).cuda()
-    linear_layer = mpu.RowParallelLinear(input_size, output_size, keep_master_weight_for_test=True).cuda()
+    linear_layer = layers.RowParallelLinear(input_size, output_size, keep_master_weight_for_test=True).cuda()
     loss_weight = torch.randn([batch_size, output_size]).cuda()
     # Forward
     input_ = identity_layer()
@@ -290,206 +291,90 @@ def test_row_parallel_linear(model_parallel_size):
         print(" >> passed the test :-)")
 
 
-class IdentityLayer3D(torch.nn.Module):
-    def __init__(self, m, n, k):
-        super(IdentityLayer3D, self).__init__()
-        self.weight = Parameter(torch.Tensor(m, n, k))
-        torch.nn.init.xavier_normal_(self.weight)
+def run_test_pipe(rank, model_parallel_size):
+    pipe_world_size = 2
+    dist_init(rank, model_parallel_size)
 
-    def forward(self):
-        return self.weight
-
-
-def parallel_self_attention(
-    model_parallel_size,
-    num_att_heads_per_partition,
-    hidden_size_per_att_head,
-    dropout_prob,
-    batch_size,
-    sequence_length,
-):
     mpu.initialize_model_parallel(model_parallel_size)
+    if torch.distributed.get_rank() == 0:
+        print(
+            "> testing Sequential + Pipe with model parallel size: {}, pipe: {}".format(
+                model_parallel_size, pipe_world_size
+            )
+        )
     model_parallel_size = mpu.get_model_parallel_world_size()
+    chunk_size = 8
 
     seed = 12345
     set_random_seed(seed)
+    input_size_coeff = 13
+    input_size = input_size_coeff * model_parallel_size
+    output_size_coeff = 17
+    output_size = output_size_coeff * model_parallel_size
+    batch_size = 7 * chunk_size
 
-    num_att_heads = num_att_heads_per_partition * torch.distributed.get_world_size()
-    hidden_size = hidden_size_per_att_head * num_att_heads
+    identity = IdentityLayer2D(batch_size, input_size).cuda()
 
-    # Network
-    identity_layer = IdentityLayer3D(batch_size, sequence_length, hidden_size).cuda()
-    attention_layer = mpu.BertParallelSelfAttention(hidden_size, num_att_heads, dropout_prob).cuda()
-    loss_weight = torch.randn([batch_size, sequence_length, hidden_size]).cuda()
-    attention_mask = torch.randn([batch_size, 1, 1, sequence_length]).cuda()
-    # Forward
-    input_ = identity_layer()
-    output = attention_layer(input_, attention_mask)
-    loss = torch.mul(output, loss_weight).sum()
-    # Backward
-    loss.backward()
+    pipeline_devices = mpu.get_pipeline_parallel_group()
+    if pipe_world_size == 2 and len(pipeline_devices) == 1:
+        pipeline_devices.append(pipeline_devices[0] + model_parallel_size)
 
-    rank = mpu.get_model_parallel_rank()
-    mpu.destroy_model_parallel()
-    return rank, hidden_size, model_parallel_size, loss, attention_layer, identity_layer
-
-
-def test_parallel_self_attention(model_parallel_size):
-
-    if torch.distributed.get_rank() == 0:
-        print("> testing ParallelSelfAttention with model parallel " "size: {}".format(model_parallel_size))
-
-    num_att_heads_per_partition = 3
-    hidden_size_per_att_head = 7
-    dropout_prob = 0.0  # has to be zero
-    batch_size = 5
-    sequence_length = 13
-
-    rank_1, hideen_size_1, model_parallel_size_1, loss_1, attention_layer_1, identity_layer_1 = parallel_self_attention(
-        1, num_att_heads_per_partition, hidden_size_per_att_head, dropout_prob, batch_size, sequence_length
-    )
-
-    rank, hidden_size, model_parallel_size, loss, attention_layer, identity_layer = parallel_self_attention(
-        model_parallel_size,
-        num_att_heads_per_partition,
-        hidden_size_per_att_head,
-        dropout_prob,
-        batch_size,
-        sequence_length,
-    )
-    assert hideen_size_1 == hidden_size
-
-    error = loss_1.sub(loss).abs().max()
-    torch.distributed.barrier()
-    print("   loss error on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 5.0e-6
-
-    my_lin_grad_list = torch.split(
-        attention_layer_1.query_key_value.weight.grad, hidden_size // model_parallel_size, 0
-    )[rank::model_parallel_size]
-    my_lin_grad = torch.cat(my_lin_grad_list, dim=0)
-    error = my_lin_grad.sub(attention_layer.query_key_value.weight.grad).abs().max()
-    torch.distributed.barrier()
-    print("   weight gradient error on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 5.0e-6
-
-    error = identity_layer_1.weight.grad.sub(identity_layer.weight.grad).abs().max()
-    torch.distributed.barrier()
-    print("   input gradient error on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 5.0e-6
-
-    torch.distributed.barrier()
-    if torch.distributed.get_rank() == 0:
-        print(" >> passed the test :-)")
-
-
-def parallel_transformer(
-    model_parallel_size, num_att_heads_per_partition, hidden_size_per_att_head, batch_size, sequence_length
-):
-
-    mpu.initialize_model_parallel(model_parallel_size)
-    model_parallel_size = mpu.get_model_parallel_world_size()
-
-    seed = 12345
     set_random_seed(seed)
-
-    num_att_heads = num_att_heads_per_partition * torch.distributed.get_world_size()
-    hidden_size = hidden_size_per_att_head * num_att_heads
-    intermediate_size = 4 * hidden_size
-
-    # Network
-    identity_layer = IdentityLayer3D(batch_size, sequence_length, hidden_size).cuda()
-    transformer_layer = mpu.BertParallelTransformerLayer(
-        hidden_size, intermediate_size, num_att_heads, 0.0, 0.0, torch.nn.functional.relu, 1.0e-5
-    ).cuda()
-
-    loss_weight = torch.randn([batch_size, sequence_length, hidden_size]).cuda()
-    attention_mask = torch.randn([batch_size, 1, 1, sequence_length]).cuda()
-    # Forward
-    input_ = identity_layer()
-    output = transformer_layer(input_, attention_mask)
-    loss = torch.mul(output, loss_weight).sum()
-    # Backward
-    loss.backward()
-
-    rank = mpu.get_model_parallel_rank()
-    mpu.destroy_model_parallel()
-    return rank, hidden_size, model_parallel_size, loss, transformer_layer, identity_layer
-
-
-def test_parallel_transformer_layer(model_parallel_size):
-
-    if torch.distributed.get_rank() == 0:
-        print("> testing ParallelTransformerLayer with model parallel " "size: {}".format(model_parallel_size))
-
-    num_att_heads_per_partition = 3
-    hidden_size_per_att_head = 7
-    batch_size = 5
-    sequence_length = 13
-
-    rank_1, hidden_size_1, model_parallel_size_1, loss_1, transformer_layer_1, identity_layer_1 = parallel_transformer(
-        1, num_att_heads_per_partition, hidden_size_per_att_head, batch_size, sequence_length
+    model = nn.Sequential(
+        layers.ColumnParallelLinear(input_size, output_size, keep_master_weight_for_test=True, bias=False).cuda(),
+        nn.ReLU(),
+        layers.RowParallelLinear(output_size, input_size, keep_master_weight_for_test=True, bias=False).cuda(),
     )
 
-    rank, hidden_size, model_parallel_size, loss, transformer_layer, identity_layer = parallel_transformer(
-        model_parallel_size, num_att_heads_per_partition, hidden_size_per_att_head, batch_size, sequence_length
+    set_random_seed(seed)
+    reference = nn.Sequential(
+        nn.Linear(input_size, output_size, bias=False).cuda(),
+        nn.ReLU(),
+        nn.Linear(output_size, input_size, bias=False).cuda(),
     )
 
-    error = loss_1.sub(loss).abs().max()
+    reference[0].weight.data = model[0].master_weight.cuda()
+    reference[-1].weight.data = model[-1].master_weight.cuda()
+
+    loss_weight = torch.randn([batch_size, output_size]).cuda()
+    output = model(identity())
+    reference_output = reference(identity())
+
+    error = reference_output.sub(output).max()
     torch.distributed.barrier()
-    print("   loss error on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 5.0e-5, "error: {}".format(error)
+    assert error < 1.0e-6
 
-    error = identity_layer_1.weight.grad.sub(identity_layer.weight.grad).abs().max()
-    torch.distributed.barrier()
-    print("   input gradient error on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 5.0e-5, "error: {}".format(error)
+    if pipe_world_size == 2:
+        pipe_model = Pipe(model, [2, 1], devices=pipeline_devices, chunks=chunk_size)
+        torch.distributed.barrier()
+        pipe_output = pipe_model(identity())
 
-    torch.distributed.barrier()
-    if torch.distributed.get_rank() == 0:
-        print(" >> passed the test :-)")
+        error = reference_output.sub(pipe_output.cuda()).max()
+        torch.distributed.barrier()
+        assert error < 1.0e-6
 
 
-if __name__ == "__main__":
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
-    initialize_distributed()
-    world_size = torch.distributed.get_world_size()
+def test_affine_weight():
+    spawn_for_all_world_sizes(run_test_initialize_affine_weight)
 
-    print_separator("test initialize affine weight")
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        test_initialize_affine_weight(model_parallel_size)
-        model_parallel_size *= 2
 
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        print_separator("test parallel embedding")
-        test_parallel_embedding(model_parallel_size)
-        model_parallel_size *= 2
+def test_embedding():
+    spawn_for_all_world_sizes(run_test_parallel_embedding)
 
-    print_separator("test column-parallel linear")
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        test_column_parallel_linear(model_parallel_size)
-        model_parallel_size *= 2
 
-    print_separator("test row-parallel linear")
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        test_row_parallel_linear(model_parallel_size)
-        model_parallel_size *= 2
+def test_column_parallel():
+    spawn_for_all_world_sizes(run_test_column_parallel_linear)
 
-    print_separator("test parallel self-attention")
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        test_parallel_self_attention(model_parallel_size)
-        model_parallel_size *= 2
 
-    print_separator("test parallel transformer")
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        test_parallel_transformer_layer(model_parallel_size)
-        model_parallel_size *= 2
+def test_row_parallel():
+    spawn_for_all_world_sizes(run_test_row_parallel_linear)
+
+
+def test_pipe():
+    world_sizes = [x for x in get_world_sizes() if x <= torch.cuda.device_count() / 2]
+
+    spawn_for_all_world_sizes(run_test_pipe, world_sizes)

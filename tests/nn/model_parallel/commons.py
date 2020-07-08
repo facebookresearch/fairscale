@@ -13,13 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import argparse
 import os
 import random
+
 import numpy
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 
-import mpu
+from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
 
 
 class IdentityLayer(torch.nn.Module):
@@ -36,45 +38,21 @@ def set_random_seed(seed):
     random.seed(seed)
     numpy.random.seed(seed)
     torch.manual_seed(seed)
-    mpu.model_parallel_cuda_manual_seed(seed)
+    model_parallel_cuda_manual_seed(seed)
 
 
-def initialize_distributed(backend="nccl"):
-    """Initialize torch.distributed."""
-    # Get local rank in case it is provided.
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--local_rank", type=int, default=None, help="local rank passed from distributed launcher")
-    args = parser.parse_args()
-    local_rank = args.local_rank
-
-    # Get rank and world size.
-    rank = int(os.getenv("RANK", "0"))
-    world_size = int(os.getenv("WORLD_SIZE", "1"))
-
-    print(
-        "> initializing torch.distributed with local rank: {}, "
-        "rank: {}, world size: {}".format(local_rank, rank, world_size)
-    )
-
-    # Set the device id.
-    device = rank % torch.cuda.device_count()
-    if local_rank is not None:
-        device = local_rank
-    torch.cuda.set_device(device)
-
-    # Call the init process.
-    init_method = "tcp://"
-    master_ip = os.getenv("MASTER_ADDR", "localhost")
-    master_port = os.getenv("MASTER_PORT", "6000")
-    init_method += master_ip + ":" + master_port
-    torch.distributed.init_process_group(backend=backend, world_size=world_size, rank=rank, init_method=init_method)
+def dist_init(rank, world_size):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29501"
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
 
 
-def print_separator(message):
-    torch.distributed.barrier()
-    filler_len = (78 - len(message)) // 2
-    filler = "-" * filler_len
-    string = "\n" + filler + " {} ".format(message) + filler
-    if torch.distributed.get_rank() == 0:
-        print(string, flush=True)
-    torch.distributed.barrier()
+def get_world_sizes():
+    limit = torch.cuda.device_count()
+    return [x for x in [1, 2, 4, 8] if x <= limit]
+
+
+def spawn_for_all_world_sizes(test_func, world_sizes=get_world_sizes()):
+    for world_size in world_sizes:
+        mp.spawn(test_func, args=(world_size,), nprocs=world_size, join=True)
