@@ -21,12 +21,11 @@ import contextlib
 
 import torch
 from torch import _C
-from torch.cuda import _lazy_call, device as device_ctx_manager
+from torch.cuda import _lazy_call
+from torch.cuda import device as device_ctx_manager
 from torch.utils.checkpoint import detach_variable
 
-from .initialize import get_data_parallel_rank
-from .initialize import get_model_parallel_rank
-
+from .initialize import get_data_parallel_rank, get_model_parallel_rank
 
 # Default name for the model parallel rng tracker.
 _MODEL_PARALLEL_RNG_TRACKER_NAME = "model-parallel-rng"
@@ -35,7 +34,7 @@ _MODEL_PARALLEL_RNG_TRACKER_NAME = "model-parallel-rng"
 def _set_cuda_rng_state(new_state, device=-1):
     """Sets the random number generator state of the current GPU.
 
-    Argumentss:
+    Arguments:
         new_state (torch.ByteTensor): The desired state
     This function is adapted from PyTorch repo (torch.cuda.set_rng_state)
     with a single change: the input state is not cloned. Cloning caused
@@ -100,7 +99,11 @@ class CudaRNGStatesTracker:
         self.states_ = states
 
     def add(self, name, seed):
-        """Track the rng state."""
+        """Track the rng state.
+        Arguments:
+            name (str): The name of the seed
+            seed (int): The seed value
+        """
         # Check seed is not already used.
         if seed in self.seeds_:
             raise Exception("seed {} already exists".format(seed))
@@ -191,10 +194,10 @@ def model_parallel_cuda_manual_seed(seed):
 
 class CheckpointFunction(torch.autograd.Function):
     """This function is adapted from torch.utils.checkpoint with
-       two main changes:
-           1) torch.cuda.set_rng_state is replaced with `_set_cuda_rng_state`
-           2) the states in the model parallel tracker are also properly
-              tracked/set/reset.
+    two main changes:
+        1) torch.cuda.set_rng_state is replaced with `_set_cuda_rng_state`
+        2) the states in the model parallel tracker are also properly
+           tracked/set/reset.
     """
 
     @staticmethod
@@ -214,7 +217,7 @@ class CheckpointFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *args):
         if not torch.autograd._is_checkpoint_valid():
-            raise RuntimeError("Checkpointing is not compatible with .grad(), " "please use .backward() if possible")
+            raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
         inputs = ctx.saved_tensors
 
         # Store the current states.

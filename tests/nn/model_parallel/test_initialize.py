@@ -13,16 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from commons import print_separator
-from commons import initialize_distributed
-import mpu
 import torch
-import sys
 
-sys.path.append("../..")
+from fairscale.nn.model_parallel import initialize as mpu
+from tests.nn.model_parallel.commons import dist_init, spawn_for_all_world_sizes
 
 
-def test_initialize_model_parallel(model_parallel_size):
+def run_test_initialize_model_parallel(rank, model_parallel_size):
+    dist_init(rank, model_parallel_size)
 
     if torch.distributed.get_rank() == 0:
         print("> testing initialize_model_parallel with size {} ...".format(model_parallel_size))
@@ -58,7 +56,8 @@ def test_initialize_model_parallel(model_parallel_size):
         print(">> passed the test :-)")
 
 
-def test_get_model_parallel_src_rank(model_parallel_size_):
+def run_test_get_model_parallel_src_rank(rank, model_parallel_size_):
+    dist_init(rank, model_parallel_size_)
 
     if torch.distributed.get_rank() == 0:
         print("> testing get_model_parallel_src_rank with size {} ...".format(model_parallel_size_))
@@ -79,14 +78,53 @@ def test_get_model_parallel_src_rank(model_parallel_size_):
         print(">> passed the test :-)")
 
 
-if __name__ == "__main__":
+def test_initialize_model_parallel():
+    spawn_for_all_world_sizes(run_test_initialize_model_parallel)
 
-    initialize_distributed()
-    world_size = torch.distributed.get_world_size()
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        print_separator("test initialize model parallel")
-        test_initialize_model_parallel(model_parallel_size)
-        print_separator("test model parallel source rank")
-        test_get_model_parallel_src_rank(model_parallel_size)
-        model_parallel_size *= 2
+
+def test_get_model_parallel_src_rank():
+    spawn_for_all_world_sizes(run_test_get_model_parallel_src_rank)
+
+
+def test_adjacency(monkeypatch):
+
+    new_groups = []
+
+    data_parallel_size = 32
+    pipeline_length = 8
+    model_parallel_size = 4
+
+    class MockDistribued:
+        def get_rank(self):
+            return 0
+
+        def is_initialized(self):
+            return True
+
+        def get_world_size(self):
+            return data_parallel_size * pipeline_length * model_parallel_size
+
+        def new_group(self, args):
+            new_groups.append(args.copy())
+            return ()
+
+    monkeypatch.setattr(torch, "distributed", MockDistribued())
+
+    mpu.initialize_model_parallel(model_parallel_size, pipeline_length)
+
+    from collections import defaultdict
+
+    buckets = defaultdict(list)
+
+    for group in new_groups:
+        buckets[len(group)].append(group)
+
+    assert sorted(list(buckets.keys())) == [model_parallel_size, data_parallel_size]
+
+    assert len(buckets[model_parallel_size]) == pipeline_length * data_parallel_size
+    assert len(buckets[data_parallel_size]) == model_parallel_size * pipeline_length
+
+    # Check that model_parallel groups are contiguous
+    for group in buckets[model_parallel_size]:
+        assert sorted(group) == group
+        assert list(range(group[0], group[-1] + 1)) == group

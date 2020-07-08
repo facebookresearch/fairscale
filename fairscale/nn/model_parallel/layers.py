@@ -18,25 +18,19 @@
 # repo: https://github.com/pytorch/pytorch
 
 
-import math
-
 import torch
 import torch.nn.functional as F
 import torch.nn.init as init
 from torch.nn.parameter import Parameter
 
-from apex.normalization.fused_layer_norm import FusedLayerNorm as LayerNorm
-
-from .initialize import get_model_parallel_rank
-from .initialize import get_model_parallel_world_size
-from .mappings import copy_to_model_parallel_region
-from .mappings import gather_from_model_parallel_region
-from .mappings import reduce_from_model_parallel_region
-from .mappings import scatter_to_model_parallel_region
-from .random import get_cuda_rng_tracker
-from .utils import divide
-from .utils import split_tensor_along_last_dim
-from .utils import VocabUtility
+from .initialize import get_model_parallel_rank, get_model_parallel_world_size
+from .mappings import (
+    copy_to_model_parallel_region,
+    gather_from_model_parallel_region,
+    reduce_from_model_parallel_region,
+    scatter_to_model_parallel_region,
+)
+from .utils import VocabUtility, divide_and_check_no_remainder
 
 
 def _initialize_affine_weight(
@@ -71,7 +65,7 @@ def _initialize_affine_weight(
     init_method(master_weight)
 
     # Split and copy
-    per_partition_per_stride_size = divide(per_partition_size, stride)
+    per_partition_per_stride_size = divide_and_check_no_remainder(per_partition_size, stride)
     weight_list = torch.split(master_weight, per_partition_per_stride_size, dim=partition_dim)
     rank = get_model_parallel_rank()
     my_weight_list = weight_list[rank::world_size]
@@ -169,7 +163,7 @@ class ParallelEmbedding(torch.nn.Module):
         self._weight = None
         # Divide the weight matrix along the embedding dimension.
         world_size = get_model_parallel_world_size()
-        self.embedding_dim_per_partition = divide(self.embedding_dim, world_size)
+        self.embedding_dim_per_partition = divide_and_check_no_remainder(self.embedding_dim, world_size)
 
         # Allocate weights.
         self.weight = Parameter(torch.Tensor(self.num_embeddings, self.embedding_dim_per_partition))
@@ -239,7 +233,7 @@ class ColumnParallelLinear(torch.nn.Module):
         self.gather_output = gather_output
         # Divide the weight matrix along the last dimension.
         world_size = get_model_parallel_world_size()
-        self.output_size_per_partition = divide(output_size, world_size)
+        self.output_size_per_partition = divide_and_check_no_remainder(output_size, world_size)
 
         # Parameters.
         # Note: torch.nn.functional.linear performs XA^T + b and as a result
@@ -326,7 +320,7 @@ class RowParallelLinear(torch.nn.Module):
         self.input_is_parallel = input_is_parallel
         # Divide the weight matrix along the last dimension.
         world_size = get_model_parallel_world_size()
-        self.input_size_per_partition = divide(input_size, world_size)
+        self.input_size_per_partition = divide_and_check_no_remainder(input_size, world_size)
 
         # Parameters.
         # Note: torch.nn.functional.linear performs XA^T + b and as a result

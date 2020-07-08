@@ -13,16 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from commons import print_separator
-from commons import initialize_distributed
-import mpu
 import torch
-import sys
 
-sys.path.append("../..")
+from fairscale.nn.model_parallel import initialize as mpu
+from fairscale.nn.model_parallel import random
+from fairscale.nn.model_parallel.random import get_cuda_rng_tracker, model_parallel_cuda_manual_seed
+from tests.nn.model_parallel.commons import dist_init, spawn_for_all_world_sizes
 
 
-def test_set_cuda_rng_state(model_parallel_size):
+def run_test_set_cuda_rng_state(rank, model_parallel_size):
+    dist_init(rank, model_parallel_size)
 
     if torch.distributed.get_rank() == 0:
         print("> testing set_rng_state with size {} ...".format(model_parallel_size))
@@ -58,10 +58,10 @@ def test_set_cuda_rng_state(model_parallel_size):
     assert max_diff > 0
 
     # Reset the rng state and do the same stuff.
-    mpu.random._set_cuda_rng_state(rng_state)
+    random._set_cuda_rng_state(rng_state)
     for _ in range(5):
         torch.randn(size, out=tensor)
-    mpu.random._set_cuda_rng_state(rng_state)
+    random._set_cuda_rng_state(rng_state)
     for _ in range(5):
         torch.randn(size, out=tensor)
     result_2 = tensor.clone()
@@ -69,8 +69,9 @@ def test_set_cuda_rng_state(model_parallel_size):
     # Results should be the same
     error = result_2.sub(result_1).abs().max()
     print(
-        "   max error in generated tensors (should be zero) on "
-        "global rank {}: {}".format(torch.distributed.get_rank(), error)
+        "   max error in generated tensors (should be zero) on global rank {}: {}".format(
+            torch.distributed.get_rank(), error
+        )
     )
     assert error < 1.0e-6
 
@@ -89,7 +90,8 @@ def test_set_cuda_rng_state(model_parallel_size):
         print(">> passed the test :-)")
 
 
-def test_cuda_rng_tracker(model_parallel_size):
+def run_test_cuda_rng_tracker(rank, model_parallel_size):
+    dist_init(rank, model_parallel_size)
 
     if torch.distributed.get_rank() == 0:
         print("> testing cuda rng tracker with size {} ...".format(model_parallel_size))
@@ -119,40 +121,42 @@ def test_cuda_rng_tracker(model_parallel_size):
     # Now if we interleave seed_1 and seed_2,
     # we should still get the same tensors
     torch.cuda.manual_seed(seed_1)
-    mpu.get_cuda_rng_tracker().add("test", seed_2)
+    get_cuda_rng_tracker().add("test", seed_2)
 
     torch.randn(size, out=tensor)
     result_11 = tensor.clone()
 
-    with mpu.get_cuda_rng_tracker().fork("test"):
+    with get_cuda_rng_tracker().fork("test"):
         torch.randn(size, out=tensor)
         result_21 = tensor.clone()
 
     torch.randn(size, out=tensor)
     result_12 = tensor.clone()
 
-    with mpu.get_cuda_rng_tracker().fork("test"):
+    with get_cuda_rng_tracker().fork("test"):
         torch.randn(size, out=tensor)
         result_22 = tensor.clone()
 
     diff = result_11.sub(result_21).abs().max()
     diff = min(diff, result_12.sub(result_22).abs().max())
     print(
-        "   max diff in generated tensors (should be non-zero) on "
-        "global rank {}: {}".format(torch.distributed.get_rank(), diff)
+        "   max diff in generated tensors (should be non-zero) on global rank {}: {}".format(
+            torch.distributed.get_rank(), diff
+        )
     )
     assert diff > 1.0e-6
     error = max(result_11.sub(target_11).abs().max(), result_12.sub(target_12).abs().max())
     error = max(error, result_21.sub(target_21).abs().max())
     error = max(error, result_22.sub(target_22).abs().max())
     print(
-        "   max error in generated tensors (should be zero) on "
-        "global rank {}: {}".format(torch.distributed.get_rank(), error)
+        "   max error in generated tensors (should be zero) on global rank {}: {}".format(
+            torch.distributed.get_rank(), error
+        )
     )
     assert error < 1.0e-6
 
     # Reset the tracker
-    mpu.get_cuda_rng_tracker().reset()
+    get_cuda_rng_tracker().reset()
 
     # Reset groups
     mpu.destroy_model_parallel()
@@ -162,7 +166,8 @@ def test_cuda_rng_tracker(model_parallel_size):
         print(">> passed the test :-)")
 
 
-def test_model_parallel_cuda_manual_seed(model_parallel_size):
+def run_test_model_parallel_cuda_manual_seed(rank, model_parallel_size):
+    dist_init(rank, model_parallel_size)
 
     if torch.distributed.get_rank() == 0:
         print("> testing model parallel cuda manual seed with size {} ...".format(model_parallel_size))
@@ -170,13 +175,13 @@ def test_model_parallel_cuda_manual_seed(model_parallel_size):
     mpu.initialize_model_parallel(model_parallel_size)
     model_parallel_size = mpu.get_model_parallel_world_size()
 
-    mpu.model_parallel_cuda_manual_seed(12345)
+    model_parallel_cuda_manual_seed(12345)
     assert torch.cuda.initial_seed() == 12345
-    with mpu.get_cuda_rng_tracker().fork():
+    with get_cuda_rng_tracker().fork():
         assert torch.cuda.initial_seed() == (12345 + 2718 + mpu.get_model_parallel_rank())
 
     # Reset the tracker
-    mpu.get_cuda_rng_tracker().reset()
+    get_cuda_rng_tracker().reset()
 
     # Reset groups
     mpu.destroy_model_parallel()
@@ -186,25 +191,13 @@ def test_model_parallel_cuda_manual_seed(model_parallel_size):
         print(">> passed the test :-)")
 
 
-if __name__ == "__main__":
+def test_set_cuda_rng_state():
+    spawn_for_all_world_sizes(run_test_set_cuda_rng_state)
 
-    initialize_distributed()
-    world_size = torch.distributed.get_world_size()
 
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        print_separator("test set rng state")
-        test_set_cuda_rng_state(model_parallel_size)
-        model_parallel_size *= 2
+def test_cuda_rng_tracker():
+    spawn_for_all_world_sizes(run_test_cuda_rng_tracker)
 
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        print_separator("test cuda rng tracker")
-        test_cuda_rng_tracker(model_parallel_size)
-        model_parallel_size *= 2
 
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
-        print_separator("test model parallel cuda manual seed")
-        test_model_parallel_cuda_manual_seed(model_parallel_size)
-        model_parallel_size *= 2
+def test_model_parallel_cuda_manual_seed():
+    spawn_for_all_world_sizes(run_test_model_parallel_cuda_manual_seed)
