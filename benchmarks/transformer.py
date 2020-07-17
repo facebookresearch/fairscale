@@ -5,6 +5,7 @@ import time
 
 import torch
 import torch.nn as nn
+from torch.optim.adam import Adam
 import torchtext
 from torchtext.data.utils import get_tokenizer
 
@@ -123,8 +124,8 @@ def make_model(device, ntokens):
     model = TransformerLMSequntial(ntokens, ninp, nhead, nhid, dropout, initrange).to(device)
 
     criterion = nn.CrossEntropyLoss()
-    lr = 1.0  # learning rate
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    lr = 0.01  # learning rate
+    optimizer = Adam(model.parameters(), lr=lr)
 
     return model, criterion, optimizer
 
@@ -212,7 +213,7 @@ def benchmark_language_model(train_data, val_data, test_data, model, criterion, 
     if len(model.balance) == 4:
         # Assert that words per second is within 3 standard deviations of the average
         # of five golden runs
-        assert wps > 19779.5 - (3 * 167.81)
+        assert wps > 19276.1 - (3 * 88)
 
         print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
         print("Peak allocated bytes on cuda:1: {:1d}".format(torch.cuda.memory_stats(1)["allocated_bytes.all.peak"]))
@@ -220,11 +221,11 @@ def benchmark_language_model(train_data, val_data, test_data, model, criterion, 
         print("Peak allocated bytes on cuda:3: {:1d}".format(torch.cuda.memory_stats(3)["allocated_bytes.all.peak"]))
 
         # Assert that memory usage on each GPU is within 10% of golden run
-        # Right-hand-side is golden run KB * KB to bytes conversion * 110%
-        assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 346094 * 1024 * 1.1
-        assert torch.cuda.memory_stats(1)["allocated_bytes.all.peak"] < 1251 * 1024 * 1.1
-        assert torch.cuda.memory_stats(2)["allocated_bytes.all.peak"] < 2595 * 1024 * 1.1
-        assert torch.cuda.memory_stats(3)["allocated_bytes.all.peak"] < 174784 * 1024 * 1.1
+        # Right-hand-side is golden run bytes * 110%
+        assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 365915648 * 1.1
+        assert torch.cuda.memory_stats(1)["allocated_bytes.all.peak"] < 1281024 * 1.1
+        assert torch.cuda.memory_stats(2)["allocated_bytes.all.peak"] < 2788864 * 1.1
+        assert torch.cuda.memory_stats(3)["allocated_bytes.all.peak"] < 190724608 * 1.1
         print("No regression detected")
 
 
