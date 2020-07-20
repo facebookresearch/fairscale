@@ -20,7 +20,7 @@ model = fairscale.nn.Pipe(model, balance=[2, 2], devices=[0, 1], chunks=8)
 
 ## Requirements
 
-* PyTorch >= 1.4
+* PyTorch >= 1.5
 
 ## Installation
 
