@@ -128,6 +128,7 @@ class _GatherFromModelParallelRegion(torch.autograd.Function):
 # Helper functions.
 # -----------------
 
+
 def copy_to_model_parallel_region(input_):
     return _CopyToModelParallelRegion.apply(input_)
 
