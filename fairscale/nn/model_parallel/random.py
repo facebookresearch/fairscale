@@ -29,7 +29,7 @@ from .initialize import get_model_parallel_rank
 
 
 # Default name for the model parallel rng tracker.
-_MODEL_PARALLEL_RNG_TRACKER_NAME = 'model-parallel-rng'
+_MODEL_PARALLEL_RNG_TRACKER_NAME = "model-parallel-rng"
 
 
 def _set_cuda_rng_state(new_state, device=-1):
@@ -41,19 +41,20 @@ def _set_cuda_rng_state(new_state, device=-1):
     with a single change: the input state is not cloned. Cloning caused
     major performance issues for +4 GPU cases.
     """
-    if hasattr(_C, '_cuda_setRNGState') and callable(_C._cuda_setRNGState):
+    if hasattr(_C, "_cuda_setRNGState") and callable(_C._cuda_setRNGState):
         # older PyTorch
         def cb():
             with device_ctx_manager(device):
                 _C._cuda_setRNGState(new_state)
+
     else:
         # newer PyTorch
         if device == -1:
-            device = torch.device('cuda')
+            device = torch.device("cuda")
         elif isinstance(device, str):
             device = torch.device(device)
         elif isinstance(device, int):
-            device = torch.device('cuda', device)
+            device = torch.device("cuda", device)
 
         def cb():
             idx = device.index
@@ -102,11 +103,11 @@ class CudaRNGStatesTracker:
         """Track the rng state."""
         # Check seed is not already used.
         if seed in self.seeds_:
-            raise Exception('seed {} already exists'.format(seed))
+            raise Exception("seed {} already exists".format(seed))
         self.seeds_.add(seed)
         # Check that state is not already defined.
         if name in self.states_:
-            raise Exception('cuda rng state {} already exists'.format(name))
+            raise Exception("cuda rng state {} already exists".format(name))
         # Get the current rng state.
         orig_rng_state = torch.cuda.get_rng_state()
         # Set the new state and store it.
@@ -121,7 +122,7 @@ class CudaRNGStatesTracker:
         the original state."""
         # Check if we have added the state
         if name not in self.states_:
-            raise Exception('cuda rng state {} is not added'.format(name))
+            raise Exception("cuda rng state {} is not added".format(name))
         # Store current rng state.
         orig_cuda_rng_state = torch.cuda.get_rng_state()
         # Set rng state to the desired one
@@ -169,18 +170,23 @@ def model_parallel_cuda_manual_seed(seed):
     data_parallel_seed = seed
 
     if torch.distributed.get_rank() == 0:
-        print('> initializing model parallel cuda seeds on global rank {}, '
-              'model parallel rank {}, and data parallel rank {} with '
-              'model parallel seed: {} and data parallel seed: {}'.format(
-                  torch.distributed.get_rank(), get_model_parallel_rank(),
-                  get_data_parallel_rank(), model_parallel_seed,
-                  data_parallel_seed), flush=True)
+        print(
+            "> initializing model parallel cuda seeds on global rank {}, "
+            "model parallel rank {}, and data parallel rank {} with "
+            "model parallel seed: {} and data parallel seed: {}".format(
+                torch.distributed.get_rank(),
+                get_model_parallel_rank(),
+                get_data_parallel_rank(),
+                model_parallel_seed,
+                data_parallel_seed,
+            ),
+            flush=True,
+        )
     _CUDA_RNG_STATE_TRACKER.reset()
     # Set the default state.
     torch.cuda.manual_seed(data_parallel_seed)
     # and model parallel state.
-    _CUDA_RNG_STATE_TRACKER.add(_MODEL_PARALLEL_RNG_TRACKER_NAME,
-                                model_parallel_seed)
+    _CUDA_RNG_STATE_TRACKER.add(_MODEL_PARALLEL_RNG_TRACKER_NAME, model_parallel_seed)
 
 
 class CheckpointFunction(torch.autograd.Function):
@@ -190,6 +196,7 @@ class CheckpointFunction(torch.autograd.Function):
            2) the states in the model parallel tracker are also properly
               tracked/set/reset.
     """
+
     @staticmethod
     def forward(ctx, run_function, *args):
         ctx.run_function = run_function
@@ -207,8 +214,7 @@ class CheckpointFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *args):
         if not torch.autograd._is_checkpoint_valid():
-            raise RuntimeError("Checkpointing is not compatible with .grad(), "
-                               "please use .backward() if possible")
+            raise RuntimeError("Checkpointing is not compatible with .grad(), " "please use .backward() if possible")
         inputs = ctx.saved_tensors
 
         # Store the current states.
