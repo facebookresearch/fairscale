@@ -44,6 +44,7 @@ from .pooling import AdaptiveAvgPool1d as AdaptiveAvgPool1d, AdaptiveAvgPool2d a
 from .rnn import GRU as GRU, GRUCell as GRUCell, LSTM as LSTM, LSTMCell as LSTMCell, RNN as RNN, RNNBase as RNNBase, \
     RNNCell as RNNCell, RNNCellBase as RNNCellBase
 from .sparse import Embedding as Embedding, EmbeddingBag as EmbeddingBag
+from .transformer import TransformerEncoderLayer as TransformerEncoderLayer
 from .upsampling import Upsample as Upsample, UpsamplingBilinear2d as UpsamplingBilinear2d, \
     UpsamplingNearest2d as UpsamplingNearest2d
 
