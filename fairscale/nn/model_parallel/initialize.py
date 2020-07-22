@@ -16,7 +16,9 @@
 
 """Model and data parallel groups."""
 
-import numpy as np
+from typing import List
+
+import numpy as np  # type: ignore
 import torch
 
 from .utils import ensure_divisibility
@@ -29,7 +31,7 @@ _DATA_PARALLEL_GROUP = None
 _PIPELINE_PARALLEL_GROUP = None
 
 
-def initialize_model_parallel(model_parallel_size_, pipeline_length=1):
+def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 1) -> None:
     """
     Initialize model data parallel groups.
 
@@ -91,42 +93,42 @@ def initialize_model_parallel(model_parallel_size_, pipeline_length=1):
     _PIPELINE_PARALLEL_GROUP = groups[found[0], :, found[2]].tolist()
 
 
-def model_parallel_is_initialized():
+def model_parallel_is_initialized() -> bool:
     """Check if model and data parallel groups are initialized."""
     if _MODEL_PARALLEL_GROUP is None or _DATA_PARALLEL_GROUP is None or _PIPELINE_PARALLEL_GROUP is None:
         return False
     return True
 
 
-def get_model_parallel_group():
+def get_model_parallel_group() -> torch.distributed.ProcessGroup:
     """Get the model parallel group the caller rank belongs to."""
     assert _MODEL_PARALLEL_GROUP is not None, "model parallel group is not initialized"
     return _MODEL_PARALLEL_GROUP
 
 
-def get_data_parallel_group():
+def get_data_parallel_group() -> torch.distributed.ProcessGroup:
     """Get the data parallel group the caller rank belongs to."""
     assert _DATA_PARALLEL_GROUP is not None, "data parallel group is not initialized"
     return _DATA_PARALLEL_GROUP
 
 
-def get_pipeline_parallel_group():
+def get_pipeline_parallel_group() -> List[int]:
     """Get the pipeline parallel group the caller rank belongs to."""
     assert _PIPELINE_PARALLEL_GROUP is not None, "pipeline parallel group is not initialized"
     return _PIPELINE_PARALLEL_GROUP
 
 
-def get_model_parallel_world_size():
+def get_model_parallel_world_size() -> int:
     """Return world size for the model parallel group."""
     return torch.distributed.get_world_size(group=get_model_parallel_group())
 
 
-def get_model_parallel_rank():
+def get_model_parallel_rank() -> int:
     """Return my rank for the model parallel group."""
     return torch.distributed.get_rank(group=get_model_parallel_group())
 
 
-def get_model_parallel_src_rank():
+def get_model_parallel_src_rank() -> int:
     """Calculate the global rank corresponding to a local rank zero
     in the model parallel group."""
     global_rank = torch.distributed.get_rank()
@@ -134,19 +136,21 @@ def get_model_parallel_src_rank():
     return (global_rank // local_world_size) * local_world_size
 
 
-def get_data_parallel_world_size():
+def get_data_parallel_world_size() -> int:
     """Return world size for the data parallel group."""
     return torch.distributed.get_world_size(group=get_data_parallel_group())
 
 
-def get_data_parallel_rank():
+def get_data_parallel_rank() -> int:
     """Return my rank for the data parallel group."""
     return torch.distributed.get_rank(group=get_data_parallel_group())
 
 
-def destroy_model_parallel():
+def destroy_model_parallel() -> None:
     """Set the groups to none."""
     global _MODEL_PARALLEL_GROUP
     _MODEL_PARALLEL_GROUP = None
     global _DATA_PARALLEL_GROUP
     _DATA_PARALLEL_GROUP = None
+    global _PIPELINE_PARALLEL_GROUP
+    _PIPELINE_PARALLEL_GROUP = None

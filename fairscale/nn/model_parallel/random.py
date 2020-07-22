@@ -18,11 +18,10 @@
 # repo: https://github.com/pytorch/pytorch
 
 import contextlib
+from typing import Dict, Iterator, Set, Union
 
 import torch
-from torch import _C
 from torch.cuda import _lazy_call
-from torch.cuda import device as device_ctx_manager
 from torch.utils.checkpoint import detach_variable
 
 from .initialize import get_data_parallel_rank, get_model_parallel_rank
@@ -31,7 +30,7 @@ from .initialize import get_data_parallel_rank, get_model_parallel_rank
 _MODEL_PARALLEL_RNG_TRACKER_NAME = "model-parallel-rng"
 
 
-def _set_cuda_rng_state(new_state, device=-1):
+def _set_cuda_rng_state(new_state: torch.ByteTensor, device: Union[int, str, torch.device] = -1) -> None:
     """Sets the random number generator state of the current GPU.
 
     Arguments:
@@ -40,27 +39,19 @@ def _set_cuda_rng_state(new_state, device=-1):
     with a single change: the input state is not cloned. Cloning caused
     major performance issues for +4 GPU cases.
     """
-    if hasattr(_C, "_cuda_setRNGState") and callable(_C._cuda_setRNGState):
-        # older PyTorch
-        def cb():
-            with device_ctx_manager(device):
-                _C._cuda_setRNGState(new_state)
+    if device == -1:
+        device = torch.device("cuda")
+    elif isinstance(device, str):
+        device = torch.device(device)
+    elif isinstance(device, int):
+        device = torch.device("cuda", device)
 
-    else:
-        # newer PyTorch
-        if device == -1:
-            device = torch.device("cuda")
-        elif isinstance(device, str):
-            device = torch.device(device)
-        elif isinstance(device, int):
-            device = torch.device("cuda", device)
-
-        def cb():
-            idx = device.index
-            if idx is None:
-                idx = torch.cuda.current_device()
-            default_generator = torch.cuda.default_generators[idx]
-            default_generator.set_state(new_state)
+    def cb() -> None:
+        idx = device.index  # type: ignore
+        if idx is None:
+            idx = torch.cuda.current_device()
+        default_generator = torch.cuda.default_generators[idx]  # type: ignore
+        default_generator.set_state(new_state)
 
     _lazy_call(cb)
 
@@ -74,18 +65,18 @@ class CudaRNGStatesTracker:
     cuda state.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Map from a string name to the cuda rng state.
-        self.states_ = {}
+        self.states_: Dict[str, torch.ByteTensor] = {}
         # Seeds are just for book keeping and ensure no seed is set twice.
-        self.seeds_ = set()
+        self.seeds_: Set[int] = set()
 
-    def reset(self):
+    def reset(self) -> None:
         """Set to the initial state (no tracker)."""
         self.states_ = {}
         self.seeds_ = set()
 
-    def get_states(self):
+    def get_states(self) -> Dict[str, torch.ByteTensor]:
         """Get rng states. Copy the dictionary so we have direct
         pointers to the states, not just a pointer to the dictionary."""
         states = {}
@@ -93,12 +84,12 @@ class CudaRNGStatesTracker:
             states[name] = self.states_[name]
         return states
 
-    def set_states(self, states):
+    def set_states(self, states: Dict[str, torch.ByteTensor]) -> None:
         """Set the rng states. For efficiency purposes, we do not check
         the size of seed for compatibility."""
         self.states_ = states
 
-    def add(self, name, seed):
+    def add(self, name: str, seed: int) -> None:
         """Track the rng state.
         Arguments:
             name (str): The name of the seed
@@ -120,7 +111,7 @@ class CudaRNGStatesTracker:
         _set_cuda_rng_state(orig_rng_state)
 
     @contextlib.contextmanager
-    def fork(self, name=_MODEL_PARALLEL_RNG_TRACKER_NAME):
+    def fork(self, name: str = _MODEL_PARALLEL_RNG_TRACKER_NAME) -> Iterator[None]:
         """Fork the cuda rng state, perform operations, and exit with
         the original state."""
         # Check if we have added the state
@@ -144,12 +135,12 @@ class CudaRNGStatesTracker:
 _CUDA_RNG_STATE_TRACKER = CudaRNGStatesTracker()
 
 
-def get_cuda_rng_tracker():
+def get_cuda_rng_tracker() -> CudaRNGStatesTracker:
     """Get cuda rng tracker."""
     return _CUDA_RNG_STATE_TRACKER
 
 
-def model_parallel_cuda_manual_seed(seed):
+def model_parallel_cuda_manual_seed(seed: int) -> None:
     """Initialize model parallel cuda seed.
 
     This function should be called after the model parallel is
@@ -201,7 +192,7 @@ class CheckpointFunction(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, run_function, *args):
+    def forward(ctx, run_function, *args):  # type: ignore
         ctx.run_function = run_function
 
         # Copy the rng states.
@@ -215,7 +206,7 @@ class CheckpointFunction(torch.autograd.Function):
         return outputs
 
     @staticmethod
-    def backward(ctx, *args):
+    def backward(ctx, *args):  # type: ignore
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
         inputs = ctx.saved_tensors
@@ -246,7 +237,7 @@ class CheckpointFunction(torch.autograd.Function):
         return (None,) + tuple(inp.grad for inp in detached_inputs)
 
 
-def checkpoint(function, *args):
+def checkpoint(function, *args):  # type: ignore
     """Checkpoint a model or part of the model.
     This has been directly copied from torch.utils.checkpoint."""
     return CheckpointFunction.apply(function, *args)

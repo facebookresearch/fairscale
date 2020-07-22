@@ -19,7 +19,7 @@ from .initialize import get_model_parallel_group
 from .utils import split_tensor_along_last_dim
 
 
-def _reduce(input_):
+def _reduce(input_: torch.Tensor) -> torch.Tensor:
     """All-reduce the the input tensor across model parallel group."""
     group = get_model_parallel_group()
 
@@ -33,7 +33,7 @@ def _reduce(input_):
     return input_
 
 
-def _split(input_):
+def _split(input_: torch.Tensor) -> torch.Tensor:
     """Split the tensor along its last dimension and keep the
     corresponding slice."""
     group = get_model_parallel_group()
@@ -53,7 +53,7 @@ def _split(input_):
     return output
 
 
-def _gather(input_):
+def _gather(input_: torch.Tensor) -> torch.Tensor:
     """Gather tensors and concatinate along the last dimension."""
     group = get_model_parallel_group()
 
@@ -80,11 +80,11 @@ class _CopyToModelParallelRegion(torch.autograd.Function):
     """Pass the input to the model parallel region."""
 
     @staticmethod
-    def forward(ctx, input_):
+    def forward(ctx, input_):  # type: ignore
         return input_
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output):  # type: ignore
         return _reduce(grad_output)
 
 
@@ -92,11 +92,11 @@ class _ReduceFromModelParallelRegion(torch.autograd.Function):
     """All-redcue the input from the model parallel region."""
 
     @staticmethod
-    def forward(ctx, input_):
+    def forward(ctx, input_):  # type: ignore
         return _reduce(input_)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output):  # type: ignore
         return grad_output
 
 
@@ -104,11 +104,11 @@ class _ScatterToModelParallelRegion(torch.autograd.Function):
     """Split the input and keep only the corresponding chuck to the rank."""
 
     @staticmethod
-    def forward(ctx, input_):
+    def forward(ctx, input_):  # type: ignore
         return _split(input_)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output):  # type: ignore
         return _gather(grad_output)
 
 
@@ -116,11 +116,11 @@ class _GatherFromModelParallelRegion(torch.autograd.Function):
     """Gather the input from model parallel region and concatinate."""
 
     @staticmethod
-    def forward(ctx, input_):
+    def forward(ctx, input_):  # type: ignore
         return _gather(input_)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output):  # type: ignore
         return _split(grad_output)
 
 
@@ -129,17 +129,17 @@ class _GatherFromModelParallelRegion(torch.autograd.Function):
 # -----------------
 
 
-def copy_to_model_parallel_region(input_):
+def copy_to_model_parallel_region(input_: torch.Tensor) -> torch.Tensor:
     return _CopyToModelParallelRegion.apply(input_)
 
 
-def reduce_from_model_parallel_region(input_):
+def reduce_from_model_parallel_region(input_: torch.Tensor) -> torch.Tensor:
     return _ReduceFromModelParallelRegion.apply(input_)
 
 
-def scatter_to_model_parallel_region(input_):
+def scatter_to_model_parallel_region(input_: torch.Tensor) -> torch.Tensor:
     return _ScatterToModelParallelRegion.apply(input_)
 
 
-def gather_from_model_parallel_region(input_):
+def gather_from_model_parallel_region(input_: torch.Tensor) -> torch.Tensor:
     return _GatherFromModelParallelRegion.apply(input_)
