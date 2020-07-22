@@ -5,11 +5,11 @@ import time
 
 import torch
 import torch.nn as nn
-from torch.optim.adam import Adam
 import torchtext
 from torchtext.data.utils import get_tokenizer
 
 import fairscale.nn.pipe.pipe as pipe
+from fairscale.optim.adam import FusedAdamV1 as Adam
 
 
 class EmbeddingLayer(nn.Embedding):
