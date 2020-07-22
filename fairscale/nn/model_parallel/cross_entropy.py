@@ -22,7 +22,7 @@ from .utils import VocabUtility
 
 class _VocabParallelCrossEntropy(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, vocab_parallel_logits, target):
+    def forward(ctx, vocab_parallel_logits, target):  # type: ignore
 
         # Maximum value along vocab dimension across all GPUs.
         logits_max = torch.max(vocab_parallel_logits, dim=-1)[0]
@@ -75,7 +75,7 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
         return loss
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output):  # type: ignore
 
         # Retreive tensors from the forward path.
         softmax, target_mask, masked_target_1d = ctx.saved_tensors
@@ -96,6 +96,6 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
         return grad_input, None
 
 
-def vocab_parallel_cross_entropy(vocab_parallel_logits, target):
+def vocab_parallel_cross_entropy(vocab_parallel_logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Helper function for the cross entropy."""
     return _VocabParallelCrossEntropy.apply(vocab_parallel_logits, target)
