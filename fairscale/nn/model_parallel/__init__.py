@@ -1,3 +1,8 @@
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
+
 from .cross_entropy import vocab_parallel_cross_entropy
 from .initialize import (
     get_data_parallel_group,
