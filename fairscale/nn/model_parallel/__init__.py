@@ -5,6 +5,7 @@
 
 from .cross_entropy import vocab_parallel_cross_entropy
 from .initialize import (
+    destroy_model_parallel,
     get_data_parallel_group,
     get_data_parallel_rank,
     get_data_parallel_world_size,
@@ -12,6 +13,8 @@ from .initialize import (
     get_model_parallel_rank,
     get_model_parallel_src_rank,
     get_model_parallel_world_size,
+    get_pipeline_parallel_group,
+    get_pipeline_parallel_ranks,
     initialize_model_parallel,
 )
 from .layers import ColumnParallelLinear, RowParallelLinear, VocabParallelEmbedding

@@ -25,11 +25,12 @@ one of the most important feature of :mod:`torchpipe.skip`.
 The metaphor is inspired by Portal™ from Valve.
 
 """
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import torch
 from torch import Tensor
 
+from . import Namespace
 from ..copy import Context as CopyContext
 from ..copy import Copy
 from ..phony import get_phony
@@ -41,9 +42,16 @@ __all__: List[str] = []
 class Portal:
     """A portal for a tensor."""
 
-    def __init__(self, tensor: Optional[Tensor], tensor_life: int) -> None:
+    def __init__(self, tensor: Optional[Tensor], tensor_life: int, index: int) -> None:
         self.put_tensor(tensor, tensor_life)
         self.grad: Optional[Tensor] = None
+        self.__index = index
+        self.ns_name: Optional[Tuple[Namespace, str]]
+        self.pipeline: Any
+
+    @property
+    def index(self) -> int:
+        return self.__index
 
     def blue(self) -> Tensor:
         """Creates a :class:`PortalBlue` which hides the underlying tensor from
@@ -151,12 +159,17 @@ class Portal:
 
     def put_grad(self, grad: Tensor) -> None:
         """Stores a gradient into this portal."""
+        if hasattr(self, "pipeline"):
+            self.pipeline.send_portal_grad(self.ns_name, self.index, grad)
         self.grad = grad
 
     def use_grad(self) -> Tensor:
         """Retrieves and removes the underlying gradient. The gradient is
         always ephemeral.
         """
+        if self.grad is None and hasattr(self, "pipeline"):
+            self.grad = self.pipeline.recv_portal_grad(self.ns_name, self.index)
+
         if self.grad is None:
             raise RuntimeError("grad in portal has been removed or never set")
 

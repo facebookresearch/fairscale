@@ -204,7 +204,7 @@ class Skippable(nn.Module):
 
         # Load skip tensors that might be popped.
         poppable_tensors = {}
-        batch = Batch(input)
+        batch = Batch(input, skip_tracker.index)
         for ns, name in self.poppable():
             try:
                 poppable_tensors[name] = skip_tracker.load(batch, ns, name)
@@ -237,7 +237,7 @@ class Skippable(nn.Module):
             raise RuntimeError(f"{comma_names} must be popped but have not")
 
         # Save stashed skip tensors.
-        batch = Batch(output)
+        batch = Batch(output, skip_tracker.index)
         for ns, name in self.stashable():
             tensor = stashed_tensors[name]
             skip_tracker.save(batch, ns, name, tensor)

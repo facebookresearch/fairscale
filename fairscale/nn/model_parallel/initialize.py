@@ -35,6 +35,8 @@ _DATA_PARALLEL_GROUP = None
 # Pipeline parallel group that the current rank belongs to.
 _PIPELINE_PARALLEL_GROUP = None
 
+_PIPELINE_PARALLEL_RANKS = None
+
 
 def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 1) -> None:
     """
@@ -93,7 +95,15 @@ def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 
 
     global _PIPELINE_PARALLEL_GROUP
     assert _PIPELINE_PARALLEL_GROUP is None, "model parallel group is already initialized"
-    _PIPELINE_PARALLEL_GROUP = groups[found[0], :, found[2]].tolist()
+    global _PIPELINE_PARALLEL_RANKS
+    assert _PIPELINE_PARALLEL_RANKS is None, "model parallel group is already initialized"
+    for i in range(data_parallel_size):
+        for k in range(model_parallel_size):
+            ranks = groups[i, :, k].tolist()
+            group = torch.distributed.new_group(ranks)
+            if i == found[0] and k == found[2]:
+                _PIPELINE_PARALLEL_GROUP = group
+                _PIPELINE_PARALLEL_RANKS = ranks
 
 
 def model_parallel_is_initialized() -> bool:
@@ -115,10 +125,16 @@ def get_data_parallel_group() -> torch.distributed.ProcessGroup:
     return _DATA_PARALLEL_GROUP
 
 
-def get_pipeline_parallel_group() -> List[int]:
+def get_pipeline_parallel_group() -> torch.distributed.ProcessGroup:
     """Get the pipeline parallel group the caller rank belongs to."""
     assert _PIPELINE_PARALLEL_GROUP is not None, "pipeline parallel group is not initialized"
     return _PIPELINE_PARALLEL_GROUP
+
+
+def get_pipeline_parallel_ranks() -> List[int]:
+    """Get the pipeline parallel group the caller rank belongs to."""
+    assert _PIPELINE_PARALLEL_RANKS is not None, "pipeline parallel group is not initialized"
+    return _PIPELINE_PARALLEL_RANKS
 
 
 def get_model_parallel_world_size() -> int:
@@ -157,3 +173,6 @@ def destroy_model_parallel() -> None:
     _DATA_PARALLEL_GROUP = None
     global _PIPELINE_PARALLEL_GROUP
     _PIPELINE_PARALLEL_GROUP = None
+
+    global _PIPELINE_PARALLEL_RANKS
+    _PIPELINE_PARALLEL_RANKS = None

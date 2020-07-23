@@ -280,10 +280,14 @@ class ColumnParallelLinear(torch.nn.Module):
             return_master_weight=keep_master_weight_for_test,
         )
 
+    def get_master_weight(self) -> torch.Tensor:
+        return gather_from_model_parallel_region(self.weight.data.transpose(0, 1)).transpose_(0, 1)
+
     def forward(self, input_: torch.Tensor) -> torch.Tensor:  # type: ignore
         # Set up backprop all-reduce.
         input_parallel = copy_to_model_parallel_region(input_)
         # Matrix multiply.
+        # print(f"ColumnParallelLinear:\n{self.weight.data}\n*\n{input_parallel}")
         output_parallel = F.linear(input_parallel, self.weight, self.bias)
         if self.gather_output:
             # All-gather across the partitions.
@@ -364,6 +368,9 @@ class RowParallelLinear(torch.nn.Module):
             return_master_weight=keep_master_weight_for_test,
         )
 
+    def get_master_weight(self) -> torch.Tensor:
+        return gather_from_model_parallel_region(self.weight.data)
+
     def forward(self, input_: torch.Tensor) -> torch.Tensor:  # type:ignore
         # Set up backprop all-reduce.
         if self.input_is_parallel:
@@ -371,6 +378,8 @@ class RowParallelLinear(torch.nn.Module):
         else:
             input_parallel = scatter_to_model_parallel_region(input_)
         # Matrix multiply.
+        print(f"RowParallelLinear:{self.weight.size()}*{input_parallel.size()}")
+        print(f"RowParallelLinear:{self.weight.data.device}*{input_parallel.device}")
         output_parallel = F.linear(input_parallel, self.weight)
         # All-reduce across all the partitions.
         output_ = reduce_from_model_parallel_region(output_parallel)
