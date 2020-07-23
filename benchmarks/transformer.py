@@ -9,7 +9,7 @@ import torchtext
 from torchtext.data.utils import get_tokenizer
 
 import fairscale.nn.pipe.pipe as pipe
-from fairscale.optim.adam import FusedAdamV1 as Adam
+from fairscale.optim.adam import FusedAdamV2 as Adam
 
 
 class EmbeddingLayer(nn.Embedding):

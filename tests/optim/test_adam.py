@@ -6,7 +6,7 @@
 import pytest
 import torch
 
-from fairscale.optim.adam import FusedAdamV1 as Adam
+from fairscale.optim.adam import FusedAdamV2 as Adam
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 

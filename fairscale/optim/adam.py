@@ -1,10 +1,7 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
-#
-# This source code is licensed under the BSD license found in the
-# LICENSE file in the root directory of this source tree.
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
-from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
-
+from apex.multi_tensor_apply import multi_tensor_applier
+from apex.optimizers import FusedAdam
 import torch
 
 if TYPE_CHECKING:
@@ -12,71 +9,22 @@ if TYPE_CHECKING:
 else:
     _params_t = Any
 
-fused_adam_cuda: Any
 
-
-class FusedAdamV1(torch.optim.Optimizer):
+class FusedAdamV2(FusedAdam):
     state: dict
 
     """
-    Implements Adam algorithm. Currently GPU-only. Requires Apex to be installed via
-    ``python setup.py install --cuda_ext --cpp_ext``.
-    It has been proposed in `Adam: A Method for Stochastic Optimization`_.
     Compared to the original version in Apex, the fairseq version casts grads
     and params to FP32 internally to support ``--memory-efficient-fp16``.
-    Arguments:
-        params (iterable): iterable of parameters to optimize or dicts defining
-            parameter groups.
-        lr (float, optional): learning rate. (default: 1e-3)
-        betas (Tuple[float, float], optional): coefficients used for computing
-            running averages of gradient and its square. (default: (0.9, 0.999))
-        eps (float, optional): term added to the denominator to improve
-            numerical stability. (default: 1e-8)
-        weight_decay (float, optional): weight decay (L2 penalty) (default: 0)
-        amsgrad (boolean, optional): whether to use the AMSGrad variant of this
-            algorithm from the paper `On the Convergence of Adam and Beyond`_
-            (default: False) NOT SUPPORTED in FusedAdam!
-        eps_inside_sqrt (boolean, optional): in the 'update parameters' step,
-            adds eps to the bias-corrected second moment estimate before
-            evaluating square root instead of adding it to the square root of
-            second moment estimate as in the original paper. (default: False)
-    .. _Adam: A Method for Stochastic Optimization:
-        https://arxiv.org/abs/1412.6980
-    .. _On the Convergence of Adam and Beyond:
-        https://openreview.net/forum?id=ryQu7f-RZ
     """
 
-    def __init__(
-        self,
-        params: _params_t,
-        lr: Optional[float] = 1e-3,
-        bias_correction: Optional[bool] = True,
-        betas: Optional[Tuple[float, float]] = (0.9, 0.999),
-        eps: Optional[float] = 1e-8,
-        eps_inside_sqrt: Optional[bool] = False,
-        weight_decay: Optional[float] = 0.0,
-        max_grad_norm: Optional[float] = 0.0,
-        amsgrad: Optional[bool] = False,
-    ):
-        global fused_adam_cuda
-        import importlib
+    def __init__(self, *args: Optional[List], **kwargs: Optional[dict]):
+        super().__init__(*args, **kwargs)
+        if not hasattr(self, "multi_tensor_adam"):
+            raise Exception("Apex installation is outdated. Please install an updated version of apex.")
 
-        fused_adam_cuda = importlib.import_module("fused_adam_cuda")
+        property
 
-        if amsgrad:
-            raise RuntimeError("FusedAdam does not support the AMSGrad variant.")
-        defaults = {
-            "lr": lr,
-            "bias_correction": bias_correction,
-            "betas": betas,
-            "eps": eps,
-            "weight_decay": weight_decay,
-            "max_grad_norm": max_grad_norm,
-        }
-        super().__init__(params, defaults)
-        self.eps_mode = 0 if eps_inside_sqrt else 1
-
-    @property
     def supports_memory_efficient_fp16(self) -> bool:
         return True
 
@@ -84,72 +32,88 @@ class FusedAdamV1(torch.optim.Optimizer):
     def supports_flat_params(self) -> bool:
         return True
 
-    @property
-    def supports_step_with_scale(self) -> bool:
-        return True
-
     def step(self, closure: Optional[Callable[[], float]] = None, scale: Optional[float] = 1.0,) -> Optional[float]:
-        """Performs a single optimization step.
-        Arguments:
-            closure (callable, optional): A closure that reevaluates the model
-                and returns the loss.
-            scale (float, optional): factor to divide gradient tensor values
-                by before applying to weights. (default: 1)
-            output params (list of tensors, optional): A reduced precision copy
-                of the updated weights written out in addition to the regular
-                updated weights. Have to be of same type as gradients. (default: None)
-        """
+        """Performs a single optimization step."""
         loss = None
         if closure is not None:
             loss = closure()
 
         for group in self.param_groups:
-            bias_correction = 1 if group.get("bias_correction", 1) else 0
+            bias_correction = 1 if group["bias_correction"] else 0
+            beta1, beta2 = group["betas"]
+
+            # assume same step across group now to simplify things
+            # per parameter step can be easily support by making it tensor, or pass list into kernel
+            if "step" in group:
+                group["step"] += 1
+            else:
+                group["step"] = 1
+
+            # create lists for multi-tensor apply
+            g_16, p_16, orig_p_16, m_16, v_16 = [], [], [], [], []
+            g_32, p_32, m_32, v_32 = [], [], [], []
 
             for p in group["params"]:
-                # note: p.grad should not ever be set for correct
-                # operation of mixed precision optimizer that sometimes
-                # sends None gradients
                 if p.grad is None:
                     continue
-                grad = p.grad.data
-
-                p_data_fp32 = p.data.float()
+                if p.grad.data.is_sparse:
+                    raise RuntimeError(
+                        "FusedAdam does not support sparse gradients, " "please consider SparseAdam instead"
+                    )
 
                 state = self.state[p]
-
                 # State initialization
                 if len(state) == 0:
-                    state["step"] = 0
                     # Exponential moving average of gradient values
-                    state["exp_avg"] = torch.zeros_like(p_data_fp32)
+                    state["exp_avg"] = torch.zeros_like(p.data, dtype=torch.float)
                     # Exponential moving average of squared gradient values
-                    state["exp_avg_sq"] = torch.zeros_like(p_data_fp32)
+                    state["exp_avg_sq"] = torch.zeros_like(p.data, dtype=torch.float)
                 else:
-                    state["exp_avg"] = state["exp_avg"].to(p_data_fp32)
-                    state["exp_avg_sq"] = state["exp_avg_sq"].to(p_data_fp32)
+                    state["exp_avg"] = state["exp_avg"].to(device=p.data.device, dtype=torch.float)
+                    state["exp_avg_sq"] = state["exp_avg_sq"].to(device=p.data.device, dtype=torch.float)
 
-                exp_avg = state["exp_avg"]
-                exp_avg_sq = state["exp_avg_sq"]
-                beta1, beta2 = group["betas"]
+                if p.dtype == torch.float16:
+                    g_16.append(p.grad.data.float())
+                    p_16.append(p.data.float())
+                    orig_p_16.append(p.data)
+                    m_16.append(state["exp_avg"])
+                    v_16.append(state["exp_avg_sq"])
+                elif p.dtype == torch.float32:
+                    g_32.append(p.grad.data)
+                    p_32.append(p.data)
+                    m_32.append(state["exp_avg"])
+                    v_32.append(state["exp_avg_sq"])
+                else:
+                    raise RuntimeError("FusedAdam only support fp16 and fp32.")
 
-                state["step"] += 1
-
-                out_p = p.data
-                with torch.cuda.device(p.device):
-                    fused_adam_cuda.adam(
-                        p_data_fp32,
-                        out_p,
-                        exp_avg,
-                        exp_avg_sq,
-                        grad,
+            with torch.cuda.device(p.device):
+                if len(g_16) > 0:
+                    multi_tensor_applier(
+                        self.multi_tensor_adam,
+                        self._dummy_overflow_buf,
+                        [g_16, p_16, m_16, v_16],
                         group["lr"],
                         beta1,
                         beta2,
                         group["eps"],
-                        scale,
-                        state["step"],
-                        self.eps_mode,
+                        group["step"],
+                        self.adam_w_mode,
+                        bias_correction,
+                        group["weight_decay"],
+                    )
+                    for orig_p, p in zip(orig_p_16, p_16):
+                        orig_p.copy_(p.data)
+                if len(g_32) > 0:
+                    multi_tensor_applier(
+                        self.multi_tensor_adam,
+                        self._dummy_overflow_buf,
+                        [g_32, p_32, m_32, v_32],
+                        group["lr"],
+                        beta1,
+                        beta2,
+                        group["eps"],
+                        group["step"],
+                        self.adam_w_mode,
                         bias_correction,
                         group["weight_decay"],
                     )
