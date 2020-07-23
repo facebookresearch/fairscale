@@ -4,7 +4,4 @@ isort == 4.3.21
 mypy == 0.770
 pytest == 5.4.1
 torchtext == 0.6.0
-torch == 1.5.1
-# NOTE(msb) not a dependency but needed by torch
-numpy == 1.19.1
 pytorch-extension --global-option='--cpp_ext' --global-option='--cuda_ext'
