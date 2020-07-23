@@ -47,6 +47,12 @@ install_dep: &install_dep
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
 
+install_apex: &install_apex
+  - run:
+      name: Install Apex
+      command: |
+        pip install pytorch-extension --global-option='--cpp_ext' --global-option='--cuda_ext'
+
 install_repo: &install_repo
   - run:
       name: Install Repository
@@ -142,6 +148,8 @@ jobs:
 
       - <<: *install_dep
 
+      - <<: *install_apex
+
       - save_cache:
           paths:
             - ~/venv
@@ -174,6 +182,8 @@ jobs:
             - cache-key-gpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep
+
+      - <<: *install_apex
 
       - save_cache:
           paths:
