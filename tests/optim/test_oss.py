@@ -16,9 +16,7 @@ import torch.multiprocessing as mp
 
 import fairscale.optim as optim
 
-skip_if_no_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="cuda required"
-)
+skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 
 BACKEND = "nccl" if torch.cuda.is_available() else "gloo"
 DEVICE = torch.device("gpu") if torch.cuda.is_available() else torch.device("cpu")
@@ -161,9 +159,7 @@ def run_test_step_with_closure(rank, world_size, optimizer=None):
 @skip_if_no_cuda
 def test_step_with_closure():
     world_size = 2
-    mp.spawn(
-        run_test_step_with_closure, args=(world_size,), nprocs=world_size, join=True
-    )
+    mp.spawn(run_test_step_with_closure, args=(world_size,), nprocs=world_size, join=True)
 
 
 def run_test_sharding(rank, world_size):
@@ -181,7 +177,6 @@ def test_sharding():
 
 
 def run_test_collect_shards(rank, world_size, reference_rank):
-
     dist_init(rank, world_size)
 
     # Run a dummy step so that the optimizer state dict exists
@@ -189,9 +184,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     target = torch.rand((batch, target_width), device=DEVICE)
     inputs = torch.rand((batch, input_width), device=DEVICE)
 
-    model = torch.nn.Sequential(
-        torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)
-    )
+    model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
     loss_fn = torch.nn.L1Loss()
 
     # With SGD, Momentum is required to get a state to shard
@@ -209,9 +202,19 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     # Update the optimizer state on the reference rank
     optimizer.consolidate_state_dict(recipient_rank=reference_rank)
 
-    # Fetch the state on the reference rank, check that it has the correct size
+    # Fetch the state on the reference rank
+    # - check that it has the correct size
+    # - load it again
     if rank == reference_rank:
-        assert len(optimizer.global_state_dict) == world_size
+        optimizer_state_dict = optimizer.state_dict()
+        assert len(optimizer_state_dict["state"]) == world_size
+    else:
+        optimizer_state_dict = {}
+
+    optimizer_state_dict = optim.utils.broadcast_object(optimizer_state_dict, src_rank=reference_rank)
+
+    # Load the optimizer state dict
+    optimizer.load_state_dict(optimizer_state_dict)
 
 
 def test_collect_shards():
@@ -219,8 +222,5 @@ def test_collect_shards():
     reference_rank = 1
 
     mp.spawn(
-        run_test_collect_shards,
-        args=(world_size, reference_rank),
-        nprocs=world_size,
-        join=True,
+        run_test_collect_shards, args=(world_size, reference_rank), nprocs=world_size, join=True,
     )
