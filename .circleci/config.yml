@@ -47,11 +47,18 @@ install_dep: &install_dep
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
 
-install_repo: &install_repo
+install_repo_cpu: &install_repo_cpu
   - run:
       name: Install Repository
       command: |
         python setup.py build develop
+
+install_repo_gpu: &install_repo_gpu
+  - run:
+      name: Install Repository
+      command: |
+        export CUDA_HOME=/usr/local/cuda-10.1
+        python setup.py --fused-adam build develop
 
 run_unittests: &run_unittests
   - run:
@@ -97,7 +104,7 @@ jobs:
             - ~/venv
           key: cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo
+      - <<: *install_repo_cpu
 
       - run:
           name: Run Linter (isort)
@@ -147,7 +154,7 @@ jobs:
             - ~/venv
           key: cache-key-gpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo
+      - <<: *install_repo_gpu
 
       - <<: *run_unittests
 
@@ -180,7 +187,7 @@ jobs:
             - ~/venv
           key: cache-key-gpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo
+      - <<: *install_repo_gpu
 
       - <<: *run_transformer_benchmark
 
