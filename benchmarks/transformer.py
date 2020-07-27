@@ -12,8 +12,12 @@ import fairscale.nn.pipe.pipe as pipe
 
 try:
     from fairscale.optim.adam import Adam  # type: ignore
+
+    can_benchmark = True
 except ImportError:
     from torch.optim import Adam  # type: ignore
+
+    can_benchmark = False
 
 
 class EmbeddingLayer(nn.Embedding):
@@ -214,10 +218,10 @@ def benchmark_language_model(train_data, val_data, test_data, model, criterion, 
     )
     print("=" * 89)
 
-    if len(model.balance) == 4:
+    if can_benchmark and len(model.balance) == 4:
         # Assert that words per second is within 3 standard deviations of the average
-        # of five golden runs
-        assert wps > 19276.1 - (3 * 88)
+        # of six golden runs
+        assert wps > 20052.1 - (3 * 359)
 
         print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
         print("Peak allocated bytes on cuda:1: {:1d}".format(torch.cuda.memory_stats(1)["allocated_bytes.all.peak"]))
@@ -226,7 +230,7 @@ def benchmark_language_model(train_data, val_data, test_data, model, criterion, 
 
         # Assert that memory usage on each GPU is within 10% of golden run
         # Right-hand-side is golden run bytes * 110%
-        assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 365915648 * 1.1
+        assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 365916160 * 1.1
         assert torch.cuda.memory_stats(1)["allocated_bytes.all.peak"] < 1281024 * 1.1
         assert torch.cuda.memory_stats(2)["allocated_bytes.all.peak"] < 2788864 * 1.1
         assert torch.cuda.memory_stats(3)["allocated_bytes.all.peak"] < 190724608 * 1.1
