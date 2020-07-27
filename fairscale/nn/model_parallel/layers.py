@@ -37,8 +37,8 @@ from .utils import VocabUtility, divide_and_check_no_remainder
 
 def _initialize_affine_weight(
     weight: torch.Tensor,
-    output_size: int,
-    input_size: int,
+    out_features: int,
+    in_features: int,
     per_partition_size: int,
     partition_dim: int,
     init_method: Callable[[torch.Tensor], None],
@@ -59,7 +59,7 @@ def _initialize_affine_weight(
         return None
 
     # Initialize master weight
-    master_weight = torch.empty(output_size, input_size, dtype=weight.dtype, requires_grad=False)
+    master_weight = torch.empty(out_features, in_features, dtype=weight.dtype, requires_grad=False)
     init_method(master_weight)
 
     # Split and copy
@@ -87,18 +87,25 @@ class VocabParallelEmbedding(torch.nn.Module):
     """
 
     def __init__(
-        self, num_embeddings: int, embedding_dim: int, init_method: Callable[[torch.Tensor], None] = init.xavier_normal_
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        padding_idx: Optional[int] = None,
+        max_norm: Optional[float] = None,
+        norm_type: float = 2.0,
+        scale_grad_by_freq: bool = False,
+        sparse: bool = False,
+        init_method: Callable[[torch.Tensor], None] = init.xavier_normal_,
     ) -> None:
         super(VocabParallelEmbedding, self).__init__()
         # Keep the input dimensions.
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        # Set the detauls for compatibility.
-        self.padding_idx = None
-        self.max_norm = None
-        self.norm_type = 2.0
-        self.scale_grad_by_freq = False
-        self.sparse = False
+        self.padding_idx = padding_idx
+        self.max_norm = max_norm
+        self.norm_type = norm_type
+        self.scale_grad_by_freq = scale_grad_by_freq
+        self.sparse = sparse
         self._weight = None
         # Divide the weight matrix along the vocaburaly dimension.
         self.vocab_start_index, self.vocab_end_index = VocabUtility.vocab_range_from_global_vocab_size(
@@ -151,6 +158,11 @@ class ParallelEmbedding(torch.nn.Module):
         self,
         num_embeddings: int,
         embedding_dim: int,
+        padding_idx: Optional[int] = None,
+        max_norm: Optional[float] = None,
+        norm_type: float = 2.0,
+        scale_grad_by_freq: bool = False,
+        sparse: bool = False,
         init_method: Callable[[torch.Tensor], None] = init.xavier_normal_,
         keep_master_weight_for_test: bool = False,
     ) -> None:
@@ -158,12 +170,11 @@ class ParallelEmbedding(torch.nn.Module):
         # Keep the input dimensions.
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        # Set some detauls for compatibility.
-        self.padding_idx = None
-        self.max_norm = None
-        self.norm_type = 2.0
-        self.scale_grad_by_freq = False
-        self.sparse = False
+        self.padding_idx = padding_idx
+        self.max_norm = max_norm
+        self.norm_type = scale_grad_by_freq
+        self.scale_grad_by_freq = scale_grad_by_freq
+        self.sparse = sparse
         self._weight = None
         # Divide the weight matrix along the embedding dimension.
         world_size = get_model_parallel_world_size()
@@ -205,8 +216,8 @@ class ColumnParallelLinear(torch.nn.Module):
     its second dimension as A = [A_1, ..., A_p].
 
     Arguments:
-        input_size: first dimension of matrix A.
-        output_size: second dimension of matrix A.
+        in_features: first dimension of matrix A.
+        out_features: second dimension of matrix A.
         bias: If true, add bias
         gather_output: If true, call all-gether on output and make Y avaiable
                        to all GPUs, otherwise, every GPU will have its output
@@ -221,8 +232,8 @@ class ColumnParallelLinear(torch.nn.Module):
 
     def __init__(
         self,
-        input_size: int,
-        output_size: int,
+        in_features: int,
+        out_features: int,
         bias: bool = True,
         gather_output: bool = True,
         init_method: Callable[[torch.Tensor], None] = init.xavier_normal_,
@@ -232,17 +243,17 @@ class ColumnParallelLinear(torch.nn.Module):
         super(ColumnParallelLinear, self).__init__()
 
         # Keep input parameters
-        self.input_size = input_size
-        self.output_size = output_size
+        self.in_features = in_features
+        self.out_features = out_features
         self.gather_output = gather_output
         # Divide the weight matrix along the last dimension.
         world_size = get_model_parallel_world_size()
-        self.output_size_per_partition = divide_and_check_no_remainder(output_size, world_size)
+        self.output_size_per_partition = divide_and_check_no_remainder(out_features, world_size)
 
         # Parameters.
         # Note: torch.nn.functional.linear performs XA^T + b and as a result
         # we allocate the transpose.
-        self.weight = Parameter(torch.Tensor(self.output_size_per_partition, self.input_size))
+        self.weight = Parameter(torch.Tensor(self.output_size_per_partition, self.in_features))
         if bias:
             self.bias = Parameter(torch.Tensor(self.output_size_per_partition))
             # Always initialize bias to zero.
@@ -254,8 +265,8 @@ class ColumnParallelLinear(torch.nn.Module):
         # Initialize weight.
         self.master_weight = _initialize_affine_weight(
             self.weight,
-            self.output_size,
-            self.input_size,
+            self.out_features,
+            self.in_features,
             self.output_size_per_partition,
             0,
             init_method,
@@ -289,8 +300,8 @@ class RowParallelLinear(torch.nn.Module):
               | A_p |
                -   -
     Arguments:
-        input_size: first dimension of matrix A.
-        output_size: second dimension of matrix A.
+        in_features: first dimension of matrix A.
+        out_features: second dimension of matrix A.
         bias: If true, add bias. Note that bias is not parallelized.
         input_is_parallel: If true, we assume that the input is already
                            split across the GPUs and we do not split
@@ -305,8 +316,8 @@ class RowParallelLinear(torch.nn.Module):
 
     def __init__(
         self,
-        input_size: int,
-        output_size: int,
+        in_features: int,
+        out_features: int,
         bias: bool = True,
         input_is_parallel: bool = False,
         init_method: Callable[[torch.Tensor], None] = init.xavier_normal_,
@@ -316,19 +327,19 @@ class RowParallelLinear(torch.nn.Module):
         super(RowParallelLinear, self).__init__()
 
         # Keep input parameters
-        self.input_size = input_size
-        self.output_size = output_size
+        self.in_features = in_features
+        self.out_features = out_features
         self.input_is_parallel = input_is_parallel
         # Divide the weight matrix along the last dimension.
         world_size = get_model_parallel_world_size()
-        self.input_size_per_partition = divide_and_check_no_remainder(input_size, world_size)
+        self.input_size_per_partition = divide_and_check_no_remainder(in_features, world_size)
 
         # Parameters.
         # Note: torch.nn.functional.linear performs XA^T + b and as a result
         # we allocate the transpose.
-        self.weight = Parameter(torch.Tensor(self.output_size, self.input_size_per_partition))
+        self.weight = Parameter(torch.Tensor(self.out_features, self.input_size_per_partition))
         if bias:
-            self.bias = Parameter(torch.Tensor(self.output_size))
+            self.bias = Parameter(torch.Tensor(self.out_features))
             # Always initialize bias to zero.
             with torch.no_grad():
                 self.bias.zero_()
@@ -338,8 +349,8 @@ class RowParallelLinear(torch.nn.Module):
         # Initialize weight.
         self.master_weight = _initialize_affine_weight(
             self.weight,
-            self.output_size,
-            self.input_size,
+            self.out_features,
+            self.in_features,
             self.input_size_per_partition,
             1,
             init_method,
