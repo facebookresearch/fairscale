@@ -3,6 +3,10 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pylint: disable=missing-module-docstring
+# pylint: disable=missing-class-docstring
+# pylint: disable=missing-function-docstring
+
 import os
 
 import pytest
@@ -14,17 +18,20 @@ import fairscale.optim as optim
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 
+BACKEND = "nccl" if torch.cuda.is_available() else "gloo"
+DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
 
 def setup_module(module):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "29500"
-    dist.init_process_group(backend="nccl", rank=0, world_size=1)
+    dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
 
 
 def dist_init(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "29501"
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size)
 
 
 def test_create():
@@ -57,9 +64,9 @@ def run_test_add_param_group(rank, world_size):
     # Verify that added group is added to the correct partition making all have 8 elements.
     assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == 8
     if rank == 1:
-        len(o.optim.param_groups) == 2
+        assert len(o.optim.param_groups) == 2
     else:
-        len(o.optim.param_groups) == 1
+        assert len(o.optim.param_groups) == 1
 
 
 def test_add_param_group():
@@ -111,8 +118,9 @@ def test_step():
     mp.spawn(run_test_step, args=(world_size,), nprocs=world_size, join=True)
 
 
-def run_test_step_with_closure(rank, world_size):
+def run_test_step_with_closure(rank, world_size, optimizer=None):
     dist_init(rank, world_size)
+
     x_val = rank + 1
     weight = 1.0
     bias = 2.0
@@ -125,7 +133,9 @@ def run_test_step_with_closure(rank, world_size):
     m.weight.data = torch.tensor([[weight]])
     m.bias.data = torch.tensor([bias])
     m.to(rank)
+
     o = optim.OSS(m.parameters(), lr=0.1)
+
     y = m(x)
     y.backward(x)
     for p in m.parameters():
@@ -164,3 +174,55 @@ def run_test_sharding(rank, world_size):
 def test_sharding():
     world_size = 3
     mp.spawn(run_test_sharding, args=(world_size,), nprocs=world_size, join=True)
+
+
+def run_test_collect_shards(rank, world_size, reference_rank):
+    dist_init(rank, world_size)
+
+    # Run a dummy step so that the optimizer state dict exists
+    batch, input_width, hidden, target_width = 3, 20, 10, 5
+    target = torch.rand((batch, target_width), device=DEVICE)
+    inputs = torch.rand((batch, input_width), device=DEVICE)
+
+    model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
+    loss_fn = torch.nn.L1Loss()
+
+    # With SGD, Momentum is required to get a state to shard
+    optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99)
+
+    def closure():
+        optimizer.zero_grad()
+        output = model(inputs)
+        loss = loss_fn(output, target)
+        loss.backward()
+        return loss
+
+    _ = optimizer.step(closure=closure)
+
+    # Update the optimizer state on the reference rank
+    optimizer.consolidate_state_dict(recipient_rank=reference_rank)
+
+    # Fetch the state on the reference rank
+    # - check that it has the correct size
+    # - load it again
+    if rank == reference_rank:
+        optimizer_state_dict = optimizer.state_dict()
+        assert len(optimizer_state_dict["state"]) == world_size
+    else:
+        optimizer_state_dict = {}
+
+    optimizer_state_dict = optim.utils.broadcast_object(
+        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD
+    )
+
+    # Load the optimizer state dict
+    optimizer.load_state_dict(optimizer_state_dict)
+
+
+def test_collect_shards():
+    world_size = 3
+    reference_rank = 1
+
+    mp.spawn(
+        run_test_collect_shards, args=(world_size, reference_rank), nprocs=world_size, join=True,
+    )
