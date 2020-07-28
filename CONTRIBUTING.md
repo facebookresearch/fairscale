@@ -38,6 +38,7 @@ black ./(mmf|tests|tools)/**/*.py
 isort -rc (mmf|tests|tools)
 ```
 * Read the [editorconfig](.editorconfig) file to understand the exact coding style preferences.
+* Place Python code related to models in fairscale/nn. Place Python code related to optimizers in fairscale/optim. Place C++ extensions in fairscale/clib.
 
 ## Commit Guidelines
 
