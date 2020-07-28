@@ -39,17 +39,17 @@ def test_create():
     o = optim.OSS(params, lr=0.01)
 
 
-@skip_if_no_cuda
 def test_state_dict():
-    x = torch.tensor([1.0], device="cuda", requires_grad=True)
+    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
     o = optim.OSS([x], lr=0.1)
+    o.consolidate_state_dict() # Sync state dict in between replicas - even if there are none
     state_dict = o.state_dict()
     o = optim.OSS([x], lr=0.01)
     o.load_state_dict(state_dict)
     # We should now be using a lr of 0.1.
     x.backward()
     o.step()
-    assert x == torch.tensor([0.9], device="cuda")
+    assert x == torch.tensor([0.9], device=DEVICE)
 
 
 def run_test_add_param_group(rank, world_size):
@@ -207,7 +207,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     # - load it again
     if rank == reference_rank:
         optimizer_state_dict = optimizer.state_dict()
-        assert len(optimizer_state_dict["state"]) == world_size
+        assert len(optimizer_state_dict["states"]) == world_size
     else:
         optimizer_state_dict = {}
 
