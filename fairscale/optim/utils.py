@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import io
-from typing import Any
+from typing import Any, Dict
 
 import torch
 from torch._six import container_abcs
@@ -25,14 +25,14 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
         return value.to(device, non_blocking=non_blocking)
 
     if isinstance(value, (list, tuple)):
-        device_val = []
+        values = []
         for val in value:
-            device_val.append(recursive_copy_to_device(val, non_blocking=non_blocking, device=device))
+            values.append(recursive_copy_to_device(val, non_blocking=non_blocking, device=device))
 
-        return device_val if isinstance(value, list) else tuple(device_val)
+        return values if isinstance(value, list) else tuple(values)
 
     if isinstance(value, container_abcs.Mapping):
-        device_val = {}
+        device_val: Dict[str, Any] = {}
         for key, val in value.items():
             device_val[key] = recursive_copy_to_device(val, non_blocking=non_blocking, device=device)
 
@@ -41,7 +41,7 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
     return value
 
 
-def broadcast_object(obj: Any, src_rank: int) -> Any:
+def broadcast_object(obj: Any, src_rank: int, group: object) -> Any:
     """
     Either broadcast from master to the fleet (default),
     or use the src setting as the original rank.
@@ -52,18 +52,18 @@ def broadcast_object(obj: Any, src_rank: int) -> Any:
     if dist.get_rank() == src_rank:
         # Emit data
         buffer = io.BytesIO()
-        torch.save(obj, buffer)
+        torch.save(obj, buffer)  # type: ignore
         data = bytearray(buffer.getbuffer())
         length_tensor = torch.LongTensor([len(data)])
-        data_tensor = torch.ByteTensor(data)
-        dist.broadcast(length_tensor, src=src_rank)
-        dist.broadcast(data_tensor, src=src_rank)
+        data_send_tensor = torch.ByteTensor(data)
+        dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
+        dist.broadcast(data_send_tensor, src=src_rank, group=group, async_op=False)
     else:
         # Fetch from the source
         length_tensor = torch.LongTensor([0])
-        dist.broadcast(length_tensor, src=src_rank)
-        data_tensor = torch.empty([length_tensor.item()], dtype=torch.uint8)
-        dist.broadcast(data_tensor, src=src_rank)
-        buffer = io.BytesIO(data_tensor.numpy())
-        obj = torch.load(buffer)
+        dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
+        data_recv_tensor = torch.empty([int(length_tensor.item())], dtype=torch.uint8)
+        dist.broadcast(data_recv_tensor, src=src_rank, group=group, async_op=False)
+        buffer = io.BytesIO(data_recv_tensor.numpy())
+        obj = torch.load(buffer)  # type: ignore
     return obj

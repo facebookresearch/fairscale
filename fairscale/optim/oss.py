@@ -117,12 +117,12 @@ class OSS(Optimizer):
                 )
 
                 # Sync with other replicas
-                broadcast_object(empty_buffer, src_rank=rank)
+                broadcast_object(empty_buffer, src_rank=rank, group=self.group)
             else:
                 # Reuse the param_groups from this rank, these are shared across replicas
                 logging.debug("Receiving state from rank %s ", rank)
                 replica_state = {
-                    "state": broadcast_object(empty_buffer, src_rank=rank),
+                    "state": broadcast_object(empty_buffer, src_rank=rank, group=self.group),
                     "param_groups": local_state["param_groups"],
                 }
 
@@ -150,11 +150,11 @@ class OSS(Optimizer):
                 logging.debug(
                     "Sending the sharded SGD state to the reference replica from rank %s", rank,
                 )
-                broadcast_object(local_state["state"], src_rank=rank)
+                broadcast_object(local_state["state"], src_rank=rank, group=self.group)
             else:
                 # Discard this tensor/rank, broadcast necessary for syncing
                 logging.debug("Discarding broadcast from rank %s", rank)
-                broadcast_object(empty_buffer, src_rank=rank)
+                broadcast_object(empty_buffer, src_rank=rank, group=self.group)
 
     def consolidate_state_dict(self, recipient_rank: int = 0) -> None:
         """ Update the consolidated state_dict list, one per rank.
