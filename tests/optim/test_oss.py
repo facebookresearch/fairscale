@@ -19,7 +19,7 @@ import fairscale.optim as optim
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 
 BACKEND = "nccl" if torch.cuda.is_available() else "gloo"
-DEVICE = torch.device("gpu") if torch.cuda.is_available() else torch.device("cpu")
+DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 
 def setup_module(module):

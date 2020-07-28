@@ -11,9 +11,7 @@ from torch._six import container_abcs
 import torch.distributed as dist
 
 
-def recursive_copy_to_device(
-    value: Any, non_blocking: bool, device: torch.device
-) -> Any:
+def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.device) -> Any:
     """
     Recursively searches lists, tuples, dicts and copies tensors to device if
     possible. Non-tensor values are passed as-is in the result.
@@ -29,18 +27,14 @@ def recursive_copy_to_device(
     if isinstance(value, (list, tuple)):
         device_val = []
         for val in value:
-            device_val.append(
-                recursive_copy_to_device(val, non_blocking=non_blocking, device=device)
-            )
+            device_val.append(recursive_copy_to_device(val, non_blocking=non_blocking, device=device))
 
         return device_val if isinstance(value, list) else tuple(device_val)
 
     if isinstance(value, container_abcs.Mapping):
         device_val = {}
         for key, val in value.items():
-            device_val[key] = recursive_copy_to_device(
-                val, non_blocking=non_blocking, device=device
-            )
+            device_val[key] = recursive_copy_to_device(val, non_blocking=non_blocking, device=device)
 
         return device_val
 
