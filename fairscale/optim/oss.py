@@ -175,8 +175,14 @@ class OSS(Optimizer):
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Loads this rank's optimizer state_dict, given the global optimizer state. """
+        # Make sure that the state is on the appropriate device
+        self_device = self.partition_parameters()[self.rank][0]["params"][0].device
+        state_dict_ondevice = recursive_copy_to_device(
+            state_dict["states"][self.rank], non_blocking=False, device=self_device
+        )
 
-        self.optim.load_state_dict(state_dict["states"][self.rank])
+        # Normal load_state_dict for this rank
+        self.optim.load_state_dict(state_dict_ondevice)
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
