@@ -4,13 +4,14 @@
 # LICENSE file in the root directory of this source tree.
 
 import io
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import torch
 from torch._six import container_abcs
 import torch.distributed as dist
 
 
+# Credits:  classy_vision/generic/distributed_util.py
 def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.device) -> Any:
     """
     Recursively searches lists, tuples, dicts and copies tensors to device if
@@ -49,13 +50,16 @@ def broadcast_object(obj: Any, src_rank: int, group: object = dist.group.WORLD) 
     The object needs to be on the appropriate device, depending on the
     backend being used.
     """
+
+    distributed_tensor_device = "cuda" if dist.get_backend() == dist.Backend.NCCL else "cpu"  # type: ignore
+
     if dist.get_rank() == src_rank:
         # Emit data
         buffer = io.BytesIO()
         torch.save(obj, buffer)  # type: ignore
         data = bytearray(buffer.getbuffer())
-        length_tensor = torch.LongTensor([len(data)])
-        data_send_tensor = torch.ByteTensor(data)
+        length_tensor = torch.LongTensor([len(data)]).to(distributed_tensor_device)
+        data_send_tensor = torch.ByteTensor(data).to(distributed_tensor_device)
         dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
         dist.broadcast(data_send_tensor, src=src_rank, group=group, async_op=False)
     else:
