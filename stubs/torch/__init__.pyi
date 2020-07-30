@@ -1,9 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
-# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
-
-# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
-
 # @generated from torch/__init__.pyi.in
 
 from typing import List, Tuple, Optional, Union, Any, ContextManager, Callable, overload, Iterator, Iterable
