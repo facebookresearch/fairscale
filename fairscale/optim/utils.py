@@ -69,5 +69,5 @@ def broadcast_object(
         data_recv_tensor = torch.empty([int(length_tensor.item())], dtype=torch.uint8, device=dist_device)
         dist.broadcast(data_recv_tensor, src=src_rank, group=group, async_op=False)
         buffer = io.BytesIO(data_recv_tensor.cpu().numpy())
-        obj = torch.load(buffer)  # type: ignore
+        obj = torch.load(buffer, map_location=dist_device)  # type: ignore
     return obj
