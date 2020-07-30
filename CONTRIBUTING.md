@@ -47,8 +47,8 @@ outlined on that page and do not file a public issue.
 
 ```
 black .
-isort -rc .
-flake8 .
+isort
+flake8
 ```
 * Read the [editorconfig](.editorconfig) file to understand the exact coding style preferences.
 
@@ -63,7 +63,7 @@ mypy .
 Unit tests:
 
 ```
-pytest .
+pytest
 ```
 
 ## Commit Guidelines
