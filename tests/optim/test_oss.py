@@ -178,19 +178,20 @@ def test_sharding():
 
 def run_test_collect_shards(rank, world_size, reference_rank):
     dist_init(rank, world_size)
-    self_device = rank if torch.cuda.device_count() > 1 else DEVICE
+    device = rank if torch.cuda.device_count() > 1 else DEVICE
 
-    print(self_device)
+    logging.info("Using device: %s", device)
 
     # Run a dummy step so that the optimizer state dict exists
     batch, input_width, hidden, target_width = 3, 20, 10, 5
-    target = torch.rand((batch, target_width), device=self_device)
-    inputs = torch.rand((batch, input_width), device=self_device)
+    target = torch.rand((batch, target_width), device=device)
+    inputs = torch.rand((batch, input_width), device=device)
 
     model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
-    model.to(self_device)
+    model.to(device)
 
     loss_fn = torch.nn.L1Loss()
+    loss_fn.to(device)
 
     # With SGD, Momentum is required to get a state to shard
     optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99)
@@ -220,7 +221,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     logging.warning("State dict fetched")
 
     optimizer_state_dict = optim.utils.broadcast_object(
-        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=DEVICE
+        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
     )
     logging.warning("State dict broadcasted")
 
