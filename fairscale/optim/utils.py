@@ -42,16 +42,13 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
     return value
 
 
-def broadcast_object(obj: Any, src_rank: int, group: object = dist.group.WORLD) -> Any:
+def broadcast_object(
+    obj: Any, src_rank: int, group: object = dist.group.WORLD, dist_device: torch.device = torch.device("cpu")
+) -> Any:
     """
     Either broadcast from master to the fleet (default),
     or use the src setting as the original rank.
     """
-
-    # Depending on backends, broadcasted tensors need to be on specific devices
-    dist_device = torch.device(
-        "cuda" if dist.get_backend() == dist.Backend.NCCL else "cpu"  # type: ignore
-    )
 
     if dist.get_rank() == src_rank:
         # Emit data

@@ -60,11 +60,9 @@ class OSS(Optimizer):
 
         # Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []
-        self._device = torch.device(
-            "cuda"
-            if dist.get_backend() == dist.Backend.NCCL  # type: ignore
-            else "cpu"
-        )
+
+        # Current device is set by the parameters allocated to this rank
+        self._device = self.partition_parameters()[self.rank][0]["params"][0].device
 
     def partition_parameters(self) -> List[List[dict]]:
         """Partitions parameters across distributed ranks.
@@ -163,11 +161,13 @@ class OSS(Optimizer):
                 )
 
                 # Sync with other replicas
-                broadcast_object(empty_buffer, src_rank=rank, group=self.group)
+                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
             else:
                 # Fetch the optim state from the other replicas
                 logging.debug("Receiving state from rank %s ", rank)
-                replica_state = broadcast_object(empty_buffer, src_rank=rank, group=self.group)
+                replica_state = broadcast_object(
+                    empty_buffer, src_rank=rank, group=self.group, dist_device=self._device
+                )
 
                 all_states.append(
                     recursive_copy_to_device(replica_state, non_blocking=True, device=torch.device("cpu"))
@@ -189,8 +189,8 @@ class OSS(Optimizer):
                 logging.debug(
                     "Sending the sharded SGD state to the reference replica from rank %s", rank,
                 )
-                broadcast_object(self.local_state_dict(), src_rank=rank, group=self.group)
+                broadcast_object(self.local_state_dict(), src_rank=rank, group=self.group, dist_device=self._device)
             else:
                 # Discard this tensor/rank, broadcast necessary for syncing
                 logging.debug("Discarding broadcast from rank %s", rank)
-                broadcast_object(empty_buffer, src_rank=rank, group=self.group)
+                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
