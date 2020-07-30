@@ -17,7 +17,7 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
     Recursively searches lists, tuples, dicts and copies tensors to device if
     possible. Non-tensor values are passed as-is in the result.
 
-    Note:  These are all copies, so if there are two objects that reference
+    NOTE:  These are all copies, so if there are two objects that reference
     the same object, then after this call, there will be two different objects
     referenced on the device.
     """
@@ -42,7 +42,9 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
     return value
 
 
-def broadcast_object(obj: Any, src_rank: int, group: object = dist.group.WORLD) -> Any:
+def broadcast_object(
+    obj: Any, src_rank: int, group: object = dist.group.WORLD, dist_device: torch.device = torch.device("cpu")
+) -> Any:
     """
     Either broadcast from master to the fleet (default),
     or use the src setting as the original rank.
@@ -51,22 +53,20 @@ def broadcast_object(obj: Any, src_rank: int, group: object = dist.group.WORLD) 
     backend being used.
     """
 
-    distributed_tensor_device = torch.device("cuda") if dist.get_backend() == dist.Backend.NCCL else torch.device("cpu")  # type: ignore
-
     if dist.get_rank() == src_rank:
         # Emit data
         buffer = io.BytesIO()
         torch.save(obj, buffer)  # type: ignore
         data = bytearray(buffer.getbuffer())
-        length_tensor = torch.LongTensor([len(data)]).to(distributed_tensor_device)
-        data_send_tensor = torch.ByteTensor(data).to(distributed_tensor_device)
+        length_tensor = torch.LongTensor([len(data)]).to(dist_device)
+        data_send_tensor = torch.ByteTensor(data).to(dist_device)
         dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
         dist.broadcast(data_send_tensor, src=src_rank, group=group, async_op=False)
     else:
         # Fetch from the source
-        length_tensor = torch.LongTensor([0]).to(distributed_tensor_device)
+        length_tensor = torch.LongTensor([0]).to(dist_device)
         dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
-        data_recv_tensor = torch.empty([int(length_tensor.item())], dtype=torch.uint8, device=distributed_tensor_device)
+        data_recv_tensor = torch.empty([int(length_tensor.item())], dtype=torch.uint8, device=dist_device)
         dist.broadcast(data_recv_tensor, src=src_rank, group=group, async_op=False)
         buffer = io.BytesIO(data_recv_tensor.cpu().numpy())
         obj = torch.load(buffer)  # type: ignore

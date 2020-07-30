@@ -19,7 +19,7 @@ import fairscale.optim as optim
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
-DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
 
 
 def setup_module(module):
@@ -177,14 +177,17 @@ def test_sharding():
 
 def run_test_collect_shards(rank, world_size, reference_rank):
     dist_init(rank, world_size)
+    self_device = DEVICE + f":{rank}" if torch.cuda.device_count() > 1 else DEVICE
+
+    print(self_device)
 
     # Run a dummy step so that the optimizer state dict exists
     batch, input_width, hidden, target_width = 3, 20, 10, 5
-    target = torch.rand((batch, target_width), device=DEVICE)
-    inputs = torch.rand((batch, input_width), device=DEVICE)
+    target = torch.rand((batch, target_width), device=self_device)
+    inputs = torch.rand((batch, input_width), device=self_device)
 
     model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
-    model.to(DEVICE)
+    model.to(self_device)
 
     loss_fn = torch.nn.L1Loss()
 
@@ -213,7 +216,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
         optimizer_state_dict = {}
 
     optimizer_state_dict = optim.utils.broadcast_object(
-        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD
+        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=self_device
     )
 
     # Load the optimizer state dict
