@@ -58,7 +58,7 @@ install_repo_gpu: &install_repo_gpu
       name: Install Repository
       command: |
         export CUDA_HOME=/usr/local/cuda-10.1
-        python setup.py --fused-adam build develop
+        python setup.py build develop
 
 run_unittests: &run_unittests
   - run:

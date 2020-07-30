@@ -34,11 +34,6 @@ Development mode:
 pip install -e .
 ```
 
-To make FusedAdam available:
-```bash
-pip install --fused-adam -e .
-```
-
 ## Contributors
 
 See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.

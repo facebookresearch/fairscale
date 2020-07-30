@@ -3,10 +3,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 import os
-import sys
 import warnings
 
 import setuptools
+import torch
+from torch.utils.cpp_extension import CUDA_HOME, BuildExtension, CUDAExtension
 
 
 def fetch_requirements():
@@ -18,28 +19,24 @@ def fetch_requirements():
 extensions = []
 cmdclass = {}
 
-if "--fused-adam" in sys.argv:
-    if "CUDA_HOME" not in os.environ:
-        warnings.warn("Cannot install FusedAdam cuda because CUDA_HOME environment variable is not set. ")
-    else:
-        from torch.utils import cpp_extension
+force_cuda = os.getenv("FORCE_CUDA", "0") == "1"
+if (torch.cuda.is_available() and CUDA_HOME is not None) or force_cuda:
+    extensions.extend(
+        [
+            CUDAExtension(
+                name="fairscale.fused_adam_cuda",
+                sources=[
+                    "fairscale/clib/fused_adam_cuda/fused_adam_cuda.cpp",
+                    "fairscale/clib/fused_adam_cuda/fused_adam_cuda_kernel.cu",
+                ],
+                extra_compile_args={"cxx": ["-O3"], "nvcc": ["-O3", "--use_fast_math"]},
+            )
+        ]
+    )
 
-        extensions.extend(
-            [
-                cpp_extension.CUDAExtension(
-                    name="fairscale.fused_adam_cuda",
-                    sources=[
-                        "fairscale/clib/fused_adam_cuda/fused_adam_cuda.cpp",
-                        "fairscale/clib/fused_adam_cuda/fused_adam_cuda_kernel.cu",
-                    ],
-                    extra_compile_args={"cxx": ["-O3"], "nvcc": ["-O3", "--use_fast_math"]},
-                )
-            ]
-        )
-
-        cmdclass["build_ext"] = cpp_extension.BuildExtension
-
-    sys.argv.remove("--fused-adam")
+    cmdclass["build_ext"] = BuildExtension
+else:
+    warnings.warn("Cannot install FusedAdam cuda.")
 
 
 if __name__ == "__main__":
