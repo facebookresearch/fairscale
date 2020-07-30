@@ -3,7 +3,9 @@ We want to make contributing to this project as easy and transparent as
 possible.
 
 ## Our Development Process
-Minor changes and improvements will be released on an ongoing basis. Larger changes (e.g., changesets implementing a new paper) will be released on a more periodic basis.
+Minor changes and improvements will be released on an ongoing basis. Larger
+changes (e.g., changesets implementing a new paper) will be released on a
+more periodic basis.
 
 ## Pull Requests
 We actively welcome your pull requests.
@@ -29,15 +31,40 @@ Facebook has a [bounty program](https://www.facebook.com/whitehat/) for the safe
 disclosure of security bugs. In those cases, please go through the process
 outlined on that page and do not file a public issue.
 
+## Environment setup
+
+```
+~$ python3 -m venv venv2
+~$ source venv2/bin/activate
+(venv2) ~$ cd git/fairscale/
+(venv2) ~/git/fairscale (min/setup)$ pip3 install -r requirements-test.txt
+```
+
 ## Coding Style
-* In your editor, install the [editorconfig](https://editorconfig.org/) extension which should ensure that you are following the same standards as us.
+* In your editor, install the [editorconfig](https://editorconfig.org/) extension
+  which should ensure that you are following the same standards as us.
 * Ideally, run black and isort before opening up your PR.
 
 ```
-black ./(mmf|tests|tools)/**/*.py
-isort -rc (mmf|tests|tools)
+black .
+isort -rc .
+flake8 .
 ```
 * Read the [editorconfig](.editorconfig) file to understand the exact coding style preferences.
+
+## Testing
+
+Static analysis:
+
+```
+mypy .
+```
+
+Unit tests:
+
+```
+pytest .
+```
 
 ## Commit Guidelines
 
