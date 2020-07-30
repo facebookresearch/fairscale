@@ -37,7 +37,7 @@ outlined on that page and do not file a public issue.
 ~$ python3 -m venv venv2
 ~$ source venv2/bin/activate
 (venv2) ~$ cd git/fairscale/
-(venv2) ~/git/fairscale (min/setup)$ pip3 install -r requirements-test.txt
+(venv2) ~/git/fairscale $ pip3 install -r requirements-test.txt
 ```
 
 ## Coding Style
@@ -65,6 +65,10 @@ Unit tests:
 ```
 pytest
 ```
+
+CircleCI status:
+
+(TODO: add ways to check circleCI status/output?)
 
 ## Commit Guidelines
 
