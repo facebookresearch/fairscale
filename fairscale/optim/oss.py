@@ -133,9 +133,7 @@ class OSS(Optimizer):
         """ Loads this rank's state_dict. """
 
         # Make sure that the state is on the appropriate device
-        state_dict_ondevice = recursive_copy_to_device(
-            state_dict, non_blocking=False, device=self._device
-        )
+        state_dict_ondevice = recursive_copy_to_device(state_dict, non_blocking=False, device=self._device)
 
         self.optim.load_state_dict(state_dict_ondevice)
 
