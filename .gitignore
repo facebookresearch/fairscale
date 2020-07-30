@@ -1,4 +1,8 @@
 *~
+*.swp
+
 *.pyc
+*.pyo
+
 .mypy_cache/
 *.egg-info/
