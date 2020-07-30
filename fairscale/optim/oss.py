@@ -60,10 +60,10 @@ class OSS(Optimizer):
 
         # Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []
-        self._device = (
-            torch.device("cuda", torch.cuda.current_device())
+        self._device = torch.device(
+            "cuda"
             if dist.get_backend() == dist.Backend.NCCL  # type: ignore
-            else torch.device("cpu")
+            else "cpu"
         )
 
     def partition_parameters(self) -> List[List[dict]]:
@@ -150,7 +150,7 @@ class OSS(Optimizer):
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
         """
-        Collect all the state shards
+        Collect all the state shards, in CPU memory.
         """
         empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
         all_states: List[Dict[str, Any]] = []
@@ -163,13 +163,11 @@ class OSS(Optimizer):
                 )
 
                 # Sync with other replicas
-                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
+                broadcast_object(empty_buffer, src_rank=rank, group=self.group)
             else:
                 # Fetch the optim state from the other replicas
                 logging.debug("Receiving state from rank %s ", rank)
-                replica_state = broadcast_object(
-                    empty_buffer, src_rank=rank, group=self.group, dist_device=self._device
-                )
+                replica_state = broadcast_object(empty_buffer, src_rank=rank, group=self.group)
 
                 all_states.append(
                     recursive_copy_to_device(replica_state, non_blocking=True, device=torch.device("cpu"))
@@ -191,8 +189,8 @@ class OSS(Optimizer):
                 logging.debug(
                     "Sending the sharded SGD state to the reference replica from rank %s", rank,
                 )
-                broadcast_object(self.local_state_dict(), src_rank=rank, group=self.group, dist_device=self._device)
+                broadcast_object(self.local_state_dict(), src_rank=rank, group=self.group)
             else:
                 # Discard this tensor/rank, broadcast necessary for syncing
                 logging.debug("Discarding broadcast from rank %s", rank)
-                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
+                broadcast_object(empty_buffer, src_rank=rank, group=self.group)
