@@ -54,25 +54,38 @@ flake8
 
 ## Testing
 
-Static analysis:
+### Static analysis
 
 ```
 mypy .
 ```
 
-Unit tests:
+### Unit tests
 
 ```
 pytest
 ```
 
-CircleCI status:
+### CircleCI status
 
-(TODO: add ways to check circleCI status/output?)
+From your PR page, you can expand on the CircleCI results. For GPU test, you should see
+what CI has run, like:
+
+```
+...
+----- generated xml file: /home/circleci/fairscale/test-results/junit.xml ------
+================== 217 passed, 2 xfailed in 218.74s (0:03:38) ==================
+CircleCI received exit code 0
+```
+
+The number of passed and failed should give you an idea on whether your local
+test was the same or not.
 
 ## Commit Guidelines
 
-We follow the same guidelines as AngularJS. Each commit message consists of a **header**, a **body** and a **footer**.  The header has a special format that includes a **type**, and a **subject**:
+We follow the same guidelines as AngularJS. Each commit message consists of a **header**,
+a **body** and a **footer**.  The header has a special format that includes a **type**,
+and a **subject**:
 
 ```
 [<type>] <subject>
