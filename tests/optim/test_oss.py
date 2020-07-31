@@ -42,7 +42,7 @@ def test_create():
 def test_state_dict():
     x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
     o = optim.OSS([x], lr=0.1)
-    o.consolidate_state_dict()  # Sync state dict in between replicas - even if there are none
+    o.consolidate_state_dict() # Sync state dict in between replicas - even if there are none
     state_dict = o.state_dict()
     o = optim.OSS([x], lr=0.01)
     o.load_state_dict(state_dict)
