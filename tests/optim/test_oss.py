@@ -7,7 +7,6 @@
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
 
-import logging
 import os
 
 import pytest
@@ -178,7 +177,7 @@ def test_sharding():
 
 def run_test_collect_shards(rank, world_size, reference_rank):
     dist_init(rank, world_size)
-    self_device = rank if torch.cuda.device_count() > 1 else DEVICE
+    self_device = DEVICE + f":{rank}" if torch.cuda.device_count() > 1 else DEVICE
 
     print(self_device)
 
@@ -206,7 +205,6 @@ def run_test_collect_shards(rank, world_size, reference_rank):
 
     # Update the optimizer state on the reference rank
     optimizer.consolidate_state_dict(recipient_rank=reference_rank)
-    logging.warning("State consolidation done")
 
     # Fetch the state on the reference rank
     # - check that it has the correct size
@@ -217,12 +215,9 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     else:
         optimizer_state_dict = {}
 
-    logging.warning("State dict fetched")
-
     optimizer_state_dict = optim.utils.broadcast_object(
-        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=DEVICE
+        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=self_device
     )
-    logging.warning("State dict broadcasted")
 
     # Load the optimizer state dict
     optimizer.load_state_dict(optimizer_state_dict)
