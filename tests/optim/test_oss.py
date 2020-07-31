@@ -178,7 +178,7 @@ def test_sharding():
 
 def run_test_collect_shards(rank, world_size, reference_rank):
     dist_init(rank, world_size)
-    device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
+    device = rank if torch.cuda.device_count() > 1 else DEVICE
 
     logging.info("Using device: %s", device)
 
@@ -221,7 +221,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     logging.warning("State dict fetched")
 
     optimizer_state_dict = optim.utils.broadcast_object(
-        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD
+        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
     )
     logging.warning("State dict broadcasted")
 
