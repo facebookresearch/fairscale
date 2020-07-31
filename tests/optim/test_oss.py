@@ -7,6 +7,7 @@
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
 
+import logging
 import os
 
 import pytest
