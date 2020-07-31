@@ -180,6 +180,8 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     dist_init(rank, world_size)
     device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
 
+    logging.info("Using device: %s", device)
+
     # Run a dummy step so that the optimizer state dict exists
     batch, input_width, hidden, target_width = 3, 20, 10, 5
     target = torch.rand((batch, target_width), device=device)
@@ -205,6 +207,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
 
     # Update the optimizer state on the reference rank
     optimizer.consolidate_state_dict(recipient_rank=reference_rank)
+    logging.warning("State consolidation done")
 
     # Fetch the state on the reference rank
     # - check that it has the correct size
@@ -215,9 +218,12 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     else:
         optimizer_state_dict = {}
 
+    logging.warning("State dict fetched")
+
     optimizer_state_dict = optim.utils.broadcast_object(
-        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
+        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD
     )
+    logging.warning("State dict broadcasted")
 
     # Load the optimizer state dict
     optimizer.load_state_dict(optimizer_state_dict)
@@ -225,7 +231,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
 
 def test_collect_shards():
     world_size = 3
-    reference_rank = 0
+    reference_rank = 1
 
     mp.spawn(
         run_test_collect_shards, args=(world_size, reference_rank), nprocs=world_size, join=True,
