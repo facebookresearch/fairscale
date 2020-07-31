@@ -17,6 +17,7 @@ try:
 
     class Adam(torch.optim.Optimizer):
         state: dict
+        defaults: dict
         """
         Implements Adam algorithm. Currently GPU-only.
         It has been proposed in `Adam: A Method for Stochastic Optimization`_.
@@ -56,7 +57,12 @@ try:
             max_grad_norm: Optional[float] = 0.0,
             amsgrad: Optional[bool] = False,
             use_mt: Optional[bool] = True,
+            mixed_precision: Optional[bool] = False,
         ):
+            self.mixed_precision = mixed_precision
+            if self.mixed_precision:
+                model_params = params
+                params = self.build_fp32_params(params)
 
             self._use_multi_tensor = False
             if use_mt:
@@ -75,6 +81,58 @@ try:
             }
             super().__init__(params, defaults)
             self.eps_mode = 0 if eps_inside_sqrt else 1
+            if mixed_precision:
+                self.add_model_params(model_params)
+
+        def add_model_params(self, params: Any) -> None:
+            self.model_param_groups = []
+            param_groups = list(params)
+            if not isinstance(param_groups[0], dict):
+                param_groups = [{"params": param_groups}]
+
+            for param_group in param_groups:
+                params = param_group["params"]
+                if isinstance(params, torch.Tensor):
+                    param_group["params"] = [params]
+                elif isinstance(params, set):
+                    raise TypeError(
+                        "optimizer parameters need to be organized in ordered collections, but "
+                        "the ordering of tensors in sets will change between runs. Please use a list instead."
+                    )
+                else:
+                    param_group["params"] = list(params)
+
+                for param in param_group["params"]:
+                    if not isinstance(param, torch.Tensor):
+                        raise TypeError(
+                            "optimizer can only optimize Tensors, " "but one of the params is " + torch.typename(param)
+                        )
+                    if not param.is_leaf:
+                        raise ValueError("can't optimize a non-leaf Tensor")
+
+                for name, default in self.defaults.items():
+                    param_group.setdefault(name, default)
+
+                params = param_group["params"]
+
+                param_set = set()
+                for group in self.param_groups:
+                    param_set.update(set(group["params"]))
+
+                if not param_set.isdisjoint(set(param_group["params"])):
+                    raise ValueError("some parameters appear in more than one parameter group")
+
+                self.model_param_groups.append(param_group)
+
+        @staticmethod
+        def build_fp32_params(params: Any) -> _params_t:
+            # create FP32 copy of parameters and grads
+            fp32_params = []
+            for p in params:
+                p32 = torch.nn.Parameter(p.data.float())
+                p32.grad = torch.zeros_like(p32.data)
+                fp32_params.append(p32)
+            return fp32_params
 
         @property
         def supports_memory_efficient_fp16(self) -> bool:
@@ -98,17 +156,21 @@ try:
             if closure is not None:
                 loss = closure()
 
-            for group in self.param_groups:
+            for i in range(len(self.param_groups)):
+                group = self.param_groups[i]
                 bias_correction = 1 if group["bias_correction"] else 0
                 tensorlists: Dict[torch.device, List[List[torch.Tensor]]] = dict()
 
-                for p in group["params"]:
+                for j in range(len(group["params"])):
+                    p = group["params"][j]
                     # note: p.grad should not ever be set for correct
                     # operation of mixed precision optimizer that sometimes
                     # sends None gradients
-                    if p.grad is None:
+                    if (self.mixed_precision and self.model_param_groups[i]["params"][j].grad is None) or (
+                        not self.mixed_precision and p.grad is None
+                    ):
                         continue
-                    grad = p.grad.data
+                    grad = self.model_param_groups[i]["params"][j].grad if self.mixed_precision else p.grad.data
                     if grad.is_sparse:
                         raise RuntimeError(
                             "FusedAdam does not support sparse gradients, " "please consider SparseAdam instead"
@@ -129,7 +191,7 @@ try:
                     beta1, beta2 = group["betas"]
 
                     state["step"] += 1
-                    out_p = torch.tensor([])
+                    out_p = self.model_param_groups[i]["params"][j].data if self.mixed_precision else torch.tensor([])
 
                     if self._use_multi_tensor:
                         pl = [p.data, exp_avg, exp_avg_sq, grad]

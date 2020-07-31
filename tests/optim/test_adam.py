@@ -26,7 +26,7 @@ def test_step():
     weight = torch.randn(10, 5).cuda().requires_grad_()
     bias = torch.randn(10).cuda().requires_grad_()
     input = torch.randn(5).cuda()
-    optimizer = Adam([weight, bias], lr=1e-3)
+    optimizer = Adam([weight, bias], lr=1e-3, use_mt=False)
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
@@ -48,13 +48,68 @@ def test_step():
 
 @skip_if_no_cuda
 @skip_if_no_adam
+def test_step_me():
+    weight = torch.randn(10, 5).cuda().half().requires_grad_()
+    bias = torch.randn(10).cuda().half().requires_grad_()
+    input = torch.randn(5).half().cuda()
+    optimizer = Adam([weight, bias], lr=1e-3, use_mt=False)
+
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+
+    def fn():
+        optimizer.zero_grad()
+        y = weight.mv(input)
+        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
+            y = y.cuda(bias.get_device())
+        loss = (y + bias).pow(2).sum()
+        loss.backward()
+        return loss
+
+    initial_value = fn().item()
+    for _i in range(5):
+        optimizer.step(fn)
+    assert fn().item() < initial_value
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_step_mixed_precision():
+    weight = torch.randn(10, 5).cuda().half().requires_grad_()
+    bias = torch.randn(10).cuda().half().requires_grad_()
+    input = torch.randn(5).half().cuda()
+    optimizer = Adam([weight, bias], lr=1e-3, mixed_precision=True, use_mt=False)
+
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+
+    def fn():
+        optimizer.zero_grad()
+        y = weight.mv(input)
+        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
+            y = y.cuda(bias.get_device())
+        loss = (y + bias).pow(2).sum()
+        loss.backward()
+        return loss
+
+    initial_value = fn().item()
+    for _i in range(5):
+        optimizer.step(fn)
+
+    assert weight is optimizer.model_param_groups[0]["params"][0]
+    assert bias is optimizer.model_param_groups[0]["params"][1]
+    assert fn().item() < initial_value
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
 def test_step_multigpu():
     if not torch.cuda.device_count() > 1:
         return
     weight = torch.randn(10, 5).cuda(0).requires_grad_()
     bias = torch.randn(10).cuda(1).requires_grad_()
     input = torch.randn(5).cuda(0)
-    optimizer = Adam([weight, bias], lr=1e-3)
+    optimizer = Adam([weight, bias], lr=1e-3, use_mt=False)
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
@@ -81,7 +136,7 @@ def test_state_dict():
     bias = torch.randn(10).float().cuda().requires_grad_()
     input = torch.randn(5).float().cuda()
 
-    optimizer = Adam([weight, bias], lr=1e-3)
+    optimizer = Adam([weight, bias], lr=1e-3, use_mt=False)
 
     def fn_base(optimizer, weight, bias, input):
         optimizer.zero_grad()
