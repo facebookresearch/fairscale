@@ -88,6 +88,7 @@ def run_test_zero_grad(rank, world_size):
     assert not m.bias.grad
 
 
+@skip_if_no_cuda
 def test_zero_grad():
     world_size = 2
     mp.spawn(run_test_zero_grad, args=(world_size,), nprocs=world_size, join=True)

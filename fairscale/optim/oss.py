@@ -98,54 +98,6 @@ class OSS(Optimizer):
         """ Gets this rank's state_dict. """
         return self.optim.state_dict()
 
-    def consolidate_state_dict(self, recipient_rank: int = 0) -> None:
-        """ Update the consolidated state_dict list, one per rank.
-
-        This needs to be called on all replicas """
-
-        if self.rank == recipient_rank:
-            # Pull the sharded state from all the other replicas
-            # Store all the states in order, rank by rank
-            logging.debug("Pulling the sharded SGD state from all replicas")
-            self._all_states = self._collect_sharded_states()
-        else:
-            # Acknowledge broadcasts, and send this rank's shard when needed
-            self._broadcast_state_dict()
-
-    def state_dict(self) -> Dict[str, Any]:
-        """
-        Return the last known global optimizer state, which consist of a list of the shards.
-
-        NOTE: This is limited to the replica which was responsible for the consolidation.
-        The state may also not be up to date, depending on when `consolidate_state_dict` was last called.
-        """
-
-        assert (
-            len(self._all_states) > 0
-        ), "The optimizer state is not materialized, please call consolidate_state_dict on every replica beforehand"
-
-        return {"states": self._all_states}
-
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
-        """ Loads this rank's optimizer state_dict, given the global optimizer state. """
-        # Make sure that the state is on the appropriate device
-        self_device = (
-            torch.device("cuda") if dist.get_backend() == dist.Backend.NCCL else torch.device("cpu")  # type: ignore
-        )
-        state_dict_ondevice = recursive_copy_to_device(
-            state_dict["states"][self.rank], non_blocking=False, device=self_device
-        )
-
-        # Normal load_state_dict for this rank
-        self.optim.load_state_dict(state_dict_ondevice)
-
-    def add_param_group(self, param_group: dict) -> None:
-        super().add_param_group(param_group)
-        if not self.in_super_constructor:
-            param_groups = self.partition_parameters()[self.rank]
-            if len(param_groups) == len(self.optim.param_groups) + 1:
-                self.optim.add_param_group(param_groups[-1])
-
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
         """
         Collect all the state shards
@@ -192,3 +144,49 @@ class OSS(Optimizer):
                 # Discard this tensor/rank, broadcast necessary for syncing
                 logging.debug("Discarding broadcast from rank %s", rank)
                 broadcast_object(empty_buffer, src_rank=rank, group=self.group)
+
+    def consolidate_state_dict(self, recipient_rank: int = 0) -> None:
+        """ Update the consolidated state_dict list, one per rank.
+
+        This needs to be called on all replicas """
+
+        if self.rank == recipient_rank:
+            # Pull the sharded state from all the other replicas
+            # Store all the states in order, rank by rank
+            logging.debug("Pulling the sharded SGD state from all replicas")
+            self._all_states = self._collect_sharded_states()
+        else:
+            # Acknowledge broadcasts, and send this rank's shard when needed
+            self._broadcast_state_dict()
+
+    def state_dict(self) -> Dict[str, Any]:
+        """
+        Return the last known global optimizer state, which consist of a list of the shards.
+
+        NOTE: This is limited to the replica which was responsible for the consolidation.
+        The state may also not be up to date, depending on when `consolidate_state_dict` was last called.
+        """
+
+        assert (
+            len(self._all_states) > 0
+        ), "The optimizer state is not materialized, please call consolidate_state_dict on every replica beforehand"
+
+        return {"states": self._all_states}
+
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        """ Loads this rank's optimizer state_dict, given the global optimizer state. """
+        # Make sure that the state is on the appropriate device
+        self_device = self.partition_parameters()[self.rank][0]["params"][0].device
+        state_dict_ondevice = recursive_copy_to_device(
+            state_dict["states"][self.rank], non_blocking=False, device=self_device
+        )
+
+        # Normal load_state_dict for this rank
+        self.optim.load_state_dict(state_dict_ondevice)
+
+    def add_param_group(self, param_group: dict) -> None:
+        super().add_param_group(param_group)
+        if not self.in_super_constructor:
+            param_groups = self.partition_parameters()[self.rank]
+            if len(param_groups) == len(self.optim.param_groups) + 1:
+                self.optim.add_param_group(param_groups[-1])
