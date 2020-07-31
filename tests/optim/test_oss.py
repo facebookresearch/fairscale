@@ -185,8 +185,6 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     inputs = torch.rand((batch, input_width), device=DEVICE)
 
     model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
-    model.to(DEVICE)
-
     loss_fn = torch.nn.L1Loss()
 
     # With SGD, Momentum is required to get a state to shard
