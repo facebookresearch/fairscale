@@ -129,20 +129,15 @@ class OSS(Optimizer):
 
         return {"states": self._all_states}
 
-    def load_local_state_dict(self, state_dict: dict) -> None:
-        """ Loads this rank's state_dict. """
-
-        # Make sure that the state is on the appropriate device
-        state_dict_ondevice = recursive_copy_to_device(
-            state_dict, non_blocking=False, device=self._device
-        )
-
-        self.optim.load_state_dict(state_dict_ondevice)
-
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Loads this rank's optimizer state_dict, given the global optimizer state. """
-        # Dispatch this rank's state dictionary to the local load
-        self.load_local_state_dict(state_dict["states"][self.rank])
+        # Make sure that the state is on the appropriate device
+        state_dict_ondevice = recursive_copy_to_device(
+            state_dict["states"][self.rank], non_blocking=False, device=self._device
+        )
+
+        # Normal load_state_dict for this rank
+        self.optim.load_state_dict(state_dict_ondevice)
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)

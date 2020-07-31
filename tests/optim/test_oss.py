@@ -52,18 +52,6 @@ def test_state_dict():
     assert x == torch.tensor([0.9], device=DEVICE)
 
 
-def test_local_state_dict():
-    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
-    o = optim.OSS([x], lr=0.1)
-    local_state_dict = o.local_state_dict()
-    o = optim.OSS([x], lr=0.01)
-    o.load_local_state_dict(local_state_dict)
-    # We should now be using a lr of 0.1.
-    x.backward()
-    o.step()
-    assert x == torch.tensor([0.9], device=DEVICE)
-
-
 def run_test_add_param_group(rank, world_size):
     dist_init(rank, world_size)
     params = []
