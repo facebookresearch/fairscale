@@ -6,3 +6,6 @@
 
 .mypy_cache/
 *.egg-info/
+
+build/
+dist/
