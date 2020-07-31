@@ -52,7 +52,7 @@ else:
 if __name__ == "__main__":
     setuptools.setup(
         name="fairscale",
-        description="fairscale: Utility library for large-scale and high-performance training.",
+        description="fairscale: A PyTorch library for large-scale and high-performance training.",
         version=find_version("fairscale/__init__.py"),
         install_requires=fetch_requirements(),
         include_package_data=True,
