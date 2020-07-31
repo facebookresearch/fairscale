@@ -51,7 +51,7 @@ def broadcast_object(obj: Any, src_rank: int, group: object = dist.group.WORLD) 
     backend being used.
     """
 
-    distributed_tensor_device = torch.device("cuda") if dist.get_backend() == dist.Backend.NCCL else torch.device("cpu")  # type: ignore
+    distributed_tensor_device = "cuda" if dist.get_backend() == dist.Backend.NCCL else "cpu"  # type: ignore
 
     if dist.get_rank() == src_rank:
         # Emit data
@@ -64,10 +64,10 @@ def broadcast_object(obj: Any, src_rank: int, group: object = dist.group.WORLD) 
         dist.broadcast(data_send_tensor, src=src_rank, group=group, async_op=False)
     else:
         # Fetch from the source
-        length_tensor = torch.LongTensor([0]).to(distributed_tensor_device)
+        length_tensor = torch.LongTensor([0])
         dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
-        data_recv_tensor = torch.empty([int(length_tensor.item())], dtype=torch.uint8, device=distributed_tensor_device)
+        data_recv_tensor = torch.empty([int(length_tensor.item())], dtype=torch.uint8)
         dist.broadcast(data_recv_tensor, src=src_rank, group=group, async_op=False)
-        buffer = io.BytesIO(data_recv_tensor.cpu().numpy())
+        buffer = io.BytesIO(data_recv_tensor.numpy())
         obj = torch.load(buffer)  # type: ignore
     return obj

@@ -60,7 +60,6 @@ class OSS(Optimizer):
 
         # Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []
-        self._device = torch.device("cuda") if dist.get_backend() == dist.Backend.NCCL else torch.device("cpu")  # type: ignore
 
     def partition_parameters(self) -> List[List[dict]]:
         """Partitions parameters across distributed ranks.
@@ -130,8 +129,11 @@ class OSS(Optimizer):
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Loads this rank's optimizer state_dict, given the global optimizer state. """
         # Make sure that the state is on the appropriate device
+        self_device = (
+            torch.device("cuda") if dist.get_backend() == dist.Backend.NCCL else torch.device("cpu")  # type: ignore
+        )
         state_dict_ondevice = recursive_copy_to_device(
-            state_dict["states"][self.rank], non_blocking=False, device=self._device
+            state_dict["states"][self.rank], non_blocking=False, device=self_device
         )
 
         # Normal load_state_dict for this rank
@@ -148,7 +150,7 @@ class OSS(Optimizer):
         """
         Collect all the state shards
         """
-        empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
+        empty_buffer = torch.empty([1], dtype=torch.uint8)
         all_states: List[Dict[str, Any]] = []
 
         for rank in range(dist.get_world_size(group=self.group)):
@@ -177,7 +179,7 @@ class OSS(Optimizer):
         """
         Broadcast this rank's state shard, discard others
         """
-        empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
+        empty_buffer = torch.empty([1], dtype=torch.uint8)
 
         for rank in range(dist.get_world_size(group=self.group)):
             if rank == self.rank:
