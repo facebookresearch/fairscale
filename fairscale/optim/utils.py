@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import io
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import torch
 from torch._six import container_abcs
