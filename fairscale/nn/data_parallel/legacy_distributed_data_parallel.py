@@ -1,17 +1,12 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
-# This source code is licensed under the MIT license found in the
+# This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
 """
-A modified version of the legacy DistributedDataParallel module that uses c10d
-communication primitives. This version is simpler than the latest PyTorch
-version and is useful for debugging. Notably it does not overlap gradient
-communication with the backward pass, which makes it slower but more robust
-than the PyTorch version.
+A distributed data parallel class that works with OSS optimizer.
 
-This version also supports the *no_sync* context manager, which allows faster
-training with `--update-freq`.
+Adopted from LegacyDistributedDataParallel module from fairseq.
 """
 
 from collections import OrderedDict
@@ -20,13 +15,11 @@ import copy
 
 import torch
 from torch import nn
-from torch.autograd import Variable
-
-from . import distributed_utils
+import torch.distributed as dist
 
 
-class LegacyDistributedDataParallel(nn.Module):
-    """Implements distributed data parallelism at the module level.
+class OssDdp(nn.Module):
+    """Implements distributed data parallel training with optimizer state sharding.
 
     A simplified version of :class:`torch.nn.parallel.DistributedDataParallel`.
     This version uses a c10d process group for communication and does not
@@ -34,32 +27,40 @@ class LegacyDistributedDataParallel(nn.Module):
 
     Args:
         module (~torch.nn.Module): module to be parallelized
+        oss (fairscale.optim.OSS): shared state optimizer
         world_size (int): number of parallel workers
         process_group (optional): the c10d process group to be used for
-            distributed data all-reduction. If None, the default process group
+            distributed gradient reduction. If None, the default WORLD process group
             will be used.
         buffer_size (int, optional): number of elements to buffer before
-            performing all-reduce (default: 256M).
+            performing reduce (default: 256M). Used to reduce multiple small
+            params to avoid communication overhead.
     """
 
-    def __init__(self, module, world_size, process_group=None, buffer_size=2**28):
+    def __init__(self, module, oss, world_size, process_group=None, buffer_size=2**28):
         super().__init__()
 
         self.module = module
         self.world_size = world_size
-        self.process_group = process_group
+        self.process_group = process_group if process_group is not None else dist.group.WORLD
+        self.rank = dist.get_rank(self.process_group)
 
         # Never use a bigger buffer than the number of model params
-        self.buffer_size = min(buffer_size, sum(p.numel() for p in module.parameters()))
+        self.buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
         self.buffer = None
 
-        # Flag used by the NCCL backend to make sure we only reduce gradients
-        # one time in the execution engine
+        # Flag used to make sure we only reduce gradients one time in the execution engine
         self.need_reduction = False
 
         # We can also forcibly accumulate grads locally and only do the
-        # all-reduce at some later time
+        # gradients-reduce at some later time
         self.accumulate_grads = False
+
+        # TODO: The algorithm here can be improved. We are sorting params by device
+        #       and by rank. Then in reduction_fn below, we pack smaller ones into
+        #       a buffer for reduction.
+        #       We can pre-sort them here and simplify the reduction_fn logic below
+        #       since their size shouldn't change.
 
         # make per-device lists of parameters
         paramlists = OrderedDict()
@@ -71,13 +72,22 @@ class LegacyDistributedDataParallel(nn.Module):
             paramlists[device] += [param]
         self.per_device_params = list(paramlists.values())
 
+        # query oss and build a param-to-rank table
+        self.param_rank = {}
+        for rank, param_groups in enumerate(oss.partition_parameters()):
+            for param_group in param_groups:
+                for param in param_group["params"]:
+                    self.param_rank[rank] = param
+
+        # sanity checks
+        assert len(self.param_rank) == len(self.module.parameters()), "number of params do not match"
+        for param in self.module.parameters():
+            assert param in self.param_rank, f"{param} not in the optimizer"
+
 
     def __getstate__(self):
         attrs = copy.copy(self.__dict__)
         return attrs
-
-    def __setstate__(self, state):
-        super().__setstate__(state)
 
     @contextmanager
     def no_sync(self):
@@ -90,20 +100,21 @@ class LegacyDistributedDataParallel(nn.Module):
     def forward(self, *inputs, **kwargs):
         if self.need_reduction:
             raise RuntimeError(
-                'LegacyDistributedDataParallel requires explicit reduction, '
-                'must call LegacyDistributedDataParallel.all_reduce'
+                'OssDdp requires explicit reduction, '
+                'must call OssDdp.reduce'
             )
         if not self.accumulate_grads:
             self.need_reduction = True
         return self.module(*inputs, **kwargs)
 
-    def all_reduce(self):
+    def reduce(self):
         """
         This function must be called explicitly after backward to reduce
         gradients. There is no automatic hook like c10d.
         """
 
-        def all_reduce_params(params):
+        def reduce_params(params, params_rank):
+            """ Helper to reduce a list of params that should fix in the buffer. """
             buffer = self.buffer
             nonzero_buffer = False
             if len(params) > 1:
@@ -117,7 +128,7 @@ class LegacyDistributedDataParallel(nn.Module):
                         buffer[offset:offset+sz].zero_()
                     offset += sz
             else:
-                # we only have a single grad to all-reduce
+                # we only have a single grad to reduce
                 p = params[0]
                 if p.grad is not None:
                     buffer = p.grad.data
@@ -131,17 +142,23 @@ class LegacyDistributedDataParallel(nn.Module):
             if nonzero_buffer:
                 buffer.div_(self.world_size)
 
-            distributed_utils.all_reduce(buffer, self.process_group)
+            dist.reduce(buffer, params_rank, group=self.process_group)
 
-            # copy all-reduced grads back into their original place
-            offset = 0
-            for p in params:
-                sz = p.numel()
-                if p.grad is not None:
-                    p.grad.data.copy_(buffer[offset:offset+sz].view_as(p))
-                else:
-                    p.grad = buffer[offset:offset+sz].view_as(p).clone()
-                offset += sz
+            if p_rank == self.rank:
+                # copy reduced grads back into their original place
+                offset = 0
+                for p in params:
+                    sz = p.numel()
+                    if p.grad is not None:
+                        p.grad.data.copy_(buffer[offset:offset+sz].view_as(p))
+                    else:
+                        p.grad = buffer[offset:offset+sz].view_as(p).clone()
+                    offset += sz
+            else:
+                # clear the grads
+                for p in params:
+                    if p.grad is not None:
+                        p.grad.fill_(0)
 
         def reduction_fn():
             # This function only needs to be called once
@@ -153,10 +170,13 @@ class LegacyDistributedDataParallel(nn.Module):
                 self.buffer = next(self.module.parameters()).new(self.buffer_size)
 
             for params in self.per_device_params:
-                # All-reduce the gradients in buckets
+                # Reduce the gradients in buckets
                 offset = 0
                 buffered_params = []
+                param_rank = None
                 for param in params:
+                    last_param_rank = param_rank
+                    param_rank = self.param_rank[param]
                     if not param.requires_grad:
                         continue
                     if param.grad is None:
@@ -167,17 +187,20 @@ class LegacyDistributedDataParallel(nn.Module):
                                            "grad")
                     sz = param.numel()
                     if sz > self.buffer.numel():
-                        # all-reduce big params directly
-                        all_reduce_params([param])
+                        # reduce big params directly
+                        reduce_params([param], param_rank)
                     else:
-                        if offset + sz > self.buffer.numel():
-                            all_reduce_params(buffered_params)
+                        # smaller params are packed together from the same device
+                        # and same rank.
+                        if (offset + sz > self.buffer.numel() or
+                           (last_param_rank is not None and last_param_rank != param_rank)):
+                            reduce_params(buffered_params, last_param_rank)
                             offset = 0
                             buffered_params.clear()
                         buffered_params.append(param)
                         offset += sz
 
                 if len(buffered_params) > 0:
-                    all_reduce_params(buffered_params)
+                    reduce_params(buffered_params)
 
         reduction_fn()
