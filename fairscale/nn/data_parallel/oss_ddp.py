@@ -155,10 +155,10 @@ class OssDdp(nn.Module):
                         p.grad = buffer[offset:offset+sz].view_as(p).clone()
                     offset += sz
             else:
-                # clear the grads
+                # zero the grads
                 for p in params:
                     if p.grad is not None:
-                        p.grad.fill_(0)
+                        p.grad.data.zero_()
 
         def reduction_fn():
             # This function only needs to be called once
@@ -193,7 +193,9 @@ class OssDdp(nn.Module):
                         # smaller params are packed together from the same device
                         # and same rank.
                         if (offset + sz > self.buffer.numel() or
-                           (last_param_rank is not None and last_param_rank != param_rank)):
+                           (last_param_rank is not None and
+                            last_param_rank != param_rank)
+                        ):
                             reduce_params(buffered_params, last_param_rank)
                             offset = 0
                             buffered_params.clear()
@@ -201,6 +203,6 @@ class OssDdp(nn.Module):
                         offset += sz
 
                 if len(buffered_params) > 0:
-                    reduce_params(buffered_params)
+                    reduce_params(buffered_params, param_rank)
 
         reduction_fn()
