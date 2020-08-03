@@ -198,7 +198,7 @@ try:
                             pl = [p.data, exp_avg, exp_avg_sq, grad, out_p]
                             if p.device not in tensorlists:
                                 tensorlists[p.device] = [[], [], [], [], []]
-                            
+
                             for tl, t in zip(tensorlists[p.device], pl):
                                 tl.append(t)
                         else:

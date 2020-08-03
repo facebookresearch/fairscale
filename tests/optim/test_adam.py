@@ -26,7 +26,7 @@ def test_step():
     weight = torch.randn(10, 5).cuda().requires_grad_()
     bias = torch.randn(10).cuda().requires_grad_()
     input = torch.randn(5).cuda()
-    optimizer = Adam([weight, bias], lr=1e-3, use_mt=False)
+    optimizer = Adam([weight, bias], lr=1e-3)
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
@@ -52,7 +52,7 @@ def test_step_me():
     weight = torch.randn(10, 5).cuda().half().requires_grad_()
     bias = torch.randn(10).cuda().half().requires_grad_()
     input = torch.randn(5).half().cuda()
-    optimizer = Adam([weight, bias], lr=1e-3, use_mt=False)
+    optimizer = Adam([weight, bias], lr=1e-3)
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
@@ -78,7 +78,7 @@ def test_step_mixed_precision():
     weight = torch.randn(10, 5).cuda().half().requires_grad_()
     bias = torch.randn(10).cuda().half().requires_grad_()
     input = torch.randn(5).half().cuda()
-    optimizer = Adam([weight, bias], lr=1e-3, mixed_precision=True, use_mt=False)
+    optimizer = Adam([weight, bias], lr=1e-3, mixed_precision=True)
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
@@ -109,7 +109,7 @@ def test_step_multigpu():
     weight = torch.randn(10, 5).cuda(0).requires_grad_()
     bias = torch.randn(10).cuda(1).requires_grad_()
     input = torch.randn(5).cuda(0)
-    optimizer = Adam([weight, bias], lr=1e-3, use_mt=False)
+    optimizer = Adam([weight, bias], lr=1e-3)
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
@@ -136,7 +136,7 @@ def test_state_dict():
     bias = torch.randn(10).float().cuda().requires_grad_()
     input = torch.randn(5).float().cuda()
 
-    optimizer = Adam([weight, bias], lr=1e-3, use_mt=False)
+    optimizer = Adam([weight, bias], lr=1e-3)
 
     def fn_base(optimizer, weight, bias, input):
         optimizer.zero_grad()
