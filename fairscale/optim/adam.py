@@ -60,9 +60,7 @@ try:
             mixed_precision: Optional[bool] = False,
         ):
             self.mixed_precision = mixed_precision
-            if self.mixed_precision:
-                model_params = params
-                params = self.build_fp32_params(params)
+            parameters: List[Any] = list(params)
 
             self._use_multi_tensor = False
             if use_mt:
@@ -79,13 +77,21 @@ try:
                 "weight_decay": weight_decay,
                 "max_grad_norm": max_grad_norm,
             }
-            super().__init__(params, defaults)
+            super().__init__(parameters, defaults)
             self.eps_mode = 0 if eps_inside_sqrt else 1
             if mixed_precision:
-                self.add_model_params(model_params)
+                self.build_fp32_params(parameters)
 
-        def add_model_params(self, params: Any) -> None:
-            self.model_param_groups = []
+        def build_fp32_params(self, params: Any) -> None:
+            # create FP32 copy of parameters and grads
+            fp32_params = []
+            for p in params:
+                p32 = torch.nn.Parameter(p.data.float())
+                p32.grad = torch.zeros_like(p32.data)
+                fp32_params.append(p32)
+            params = fp32_params
+
+            self.fp32_param_groups = []
             param_groups = list(params)
             if not isinstance(param_groups[0], dict):
                 param_groups = [{"params": param_groups}]
@@ -122,23 +128,19 @@ try:
                 if not param_set.isdisjoint(set(param_group["params"])):
                     raise ValueError("some parameters appear in more than one parameter group")
 
-                self.model_param_groups.append(param_group)
-
-        @staticmethod
-        def build_fp32_params(params: Any) -> _params_t:
-            # create FP32 copy of parameters and grads
-            fp32_params = []
-            for p in params:
-                p32 = torch.nn.Parameter(p.data.float())
-                p32.grad = torch.zeros_like(p32.data)
-                fp32_params.append(p32)
-            return fp32_params
+                self.fp32_param_groups.append(param_group)
 
         @property
         def supports_memory_efficient_fp16(self) -> bool:
             return True
 
-        def step(self, closure: Optional[Callable[[], float]] = None, scale: Optional[float] = 1.0) -> Optional[float]:
+        @property
+        def _step_supports_amp_scaling(self) -> bool:
+            return False
+
+        def step(
+            self, closure: Optional[Callable[[], float]] = None, grad_scaler: Optional[Any] = None
+        ) -> Optional[float]:
             """Performs a single optimization step.
             Arguments:
                 closure (callable, optional): A closure that reevaluates the model
@@ -166,11 +168,9 @@ try:
                     # note: p.grad should not ever be set for correct
                     # operation of mixed precision optimizer that sometimes
                     # sends None gradients
-                    if (self.mixed_precision and self.model_param_groups[i]["params"][j].grad is None) or (
-                        not self.mixed_precision and p.grad is None
-                    ):
+                    if p.grad is None:
                         continue
-                    grad = self.model_param_groups[i]["params"][j].grad if self.mixed_precision else p.grad.data
+                    grad = p.grad.data
                     if grad.is_sparse:
                         raise RuntimeError(
                             "FusedAdam does not support sparse gradients, " "please consider SparseAdam instead"
@@ -191,18 +191,21 @@ try:
                     beta1, beta2 = group["betas"]
 
                     state["step"] += 1
-                    out_p = self.model_param_groups[i]["params"][j].data if self.mixed_precision else torch.tensor([])
+                    out_p = p.data if self.mixed_precision else torch.tensor([])
+                    param = self.fp32_param_groups[i]["params"][j] if self.mixed_precision else p
+
+                    scale = grad_scaler.get_scale() if grad_scaler is not None else 1.0
 
                     if self._use_multi_tensor:
                         if self.mixed_precision:
-                            pl = [p.data, exp_avg, exp_avg_sq, grad, out_p]
+                            pl = [param.data, exp_avg, exp_avg_sq, grad, out_p]
                             if p.device not in tensorlists:
                                 tensorlists[p.device] = [[], [], [], [], []]
 
                             for tl, t in zip(tensorlists[p.device], pl):
                                 tl.append(t)
                         else:
-                            pl = [p.data, exp_avg, exp_avg_sq, grad]
+                            pl = [param.data, exp_avg, exp_avg_sq, grad]
 
                             if p.device not in tensorlists:
                                 tensorlists[p.device] = [[], [], [], []]
@@ -213,7 +216,7 @@ try:
                     else:
                         with torch.cuda.device(p.device):
                             fused_adam_cuda.adam(
-                                p.data,
+                                param.data,
                                 out_p,
                                 exp_avg,
                                 exp_avg_sq,

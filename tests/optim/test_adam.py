@@ -96,8 +96,6 @@ def test_step_mixed_precision():
     for _i in range(5):
         optimizer.step(fn)
 
-    assert weight is optimizer.model_param_groups[0]["params"][0]
-    assert bias is optimizer.model_param_groups[0]["params"][1]
     assert fn().item() < initial_value
 
 

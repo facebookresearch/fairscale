@@ -9,6 +9,7 @@ import torchtext
 from torchtext.data.utils import get_tokenizer
 
 import fairscale.nn.pipe.pipe as pipe
+from fairscale.optim.grad_scaler import FairscaleGradScaler as GradScaler
 
 try:
     from fairscale.optim.adam import Adam  # type: ignore
@@ -129,11 +130,11 @@ def make_model(device, ntokens):
     dropout = 0
     initrange = 0.1
 
-    model = TransformerLMSequntial(ntokens, ninp, nhead, nhid, dropout, initrange).to(device)
+    model = TransformerLMSequntial(ntokens, ninp, nhead, nhid, dropout, initrange).half().to(device)
 
     criterion = nn.CrossEntropyLoss()
-    lr = 0.01  # learning rate
-    optimizer = Adam(model.parameters(), lr=lr)
+    lr = 0.0005  # learning rate
+    optimizer = Adam(model.parameters(), lr=lr, mixed_precision=True)
 
     return model, criterion, optimizer
 
@@ -141,6 +142,7 @@ def make_model(device, ntokens):
 def train(train_data, model, criterion, optimizer, bptt, ntokens):
     model.train()
     total_loss = 0.0
+    scaler = GradScaler()
     start_time = time.time()
     for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
         data, targets = get_batch(train_data, i, bptt)
@@ -149,10 +151,12 @@ def train(train_data, model, criterion, optimizer, bptt, ntokens):
         output = output.to(targets.device)
 
         loss = criterion(output.view(-1, ntokens), targets)
-        loss.backward()
+        scaler.scale(loss).backward()
 
-        torch.nn.utils.clip_grad_value_(model.parameters(), 0.05)
-        optimizer.step()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_value_(model.parameters(), 0.01)
+        scaler.step(optimizer)
+        scaler.update()
 
         total_loss += loss.item()
         log_interval = 200
@@ -161,8 +165,13 @@ def train(train_data, model, criterion, optimizer, bptt, ntokens):
             elapsed = time.time() - start_time
             print(
                 "| {:5d}/{:5d} batches | ms/batch {:5.2f} | "
-                "loss {:5.2f} | ppl {:8.2f}".format(
-                    batch, len(train_data) // bptt, elapsed * 1000 / log_interval, cur_loss, math.exp(cur_loss)
+                "loss {:5.2f} | ppl {:8.2f} | scale {:5d}".format(
+                    batch,
+                    len(train_data) // bptt,
+                    elapsed * 1000 / log_interval,
+                    cur_loss,
+                    math.exp(cur_loss),
+                    int(scaler.get_scale()),
                 )
             )
             total_loss = 0
