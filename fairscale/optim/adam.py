@@ -194,13 +194,21 @@ try:
                     out_p = self.model_param_groups[i]["params"][j].data if self.mixed_precision else torch.tensor([])
 
                     if self._use_multi_tensor:
-                        pl = [p.data, exp_avg, exp_avg_sq, grad]
+                        if self.mixed_precision:
+                            pl = [p.data, exp_avg, exp_avg_sq, grad, out_p]
+                            if p.device not in tensorlists:
+                                tensorlists[p.device] = [[], [], [], [], []]
+                            
+                            for tl, t in zip(tensorlists[p.device], pl):
+                                tl.append(t)
+                        else:
+                            pl = [p.data, exp_avg, exp_avg_sq, grad]
 
-                        if p.device not in tensorlists:
-                            tensorlists[p.device] = [[], [], [], []]
+                            if p.device not in tensorlists:
+                                tensorlists[p.device] = [[], [], [], []]
 
-                        for tl, t in zip(tensorlists[p.device], pl):
-                            tl.append(t)
+                            for tl, t in zip(tensorlists[p.device], pl):
+                                tl.append(t)
 
                     else:
                         with torch.cuda.device(p.device):
