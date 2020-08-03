@@ -152,9 +152,6 @@ def train(train_data, model, criterion, optimizer, bptt, ntokens):
 
         loss = criterion(output.view(-1, ntokens), targets)
         scaler.scale(loss).backward()
-
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_value_(model.parameters(), 0.01)
         scaler.step(optimizer)
         scaler.update()
 
@@ -171,7 +168,7 @@ def train(train_data, model, criterion, optimizer, bptt, ntokens):
                     elapsed * 1000 / log_interval,
                     cur_loss,
                     math.exp(cur_loss),
-                    int(scaler.get_scale()),
+                    1,
                 )
             )
             total_loss = 0
