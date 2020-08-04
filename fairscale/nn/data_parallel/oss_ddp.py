@@ -77,10 +77,10 @@ class OssDdp(nn.Module):
         for rank, param_groups in enumerate(oss.partition_parameters()):
             for param_group in param_groups:
                 for param in param_group["params"]:
-                    self.param_rank[rank] = param
+                    self.param_rank[param] = rank
 
         # sanity checks
-        assert len(self.param_rank) == len(self.module.parameters()), "number of params do not match"
+        assert len(self.param_rank) == len(list(self.module.parameters())), "number of params do not match"
         for param in self.module.parameters():
             assert param in self.param_rank, f"{param} not in the optimizer"
 
@@ -144,7 +144,7 @@ class OssDdp(nn.Module):
 
             dist.reduce(buffer, params_rank, group=self.process_group)
 
-            if p_rank == self.rank:
+            if params_rank == self.rank:
                 # copy reduced grads back into their original place
                 offset = 0
                 for p in params:
