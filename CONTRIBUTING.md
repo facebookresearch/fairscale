@@ -65,6 +65,8 @@ mypy .
 
 ```
 pytest
+# single test
+python -m pytest tests/nn/data_parallel/test_oss_ddp.py::test_on_cpu
 ```
 
 ### CircleCI status
