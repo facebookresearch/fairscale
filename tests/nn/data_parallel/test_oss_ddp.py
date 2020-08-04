@@ -7,7 +7,6 @@
 Testing OssDdp class.
 """
 
-import os
 import tempfile
 
 import pytest
