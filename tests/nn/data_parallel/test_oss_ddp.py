@@ -35,7 +35,8 @@ def test_on_gpu():
 def run_one_step(rank, world_size, backend, device, temp_file_name):
     url = "file://" + temp_file_name
     dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
+    if device == torch.device("cuda"):
+        torch.cuda.set_device(rank)
 
     model = Sequential(Linear(2, 3), Linear(3, 4)).to(device)
     optimizer = OSS(model.parameters(), lr=0.1, momentum=0.99)
