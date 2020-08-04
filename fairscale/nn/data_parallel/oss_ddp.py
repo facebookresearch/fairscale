@@ -37,7 +37,7 @@ class OssDdp(nn.Module):
             params to avoid communication overhead.
     """
 
-    def __init__(self, module, oss, world_size, process_group=None, buffer_size=2**28):
+    def __init__(self, module, oss, world_size, process_group=None, buffer_size=2 ** 28):
         super().__init__()
 
         self.module = module
@@ -84,7 +84,6 @@ class OssDdp(nn.Module):
         for param in self.module.parameters():
             assert param in self.param_rank, f"{param} not in the optimizer"
 
-
     def __getstate__(self):
         attrs = copy.copy(self.__dict__)
         return attrs
@@ -99,10 +98,7 @@ class OssDdp(nn.Module):
 
     def forward(self, *inputs, **kwargs):
         if self.need_reduction:
-            raise RuntimeError(
-                'OssDdp requires explicit reduction, '
-                'must call OssDdp.reduce'
-            )
+            raise RuntimeError("OssDdp requires explicit reduction, must call OssDdp.reduce")
         if not self.accumulate_grads:
             self.need_reduction = True
         return self.module(*inputs, **kwargs)
@@ -122,10 +118,10 @@ class OssDdp(nn.Module):
                 for p in params:
                     sz = p.numel()
                     if p.grad is not None:
-                        buffer[offset:offset+sz].copy_(p.grad.data.view(-1))
+                        buffer[offset : offset + sz].copy_(p.grad.data.view(-1))
                         nonzero_buffer = True
                     else:
-                        buffer[offset:offset+sz].zero_()
+                        buffer[offset : offset + sz].zero_()
                     offset += sz
             else:
                 # we only have a single grad to reduce
@@ -134,7 +130,7 @@ class OssDdp(nn.Module):
                     buffer = p.grad.data
                     nonzero_buffer = True
                 elif p.numel() <= self.buffer.numel():
-                    buffer = buffer[:p.numel()]
+                    buffer = buffer[: p.numel()]
                     buffer.zero_()
                 else:
                     buffer = torch.zeros_like(p)
@@ -150,9 +146,9 @@ class OssDdp(nn.Module):
                 for p in params:
                     sz = p.numel()
                     if p.grad is not None:
-                        p.grad.data.copy_(buffer[offset:offset+sz].view_as(p))
+                        p.grad.data.copy_(buffer[offset : offset + sz].view_as(p))
                     else:
-                        p.grad = buffer[offset:offset+sz].view_as(p).clone()
+                        p.grad = buffer[offset : offset + sz].view_as(p).clone()
                     offset += sz
             else:
                 # zero the grads
@@ -182,9 +178,7 @@ class OssDdp(nn.Module):
                     if param.grad is None:
                         param.grad = torch.zeros_like(param)
                     if param.grad.requires_grad:
-                        raise RuntimeError("DistributedDataParallel only works "
-                                           "with gradients that don't require "
-                                           "grad")
+                        raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
                     sz = param.numel()
                     if sz > self.buffer.numel():
                         # reduce big params directly
@@ -192,9 +186,8 @@ class OssDdp(nn.Module):
                     else:
                         # smaller params are packed together from the same device
                         # and same rank.
-                        if (offset + sz > self.buffer.numel() or
-                           (last_param_rank is not None and
-                            last_param_rank != param_rank)
+                        if offset + sz > self.buffer.numel() or (
+                            last_param_rank is not None and last_param_rank != param_rank
                         ):
                             reduce_params(buffered_params, last_param_rank)
                             offset = 0
