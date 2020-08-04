@@ -17,6 +17,7 @@ import torch.multiprocessing as mp
 import fairscale.optim as optim
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
+skip_if_not_enough_gpu = pytest.mark.skipif(torch.cuda.device_count() <= 2, reason="more than 2 GPUs required")
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
@@ -234,6 +235,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     optimizer.load_state_dict(optimizer_state_dict)
 
 
+@skip_if_not_enough_gpu
 def test_collect_shards():
     world_size = 3
     reference_rank = 0
