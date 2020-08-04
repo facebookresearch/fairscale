@@ -12,10 +12,20 @@ Adopted from LegacyDistributedDataParallel module from fairseq.
 from collections import OrderedDict
 from contextlib import contextmanager
 import copy
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, cast
 
 import torch
 from torch import nn
 import torch.distributed as dist
+
+if TYPE_CHECKING:
+    from fairscale.optim import OSS
+    from torch import Tensor
+    from torch.nn import Parameter
+else:
+    OSS = Any
+    Tensor = Any
+    Parameter = Any
 
 
 class OssDdp(nn.Module):
@@ -37,7 +47,9 @@ class OssDdp(nn.Module):
             params to avoid communication overhead.
     """
 
-    def __init__(self, module, oss, world_size, process_group=None, buffer_size=2 ** 28):
+    def __init__(
+        self, module: nn.Module, oss: OSS, world_size: int, process_group: Any = None, buffer_size: int = 2 ** 28
+    ):
         super().__init__()
 
         self.module = module
@@ -47,7 +59,7 @@ class OssDdp(nn.Module):
 
         # Never use a bigger buffer than the number of model params
         self.buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
-        self.buffer = None
+        self.buffer: Optional[Tensor] = None
 
         # Flag used to make sure we only reduce gradients one time in the execution engine
         self.need_reduction = False
@@ -63,8 +75,7 @@ class OssDdp(nn.Module):
         #       since their size shouldn't change.
 
         # make per-device lists of parameters
-        paramlists = OrderedDict()
-        devices = []
+        paramlists: OrderedDict = OrderedDict()
         for param in self.module.parameters():
             device = param.device
             if paramlists.get(device) is None:
@@ -84,41 +95,44 @@ class OssDdp(nn.Module):
         for param in self.module.parameters():
             assert param in self.param_rank, f"{param} not in the optimizer"
 
-    def __getstate__(self):
+    def __getstate__(self) -> Dict:
         attrs = copy.copy(self.__dict__)
         return attrs
 
     @contextmanager
-    def no_sync(self):
+    def no_sync(self) -> Generator:
         """A context manager to disable gradient synchronization."""
         old_accumulate_grads = self.accumulate_grads
         self.accumulate_grads = True
         yield
         self.accumulate_grads = old_accumulate_grads
 
-    def forward(self, *inputs, **kwargs):
+    def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
         if self.need_reduction:
             raise RuntimeError("OssDdp requires explicit reduction, must call OssDdp.reduce")
         if not self.accumulate_grads:
             self.need_reduction = True
         return self.module(*inputs, **kwargs)
 
-    def reduce(self):
+    def reduce(self) -> None:
         """
         This function must be called explicitly after backward to reduce
         gradients. There is no automatic hook like c10d.
         """
 
-        def reduce_params(params, params_rank):
+        def reduce_params(params: List[Parameter], params_rank: int) -> None:
             """ Helper to reduce a list of params that should fix in the buffer. """
-            buffer = self.buffer
+            assert self.buffer is not None
+            buffer: Tensor = cast(Tensor, self.buffer)
             nonzero_buffer = False
             if len(params) > 1:
                 offset = 0
                 for p in params:
                     sz = p.numel()
                     if p.grad is not None:
-                        buffer[offset : offset + sz].copy_(p.grad.data.view(-1))
+                        # The type error could have been fixed in later
+                        # version of pytorch. Same elsewhere.
+                        buffer[offset : offset + sz].copy_(p.grad.data.view(-1))  # type: ignore
                         nonzero_buffer = True
                     else:
                         buffer[offset : offset + sz].zero_()
@@ -136,9 +150,9 @@ class OssDdp(nn.Module):
                     buffer = torch.zeros_like(p)
 
             if nonzero_buffer:
-                buffer.div_(self.world_size)
+                buffer.div_(self.world_size)  # type: ignore
 
-            dist.reduce(buffer, params_rank, group=self.process_group)
+            dist.reduce(buffer, params_rank, group=self.process_group)  # type: ignore
 
             if params_rank == self.rank:
                 # copy reduced grads back into their original place
@@ -146,7 +160,7 @@ class OssDdp(nn.Module):
                 for p in params:
                     sz = p.numel()
                     if p.grad is not None:
-                        p.grad.data.copy_(buffer[offset : offset + sz].view_as(p))
+                        p.grad.data.copy_(buffer[offset : offset + sz].view_as(p))  # type: ignore
                     else:
                         p.grad = buffer[offset : offset + sz].view_as(p).clone()
                     offset += sz
@@ -156,22 +170,22 @@ class OssDdp(nn.Module):
                     if p.grad is not None:
                         p.grad.data.zero_()
 
-        def reduction_fn():
+        def reduction_fn() -> None:
             # This function only needs to be called once
             if not self.need_reduction or self.accumulate_grads:
                 return
             self.need_reduction = False
 
             if self.buffer is None:
-                self.buffer = next(self.module.parameters()).new(self.buffer_size)
+                self.buffer = next(self.module.parameters()).new(self.buffer_size)  # type: ignore
 
             for params in self.per_device_params:
                 # Reduce the gradients in buckets
                 offset = 0
-                buffered_params = []
-                param_rank = None
+                buffered_params: List[Parameter] = []
+                param_rank: Optional[int] = None
                 for param in params:
-                    last_param_rank = param_rank
+                    last_param_rank: Optional[int] = param_rank
                     param_rank = self.param_rank[param]
                     if not param.requires_grad:
                         continue
@@ -182,20 +196,23 @@ class OssDdp(nn.Module):
                     sz = param.numel()
                     if sz > self.buffer.numel():
                         # reduce big params directly
-                        reduce_params([param], param_rank)
+                        assert param_rank is not None
+                        reduce_params([param], cast(int, param_rank))
                     else:
                         # smaller params are packed together from the same device
                         # and same rank.
                         if offset + sz > self.buffer.numel() or (
                             last_param_rank is not None and last_param_rank != param_rank
                         ):
-                            reduce_params(buffered_params, last_param_rank)
+                            assert last_param_rank is not None
+                            reduce_params(buffered_params, cast(int, last_param_rank))
                             offset = 0
                             buffered_params.clear()
                         buffered_params.append(param)
                         offset += sz
 
                 if len(buffered_params) > 0:
-                    reduce_params(buffered_params, param_rank)
+                    assert param_rank is not None
+                    reduce_params(buffered_params, cast(int, param_rank))
 
         reduction_fn()
