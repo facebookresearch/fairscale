@@ -72,7 +72,6 @@ python -m pytest tests/nn/data_parallel/test_oss_ddp.py::test_on_cpu
 ### Check test coverage
 
 ```
-pip install pytest-cov
 python -m pytest --cov-report term --cov=fairscale/nn/data_parallel  tests/nn/data_parallel/test_oss_ddp.py::test_on_cpu
 ```
 
