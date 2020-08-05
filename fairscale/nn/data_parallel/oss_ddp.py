@@ -68,11 +68,11 @@ class OssDdp(nn.Module):
         # gradients-reduce at some later time
         self.accumulate_grads = False
 
-        # TODO: The algorithm here can be improved. We are sorting params by device
-        #       and by rank. Then in reduction_fn below, we pack smaller ones into
-        #       a buffer for reduction.
-        #       We can pre-sort them here and simplify the reduction_fn logic below
-        #       since their size shouldn't change.
+        # TODO (Min): The algorithm here can be improved. We are sorting params by device
+        #     and by rank. Then in reduction_fn below, we pack smaller ones into
+        #     a buffer for reduction.
+        #     We can pre-sort them here and simplify the reduction_fn logic below
+        #     since their size shouldn't change.
 
         # make per-device lists of parameters
         paramlists: OrderedDict = OrderedDict()

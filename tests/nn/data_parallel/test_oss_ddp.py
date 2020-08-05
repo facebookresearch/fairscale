@@ -46,9 +46,9 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     output.backward()
     ddp.reduce()
     optimizer.step()
-    # TODO: I need to figure out a way to verify the grads are reduced correctly
-    #       between the ranks. I haven't found the best way yet. Will need to come
-    #       back here before this is used in real training.
+    # TODO (Min): I need to figure out a way to verify the grads are reduced correctly
+    #     between the ranks. I haven't found the best way yet. Will need to come
+    #     back here before this is used in real training.
 
 
 def run_test(backend, device, world_size=2):
