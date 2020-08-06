@@ -27,13 +27,13 @@ class OSS(Optimizer):
 
     .. _ZeRO: https://arxiv.org/abs/1910.02054
 
-    Pipe combines pipeline parallelism with checkpointing to reduce peak
-    memory required to train while minimizing device under-utilization.
+    We use a greedy algorithm to pack a number of parameters
+    at each rank. Each parameter belongs to a single rank and
+    is not divided among rank.
 
-    You should determine the balance when defining a :class:`Pipe` module, as
-    balancing will not be done automatically. The module will be partitioned
-    into multiple devices according to the given balance. You may rely on
-    heuristics to find your own optimal configuration.
+    After each rank completed their parameter update, they broadcast
+    the new version of the parameters to all other ranks to synchronize
+    the parameters for next round forward/backward computation.
 
     Args:
         params (list of tensors):
