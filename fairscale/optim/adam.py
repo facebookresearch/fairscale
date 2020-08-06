@@ -82,7 +82,7 @@ try:
             # create FP32 copy of parameters and grads
             fp32_params = []
             for p in params:
-                p32 = torch.nn.Parameter(p.data.float())
+                p32 = torch.nn.Parameter(p.data.float()).to(p.device)
                 p32.grad = torch.zeros_like(p32.data)
                 fp32_params.append(p32)
             params = fp32_params
@@ -134,9 +134,7 @@ try:
         def _step_supports_amp_scaling(self) -> bool:
             return False
 
-        def step(
-            self, closure: Optional[Callable[[], float]] = None, grad_scaler: Optional[Any] = None
-        ) -> Optional[float]:
+        def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
             """Performs a single optimization step.
             Arguments:
                 closure (callable, optional): A closure that reevaluates the model
@@ -190,7 +188,7 @@ try:
                     out_p = p.data if self.mixed_precision else torch.tensor([])
                     param = self.fp32_param_groups[i]["params"][j] if self.mixed_precision else p
 
-                    scale = grad_scaler.get_scale() if grad_scaler is not None else 1.0
+                    scale = 1.0
 
                     if self.mixed_precision:
                         pl = [param.data, exp_avg, exp_avg_sq, grad, out_p]
