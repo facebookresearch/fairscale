@@ -125,7 +125,7 @@ def run_test_step(rank, world_size):
 
 @skip_if_no_cuda
 def test_step():
-    world_size = 2
+    world_size = min(2, torch.cuda.device_count())
     mp.spawn(run_test_step, args=(world_size,), nprocs=world_size, join=True)
 
 
@@ -169,7 +169,7 @@ def run_test_step_with_closure(rank, world_size, optimizer=None):
 
 @skip_if_no_cuda
 def test_step_with_closure():
-    world_size = 2
+    world_size = min(2, torch.cuda.device_count())
     mp.spawn(run_test_step_with_closure, args=(world_size,), nprocs=world_size, join=True)
 
 
@@ -236,6 +236,8 @@ def run_test_collect_shards(rank, world_size, reference_rank):
 
 def test_collect_shards():
     world_size = 3
+    if torch.cuda.is_available():
+        world_size = min(world_size, torch.cuda.device_count())
     reference_rank = 0
 
     mp.spawn(
