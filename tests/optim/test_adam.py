@@ -261,6 +261,136 @@ def test_state_dict():
 
 @skip_if_no_cuda
 @skip_if_no_adam
+def test_step_pure_fp16():
+    weight = torch.randn(10, 5).half().cuda().requires_grad_()
+    bias = torch.randn(10).half().cuda().requires_grad_()
+    input = torch.randn(5).half().cuda()
+    optimizer = Adam([weight, bias], lr=1e-3, optim_fp16=True)
+
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+
+    def fn():
+        optimizer.zero_grad()
+        y = weight.mv(input)
+        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
+            y = y.cuda(bias.get_device())
+        loss = (y + bias).pow(2).sum()
+        loss.backward()
+        return loss
+
+    initial_value = fn().item()
+    for _i in range(5):
+        optimizer.step(fn)
+    assert fn().item() < initial_value
+    assert optimizer.state[weight]["exp_avg"].dtype == torch.float16
+    assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float16
+    assert optimizer.state[bias]["exp_avg"].dtype == torch.float16
+    assert optimizer.state[bias]["exp_avg_sq"].dtype == torch.float16
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_step_pure_fp16_multigpu():
+    if not torch.cuda.device_count() > 1:
+        return
+    weight = torch.randn(10, 5).half().cuda(0).requires_grad_()
+    bias = torch.randn(10).half().cuda(1).requires_grad_()
+    input = torch.randn(5).half().cuda(0)
+    optimizer = Adam([weight, bias], lr=1e-3, optim_fp16=True)
+
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+
+    def fn():
+        optimizer.zero_grad()
+        y = weight.mv(input)
+        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
+            y = y.cuda(bias.get_device())
+        loss = (y + bias).pow(2).sum()
+        loss.backward()
+        return loss
+
+    initial_value = fn().item()
+    for _i in range(5):
+        optimizer.step(fn)
+    assert fn().item() < initial_value
+    assert optimizer.state[weight]["exp_avg"].dtype == torch.float16
+    assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float16
+    assert optimizer.state[bias]["exp_avg"].dtype == torch.float16
+    assert optimizer.state[bias]["exp_avg_sq"].dtype == torch.float16
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_pure_fp16_with_grad_scaler():
+    weight = torch.randn(10, 5).cuda().half().requires_grad_()
+    bias = torch.randn(10).cuda().half().requires_grad_()
+    input = torch.randn(5).half().cuda()
+    target = torch.randn(10).half().cuda()
+    optimizer = Adam([weight, bias], lr=1e-3, optim_fp16=True)
+    scaler = FairscaleGradScaler()
+    criterion = torch.nn.L1Loss()
+
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+
+    for i in range(5):
+        optimizer.zero_grad()
+        output = weight.mv(input) + bias
+        loss = criterion(output, target)
+        if i == 0:
+            initial_value = loss.item()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+    assert loss.item() < initial_value
+    assert optimizer.state[weight]["exp_avg"].dtype == torch.float16
+    assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float16
+    assert optimizer.state[bias]["exp_avg"].dtype == torch.float16
+    assert optimizer.state[bias]["exp_avg_sq"].dtype == torch.float16
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_state_dict_pure_fp16():
+    weight = torch.randn(10, 5).half().cuda().requires_grad_()
+    bias = torch.randn(10).half().cuda().requires_grad_()
+    input = torch.randn(5).half().cuda()
+
+    optimizer = Adam([weight, bias], lr=1e-3, optim_fp16=True)
+
+    def fn_base(optimizer, weight, bias, input):
+        optimizer.zero_grad()
+        loss = (weight.mv(input) + bias).pow(2).sum()
+        loss.backward()
+        return loss
+
+    fn = functools.partial(fn_base, optimizer, weight, bias, input)
+
+    # Prime the optimizer
+    for _i in range(5):
+        optimizer.step(fn)
+    # Clone the weights and construct new optimizer for them
+    weight_c = weight.data.clone().requires_grad_()
+    bias_c = bias.data.clone().requires_grad_()
+    optimizer_c = Adam([weight_c, bias_c], lr=1e-3)
+    fn_c = functools.partial(fn_base, optimizer_c, weight_c, bias_c, input)
+    # Load state dict
+    state_dict = deepcopy(optimizer.state_dict())
+    state_dict_c = deepcopy(optimizer.state_dict())
+    optimizer_c.load_state_dict(state_dict_c)
+    # Run both optimizations in parallel
+    for _i in range(5):
+        optimizer.step(fn)
+        optimizer_c.step(fn_c)
+        assert torch.equal(weight, weight_c)
+        assert torch.equal(bias, bias_c)
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
 def test_invalid_beta():
     weight = torch.randn(10, 5, requires_grad=True).float().cuda()
     bias = torch.randn(10, requires_grad=True).float().cuda()
