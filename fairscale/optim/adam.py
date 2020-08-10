@@ -57,10 +57,18 @@ try:
             max_grad_norm: Optional[float] = 0.0,
             amsgrad: Optional[bool] = False,
             mixed_precision: Optional[bool] = False,
+            optim_fp16: Optional[bool] = False,
         ):
             self.mixed_precision = mixed_precision
+            self.optim_fp16 = optim_fp16
             parameters: List[Any] = list(params)
 
+            if self.mixed_precision:
+                assert parameters[0].dtype == torch.float16
+                assert not self.optim_fp16
+
+            if self.optim_fp16:
+                assert parameters[0].dtype == torch.float16
             self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
 
             if amsgrad:
@@ -174,11 +182,13 @@ try:
 
                     # State initialization
                     if len(state) == 0:
+                        optim_type = torch.float16 if self.optim_fp16 else torch.float32
+
                         state["step"] = 0
                         # Exponential moving average of gradient values
-                        state["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
+                        state["exp_avg"] = torch.zeros_like(p, dtype=optim_type)
                         # Exponential moving average of squared gradient values
-                        state["exp_avg_sq"] = torch.zeros_like(p, dtype=torch.float32)
+                        state["exp_avg_sq"] = torch.zeros_like(p, dtype=optim_type)
 
                     exp_avg = state["exp_avg"]
                     exp_avg_sq = state["exp_avg_sq"]
@@ -188,7 +198,8 @@ try:
                     out_p = p.data if self.mixed_precision else torch.tensor([])
                     param = self.fp32_param_groups[i]["params"][j] if self.mixed_precision else p
 
-                    scale = 1.0
+                    optim_scale = 1.0
+                    scale_optim = self.optim_fp16
 
                     if self.mixed_precision:
                         pl = [param.data, exp_avg, exp_avg_sq, grad, out_p]
@@ -216,7 +227,8 @@ try:
                             beta1,
                             beta2,
                             group["eps"],
-                            scale,
+                            optim_scale,
+                            scale_optim,
                             state["step"],
                             self.eps_mode,
                             bias_correction,

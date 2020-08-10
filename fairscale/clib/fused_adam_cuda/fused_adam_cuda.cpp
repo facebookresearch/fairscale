@@ -1,7 +1,7 @@
 #include <torch/extension.h>
 
 // CUDA forward declaration
-void fused_adam_cuda(int chunk_size, at::Tensor noop_flag, std::vector<std::vector<at::Tensor>> tensor_lists, float lr, float beta1, float beta2, float eps, float grad_scale, int step, int mode, int bias_correction, float decay);
+void fused_adam_cuda(int chunk_size, at::Tensor noop_flag, std::vector<std::vector<at::Tensor>> tensor_lists, float lr, float beta1, float beta2, float eps, float optim_scale, bool scale_optim, int step, int mode, int bias_correction, float decay);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         m.def("adam", &fused_adam_cuda, "Multi tensor Adam optimized CUDA implementation.");
