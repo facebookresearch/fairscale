@@ -222,7 +222,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
     # - load it again
     if rank == reference_rank:
         optimizer_state_dict = optimizer.state_dict()
-        assert len(optimizer_state_dict["states"]) == world_size
+        assert len(optimizer_state_dict["state"]) == world_size
     else:
         optimizer_state_dict = {}
 
