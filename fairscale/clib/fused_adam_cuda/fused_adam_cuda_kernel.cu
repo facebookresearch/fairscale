@@ -14,8 +14,6 @@
 #define BLOCK_SIZE 512
 #define ILP 4
 
-#include "type_shim.h"
-
 typedef enum{
     ADAM_MODE_0   =0, // eps under square root
     ADAM_MODE_1   =1  // eps outside square root
@@ -136,46 +134,59 @@ void fused_adam_cuda(
 
     size_t tl_sz = tensor_lists.size();
     AT_ASSERTM(tl_sz == 4 || tl_sz == 5, "expected tensor lists of size 4 or 5");
+    AT_ASSERTM(tensor_lists[0][0].scalar_type() == at::ScalarType::Float
+                || tensor_lists[0][0].scalar_type() == at::ScalarType::Half);
 
+    using namespace at; // prevents "toString is undefined" errors
     if (tl_sz == 4) {
-        using namespace at; // prevents "toString is undefined" errors
-        DISPATCH_FLOAT_AND_HALF(tensor_lists[0][0].scalar_type(), 0, "adam_cuda_kernel",
-            DISPATCH_FLOAT_AND_HALF(tensor_lists[3][0].scalar_type(), 1, "adam_cuda_kernel",
-                multi_tensor_apply<4>(
-                    BLOCK_SIZE,
-                    chunk_size,
-                    noop_flag,
-                    tensor_lists,
-                    AdamFunctor<4, scalar_t_0, scalar_t_1>(),
-                    beta1,
-                    beta2,
-                    eps,
-                    grad_scale,
-                    step_size,
-                    (adamMode_t) mode,
-                    decay
-                );
+        AT_ASSERTM(tensor_lists[0][0].scalar_type() == tensor_lists[3][0].scalar_type());
+        if (tensor_lists[0][0].scalar_type() == at::ScalarType::Float) {
+            multi_tensor_apply<4>(
+                BLOCK_SIZE,
+                chunk_size,
+                noop_flag,
+                tensor_lists,
+                AdamFunctor<4, float, float>(),
+                beta1,
+                beta2,
+                eps,
+                grad_scale,
+                step_size,
+                (adamMode_t) mode,
+                decay
             );
-        );
+        } else {
+            multi_tensor_apply<4>(
+                BLOCK_SIZE,
+                chunk_size,
+                noop_flag,
+                tensor_lists,
+                AdamFunctor<4, at::Half, at::Half>(),
+                beta1,
+                beta2,
+                eps,
+                grad_scale,
+                step_size,
+                (adamMode_t) mode,
+                decay
+            );
+        }
     } else {
-        using namespace at; // prevents "toString is undefined" errors
-        DISPATCH_FLOAT_AND_HALF(tensor_lists[0][0].scalar_type(), 0, "adam_cuda_kernel",
-            DISPATCH_FLOAT_AND_HALF(tensor_lists[3][0].scalar_type(), 1, "adam_cuda_kernel",
-                multi_tensor_apply<5>(
-                    BLOCK_SIZE,
-                    chunk_size,
-                    noop_flag,
-                    tensor_lists,
-                    AdamFunctor<5, scalar_t_0, scalar_t_1>(),
-                    beta1,
-                    beta2,
-                    eps,
-                    grad_scale,
-                    step_size,
-                    (adamMode_t) mode,
-                    decay
-                );
-            );
+        AT_ASSERTM(tensor_lists[0][0].scalar_type() == at::ScalarType::Float);
+        AT_ASSERTM(tensor_lists[3][0].scalar_type() == at::ScalarType::Half);
+        multi_tensor_apply<5>(
+            BLOCK_SIZE,
+            chunk_size,
+            noop_flag,
+            tensor_lists,
+            AdamFunctor<5, float, at::Half>(),
+            beta1,
+            beta2,
+            eps,
+            grad_scale,
+            step_size,
+            (adamMode_t) mode,
+            decay
         );
     }
     THCudaCheck(cudaGetLastError());
