@@ -38,11 +38,20 @@ setup_venv: &setup_venv
         which pip
         pip install --upgrade pip
 
-install_dep: &install_dep
+install_dep_15: &install_dep_15
   - run:
       name: Install Dependencies
       command: |
         pip install --progress-bar off torch==1.5.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off -r requirements-test.txt
+        python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -m torch.utils.collect_env
+
+install_dep_16: &install_dep_16
+  - run:
+      name: Install Dependencies
+      command: |
+        pip install --progress-bar off torch==1.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
@@ -97,7 +106,7 @@ jobs:
           keys:
             - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep
+      - <<: *install_dep_16
 
       - save_cache:
           paths:
@@ -128,7 +137,7 @@ jobs:
       - store_test_results:
           path: test-results
 
-  gpu_tests:
+  gpu_tests_15:
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -147,7 +156,40 @@ jobs:
           keys:
             - cache-key-gpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep
+      - <<: *install_dep_15
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-gpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_repo_gpu
+
+      - <<: *run_unittests
+
+      - store_test_results:
+          path: test-results
+
+  gpu_tests_16:
+    <<: *gpu
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+
+      - run: nvidia-smi
+
+      - run: pyenv global 3.7.0
+
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-gpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_dep_16
 
       - save_cache:
           paths:
@@ -180,7 +222,7 @@ jobs:
           keys:
             - cache-key-gpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep
+      - <<: *install_dep_16
 
       - save_cache:
           paths:
@@ -197,5 +239,6 @@ workflows:
   build:
     jobs:
       - cpu_tests
-      - gpu_tests
+      - gpu_tests_15
+      - gpu_tests_16
       - benchmarks
