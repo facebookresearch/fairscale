@@ -106,7 +106,7 @@ jobs:
           keys:
             - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_16
+      - <<: *install_dep_15
 
       - save_cache:
           paths:
