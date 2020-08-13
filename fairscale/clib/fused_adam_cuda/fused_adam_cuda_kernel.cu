@@ -14,8 +14,6 @@
 #define BLOCK_SIZE 512
 #define ILP 4
 
-#include "type_shim.h"
-
 typedef enum{
     ADAM_MODE_0   =0, // eps under square root
     ADAM_MODE_1   =1  // eps outside square root
@@ -140,9 +138,9 @@ void fused_adam_cuda(
     AT_ASSERTM(tl_sz == 4 || tl_sz == 5, "expected tensor lists of size 4 or 5");
 
     if (tensor_lists[3][0].scalar_type() == at::ScalarType::Half) {
-//alher values should be fp32 for half gradients
+        //all other values should be fp32 for half gradients
         AT_ASSERTM(tensor_lists[0][0].scalar_type() == at::ScalarType::Half, "expected parameter to be of float type");
-//dich is done on the gradient type
+        //dispatch is done on the gradient type
         if (tl_sz == 5) {
             DISPATCH_FLOAT_AND_HALF(tensor_lists[3][0].scalar_type(), 0, "adam_cuda_mt_kernel",
                 using accscalar_t = at::acc_type<scalar_t_0, true>;
