@@ -55,13 +55,10 @@ try:
             weight_decay: Optional[float] = 0.0,
             max_grad_norm: Optional[float] = 0.0,
             amsgrad: Optional[bool] = False,
-            use_mt: Optional[bool] = True,
         ):
 
             self._use_multi_tensor = False
-            if use_mt:
-                self._use_multi_tensor = True
-                self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
+            self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
 
             if amsgrad:
                 raise RuntimeError("FusedAdam does not support the AMSGrad variant.")
@@ -131,51 +128,30 @@ try:
                     state["step"] += 1
                     out_p = torch.tensor([])
 
-                    if self._use_multi_tensor:
-                        pl = [p.data, exp_avg, exp_avg_sq, grad]
+                    pl = [p.data, exp_avg, exp_avg_sq, grad]
 
-                        if p.device not in tensorlists:
-                            tensorlists[p.device] = [[], [], [], []]
+                    if p.device not in tensorlists:
+                        tensorlists[p.device] = [[], [], [], []]
 
-                        for tl, t in zip(tensorlists[p.device], pl):
-                            tl.append(t)
+                    for tl, t in zip(tensorlists[p.device], pl):
+                        tl.append(t)
 
-                    else:
-                        with torch.cuda.device(p.device):
-                            fused_adam_cuda.adam(
-                                p.data,
-                                out_p,
-                                exp_avg,
-                                exp_avg_sq,
-                                grad,
-                                group["lr"],
-                                beta1,
-                                beta2,
-                                group["eps"],
-                                scale,
-                                state["step"],
-                                self.eps_mode,
-                                bias_correction,
-                                group["weight_decay"],
-                            )
-
-                if self._use_multi_tensor:
-                    for tensordevice, tensorlist in tensorlists.items():
-                        with torch.cuda.device(tensordevice):
-                            fused_adam_cuda.adam_mt(
-                                2048 * 32,
-                                self._overflow_buf,
-                                tensorlist,
-                                group["lr"],
-                                beta1,
-                                beta2,
-                                group["eps"],
-                                scale,
-                                state["step"],
-                                self.eps_mode,
-                                bias_correction,
-                                group["weight_decay"],
-                            )
+                for tensordevice, tensorlist in tensorlists.items():
+                    with torch.cuda.device(tensordevice):
+                        fused_adam_cuda.adam(
+                            2048 * 32,
+                            self._overflow_buf,
+                            tensorlist,
+                            group["lr"],
+                            beta1,
+                            beta2,
+                            group["eps"],
+                            scale,
+                            state["step"],
+                            self.eps_mode,
+                            bias_correction,
+                            group["weight_decay"],
+                        )
 
             return loss
 
