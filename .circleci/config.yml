@@ -69,6 +69,15 @@ install_repo_gpu: &install_repo_gpu
         export CUDA_HOME=/usr/local/cuda-10.1
         python setup.py build develop
 
+
+run_coverage: &run_coverage
+  - run:
+      name: Run Unit Tests With Coverage
+      command: |
+        pytest --cov-report=xml --cov=./
+        #Uploading test coverage for Python code
+        bash <(curl -s https://codecov.io/bash) -f coverage.xml -cF Python
+
 run_unittests: &run_unittests
   - run:
       name: Run Unit Tests
@@ -199,6 +208,8 @@ jobs:
       - <<: *install_repo_gpu
 
       - <<: *run_unittests
+
+      - <<: *run_coverage
 
       - store_test_results:
           path: test-results
