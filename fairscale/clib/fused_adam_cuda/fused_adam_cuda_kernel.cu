@@ -136,6 +136,10 @@ void fused_adam_cuda(
 
     size_t tl_sz = tensor_lists.size();
     AT_ASSERTM(tl_sz == 4, "expected tensor lists of size 4");
+
+    // check that the model and gradients are FP32
+    AT_ASSERTM(tensor_lists[0][0].scalar_type() == at::ScalarType::Float);
+    AT_ASSERTM(tensor_lists[3][0].scalar_type() == at::ScalarType::Float);
     multi_tensor_apply<4>(
         BLOCK_SIZE,
         chunk_size,
