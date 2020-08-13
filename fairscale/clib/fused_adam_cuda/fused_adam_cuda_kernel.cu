@@ -14,8 +14,6 @@
 #define BLOCK_SIZE 512
 #define ILP 4
 
-#include "type_shim.h"
-
 typedef enum{
     ADAM_MODE_0   =0, // eps under square root
     ADAM_MODE_1   =1  // eps outside square root
@@ -137,81 +135,24 @@ void fused_adam_cuda(
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
     size_t tl_sz = tensor_lists.size();
-    AT_ASSERTM(tl_sz == 4 || tl_sz == 5, "expected tensor lists of size 4 or 5");
+    AT_ASSERTM(tl_sz == 4, "expected tensor lists of size 4");
 
-    if (tensor_lists[3][0].scalar_type() == at::ScalarType::Half) {
-//alher values should be fp32 for half gradients
-        AT_ASSERTM(tensor_lists[0][0].scalar_type() == at::ScalarType::Half, "expected parameter to be of float type");
-//dich is done on the gradient type
-        if (tl_sz == 5) {
-            DISPATCH_FLOAT_AND_HALF(tensor_lists[3][0].scalar_type(), 0, "adam_cuda_mt_kernel",
-                using accscalar_t = at::acc_type<scalar_t_0, true>;
-                multi_tensor_apply<5>(
-                    BLOCK_SIZE,
-                    chunk_size,
-                    noop_flag,
-                    tensor_lists,
-                    AdamFunctor<5, accscalar_t, scalar_t_0>(),
-                    beta1,
-                    beta2,
-                    eps,
-                    grad_scale,
-                    step_size,
-                    (adamMode_t) mode,
-                    decay);
-            );
-        } else {
-            DISPATCH_FLOAT_AND_HALF(tensor_lists[3][0].scalar_type(), 0, "adam_cuda_mt_kernel",
-                using accscalar_t = at::acc_type<scalar_t_0, true>;
-                multi_tensor_apply<4>(
-                    BLOCK_SIZE,
-                    chunk_size,
-                    noop_flag,
-                    tensor_lists,
-                    AdamFunctor<4, accscalar_t, scalar_t_0>(),
-                    beta1,
-                    beta2,
-                    eps,
-                    grad_scale,
-                    step_size,
-                    (adamMode_t) mode,
-                    decay);
-            );
-        }
-    } else {
-        if (tl_sz == 5) {
-            DISPATCH_DOUBLE_AND_FLOAT(tensor_lists[3][0].scalar_type(), 0, "adam_cuda_mt_kernel",
-                multi_tensor_apply<5>(
-                    BLOCK_SIZE,
-                    chunk_size,
-                    noop_flag,
-                    tensor_lists,
-                    AdamFunctor<5, scalar_t_0, scalar_t_0>(),
-                    beta1,
-                    beta2,
-                    eps,
-                    grad_scale,
-                    step_size,
-                    (adamMode_t) mode,
-                    decay);
-            );
-        } else {
-            DISPATCH_DOUBLE_AND_FLOAT(tensor_lists[3][0].scalar_type(), 0, "adam_cuda_mt_kernel",
-                multi_tensor_apply<4>(
-                    BLOCK_SIZE,
-                    chunk_size,
-                    noop_flag,
-                    tensor_lists,
-                    AdamFunctor<4, scalar_t_0, scalar_t_0>(),
-                    beta1,
-                    beta2,
-                    eps,
-                    grad_scale,
-                    step_size,
-                    (adamMode_t) mode,
-                    decay);
-            );
-        }
-    }
+    // check that the model and gradients are FP32
+    AT_ASSERTM(tensor_lists[0][0].scalar_type() == at::ScalarType::Float);
+    AT_ASSERTM(tensor_lists[3][0].scalar_type() == at::ScalarType::Float);
+    multi_tensor_apply<4>(
+        BLOCK_SIZE,
+        chunk_size,
+        noop_flag,
+        tensor_lists,
+        AdamFunctor<4, float, float>(),
+        beta1,
+        beta2,
+        eps,
+        grad_scale,
+        step_size,
+        (adamMode_t) mode,
+        decay
+    );
     THCudaCheck(cudaGetLastError());
 }
