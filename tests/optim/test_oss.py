@@ -44,9 +44,20 @@ def test_state_dict():
     o = optim.OSS([x], lr=0.1)
     o.consolidate_state_dict()  # Sync state dict in between replicas - even if there are none
     state_dict = o.state_dict()
+
+    # Check that the pulled state is what we expect
+    assert state_dict["param_groups"][0]["lr"] == 0.1
+
+    # Check that the pulled state and the .param_groups attribute are in sync
+    assert state_dict["param_groups"][0]["lr"] == o.param_groups[0]["lr"]
+
+    # Check that it's correctly loaded
     o = optim.OSS([x], lr=0.01)
     o.load_state_dict(state_dict)
-    # We should now be using a lr of 0.1.
+
+    # We should now be using a lr of 0.1, both within the optimizer
+    # and as exposed by the .param_groups attribute
+    assert o.param_groups[0]["lr"] == 0.1
     x.backward()
     o.step()
     assert x == torch.tensor([0.9], device=DEVICE)
