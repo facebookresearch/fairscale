@@ -115,7 +115,6 @@ class OSS(Optimizer):
             buffered_elements = 0
 
             def batch_sync() -> None:
-                print("Batch broadcast")
                 batch_broadcast(buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group)
                 buffered_params.clear()
                 buffered_elements = 0
