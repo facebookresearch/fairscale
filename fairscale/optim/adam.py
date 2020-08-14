@@ -77,9 +77,9 @@ try:
             self.eps_mode = 0 if eps_inside_sqrt else 1
 
             if mixed_precision:
-                self.build_fp32_params(parameters)
+                self._build_fp32_params(parameters)
 
-        def build_fp32_params(self, params: Any) -> None:
+        def _build_fp32_params(self, params: Any) -> None:
             # create FP32 copy of parameters and grads
             fp32_params = []
             for p in params:
@@ -97,21 +97,8 @@ try:
                 params = param_group["params"]
                 if isinstance(params, torch.Tensor):
                     param_group["params"] = [params]
-                elif isinstance(params, set):
-                    raise TypeError(
-                        "optimizer parameters need to be organized in ordered collections, but "
-                        "the ordering of tensors in sets will change between runs. Please use a list instead."
-                    )
                 else:
                     param_group["params"] = list(params)
-
-                for param in param_group["params"]:
-                    if not isinstance(param, torch.Tensor):
-                        raise TypeError(
-                            "optimizer can only optimize Tensors, " "but one of the params is " + torch.typename(param)
-                        )
-                    if not param.is_leaf:
-                        raise ValueError("can't optimize a non-leaf Tensor")
 
                 for name, default in self.defaults.items():
                     param_group.setdefault(name, default)
@@ -121,9 +108,6 @@ try:
                 param_set = set()
                 for group in self.param_groups:
                     param_set.update(set(group["params"]))
-
-                if not param_set.isdisjoint(set(param_group["params"])):
-                    raise ValueError("some parameters appear in more than one parameter group")
 
                 self.fp32_param_groups.append(param_group)
 

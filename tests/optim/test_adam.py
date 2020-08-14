@@ -223,7 +223,7 @@ def test_build_fp32_params():
     weight = torch.randn(10, 5).cuda().half().requires_grad_()
     bias = torch.randn(10).cuda().half().requires_grad_()
     optimizer = Adam([weight, bias], lr=1e-3)
-    optimizer.build_fp32_params([weight, bias])
+    optimizer._build_fp32_params([weight, bias])
     for fp32_group, fp16_group in zip(optimizer.fp32_param_groups, optimizer.param_groups):
         for fp32_p, fp16_p in zip(fp32_group["params"], fp16_group["params"]):
 
