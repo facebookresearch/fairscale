@@ -4,6 +4,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdio.h>
+#include <assert.h>  
 #include <cmath>
 #include "ATen/TensorUtils.h"
 // #include "ATen/Type.h"
@@ -133,13 +134,13 @@ void fused_adam_cuda(
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
     size_t tl_sz = tensor_lists.size();
-    AT_ASSERTM(tl_sz == 4 || tl_sz == 5, "expected tensor lists of size 4 or 5");
+    assert(tl_sz == 4 || tl_sz == 5);
 
     if(tl_sz == 5) {
         // Mixed precision case
-        AT_ASSERTM(tensor_lists[0][0].scalar_type() == at::ScalarType::Float);
-        AT_ASSERTM(tensor_lists[3][0].scalar_type() == at::ScalarType::Half);
-        AT_ASSERTM(tensor_lists[4][0].scalar_type() == at::ScalarType::Half);
+        assert(tensor_lists[0][0].scalar_type() == at::ScalarType::Float);
+        assert(tensor_lists[3][0].scalar_type() == at::ScalarType::Half);
+        assert(tensor_lists[4][0].scalar_type() == at::ScalarType::Half);
         multi_tensor_apply<5>(
             BLOCK_SIZE,
             chunk_size,
@@ -155,7 +156,7 @@ void fused_adam_cuda(
             decay
         );
     } else {    // tl_sz == 4
-        AT_ASSERTM(tensor_lists[0][0].scalar_type() == tensor_lists[3][0].scalar_type());
+        assert(tensor_lists[0][0].scalar_type() == tensor_lists[3][0].scalar_type());
         if(tensor_lists[0][0].scalar_type() == at::ScalarType::Float) {
             multi_tensor_apply<4>(
                 BLOCK_SIZE,
@@ -187,7 +188,7 @@ void fused_adam_cuda(
                 decay
             );
         } else {
-            AT_ERROR("Parameters must be of type float or half");
+            throw "Parameters must be of type float or half";
         }
     }
     THCudaCheck(cudaGetLastError());
