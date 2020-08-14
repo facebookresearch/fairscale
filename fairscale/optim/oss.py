@@ -11,10 +11,12 @@ import torch
 import torch.distributed as dist
 from torch.optim import SGD, Optimizer
 
-from .utils import broadcast_object, recursive_copy_to_device
+from .utils import broadcast_object, recursive_copy_to_device, batch_broadcast
 
 if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
+    from torch import Tensor
+    from torch.nn import Parameter
 else:
     _params_t = Any
 
@@ -43,12 +45,22 @@ class OSS(Optimizer):
             optimizer to shard (default: SGD)
         group (group):
             torch.distributed group (default: group.WORLD)
+        buffer_size (int, optional): number of elements to buffer before
+            performing reduce (default: 32M). Used to reduce multiple small
+            params to avoid communication overhead.
     """
 
     optim: Optimizer
     in_super_constructor: bool
 
-    def __init__(self, params: _params_t, optim: Type[Optimizer] = SGD, group: Any = dist.group.WORLD, **defaults: Any):
+    def __init__(
+        self,
+        params: _params_t,
+        optim: Type[Optimizer] = SGD,
+        group: Any = dist.group.WORLD,
+        buffer_size: int = 2 ** 25,
+        **defaults: Any
+    ):
         # Hold all the nmodel params in the root .param_groups
         self.in_super_constructor = True
         super().__init__(params, defaults)
@@ -65,6 +77,7 @@ class OSS(Optimizer):
 
         # Current device is set by the parameters allocated to this rank
         self._device = self.partition_parameters()[self.rank][0]["params"][0].device
+        self._buffer = torch.zeros(buffer_size).to(self._device)
 
     def partition_parameters(self) -> List[List[dict]]:
         """Partitions parameters across distributed ranks.
@@ -97,9 +110,31 @@ class OSS(Optimizer):
 
         # Sync all the states
         for rank, param_groups in enumerate(self.partition_parameters()):
+            # Batch smaller params in a broadcast buffer to speed up the communication
+            buffered_params: List[Parameter] = []
+            buffered_elements = 0
+
+            def batch_sync() -> None:
+                print("Batch broadcast")
+                batch_broadcast(buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group)
+                buffered_params.clear()
+                buffered_elements = 0
+
             for param_group in param_groups:
                 for param in param_group["params"]:
-                    dist.broadcast(tensor=param, src=rank, group=self.group)
+                    if param.numel() > self._buffer.numel():
+                        # Big param block, broadcast directly
+                        dist.broadcast(tensor=param, src=rank, group=self.group)
+                    else:
+                        if buffered_elements + param.numel() > self._buffer.numel():
+                            # Batch buffer is full, sync
+                            batch_sync()
+                        else:
+                            buffered_params.append(param)
+                            buffered_elements += param.numel()
+
+                # Sync whatever is left in the batch buffer before moving to the next rank
+                batch_sync()
         return loss
 
     def local_state_dict(self) -> dict:

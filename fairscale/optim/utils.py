@@ -4,12 +4,18 @@
 # LICENSE file in the root directory of this source tree.
 
 import io
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import torch
 from torch._six import container_abcs
 import torch.distributed as dist
 
+if TYPE_CHECKING:
+    from torch import Tensor
+    from torch.nn import Parameter
+else:
+    Tensor = Any
+    Parameter = Any
 
 # Credits:  classy_vision/generic/distributed_util.py
 def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.device) -> Any:
@@ -68,3 +74,28 @@ def broadcast_object(
         buffer = io.BytesIO(data_recv_tensor.cpu().numpy())
         obj = torch.load(buffer, map_location=dist_device)
     return obj
+
+
+def batch_broadcast(
+    buffered_params: List[Parameter], source_rank: int, buffer: Tensor, process_group: Any = None
+) -> None:
+    """ Helper to broadcast a list of params batched into a bigger buffer.
+    NOTE: This skips the grads on purpose, only broadcasts the tensor parameters. 
+    NOTE: This also asserts that the parameters will fit in the buffer """
+
+    offset = 0
+    for p in buffered_params:
+        sz = p.numel()
+        buffer[offset : offset + p.numel()].copy_(p.data.view(-1))  # type: ignore
+        offset += sz
+        assert offset < buffer.numel()
+
+    dist.broadcast(tensor=buffer, src=source_rank, group=process_group)
+
+    # copy brodcasted grads back into their original place
+    offset = 0
+    for p in buffered_params:
+        sz = p.numel()
+        p.data.copy_(buffer[offset : offset + sz].view_as(p))  # type: ignore
+        offset += sz
+
