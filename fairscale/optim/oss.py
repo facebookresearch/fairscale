@@ -13,7 +13,7 @@ from torch.optim import SGD, Optimizer
 
 from .utils import broadcast_object, recursive_copy_to_device
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
