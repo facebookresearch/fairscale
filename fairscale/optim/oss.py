@@ -49,10 +49,12 @@ class OSS(Optimizer):
     in_super_constructor: bool
 
     def __init__(self, params: _params_t, optim: Type[Optimizer] = SGD, group: Any = dist.group.WORLD, **defaults: Any):
+        # Hold all the nmodel params in the root .param_groups
         self.in_super_constructor = True
         super().__init__(params, defaults)
         self.in_super_constructor = False
 
+        # Build the wrapped optimizer, responsible for a shard of the params
         self.group = group
         self.rank = dist.get_rank(group)
         param_groups = self.partition_parameters()
@@ -90,11 +92,14 @@ class OSS(Optimizer):
         return param_groups
 
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
+        # Run the optimizer step on this shard only
         loss = self.optim.step(closure=closure)
+
+        # Sync all the states
         for rank, param_groups in enumerate(self.partition_parameters()):
             for param_group in param_groups:
                 for param in param_group["params"]:
-                    dist.broadcast(param, rank, group=self.group)
+                    dist.broadcast(tensor=param, src=rank, group=self.group)
         return loss
 
     def local_state_dict(self) -> dict:
@@ -138,9 +143,12 @@ class OSS(Optimizer):
         self.optim.load_state_dict(state_dict_ondevice)
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
-        """ Loads this rank's optimizer state_dict, given the global optimizer state. """
-        # Dispatch this rank's state dictionary to the local load
+        """ Restore the global parameter groups as well as the shard """
+        # Dispatch this rank's state dictionary to the wrapped shard optimizer
         self.load_local_state_dict(state_dict["state"][self.rank])
+
+        # Restore the global param_groups
+        self.param_groups = state_dict["param_groups"]
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
