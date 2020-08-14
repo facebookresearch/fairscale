@@ -236,6 +236,7 @@ def test_build_fp32_params():
                 assert fp16_p.dtype == torch.float16
                 (fp32_p - fp16_p).to("cpu").detach().apply_(assert_almost_zero)
 
+
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_invalid_beta():

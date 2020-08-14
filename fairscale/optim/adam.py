@@ -17,6 +17,7 @@ try:
 
     class Adam(torch.optim.Optimizer):
         state: dict
+        defaults: dict
         """
         Implements Adam algorithm. Currently GPU-only.
         It has been proposed in `Adam: A Method for Stochastic Optimization`_.
@@ -55,7 +56,7 @@ try:
             weight_decay: Optional[float] = 0.0,
             max_grad_norm: Optional[float] = 0.0,
             amsgrad: Optional[bool] = False,
-            mixed_precision = False
+            mixed_precision: Optional[bool] = False,
         ):
             self.mixed_precision = mixed_precision
             parameters: List[Any] = list(params)
@@ -129,7 +130,7 @@ try:
         @property
         def supports_memory_efficient_fp16(self) -> bool:
             return True
- 
+
         @property
         def _step_supports_amp_scaling(self) -> bool:
             return False
