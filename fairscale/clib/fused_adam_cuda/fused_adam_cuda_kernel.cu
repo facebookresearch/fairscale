@@ -4,7 +4,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdio.h>
-#include <assert.h>  
+#include <assert.h>
 #include <cmath>
 #include "ATen/TensorUtils.h"
 // #include "ATen/Type.h"
@@ -155,9 +155,11 @@ void fused_adam_cuda(
             (adamMode_t) mode,
             decay
         );
-    } else {    // tl_sz == 4
+    } else {
+        // tl_sz == 4
         assert(tensor_lists[0][0].scalar_type() == tensor_lists[3][0].scalar_type());
         if(tensor_lists[0][0].scalar_type() == at::ScalarType::Float) {
+            // Full precision case
             multi_tensor_apply<4>(
                 BLOCK_SIZE,
                 chunk_size,
@@ -173,6 +175,7 @@ void fused_adam_cuda(
                 decay
             );
         } else if (tensor_lists[0][0].scalar_type() == at::ScalarType::Half) {
+            // "Memory Efficient Training" case
             multi_tensor_apply<4>(
                 BLOCK_SIZE,
                 chunk_size,
