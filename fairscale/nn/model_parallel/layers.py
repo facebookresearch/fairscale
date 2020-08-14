@@ -47,7 +47,7 @@ def _initialize_affine_weight(
     in_features: int,
     per_partition_size: int,
     partition_dim: int,
-    init_method: Callable[..., None],
+    init_method: Callable[..., torch.Tensor],
     stride: int = 1,
     return_master_weight: bool = False,
 ) -> Optional[torch.Tensor]:
@@ -101,7 +101,7 @@ class VocabParallelEmbedding(torch.nn.Module):
         norm_type: float = 2.0,
         scale_grad_by_freq: bool = False,
         sparse: bool = False,
-        init_method: Callable[..., None] = init.xavier_normal_,
+        init_method: Callable[..., torch.Tensor] = init.xavier_normal_,
     ) -> None:
         super(VocabParallelEmbedding, self).__init__()
         # Keep the input dimensions.
@@ -169,7 +169,7 @@ class ParallelEmbedding(torch.nn.Module):
         norm_type: float = 2.0,
         scale_grad_by_freq: bool = False,
         sparse: bool = False,
-        init_method: Callable[..., None] = init.xavier_normal_,
+        init_method: Callable[..., torch.Tensor] = init.xavier_normal_,
         keep_master_weight_for_test: bool = False,
     ) -> None:
         super(ParallelEmbedding, self).__init__()
@@ -242,7 +242,7 @@ class ColumnParallelLinear(torch.nn.Module):
         out_features: int,
         bias: bool = True,
         gather_output: bool = True,
-        init_method: Callable[..., None] = init.xavier_normal_,
+        init_method: Callable[..., torch.Tensor] = init.xavier_normal_,
         stride: int = 1,
         keep_master_weight_for_test: bool = False,
     ) -> None:
@@ -326,7 +326,7 @@ class RowParallelLinear(torch.nn.Module):
         out_features: int,
         bias: bool = True,
         input_is_parallel: bool = False,
-        init_method: Callable[..., None] = init.xavier_normal_,
+        init_method: Callable[..., torch.Tensor] = init.xavier_normal_,
         stride: int = 1,
         keep_master_weight_for_test: bool = False,
     ):
