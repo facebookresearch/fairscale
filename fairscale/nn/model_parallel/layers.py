@@ -24,13 +24,12 @@
 # repo: https://github.com/pytorch/pytorch
 
 
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 import torch.nn.functional as F
 import torch.nn.init as init
 from torch.nn.parameter import Parameter
-from typing_extensions import Protocol
 
 from .initialize import get_model_parallel_rank, get_model_parallel_world_size
 from .mappings import (
@@ -42,18 +41,13 @@ from .mappings import (
 from .utils import VocabUtility, divide_and_check_no_remainder
 
 
-class InitMethod(Protocol):
-    def __call__(self, tensor: torch.Tensor) -> None:
-        ...
-
-
 def _initialize_affine_weight(
     weight: torch.Tensor,
     out_features: int,
     in_features: int,
     per_partition_size: int,
     partition_dim: int,
-    init_method: InitMethod,
+    init_method: Callable[..., None],
     stride: int = 1,
     return_master_weight: bool = False,
 ) -> Optional[torch.Tensor]:
@@ -107,7 +101,7 @@ class VocabParallelEmbedding(torch.nn.Module):
         norm_type: float = 2.0,
         scale_grad_by_freq: bool = False,
         sparse: bool = False,
-        init_method: InitMethod = init.xavier_normal_,
+        init_method: Callable[..., None] = init.xavier_normal_,
     ) -> None:
         super(VocabParallelEmbedding, self).__init__()
         # Keep the input dimensions.
@@ -175,7 +169,7 @@ class ParallelEmbedding(torch.nn.Module):
         norm_type: float = 2.0,
         scale_grad_by_freq: bool = False,
         sparse: bool = False,
-        init_method: InitMethod = init.xavier_normal_,
+        init_method: Callable[..., None] = init.xavier_normal_,
         keep_master_weight_for_test: bool = False,
     ) -> None:
         super(ParallelEmbedding, self).__init__()
@@ -248,7 +242,7 @@ class ColumnParallelLinear(torch.nn.Module):
         out_features: int,
         bias: bool = True,
         gather_output: bool = True,
-        init_method: InitMethod = init.xavier_normal_,
+        init_method: Callable[..., None] = init.xavier_normal_,
         stride: int = 1,
         keep_master_weight_for_test: bool = False,
     ) -> None:
@@ -332,7 +326,7 @@ class RowParallelLinear(torch.nn.Module):
         out_features: int,
         bias: bool = True,
         input_is_parallel: bool = False,
-        init_method: InitMethod = init.xavier_normal_,
+        init_method: Callable[..., None] = init.xavier_normal_,
         stride: int = 1,
         keep_master_weight_for_test: bool = False,
     ):
