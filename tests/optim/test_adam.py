@@ -44,6 +44,84 @@ def test_step():
     for _i in range(5):
         optimizer.step(fn)
     assert fn().item() < initial_value
+    for group in optimizer.param_groups:
+        for p in group["params"]:
+            if p.requires_grad:
+                assert p.dtype == torch.float32
+    with pytest.raises(AttributeError):
+        optimizer.fp32_param_groups
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_step_me():
+    weight = torch.randn(10, 5).cuda().half().requires_grad_()
+    bias = torch.randn(10).cuda().half().requires_grad_()
+    input = torch.randn(5).half().cuda()
+    optimizer = Adam([weight, bias], lr=1e-3)
+
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+
+    def fn():
+        optimizer.zero_grad()
+        y = weight.mv(input)
+        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
+            y = y.cuda(bias.get_device())
+        loss = (y + bias).pow(2).sum()
+        loss.backward()
+        return loss
+
+    initial_value = fn().item()
+    for _i in range(5):
+        optimizer.step(fn)
+    assert fn().item() < initial_value
+    for group in optimizer.param_groups:
+        for p in group["params"]:
+            if p.requires_grad:
+                assert p.dtype == torch.float16
+    with pytest.raises(AttributeError):
+        optimizer.fp32_param_groups
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_step_mixed_precision():
+    weight = torch.randn(10, 5).cuda().half().requires_grad_()
+    bias = torch.randn(10).cuda().half().requires_grad_()
+    input = torch.randn(5).half().cuda()
+    optimizer = Adam([weight, bias], lr=1e-3, mixed_precision=True)
+
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+
+    def fn():
+        optimizer.zero_grad()
+        y = weight.mv(input)
+        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
+            y = y.cuda(bias.get_device())
+        loss = (y + bias).pow(2).sum()
+        loss.backward()
+        return loss
+
+    initial_value = fn().item()
+    for _i in range(5):
+        optimizer.step(fn)
+
+    assert fn().item() < initial_value
+    assert len(optimizer.fp32_param_groups) == len(optimizer.param_groups)
+
+    for fp32_group, fp16_group in zip(optimizer.fp32_param_groups, optimizer.param_groups):
+        for fp32_p, fp16_p in zip(fp32_group["params"], fp16_group["params"]):
+
+            def assert_almost_zero(x):
+                assert abs(x) < 1e-3
+                return 1.0
+
+            assert fp32_p.dtype == torch.float32
+            if fp16_p.requires_grad:
+                assert fp16_p.dtype == torch.float16
+                (fp32_p - fp16_p).to("cpu").detach().apply_(assert_almost_zero)
 
 
 @skip_if_no_cuda
@@ -55,6 +133,34 @@ def test_step_multigpu():
     bias = torch.randn(10).cuda(1).requires_grad_()
     input = torch.randn(5).cuda(0)
     optimizer = Adam([weight, bias], lr=1e-3)
+
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+
+    def fn():
+        optimizer.zero_grad()
+        y = weight.mv(input)
+        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
+            y = y.cuda(bias.get_device())
+        loss = (y + bias).pow(2).sum()
+        loss.backward()
+        return loss
+
+    initial_value = fn().item()
+    for _i in range(5):
+        optimizer.step(fn)
+    assert fn().item() < initial_value
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_step_multigpu_mixed_precision():
+    if not torch.cuda.device_count() > 1:
+        return
+    weight = torch.randn(10, 5).cuda(0).half().requires_grad_()
+    bias = torch.randn(10).cuda(1).half().requires_grad_()
+    input = torch.randn(5).cuda(0).half()
+    optimizer = Adam([weight, bias], lr=1e-3, mixed_precision=True)
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
@@ -110,6 +216,25 @@ def test_state_dict():
         assert torch.equal(weight, weight_c)
         assert torch.equal(bias, bias_c)
 
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_build_fp32_params():
+    weight = torch.randn(10, 5).cuda().half().requires_grad_()
+    bias = torch.randn(10).cuda().half().requires_grad_()
+    optimizer = Adam([weight, bias], lr=1e-3)
+    optimizer.build_fp32_params([weight, bias])
+    for fp32_group, fp16_group in zip(optimizer.fp32_param_groups, optimizer.param_groups):
+        for fp32_p, fp16_p in zip(fp32_group["params"], fp16_group["params"]):
+
+            def assert_almost_zero(x):
+                assert abs(x) < 1e-3
+                return 1.0
+
+            assert fp32_p.dtype == torch.float32
+            if fp16_p.requires_grad:
+                assert fp16_p.dtype == torch.float16
+                (fp32_p - fp16_p).to("cpu").detach().apply_(assert_almost_zero)
 
 @skip_if_no_cuda
 @skip_if_no_adam
