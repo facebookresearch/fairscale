@@ -17,6 +17,7 @@ try:
 
     class Adam(torch.optim.Optimizer):
         state: dict
+        defaults: dict
         """
         Implements Adam algorithm. Currently GPU-only.
         It has been proposed in `Adam: A Method for Stochastic Optimization`_.
@@ -55,9 +56,11 @@ try:
             weight_decay: Optional[float] = 0.0,
             max_grad_norm: Optional[float] = 0.0,
             amsgrad: Optional[bool] = False,
+            mixed_precision: Optional[bool] = False,
         ):
+            self.mixed_precision = mixed_precision
+            parameters: List[Any] = list(params)
 
-            self._use_multi_tensor = False
             self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
 
             if amsgrad:
@@ -70,14 +73,53 @@ try:
                 "weight_decay": weight_decay,
                 "max_grad_norm": max_grad_norm,
             }
-            super().__init__(params, defaults)
+            super().__init__(parameters, defaults)
             self.eps_mode = 0 if eps_inside_sqrt else 1
+
+            if mixed_precision:
+                self._build_fp32_params(parameters)
+
+        def _build_fp32_params(self, params: Any) -> None:
+            # create FP32 copy of parameters and grads
+            fp32_params = []
+            for p in params:
+                p32 = torch.nn.Parameter(p.data.float()).to(p.device)
+                p32.grad = torch.zeros_like(p32.data)
+                fp32_params.append(p32)
+            params = fp32_params
+
+            self.fp32_param_groups = []
+            param_groups = list(params)
+            if not isinstance(param_groups[0], dict):
+                param_groups = [{"params": param_groups}]
+
+            for param_group in param_groups:
+                params = param_group["params"]
+                if isinstance(params, torch.Tensor):
+                    param_group["params"] = [params]
+                else:
+                    param_group["params"] = list(params)
+
+                for name, default in self.defaults.items():
+                    param_group.setdefault(name, default)
+
+                params = param_group["params"]
+
+                param_set = set()
+                for group in self.param_groups:
+                    param_set.update(set(group["params"]))
+
+                self.fp32_param_groups.append(param_group)
 
         @property
         def supports_memory_efficient_fp16(self) -> bool:
             return True
 
-        def step(self, closure: Optional[Callable[[], float]] = None, scale: Optional[float] = 1.0) -> Optional[float]:
+        @property
+        def _step_supports_amp_scaling(self) -> bool:
+            return False
+
+        def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
             """Performs a single optimization step.
             Arguments:
                 closure (callable, optional): A closure that reevaluates the model
@@ -95,11 +137,13 @@ try:
             if closure is not None:
                 loss = closure()
 
-            for group in self.param_groups:
+            for i in range(len(self.param_groups)):
+                group = self.param_groups[i]
                 bias_correction = 1 if group["bias_correction"] else 0
                 tensorlists: Dict[torch.device, List[List[torch.Tensor]]] = dict()
 
-                for p in group["params"]:
+                for j in range(len(group["params"])):
+                    p = group["params"][j]
                     # note: p.grad should not ever be set for correct
                     # operation of mixed precision optimizer that sometimes
                     # sends None gradients
@@ -126,15 +170,26 @@ try:
                     beta1, beta2 = group["betas"]
 
                     state["step"] += 1
-                    out_p = torch.tensor([])
+                    out_p = p.data if self.mixed_precision else torch.tensor([])
+                    param = self.fp32_param_groups[i]["params"][j] if self.mixed_precision else p
 
-                    pl = [p.data, exp_avg, exp_avg_sq, grad]
+                    scale = 1.0
 
-                    if p.device not in tensorlists:
-                        tensorlists[p.device] = [[], [], [], []]
+                    if self.mixed_precision:
+                        pl = [param.data, exp_avg, exp_avg_sq, grad, out_p]
+                        if p.device not in tensorlists:
+                            tensorlists[p.device] = [[], [], [], [], []]
 
-                    for tl, t in zip(tensorlists[p.device], pl):
-                        tl.append(t)
+                        for tl, t in zip(tensorlists[p.device], pl):
+                            tl.append(t)
+                    else:
+                        pl = [param.data, exp_avg, exp_avg_sq, grad]
+
+                        if p.device not in tensorlists:
+                            tensorlists[p.device] = [[], [], [], []]
+
+                        for tl, t in zip(tensorlists[p.device], pl):
+                            tl.append(t)
 
                 for tensordevice, tensorlist in tensorlists.items():
                     with torch.cuda.device(tensordevice):
