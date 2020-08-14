@@ -53,7 +53,7 @@ def broadcast_object(
     if dist.get_rank() == src_rank:
         # Emit data
         buffer = io.BytesIO()
-        torch.save(obj, buffer)  # type: ignore
+        torch.save(obj, buffer)
         data = bytearray(buffer.getbuffer())
         length_tensor = torch.LongTensor([len(data)]).to(dist_device)
         data_send_tensor = torch.ByteTensor(data).to(dist_device)
@@ -66,5 +66,5 @@ def broadcast_object(
         data_recv_tensor = torch.empty([int(length_tensor.item())], dtype=torch.uint8, device=dist_device)
         dist.broadcast(data_recv_tensor, src=src_rank, group=group, async_op=False)
         buffer = io.BytesIO(data_recv_tensor.cpu().numpy())
-        obj = torch.load(buffer, map_location=dist_device)  # type: ignore
+        obj = torch.load(buffer, map_location=dist_device)
     return obj
