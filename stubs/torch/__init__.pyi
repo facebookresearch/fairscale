@@ -30,6 +30,7 @@ from . import nn as nn
 
 #MODIFIED BY TORCHGPIPE
 from . import backends
+from . import distributed
 from . import version
 #END
 

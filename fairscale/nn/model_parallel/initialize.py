@@ -24,7 +24,6 @@
 
 from typing import List
 
-import numpy as np  # type: ignore
 import torch
 
 from .utils import ensure_divisibility
@@ -68,11 +67,9 @@ def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 
 
     data_parallel_size = int(world_size / (model_parallel_size * pipeline_length))
 
-    groups = (
-        torch.LongTensor(range(world_size)).reshape(data_parallel_size, pipeline_length, model_parallel_size).numpy()
-    )
+    groups = torch.LongTensor(range(world_size)).reshape(data_parallel_size, pipeline_length, model_parallel_size)
 
-    found = np.where(groups == rank)
+    found = torch.where(groups == rank)
     assert all(len(x) == 1 for x in found)
     found = [x[0] for x in found]
 
