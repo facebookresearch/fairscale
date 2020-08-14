@@ -19,9 +19,7 @@ typedef enum{
     ADAM_MODE_1   =1  // eps outside square root
 } adamMode_t;
 
-
-
-template <int DEPTH, typename T, typename GRAD_T>
+template <int DEPTH, typename PARAM_T, typename GRAD_T>
 struct AdamFunctor
 {
     __device__ __forceinline__ void operator()(
@@ -40,26 +38,26 @@ struct AdamFunctor
         int chunk_idx = tl.block_to_chunk[blockIdx.x];
         int n = tl.sizes[tensor_loc];
 
-        GRAD_T* p = (GRAD_T *)tl.addresses[0][tensor_loc];
+        PARAM_T* p = (PARAM_T *)tl.addresses[0][tensor_loc];
         p += chunk_idx*chunk_size;
-        T* m = (T *)tl.addresses[1][tensor_loc];
+        float* m = (float *)tl.addresses[1][tensor_loc];
         m += chunk_idx*chunk_size;
-        T* v = (T *)tl.addresses[2][tensor_loc];
+        float* v = (float *)tl.addresses[2][tensor_loc];
         v += chunk_idx*chunk_size;
         GRAD_T* g = (GRAD_T *)tl.addresses[3][tensor_loc];
         g += chunk_idx*chunk_size;
-        GRAD_T* p_copy = NULL;
+        at::Half* p_copy = NULL;
         if (DEPTH == 5) {
-            p_copy = (GRAD_T *)tl.addresses[4][tensor_loc];
+            p_copy = (at::Half*)tl.addresses[4][tensor_loc];
             p_copy += chunk_idx*chunk_size;
         }
 
         n -= chunk_idx*chunk_size;
 
-        T incoming_p[ILP];
-        T incoming_m[ILP];
-        T incoming_v[ILP];
-        T incoming_g[ILP];
+        PARAM_T incoming_p[ILP];
+        float incoming_m[ILP];
+        float incoming_v[ILP];
+        GRAD_T incoming_g[ILP];
 
         for(int i_start = 0;
             i_start < n && i_start < chunk_size;
@@ -74,10 +72,10 @@ struct AdamFunctor
 
                 int i = i_start + threadIdx.x + ii*blockDim.x;
                 if (i < n && i < chunk_size) {
-                    incoming_p[ii] = static_cast<T>(p[i]);
+                    incoming_p[ii] = static_cast<PARAM_T>(p[i]);
                     incoming_m[ii] = m[i];
                     incoming_v[ii] = v[i];
-                    incoming_g[ii] = static_cast<T>(g[i]);
+                    incoming_g[ii] = static_cast<GRAD_T>(g[i]);
                 }
             }
 
@@ -91,7 +89,7 @@ struct AdamFunctor
                 int j = i_start + threadIdx.x + ii*blockDim.x;
 
                 if(j < n && j < chunk_size) {
-                    T scaled_grad = incoming_g[ii]/grad_scale;
+                    float scaled_grad = incoming_g[ii]/grad_scale;
                     m[j] = b1*incoming_m[ii] + (1-b1)*scaled_grad;
                     v[j] = b2*incoming_v[ii] + (1-b2)*scaled_grad*scaled_grad;
                     float denom;
@@ -100,8 +98,8 @@ struct AdamFunctor
                     else // Mode 1
                         denom = sqrtf(v[j]) + eps;
                     float update = (m[j]/denom) + (decay*incoming_p[ii]);
-                    p[j] = (GRAD_T)(incoming_p[ii] - (step_size*update));
-                    if (DEPTH == 5)  p_copy[j] = p[j];
+                    p[j] = (PARAM_T)(incoming_p[ii] - (step_size*update));
+                    if (DEPTH == 5)  p_copy[j] = (at::Half) p[j];
                 }
             }
         }
@@ -135,24 +133,62 @@ void fused_adam_cuda(
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
     size_t tl_sz = tensor_lists.size();
-    AT_ASSERTM(tl_sz == 4, "expected tensor lists of size 4");
+    AT_ASSERTM(tl_sz == 4 || tl_sz == 5, "expected tensor lists of size 4 or 5");
 
-    // check that the model and gradients are FP32
-    AT_ASSERTM(tensor_lists[0][0].scalar_type() == at::ScalarType::Float);
-    AT_ASSERTM(tensor_lists[3][0].scalar_type() == at::ScalarType::Float);
-    multi_tensor_apply<4>(
-        BLOCK_SIZE,
-        chunk_size,
-        noop_flag,
-        tensor_lists,
-        AdamFunctor<4, float, float>(),
-        beta1,
-        beta2,
-        eps,
-        grad_scale,
-        step_size,
-        (adamMode_t) mode,
-        decay
-    );
+    if(tl_sz == 5) {
+        // Mixed precision case
+        AT_ASSERTM(tensor_lists[0][0].scalar_type() == at::ScalarType::Float);
+        AT_ASSERTM(tensor_lists[3][0].scalar_type() == at::ScalarType::Half);
+        AT_ASSERTM(tensor_lists[4][0].scalar_type() == at::ScalarType::Half);
+        multi_tensor_apply<5>(
+            BLOCK_SIZE,
+            chunk_size,
+            noop_flag,
+            tensor_lists,
+            AdamFunctor<5, float, at::Half>(),
+            beta1,
+            beta2,
+            eps,
+            grad_scale,
+            step_size,
+            (adamMode_t) mode,
+            decay
+        );
+    } else {    // tl_sz == 4
+        AT_ASSERTM(tensor_lists[0][0].scalar_type() == tensor_lists[3][0].scalar_type());
+        if(tensor_lists[0][0].scalar_type() == at::ScalarType::Float) {
+            multi_tensor_apply<4>(
+                BLOCK_SIZE,
+                chunk_size,
+                noop_flag,
+                tensor_lists,
+                AdamFunctor<4, float, float>(),
+                beta1,
+                beta2,
+                eps,
+                grad_scale,
+                step_size,
+                (adamMode_t) mode,
+                decay
+            );
+        } else if (tensor_lists[0][0].scalar_type() == at::ScalarType::Half) {
+            multi_tensor_apply<4>(
+                BLOCK_SIZE,
+                chunk_size,
+                noop_flag,
+                tensor_lists,
+                AdamFunctor<4, at::Half, at::Half>(),
+                beta1,
+                beta2,
+                eps,
+                grad_scale,
+                step_size,
+                (adamMode_t) mode,
+                decay
+            );
+        } else {
+            AT_ERROR("Parameters must be of type float or half");
+        }
+    }
     THCudaCheck(cudaGetLastError());
 }
