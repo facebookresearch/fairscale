@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 from torch.optim import SGD, Optimizer
 
-from .utils import broadcast_object, recursive_copy_to_device, batch_broadcast
+from .utils import batch_broadcast, broadcast_object, recursive_copy_to_device
 
 if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
@@ -130,6 +130,7 @@ class OSS(Optimizer):
                             # Batch buffer is full, sync
                             batch_sync()
                         else:
+                            # Keep async and batch sync later
                             buffered_params.append(param)
                             buffered_elements += param.numel()
 

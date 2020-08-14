@@ -98,4 +98,3 @@ def batch_broadcast(
         sz = p.numel()
         p.data.copy_(buffer[offset : offset + sz].view_as(p))  # type: ignore
         offset += sz
-
