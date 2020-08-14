@@ -15,7 +15,6 @@ from .utils import batch_broadcast, broadcast_object, recursive_copy_to_device
 
 if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
-    from torch import Tensor
     from torch.nn import Parameter
 else:
     _params_t = Any
