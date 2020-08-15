@@ -113,27 +113,29 @@ class OSS(Optimizer):
             buffered_params: List[Parameter] = []
             buffered_elements = 0
 
-            def batch_sync() -> None:
-                batch_broadcast(buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group)
-                buffered_params.clear()
-                buffered_elements = 0
-
             for param_group in param_groups:
                 for param in param_group["params"]:
                     if param.numel() > self._buffer.numel():
                         # Big param block, broadcast directly
                         dist.broadcast(tensor=param, src=rank, group=self.group)
                     else:
-                        if buffered_elements + param.numel() > self._buffer.numel():
+                        if buffered_elements + param.numel() >= self._buffer.numel():
                             # Batch buffer is full, sync
-                            batch_sync()
+                            batch_broadcast(
+                                buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group
+                            )
+                            buffered_params.clear()
+                            buffered_elements = 0
                         else:
                             # Keep async and batch sync later
                             buffered_params.append(param)
                             buffered_elements += param.numel()
 
                 # Sync whatever is left in the batch buffer before moving to the next rank
-                batch_sync()
+                if buffered_elements > 0:
+                    batch_broadcast(buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group)
+                    buffered_params.clear()
+                    buffered_elements = 0
         return loss
 
     def local_state_dict(self) -> dict:

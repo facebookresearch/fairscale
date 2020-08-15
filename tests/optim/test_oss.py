@@ -140,6 +140,48 @@ def test_step():
     mp.spawn(run_test_step, args=(world_size,), nprocs=world_size, join=True)
 
 
+def run_test_batch_broadcast(rank, world_size):
+    dist_init(rank, world_size)
+    x = torch.rand([10, world_size], device=rank)
+    target = torch.zeros([10, world_size], device=rank)
+
+    layers = [torch.nn.Linear(i, i + 1) for i in range(world_size, 5 * world_size)]
+    m = torch.nn.Sequential(*layers)
+    m.to(rank)
+
+    # Set a very small buffer size to force the full param block to be broadcasted
+    o = optim.OSS(m.parameters(), lr=0.1, buffer_size=8)
+    loss_fn = torch.nn.L1Loss().to(device=rank)
+
+    def closure():
+        o.zero_grad()
+        output = m(x)
+        loss = loss_fn(output, target)
+        loss.backward()
+        return loss
+
+    loss = o.step(closure=closure)
+
+    # Set a very big buffer size to force all the params to be packed
+    o = optim.OSS(m.parameters(), lr=0.1, buffer_size=2 ** 26)
+    loss_fn = torch.nn.L1Loss().to(device=rank)
+
+    def closure():
+        o.zero_grad()
+        output = m(x)
+        loss = loss_fn(output, target)
+        loss.backward()
+        return loss
+
+    loss = o.step(closure=closure)
+
+
+@skip_if_no_cuda
+def test_batch_broadcast():
+    world_size = min(2, torch.cuda.device_count())
+    mp.spawn(run_test_batch_broadcast, args=(world_size,), nprocs=world_size, join=True)
+
+
 def run_test_step_with_closure(rank, world_size, optimizer=None):
     dist_init(rank, world_size)
 
