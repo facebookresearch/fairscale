@@ -143,7 +143,7 @@ def test_step():
 def run_test_batch_broadcast(rank, world_size):
     dist_init(rank, world_size)
     x = torch.rand([10, world_size], device=rank)
-    target = torch.zeros([10, world_size], device=rank)
+    target = torch.zeros([10, 5 * world_size], device=rank)
 
     layers = [torch.nn.Linear(i, i + 1) for i in range(world_size, 5 * world_size)]
     m = torch.nn.Sequential(*layers)
