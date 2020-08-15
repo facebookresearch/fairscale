@@ -39,6 +39,12 @@ try:
                 adds eps to the bias-corrected second moment estimate before
                 evaluating square root instead of adding it to the square root of
                 second moment estimate as in the original paper. (default: False)
+            mixed_precision (boolean, optional): if optimizing a half-precision 
+                model, store a full-precision copy of parameters to use for
+                step calculations (default: False)
+            optim_fp16 (boolean, optional): if optimizing a half-precision model,
+                store optimizer state in half-precision as opposed to full-
+                precision (default: False)
         .. _Adam: A Method for Stochastic Optimization:
             https://arxiv.org/abs/1412.6980
         .. _On the Convergence of Adam and Beyond:
