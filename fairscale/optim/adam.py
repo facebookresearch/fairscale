@@ -26,12 +26,13 @@ try:
         """
         Lazily serves copies of a tensor to requested devices.  Copies are cached per-device.
         """
-        def __init__(self, master_tensor):
+
+        def __init__(self, master_tensor: torch.Tensor):
             assert master_tensor.is_cuda
             self.master = master_tensor
-            self._per_device_tensors = {}
+            self._per_device_tensors: Dict[torch.device, torch.Tensor] = {}
 
-        def get(self, device):
+        def get(self, device: torch.device) -> torch.Tensor:
             retval = self._per_device_tensors.get(device, None)
             if retval is None:
                 retval = self.master.to(device=device, non_blocking=True, copy=True)
@@ -97,7 +98,7 @@ try:
                 assert parameters[0].dtype == torch.float16
 
             self.optim_type = torch.float16 if precision is Precision.PURE_FP16 else torch.float32
-            self._optim_scale = float(2**16) if self.optim_fp16 else 1.0
+            self._optim_scale = float(2**16) if precision is Precision.PURE_FP16 else 1.0
             self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
 
             if amsgrad:
@@ -265,12 +266,12 @@ try:
                             bias_correction,
                             group["weight_decay"],
                         )
-                
+
                 if sum(v.item() for v in per_device_found_inf._per_device_tensors.values()):
                     self._optim_scale /= 2
 
                     optim_type = torch.float16 if self.optim_fp16 else torch.float32
-                    
+
                     for group in self.param_groups:
                         for p in group["params"]:
                             self.state[p]["exp_avg"] = torch.zeros_like(p, dtype=optim_type)
