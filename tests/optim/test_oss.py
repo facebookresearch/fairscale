@@ -7,13 +7,14 @@
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
 
+import math
 import os
 
 import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-import math
+
 import fairscale.optim as optim
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
@@ -172,8 +173,10 @@ def run_test_batch_broadcast(rank, world_size):
         return loss
 
     loss = o.step(closure=closure)
-
     assert loss == torch.tensor([error], device=rank)
+
+    loss_update = o.step(closure=closure)
+    assert loss_update.item() < loss.item()
 
     # Set a very big buffer size to force all the params to be packed
     m_large = get_model()
@@ -189,6 +192,9 @@ def run_test_batch_broadcast(rank, world_size):
 
     loss = o.step(closure=closure)
     assert loss == torch.tensor([error], device=rank)
+
+    loss_update = o.step(closure=closure)
+    assert loss_update.item() < loss.item()
 
 
 @skip_if_no_cuda

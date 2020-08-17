@@ -131,11 +131,10 @@ class OSS(Optimizer):
                         buffered_params.append(param)
                         buffered_elements += param.numel()
 
-                # Sync whatever is left in the batch buffer before moving to the next rank
-                if buffered_elements > 0:
-                    batch_broadcast(buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group)
-                    buffered_params.clear()
-                    buffered_elements = 0
+            # Sync whatever is left in the batch buffer before moving to the next rank
+            if buffered_elements > 0:
+                batch_broadcast(buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group)
+
         return loss
 
     def local_state_dict(self) -> dict:
