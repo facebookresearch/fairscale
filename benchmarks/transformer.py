@@ -137,7 +137,7 @@ def make_model(device, ntokens):
     lr = 0.01  # learning rate
 
     try:
-        optimizer = Adam(p.parameters(), lr=lr, precision=Precision.MIXED_PRECISION)
+        optimizer = Adam(p.parameters(), lr=lr, precision=Precision.PURE_FP16)
     except NameError:
         optimizer = Adam(p.parameters(), lr=lr)
 

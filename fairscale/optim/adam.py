@@ -22,6 +22,22 @@ try:
         MEMORY_EFFICIENT_MIXED_PRECISION = auto()
         PURE_FP16 = auto()
 
+    class _MultiDeviceReplicator(object):
+        """
+        Lazily serves copies of a tensor to requested devices.  Copies are cached per-device.
+        """
+        def __init__(self, master_tensor):
+            assert master_tensor.is_cuda
+            self.master = master_tensor
+            self._per_device_tensors = {}
+
+        def get(self, device):
+            retval = self._per_device_tensors.get(device, None)
+            if retval is None:
+                retval = self.master.to(device=device, non_blocking=True, copy=True)
+                self._per_device_tensors[device] = retval
+            return retval
+
     class Adam(torch.optim.Optimizer):
         state: dict
         defaults: dict
@@ -81,7 +97,7 @@ try:
                 assert parameters[0].dtype == torch.float16
 
             self.optim_type = torch.float16 if precision is Precision.PURE_FP16 else torch.float32
-
+            self._optim_scale = float(2**16) if self.optim_fp16 else 1.0
             self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
 
             if amsgrad:
@@ -228,6 +244,9 @@ try:
                         for tl, t in zip(tensorlists[p.device], pl):
                             tl.append(t)
 
+                found_inf = torch.full((1,), 0.0, dtype=torch.float32, device=list(tensorlists.keys())[0])
+                per_device_found_inf = _MultiDeviceReplicator(found_inf)
+
                 for tensordevice, tensorlist in tensorlists.items():
                     with torch.cuda.device(tensordevice):
                         fused_adam_cuda.adam(
@@ -239,11 +258,23 @@ try:
                             beta2,
                             group["eps"],
                             scale,
+                            self._optim_scale,
+                            per_device_found_inf.get(tensordevice),
                             state["step"],
                             self.eps_mode,
                             bias_correction,
                             group["weight_decay"],
                         )
+                
+                if sum(v.item() for v in per_device_found_inf._per_device_tensors.values()):
+                    self._optim_scale /= 2
+
+                    optim_type = torch.float16 if self.optim_fp16 else torch.float32
+                    
+                    for group in self.param_groups:
+                        for p in group["params"]:
+                            self.state[p]["exp_avg"] = torch.zeros_like(p, dtype=optim_type)
+                            self.state[p]["exp_avg_sq"] = torch.zeros_like(p, dtype=optim_type)
 
             return loss
 
