@@ -143,7 +143,7 @@ def test_step():
 
 def run_test_batch_broadcast(rank, world_size):
     dist_init(rank, world_size)
-    width_multiplier = 4
+    width_multiplier = 3
     batch_size = 10
 
     x = torch.ones([batch_size, world_size], device=rank)
@@ -173,10 +173,10 @@ def run_test_batch_broadcast(rank, world_size):
         return loss
 
     loss = o.step(closure=closure)
-    assert loss == torch.tensor([error], device=rank)
+    assert round(loss.item()) == error, f"{loss} vs. expected: {error}"
 
     loss_update = o.step(closure=closure)
-    assert loss_update.item() < loss.item()
+    assert loss_update.item() < loss.item(), f"{loss.item()} vs {loss_update.item()} loss should decrease"
 
     # Set a very big buffer size to force all the params to be packed
     m_large = get_model()
@@ -191,10 +191,10 @@ def run_test_batch_broadcast(rank, world_size):
         return loss
 
     loss = o.step(closure=closure)
-    assert loss == torch.tensor([error], device=rank)
+    assert round(loss.item()) == error, f"{loss} vs. expected: {error}"
 
     loss_update = o.step(closure=closure)
-    assert loss_update.item() < loss.item()
+    assert loss_update.item() < loss.item(), f"{loss.item()} vs {loss_update.item()} loss should decrease"
 
 
 @skip_if_no_cuda

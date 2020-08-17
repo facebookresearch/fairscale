@@ -115,11 +115,11 @@ class OSS(Optimizer):
 
             for param_group in param_groups:
                 for param in param_group["params"]:
-                    if param.numel() > self._buffer.numel():
+                    if param.numel() >= self._buffer.numel():
                         # Big param block, broadcast directly
                         dist.broadcast(tensor=param, src=rank, group=self.group)
                     else:
-                        if buffered_elements + param.numel() >= self._buffer.numel():
+                        if (buffered_elements + param.numel()) >= self._buffer.numel():
                             # Batch buffer is full, sync
                             batch_broadcast(
                                 buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group
