@@ -162,8 +162,14 @@ try:
         def mixed_precision(self) -> bool:
             return self.precision is Precision.MIXED_PRECISION
 
+        def state_dict(self) -> Dict[str, Any]:
+            d = super().state_dict()
+            d["optim_scale"] = self._optim_scale
+            return d
+
         def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
             super().load_state_dict(state_dict)
+            self._optim_scale = state_dict["optim_scale"]
 
             # TODO: Optimizer state gets cast to FP16 and back to FP32 for
             # mixed-precision and memory-efficient mixed-precision. Eventually
