@@ -13,7 +13,7 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-
+import math
 import fairscale.optim as optim
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
@@ -142,38 +142,53 @@ def test_step():
 
 def run_test_batch_broadcast(rank, world_size):
     dist_init(rank, world_size)
-    x = torch.rand([10, world_size], device=rank)
-    target = torch.zeros([10, 5 * world_size], device=rank)
+    width_multiplier = 4
+    batch_size = 10
 
-    layers = [torch.nn.Linear(i, i + 1) for i in range(world_size, 5 * world_size)]
-    m = torch.nn.Sequential(*layers)
-    m.to(rank)
+    x = torch.ones([batch_size, world_size], device=rank)
+    target = torch.zeros([batch_size, width_multiplier * world_size], device=rank)
+    error = math.factorial(width_multiplier * world_size - 1)
+
+    def get_model():
+        layers = [torch.nn.Linear(i, i + 1) for i in range(world_size, width_multiplier * world_size)]
+        for l in layers:
+            l.weight.data.fill_(1.0)
+            l.bias.data.fill_(0.0)
+
+        m = torch.nn.Sequential(*layers)
+        m.to(rank)
+        return m
 
     # Set a very small buffer size to force the full param block to be broadcasted
-    o = optim.OSS(m.parameters(), lr=0.1, buffer_size=8)
+    m_small = get_model()
+    o = optim.OSS(m_small.parameters(), lr=0.1, buffer_size=8)
     loss_fn = torch.nn.L1Loss().to(device=rank)
 
     def closure():
         o.zero_grad()
-        output = m(x)
+        output = m_small(x)
         loss = loss_fn(output, target)
         loss.backward()
         return loss
 
     loss = o.step(closure=closure)
+
+    assert loss == torch.tensor([error], device=rank)
 
     # Set a very big buffer size to force all the params to be packed
-    o = optim.OSS(m.parameters(), lr=0.1, buffer_size=2 ** 26)
+    m_large = get_model()
+    o = optim.OSS(m_large.parameters(), lr=0.1, buffer_size=2 ** 26)
     loss_fn = torch.nn.L1Loss().to(device=rank)
 
     def closure():
         o.zero_grad()
-        output = m(x)
+        output = m_large(x)
         loss = loss_fn(output, target)
         loss.backward()
         return loss
 
     loss = o.step(closure=closure)
+    assert loss == torch.tensor([error], device=rank)
 
 
 @skip_if_no_cuda

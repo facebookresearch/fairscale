@@ -126,10 +126,10 @@ class OSS(Optimizer):
                             )
                             buffered_params.clear()
                             buffered_elements = 0
-                        else:
-                            # Keep async and batch sync later
-                            buffered_params.append(param)
-                            buffered_elements += param.numel()
+
+                        # Keep async and batch sync later
+                        buffered_params.append(param)
+                        buffered_elements += param.numel()
 
                 # Sync whatever is left in the batch buffer before moving to the next rank
                 if buffered_elements > 0:
