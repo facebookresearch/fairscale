@@ -20,7 +20,7 @@ typedef enum{
     ADAM_MODE_1   =1  // eps outside square root
 } adamMode_t;
 
-template <int DEPTH, typename PARAM_T, typename GRAD_T>
+template <int DEPTH, typename PARAM_T, typename GRAD_T, typename OPTIM_T>
 struct AdamFunctor
 {
     __device__ __forceinline__ void operator()(
@@ -41,9 +41,9 @@ struct AdamFunctor
 
         PARAM_T* p = (PARAM_T *)tl.addresses[0][tensor_loc];
         p += chunk_idx*chunk_size;
-        float* m = (float *)tl.addresses[1][tensor_loc];
+        OPTIM_T* m = (OPTIM_T *)tl.addresses[1][tensor_loc];
         m += chunk_idx*chunk_size;
-        float* v = (float *)tl.addresses[2][tensor_loc];
+        OPTIM_T* v = (OPTIM_T *)tl.addresses[2][tensor_loc];
         v += chunk_idx*chunk_size;
         GRAD_T* g = (GRAD_T *)tl.addresses[3][tensor_loc];
         g += chunk_idx*chunk_size;
@@ -56,8 +56,8 @@ struct AdamFunctor
         n -= chunk_idx*chunk_size;
 
         PARAM_T incoming_p[ILP];
-        float incoming_m[ILP];
-        float incoming_v[ILP];
+        OPTIM_T incoming_m[ILP];
+        OPTIM_T incoming_v[ILP];
         GRAD_T incoming_g[ILP];
 
         for(int i_start = 0;
@@ -91,14 +91,16 @@ struct AdamFunctor
 
                 if(j < n && j < chunk_size) {
                     float scaled_grad = incoming_g[ii]/grad_scale;
-                    m[j] = b1*incoming_m[ii] + (1-b1)*scaled_grad;
-                    v[j] = b2*incoming_v[ii] + (1-b2)*scaled_grad*scaled_grad;
+                    float momentum = b1 * incoming_m[ii] + (1-b1)*scaled_grad;
+                    float velocity = b2 * incoming_v[ii] + (1-b2)*scaled_grad*scaled_grad;
+                    m[j] = static_cast<OPTIM_T>(momentum);
+                    v[j] = static_cast<OPTIM_T>(velocity);
                     float denom;
                     if (mode == ADAM_MODE_0)
-                        denom = sqrtf(v[j] + eps);
+                        denom = sqrtf(velocity + eps);
                     else // Mode 1
-                        denom = sqrtf(v[j]) + eps;
-                    float update = (m[j]/denom) + (decay*incoming_p[ii]);
+                        denom = sqrtf(velocity) + eps;
+                    float update = (momentum/denom) + (decay*incoming_p[ii]);
                     p[j] = (PARAM_T)(incoming_p[ii] - (step_size*update));
                     if (DEPTH == 5)  p_copy[j] = (at::Half) p[j];
                 }
@@ -135,6 +137,7 @@ void fused_adam_cuda(
 
     size_t tl_sz = tensor_lists.size();
     assert(tl_sz == 4 || tl_sz == 5);
+    assert(tensor_lists[1][0].scalar_type() == tensor_lists[2][0].scalar_type());
 
     if(tl_sz == 5) {
         // Mixed precision case
@@ -146,7 +149,7 @@ void fused_adam_cuda(
             chunk_size,
             noop_flag,
             tensor_lists,
-            AdamFunctor<5, float, at::Half>(),
+            AdamFunctor<5, float, at::Half, float>(),
             beta1,
             beta2,
             eps,
@@ -160,12 +163,13 @@ void fused_adam_cuda(
         assert(tensor_lists[0][0].scalar_type() == tensor_lists[3][0].scalar_type());
         if(tensor_lists[0][0].scalar_type() == at::ScalarType::Float) {
             // Full precision case
+            assert(tensor_lists[1][0].scalar_type() == at::ScalarType::Float);
             multi_tensor_apply<4>(
                 BLOCK_SIZE,
                 chunk_size,
                 noop_flag,
                 tensor_lists,
-                AdamFunctor<4, float, float>(),
+                AdamFunctor<4, float, float, float>(),
                 beta1,
                 beta2,
                 eps,
@@ -175,21 +179,41 @@ void fused_adam_cuda(
                 decay
             );
         } else if (tensor_lists[0][0].scalar_type() == at::ScalarType::Half) {
-            // "Memory Efficient Training" case
-            multi_tensor_apply<4>(
-                BLOCK_SIZE,
-                chunk_size,
-                noop_flag,
-                tensor_lists,
-                AdamFunctor<4, at::Half, at::Half>(),
-                beta1,
-                beta2,
-                eps,
-                grad_scale,
-                step_size,
-                (adamMode_t) mode,
-                decay
-            );
+            if(tensor_lists[1][0].scalar_type() == at::ScalarType::Float) {
+                // FP16 model parameters and gradients; FP32 optimizer state
+                multi_tensor_apply<4>(
+                    BLOCK_SIZE,
+                    chunk_size,
+                    noop_flag,
+                    tensor_lists,
+                    AdamFunctor<4, at::Half, at::Half, float>(),
+                    beta1,
+                    beta2,
+                    eps,
+                    grad_scale,
+                    step_size,
+                    (adamMode_t) mode,
+                    decay
+                );
+            } else if (tensor_lists[1][0].scalar_type() == at::ScalarType::Half) {
+                // Pure FP16 case
+                multi_tensor_apply<4>(
+                    BLOCK_SIZE,
+                    chunk_size,
+                    noop_flag,
+                    tensor_lists,
+                    AdamFunctor<4, at::Half, at::Half, at::Half>(),
+                    beta1,
+                    beta2,
+                    eps,
+                    grad_scale,
+                    step_size,
+                    (adamMode_t) mode,
+                    decay
+                );
+            } else {
+                throw "Optimizer state must be of type float or half";
+            }
         } else {
             throw "Parameters must be of type float or half";
         }

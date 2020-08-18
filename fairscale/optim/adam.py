@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import torch
@@ -14,6 +15,12 @@ else:
 
 try:
     from fairscale import fused_adam_cuda  # type: ignore
+
+    class Precision(Enum):
+        FULL_PRECISION = auto()
+        MIXED_PRECISION = auto()
+        MEMORY_EFFICIENT_MIXED_PRECISION = auto()
+        PURE_FP16 = auto()
 
     class Adam(torch.optim.Optimizer):
         state: dict
@@ -39,6 +46,10 @@ try:
                 adds eps to the bias-corrected second moment estimate before
                 evaluating square root instead of adding it to the square root of
                 second moment estimate as in the original paper. (default: False)
+            precision (Precision, optional): One of Precision.FULL_PRECISION,
+                Precision.MIXED_PRECISION, Precision.MEMORY_EFFICIENT_MIXED_PRECISION
+                or Precision.PURE_FP16. Inferred based on model parameter precision if
+                None. (default: None)
         .. _Adam: A Method for Stochastic Optimization:
             https://arxiv.org/abs/1412.6980
         .. _On the Convergence of Adam and Beyond:
@@ -56,10 +67,23 @@ try:
             weight_decay: Optional[float] = 0.0,
             max_grad_norm: Optional[float] = 0.0,
             amsgrad: Optional[bool] = False,
-            mixed_precision: Optional[bool] = False,
+            precision: Optional[Precision] = None,
         ):
-            self.mixed_precision = mixed_precision
             parameters: List[Any] = list(params)
+
+            if precision is None:
+                precision = (
+                    Precision.FULL_PRECISION if parameters[0].dtype == torch.float32 else Precision.MIXED_PRECISION
+                )
+
+            self.mixed_precision = False
+            if precision is Precision.MIXED_PRECISION:
+                self.mixed_precision = True
+
+            if precision is not Precision.FULL_PRECISION:
+                assert parameters[0].dtype == torch.float16
+
+            self.optim_type = torch.float16 if precision is Precision.PURE_FP16 else torch.float32
 
             self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
 
@@ -76,7 +100,8 @@ try:
             super().__init__(parameters, defaults)
             self.eps_mode = 0 if eps_inside_sqrt else 1
 
-            if mixed_precision:
+            self.fp32_param_groups: List[Any] = []
+            if self.mixed_precision:
                 self._build_fp32_params(parameters)
 
         def _build_fp32_params(self, params: Any) -> None:
@@ -118,6 +143,21 @@ try:
         @property
         def _step_supports_amp_scaling(self) -> bool:
             return False
+
+        def state_dict(self) -> Dict[str, Any]:
+            d = super().state_dict()
+            d["optim_type"] = self.optim_type
+            d["mixed_precision"] = self.mixed_precision
+            d["fp32_param_groups"] = self.fp32_param_groups
+            d["state"] = self.state
+            return d
+
+        def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+            super().load_state_dict(state_dict)
+            self.optim_type = state_dict["optim_type"]
+            self.mixed_precision = state_dict["mixed_precision"]
+            self.fp32_param_groups = state_dict["fp32_param_groups"]
+            self.state = state_dict["state"]
 
         def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
             """Performs a single optimization step.
@@ -161,9 +201,9 @@ try:
                     if len(state) == 0:
                         state["step"] = 0
                         # Exponential moving average of gradient values
-                        state["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
+                        state["exp_avg"] = torch.zeros_like(p, dtype=self.optim_type)
                         # Exponential moving average of squared gradient values
-                        state["exp_avg_sq"] = torch.zeros_like(p, dtype=torch.float32)
+                        state["exp_avg_sq"] = torch.zeros_like(p, dtype=self.optim_type)
 
                     exp_avg = state["exp_avg"]
                     exp_avg_sq = state["exp_avg_sq"]
