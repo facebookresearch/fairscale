@@ -180,6 +180,7 @@ void fused_adam_cuda(
             );
         } else if (tensor_lists[0][0].scalar_type() == at::ScalarType::Half) {
             if(tensor_lists[1][0].scalar_type() == at::ScalarType::Float) {
+                // FP16 model parameters and gradients; FP32 optimizer state
                 multi_tensor_apply<4>(
                     BLOCK_SIZE,
                     chunk_size,
@@ -195,6 +196,7 @@ void fused_adam_cuda(
                     decay
                 );
             } else if (tensor_lists[1][0].scalar_type() == at::ScalarType::Half) {
+                // Pure FP16 case
                 multi_tensor_apply<4>(
                     BLOCK_SIZE,
                     chunk_size,
