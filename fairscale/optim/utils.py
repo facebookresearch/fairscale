@@ -10,7 +10,7 @@ import torch
 from torch._six import container_abcs
 import torch.distributed as dist
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from torch import Tensor
     from torch.nn import Parameter
 else:
@@ -80,7 +80,7 @@ def batch_broadcast(
     buffered_params: List[Parameter], source_rank: int, buffer: Tensor, process_group: Any = None
 ) -> None:
     """ Helper to broadcast a list of params batched into a bigger buffer.
-    NOTE: This skips the grads on purpose, only broadcasts the tensor parameters. 
+    NOTE: This skips the grads on purpose, only broadcasts the tensor parameters.
     NOTE: This also asserts that the parameters will fit in the buffer """
 
     offset = 0
