@@ -91,8 +91,8 @@ struct AdamFunctor
 
                 if(j < n && j < chunk_size) {
                     float scaled_grad = incoming_g[ii]/grad_scale;
-                    float momentum = incoming_m[ii] * b1 + (1-b1)*scaled_grad;
-                    float velocity = incoming_v[ii] * b2 + (1-b2)*scaled_grad*scaled_grad;
+                    float momentum = b1 * incoming_m[ii] + (1-b1)*scaled_grad;
+                    float velocity = b2 * incoming_v[ii] + (1-b2)*scaled_grad*scaled_grad;
                     m[j] = static_cast<OPTIM_T>(momentum);
                     v[j] = static_cast<OPTIM_T>(velocity);
                     float denom;
