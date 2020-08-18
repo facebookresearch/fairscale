@@ -21,21 +21,11 @@ skip_if_no_adam = pytest.mark.skipif(not imported_adam, reason="Fairscale Adam n
 
 
 def assert_almost_zero(x):
-    assert abs(x) < 1e-3
+    assert abs(x) < 2 * 1e-3
     return 1.0
 
 
-@skip_if_no_cuda
-@skip_if_no_adam
-def test_step_full_precision_inferred():
-    weight = torch.randn(10, 5).cuda().requires_grad_()
-    bias = torch.randn(10).cuda().requires_grad_()
-    input = torch.randn(5).cuda()
-    optimizer = Adam([weight, bias], lr=1e-3)
-
-    # to check if the optimizer can be printed as a string
-    optimizer.__repr__()
-
+def step_test(optimizer, weight, bias, input):
     def fn():
         optimizer.zero_grad()
         y = weight.mv(input)
@@ -49,6 +39,48 @@ def test_step_full_precision_inferred():
     for _i in range(5):
         optimizer.step(fn)
     assert fn().item() < initial_value
+
+
+def state_dict_test(optimizer, weight, bias, input):
+    def fn_base(optimizer, weight, bias, input):
+        optimizer.zero_grad()
+        loss = (weight.mv(input) + bias).pow(2).sum()
+        loss.backward()
+        return loss
+
+    fn = functools.partial(fn_base, optimizer, weight, bias, input)
+
+    # Prime the optimizer
+    for _i in range(5):
+        optimizer.step(fn)
+    # Clone the weights and construct new optimizer for them
+    weight_c = weight.data.clone().requires_grad_()
+    bias_c = bias.data.clone().requires_grad_()
+    optimizer_c = Adam([weight_c, bias_c], lr=1e-3)
+    fn_c = functools.partial(fn_base, optimizer_c, weight_c, bias_c, input)
+    # Load state dict
+    state_dict = deepcopy(optimizer.state_dict())
+    optimizer_c.load_state_dict(state_dict)
+    # Run both optimizations in parallel
+    for _i in range(5):
+        optimizer.step(fn)
+        optimizer_c.step(fn_c)
+        (weight - weight_c).to("cpu").detach().apply_(assert_almost_zero)
+        (bias - bias_c).to("cpu").detach().apply_(assert_almost_zero)
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_step_full_precision_inferred():
+    weight = torch.randn(10, 5).cuda().requires_grad_()
+    bias = torch.randn(10).cuda().requires_grad_()
+    input = torch.randn(5).cuda()
+    optimizer = Adam([weight, bias], lr=1e-3)
+
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+    step_test(optimizer, weight, bias, input)
+
     for group in optimizer.param_groups:
         for p in group["params"]:
             if p.requires_grad:
@@ -66,21 +98,8 @@ def test_step_mixed_precision_inferred():
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
+    step_test(optimizer, weight, bias, input)
 
-    def fn():
-        optimizer.zero_grad()
-        y = weight.mv(input)
-        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
-            y = y.cuda(bias.get_device())
-        loss = (y + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    initial_value = fn().item()
-    for _i in range(5):
-        optimizer.step(fn)
-
-    assert fn().item() < initial_value
     assert len(optimizer.fp32_param_groups) == len(optimizer.param_groups)
 
     for fp32_group, fp16_group in zip(optimizer.fp32_param_groups, optimizer.param_groups):
@@ -106,20 +125,8 @@ def test_step_memory_efficient():
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
+    step_test(optimizer, weight, bias, input)
 
-    def fn():
-        optimizer.zero_grad()
-        y = weight.mv(input)
-        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
-            y = y.cuda(bias.get_device())
-        loss = (y + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    initial_value = fn().item()
-    for _i in range(5):
-        optimizer.step(fn)
-    assert fn().item() < initial_value
     for group in optimizer.param_groups:
         for p in group["params"]:
             if p.requires_grad:
@@ -137,20 +144,8 @@ def test_step_pure_fp16():
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
+    step_test(optimizer, weight, bias, input)
 
-    def fn():
-        optimizer.zero_grad()
-        y = weight.mv(input)
-        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
-            y = y.cuda(bias.get_device())
-        loss = (y + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    initial_value = fn().item()
-    for _i in range(5):
-        optimizer.step(fn)
-    assert fn().item() < initial_value
     assert optimizer.state[weight]["exp_avg"].dtype == torch.float16
     assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float16
     assert optimizer.state[bias]["exp_avg"].dtype == torch.float16
@@ -170,20 +165,7 @@ def test_step_multigpu():
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
-
-    def fn():
-        optimizer.zero_grad()
-        y = weight.mv(input)
-        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
-            y = y.cuda(bias.get_device())
-        loss = (y + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    initial_value = fn().item()
-    for _i in range(5):
-        optimizer.step(fn)
-    assert fn().item() < initial_value
+    step_test(optimizer, weight, bias, input)
 
 
 @skip_if_no_cuda
@@ -198,20 +180,7 @@ def test_step_multigpu_mixed_precision():
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
-
-    def fn():
-        optimizer.zero_grad()
-        y = weight.mv(input)
-        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
-            y = y.cuda(bias.get_device())
-        loss = (y + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    initial_value = fn().item()
-    for _i in range(5):
-        optimizer.step(fn)
-    assert fn().item() < initial_value
+    step_test(optimizer, weight, bias, input)
 
 
 @skip_if_no_cuda
@@ -226,20 +195,8 @@ def test_step_pure_fp16_multigpu():
 
     # to check if the optimizer can be printed as a string
     optimizer.__repr__()
+    step_test(optimizer, weight, bias, input)
 
-    def fn():
-        optimizer.zero_grad()
-        y = weight.mv(input)
-        if y.is_cuda and bias.is_cuda and y.get_device() != bias.get_device():
-            y = y.cuda(bias.get_device())
-        loss = (y + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    initial_value = fn().item()
-    for _i in range(5):
-        optimizer.step(fn)
-    assert fn().item() < initial_value
     assert optimizer.state[weight]["exp_avg"].dtype == torch.float16
     assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float16
     assert optimizer.state[bias]["exp_avg"].dtype == torch.float16
@@ -252,34 +209,9 @@ def test_state_dict_full_precision():
     weight = torch.randn(10, 5).float().cuda().requires_grad_()
     bias = torch.randn(10).float().cuda().requires_grad_()
     input = torch.randn(5).float().cuda()
-
     optimizer = Adam([weight, bias], lr=1e-3)
 
-    def fn_base(optimizer, weight, bias, input):
-        optimizer.zero_grad()
-        loss = (weight.mv(input) + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    fn = functools.partial(fn_base, optimizer, weight, bias, input)
-
-    # Prime the optimizer
-    for _i in range(5):
-        optimizer.step(fn)
-    # Clone the weights and construct new optimizer for them
-    weight_c = weight.data.clone().requires_grad_()
-    bias_c = bias.data.clone().requires_grad_()
-    optimizer_c = Adam([weight_c, bias_c], lr=1e-3)
-    fn_c = functools.partial(fn_base, optimizer_c, weight_c, bias_c, input)
-    # Load state dict
-    state_dict = deepcopy(optimizer.state_dict())
-    optimizer_c.load_state_dict(state_dict)
-    # Run both optimizations in parallel
-    for _i in range(5):
-        optimizer.step(fn)
-        optimizer_c.step(fn_c)
-        (weight - weight_c).to("cpu").detach().apply_(assert_almost_zero)
-        (bias - bias_c).to("cpu").detach().apply_(assert_almost_zero)
+    state_dict_test(optimizer, weight, bias, input)
 
 
 @skip_if_no_cuda
@@ -288,34 +220,9 @@ def test_state_dict_mixed_precision():
     weight = torch.randn(10, 5).half().cuda().requires_grad_()
     bias = torch.randn(10).half().cuda().requires_grad_()
     input = torch.randn(5).half().cuda()
-
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.MIXED_PRECISION)
 
-    def fn_base(optimizer, weight, bias, input):
-        optimizer.zero_grad()
-        loss = (weight.mv(input) + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    fn = functools.partial(fn_base, optimizer, weight, bias, input)
-
-    # Prime the optimizer
-    for _i in range(5):
-        optimizer.step(fn)
-    # Clone the weights and construct new optimizer for them
-    weight_c = weight.data.clone().requires_grad_()
-    bias_c = bias.data.clone().requires_grad_()
-    optimizer_c = Adam([weight_c, bias_c], lr=1e-3)
-    fn_c = functools.partial(fn_base, optimizer_c, weight_c, bias_c, input)
-    # Load state dict
-    state_dict = deepcopy(optimizer.state_dict())
-    optimizer_c.load_state_dict(state_dict)
-    # Run both optimizations in parallel
-    for _i in range(5):
-        optimizer.step(fn)
-        optimizer_c.step(fn_c)
-        (weight - weight_c).to("cpu").detach().apply_(assert_almost_zero)
-        (bias - bias_c).to("cpu").detach().apply_(assert_almost_zero)
+    state_dict_test(optimizer, weight, bias, input)
 
 
 @skip_if_no_cuda
@@ -324,36 +231,9 @@ def test_state_dict_memory_efficient():
     weight = torch.randn(10, 5).half().cuda().requires_grad_()
     bias = torch.randn(10).half().cuda().requires_grad_()
     input = torch.randn(5).half().cuda()
-
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.MEMORY_EFFICIENT_MIXED_PRECISION)
 
-    def fn_base(optimizer, weight, bias, input):
-        optimizer.zero_grad()
-        loss = (weight.mv(input) + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    fn = functools.partial(fn_base, optimizer, weight, bias, input)
-
-    # Prime the optimizer
-    for _i in range(5):
-        optimizer.step(fn)
-    # Clone the weights and construct new optimizer for them
-    weight_c = weight.data.clone().requires_grad_()
-    bias_c = bias.data.clone().requires_grad_()
-    optimizer_c = Adam([weight_c, bias_c], lr=1e-3)
-    fn_c = functools.partial(fn_base, optimizer_c, weight_c, bias_c, input)
-    # Load state dict
-    state_dict = deepcopy(optimizer.state_dict())
-    optimizer_c.load_state_dict(state_dict)
-
-    # Run both optimizations in parallel
-    for _i in range(5):
-        optimizer.step(fn)
-        optimizer_c.step(fn_c)
-        (weight - weight_c).to("cpu").detach().apply_(assert_almost_zero)
-        (bias - bias_c).to("cpu").detach().apply_(assert_almost_zero)
-
+    state_dict_test(optimizer, weight, bias, input)
 
 @skip_if_no_cuda
 @skip_if_no_adam
@@ -361,34 +241,9 @@ def test_state_dict_pure_fp16():
     weight = torch.randn(10, 5).half().cuda().requires_grad_()
     bias = torch.randn(10).half().cuda().requires_grad_()
     input = torch.randn(5).half().cuda()
-
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.PURE_FP16)
 
-    def fn_base(optimizer, weight, bias, input):
-        optimizer.zero_grad()
-        loss = (weight.mv(input) + bias).pow(2).sum()
-        loss.backward()
-        return loss
-
-    fn = functools.partial(fn_base, optimizer, weight, bias, input)
-
-    # Prime the optimizer
-    for _i in range(5):
-        optimizer.step(fn)
-    # Clone the weights and construct new optimizer for them
-    weight_c = weight.data.clone().requires_grad_()
-    bias_c = bias.data.clone().requires_grad_()
-    optimizer_c = Adam([weight_c, bias_c], lr=1e-3)
-    fn_c = functools.partial(fn_base, optimizer_c, weight_c, bias_c, input)
-    # Load state dict
-    state_dict = deepcopy(optimizer.state_dict())
-    optimizer_c.load_state_dict(state_dict)
-    # Run both optimizations in parallel
-    for _i in range(5):
-        optimizer.step(fn)
-        optimizer_c.step(fn_c)
-        (weight - weight_c).to("cpu").detach().apply_(assert_almost_zero)
-        (bias - bias_c).to("cpu").detach().apply_(assert_almost_zero)
+    state_dict_test(optimizer, weight, bias, input)
 
 
 @skip_if_no_cuda
