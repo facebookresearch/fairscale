@@ -67,7 +67,7 @@ try:
             weight_decay: Optional[float] = 0.0,
             max_grad_norm: Optional[float] = 0.0,
             amsgrad: Optional[bool] = False,
-            precision: Optional[Union[None, Precision]] = None,
+            precision: Optional[Precision] = None,
         ):
             parameters: List[Any] = list(params)
 

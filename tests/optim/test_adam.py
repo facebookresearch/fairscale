@@ -235,6 +235,7 @@ def test_state_dict_memory_efficient():
 
     state_dict_test(optimizer, weight, bias, input)
 
+
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_state_dict_pure_fp16():
