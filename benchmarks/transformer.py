@@ -134,7 +134,7 @@ def make_model(device, ntokens):
     p = Pipe(model, balance)
 
     criterion = nn.CrossEntropyLoss()
-    lr = 0.01  # learning rate
+    lr = 0.0005  # learning rate
 
     try:
         optimizer = Adam(p.parameters(), lr=lr, precision=Precision.PURE_FP16)
