@@ -20,12 +20,26 @@ skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda
 skip_if_no_adam = pytest.mark.skipif(not imported_adam, reason="Fairscale Adam not available")
 
 
-def assert_almost_zero(x):
-    assert abs(x) < 2 * 1e-3
-    return 1.0
+def make_full_precision_params():
+    weight = torch.randn(2, 1).cuda().requires_grad_()
+    bias = torch.randn(2).cuda().requires_grad_()
+    input = torch.randn(1).cuda()
+
+    return weight, bias, input
+
+
+def make_half_precision_params():
+    weight = torch.randn(2, 1).cuda().half().requires_grad_()
+    bias = torch.randn(2).cuda().half().requires_grad_()
+    input = torch.randn(1).half().cuda()
+
+    return weight, bias, input
 
 
 def step_test(optimizer, weight, bias, input):
+    # to check if the optimizer can be printed as a string
+    optimizer.__repr__()
+
     def fn():
         optimizer.zero_grad()
         y = weight.mv(input)
@@ -56,7 +70,7 @@ def state_dict_test(optimizer, weight, bias, input):
     # Clone the weights and construct new optimizer for them
     weight_c = weight.data.clone().requires_grad_()
     bias_c = bias.data.clone().requires_grad_()
-    optimizer_c = Adam([weight_c, bias_c], lr=1e-3)
+    optimizer_c = Adam([weight_c, bias_c], lr=1e-3, precision=optimizer.precision)
     fn_c = functools.partial(fn_base, optimizer_c, weight_c, bias_c, input)
     # Load state dict
     state_dict = deepcopy(optimizer.state_dict())
@@ -69,16 +83,17 @@ def state_dict_test(optimizer, weight, bias, input):
         (bias - bias_c).to("cpu").detach().apply_(assert_almost_zero)
 
 
+def assert_almost_zero(x):
+    assert abs(x) < 1e-3
+    return 1.0
+
+
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_step_full_precision_inferred():
-    weight = torch.randn(10, 5).cuda().requires_grad_()
-    bias = torch.randn(10).cuda().requires_grad_()
-    input = torch.randn(5).cuda()
+    weight, bias, input = make_full_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3)
 
-    # to check if the optimizer can be printed as a string
-    optimizer.__repr__()
     step_test(optimizer, weight, bias, input)
 
     for group in optimizer.param_groups:
@@ -87,17 +102,17 @@ def test_step_full_precision_inferred():
                 assert p.dtype == torch.float32
     assert not optimizer.fp32_param_groups
 
+    assert optimizer.state[weight]["exp_avg"].dtype == torch.float32
+    assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float32
+    assert optimizer.state[bias]["exp_avg"].dtype == torch.float32
+    assert optimizer.state[bias]["exp_avg_sq"].dtype == torch.float32
+
 
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_step_mixed_precision_inferred():
-    weight = torch.randn(10, 5).cuda().half().requires_grad_()
-    bias = torch.randn(10).cuda().half().requires_grad_()
-    input = torch.randn(5).half().cuda()
+    weight, bias, input = make_half_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3)
-
-    # to check if the optimizer can be printed as a string
-    optimizer.__repr__()
     step_test(optimizer, weight, bias, input)
 
     assert len(optimizer.fp32_param_groups) == len(optimizer.param_groups)
@@ -114,42 +129,49 @@ def test_step_mixed_precision_inferred():
                 assert fp16_p.dtype == torch.float16
                 (fp32_p - fp16_p).to("cpu").detach().apply_(assert_almost_zero)
 
+    assert optimizer.state[weight]["exp_avg"].dtype == torch.float32
+    assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float32
+    assert optimizer.state[bias]["exp_avg"].dtype == torch.float32
+    assert optimizer.state[bias]["exp_avg_sq"].dtype == torch.float32
+
 
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_step_memory_efficient():
-    weight = torch.randn(10, 5).cuda().half().requires_grad_()
-    bias = torch.randn(10).cuda().half().requires_grad_()
-    input = torch.randn(5).half().cuda()
+    weight, bias, input = make_half_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.MEMORY_EFFICIENT_MIXED_PRECISION)
-
-    # to check if the optimizer can be printed as a string
-    optimizer.__repr__()
     step_test(optimizer, weight, bias, input)
 
     for group in optimizer.param_groups:
         for p in group["params"]:
             if p.requires_grad:
                 assert p.dtype == torch.float16
+
     assert not optimizer.fp32_param_groups
+
+    assert optimizer.state[weight]["exp_avg"].dtype == torch.float32
+    assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float32
+    assert optimizer.state[bias]["exp_avg"].dtype == torch.float32
+    assert optimizer.state[bias]["exp_avg_sq"].dtype == torch.float32
 
 
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_step_pure_fp16():
-    weight = torch.randn(10, 5).half().cuda().requires_grad_()
-    bias = torch.randn(10).half().cuda().requires_grad_()
-    input = torch.randn(5).half().cuda()
+    weight, bias, input = make_half_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.PURE_FP16)
-
-    # to check if the optimizer can be printed as a string
-    optimizer.__repr__()
     step_test(optimizer, weight, bias, input)
+
+    for group in optimizer.param_groups:
+        for p in group["params"]:
+            if p.requires_grad:
+                assert p.dtype == torch.float16
 
     assert optimizer.state[weight]["exp_avg"].dtype == torch.float16
     assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float16
     assert optimizer.state[bias]["exp_avg"].dtype == torch.float16
     assert optimizer.state[bias]["exp_avg_sq"].dtype == torch.float16
+
     assert not optimizer.fp32_param_groups
 
 
@@ -163,8 +185,6 @@ def test_step_multigpu():
     input = torch.randn(5).cuda(0)
     optimizer = Adam([weight, bias], lr=1e-3)
 
-    # to check if the optimizer can be printed as a string
-    optimizer.__repr__()
     step_test(optimizer, weight, bias, input)
 
 
@@ -178,8 +198,6 @@ def test_step_multigpu_mixed_precision():
     input = torch.randn(5).cuda(0).half()
     optimizer = Adam([weight, bias], lr=1e-3)
 
-    # to check if the optimizer can be printed as a string
-    optimizer.__repr__()
     step_test(optimizer, weight, bias, input)
 
 
@@ -193,8 +211,6 @@ def test_step_pure_fp16_multigpu():
     input = torch.randn(5).half().cuda(0)
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.PURE_FP16)
 
-    # to check if the optimizer can be printed as a string
-    optimizer.__repr__()
     step_test(optimizer, weight, bias, input)
 
     assert optimizer.state[weight]["exp_avg"].dtype == torch.float16
@@ -206,9 +222,7 @@ def test_step_pure_fp16_multigpu():
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_state_dict_full_precision():
-    weight = torch.randn(10, 5).float().cuda().requires_grad_()
-    bias = torch.randn(10).float().cuda().requires_grad_()
-    input = torch.randn(5).float().cuda()
+    weight, bias, input = make_full_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3)
 
     state_dict_test(optimizer, weight, bias, input)
@@ -217,9 +231,7 @@ def test_state_dict_full_precision():
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_state_dict_mixed_precision():
-    weight = torch.randn(10, 5).half().cuda().requires_grad_()
-    bias = torch.randn(10).half().cuda().requires_grad_()
-    input = torch.randn(5).half().cuda()
+    weight, bias, input = make_half_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.MIXED_PRECISION)
 
     state_dict_test(optimizer, weight, bias, input)
@@ -228,9 +240,7 @@ def test_state_dict_mixed_precision():
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_state_dict_memory_efficient():
-    weight = torch.randn(10, 5).half().cuda().requires_grad_()
-    bias = torch.randn(10).half().cuda().requires_grad_()
-    input = torch.randn(5).half().cuda()
+    weight, bias, input = make_half_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.MEMORY_EFFICIENT_MIXED_PRECISION)
 
     state_dict_test(optimizer, weight, bias, input)
@@ -239,9 +249,7 @@ def test_state_dict_memory_efficient():
 @skip_if_no_cuda
 @skip_if_no_adam
 def test_state_dict_pure_fp16():
-    weight = torch.randn(10, 5).half().cuda().requires_grad_()
-    bias = torch.randn(10).half().cuda().requires_grad_()
-    input = torch.randn(5).half().cuda()
+    weight, bias, input = make_half_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.PURE_FP16)
 
     state_dict_test(optimizer, weight, bias, input)
