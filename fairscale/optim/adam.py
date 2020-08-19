@@ -276,12 +276,10 @@ try:
                 if sum(v.item() for v in per_device_found_inf._per_device_tensors.values()):
                     self._optim_scale /= 2
 
-                    optim_type = torch.float16 if self.optim_fp16 else torch.float32
-
                     for group in self.param_groups:
                         for p in group["params"]:
-                            self.state[p]["exp_avg"] = torch.zeros_like(p, dtype=optim_type)
-                            self.state[p]["exp_avg_sq"] = torch.zeros_like(p, dtype=optim_type)
+                            self.state[p]["exp_avg"] = torch.zeros_like(p, dtype=self.optim_type)
+                            self.state[p]["exp_avg_sq"] = torch.zeros_like(p, dtype=self.optim_type)
 
             return loss
 
