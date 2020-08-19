@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from copy import deepcopy
+import functools
 
 import pytest
 import torch
@@ -55,47 +56,29 @@ def step_test(optimizer, weight, bias, input):
 
 
 def state_dict_test(optimizer, weight, bias, input):
-    # Prime the optimizer
-    for _i in range(5):
+    def fn_base(optimizer, weight, bias, input):
         optimizer.zero_grad()
         loss = (weight.mv(input) + bias).pow(2).sum()
         loss.backward()
-        optimizer.step()
+        return loss
 
+    fn = functools.partial(fn_base, optimizer, weight, bias, input)
+
+    # Prime the optimizer
+    for _i in range(5):
+        optimizer.step(fn)
     # Clone the weights and construct new optimizer for them
     weight_c = weight.data.clone().requires_grad_()
     bias_c = bias.data.clone().requires_grad_()
-    optimizer_c = Adam([weight_c, bias_c], lr=1e-3)
-
+    optimizer_c = Adam([weight_c, bias_c], lr=1e-3, precision=optimizer.precision)
+    fn_c = functools.partial(fn_base, optimizer_c, weight_c, bias_c, input)
     # Load state dict
     state_dict = deepcopy(optimizer.state_dict())
     optimizer_c.load_state_dict(state_dict)
-
-    for group, group_c in zip(optimizer.param_groups, optimizer_c.param_groups):
-        for p, p_c in zip(group["params"], group_c["params"]):
-            assert optimizer.state[p]["exp_avg"].dtype == optimizer_c.state[p_c]["exp_avg"].dtype
-            assert optimizer.state[p]["exp_avg_sq"].dtype == optimizer_c.state[p_c]["exp_avg_sq"].dtype
-
     # Run both optimizations in parallel
     for _i in range(5):
-        optimizer.zero_grad()
-        optimizer_c.zero_grad()
-
-        loss = (weight.mv(input) + bias).pow(2).sum()
-        loss_c = (weight_c.mv(input) + bias_c).pow(2).sum()
-
-        assert_almost_zero(loss.item() - loss_c.item())
-
-        loss.backward()
-        loss_c.backward()
-
-        for group, group_c in zip(optimizer.param_groups, optimizer_c.param_groups):
-            for p, p_c in zip(group["params"], group_c["params"]):
-                (p.grad - p_c.grad).to("cpu").detach().apply_(assert_almost_zero)
-
-        optimizer.step()
-        optimizer_c.step()
-
+        optimizer.step(fn)
+        optimizer_c.step(fn_c)
         (weight - weight_c).to("cpu").detach().apply_(assert_almost_zero)
         (bias - bias_c).to("cpu").detach().apply_(assert_almost_zero)
 

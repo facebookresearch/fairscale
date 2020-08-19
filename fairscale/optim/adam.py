@@ -70,17 +70,14 @@ try:
             precision: Optional[Precision] = None,
         ):
             parameters: List[Any] = list(params)
+            self.precision = precision
 
-            if precision is None:
-                precision = (
+            if self.precision is None:
+                self.precision = (
                     Precision.FULL_PRECISION if parameters[0].dtype == torch.float32 else Precision.MIXED_PRECISION
                 )
 
-            self.mixed_precision = False
-            if precision is Precision.MIXED_PRECISION:
-                self.mixed_precision = True
-
-            if precision is not Precision.FULL_PRECISION:
+            if self.precision is not Precision.FULL_PRECISION:
                 assert parameters[0].dtype == torch.float16
 
             self.optim_type = torch.float16 if precision is Precision.PURE_FP16 else torch.float32
@@ -144,16 +141,12 @@ try:
         def _step_supports_amp_scaling(self) -> bool:
             return False
 
-        def state_dict(self) -> Dict[str, Any]:
-            d = super().state_dict()
-            d["optim_type"] = self.optim_type
-            d["mixed_precision"] = self.mixed_precision
-            return d
+        @property
+        def mixed_precision(self) -> bool:
+            return self.precision is Precision.MIXED_PRECISION
 
         def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
             super().load_state_dict(state_dict)
-            self.optim_type = state_dict["optim_type"]
-            self.mixed_precision = state_dict["mixed_precision"]
             for group in self.param_groups:
                 for p in group["params"]:
                     self.state[p]["exp_avg"] = self.state[p]["exp_avg"].type(self.optim_type)
