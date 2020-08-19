@@ -99,6 +99,8 @@ try:
 
             self.optim_type = torch.float16 if precision is Precision.PURE_FP16 else torch.float32
             self._optim_scale = float(2 ** 16) if precision is Precision.PURE_FP16 else 1.0
+            self._steps_since_optim_overflow = 0
+            self._optim_scale_update_freq = 2000    # This is the value that GradScaler uses by default
             self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
 
             if amsgrad:
@@ -274,12 +276,22 @@ try:
                         )
 
                 if sum(v.item() for v in per_device_found_inf._per_device_tensors.values()):
+                    self._steps_since_optim_overflow = 0
                     self._optim_scale /= 2
+
+                    if self._optim_scale < 1.0:
+                        raise RuntimeError("Optimizer state scale < 1. This may mean that gradients are exploding")
 
                     for group in self.param_groups:
                         for p in group["params"]:
                             self.state[p]["exp_avg"] = torch.zeros_like(p, dtype=self.optim_type)
                             self.state[p]["exp_avg_sq"] = torch.zeros_like(p, dtype=self.optim_type)
+                else:
+                    self._steps_since_optim_overflow += 1
+                
+                if self._steps_since_optim_overflow % self._optim_scale_update_freq == 0:
+                    if self._optim_scale < 2**16:
+                        self._optim_scale *= 2
 
             return loss
 
