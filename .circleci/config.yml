@@ -96,6 +96,12 @@ run_transformer_benchmark: &run_transformer_benchmark
       command: |
         python benchmarks/transformer.py
 
+run_oss_benchmark: &run_oss_benchmark
+  - run:
+      name: Run OSS Benchmark
+      command: |
+        python benchmarks/oss.py
+
 # -------------------------------------------------------------------------------------
 # Jobs to run
 # -------------------------------------------------------------------------------------
@@ -243,6 +249,9 @@ jobs:
       - <<: *install_repo_gpu
 
       - <<: *run_transformer_benchmark
+
+      - <<: *run_oss_benchmark
+
 
 
 workflows:
