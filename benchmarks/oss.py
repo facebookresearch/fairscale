@@ -25,7 +25,7 @@ def dist_init(rank, world_size):
 
 
 def train(
-    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 64, device: torch.device = torch.device("cuda")
+    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, device: torch.device = torch.device("cuda")
 ):
     # DDP
     dist_init(rank, world_size)
@@ -51,15 +51,17 @@ def train(
     model.to(device)
     model.train()
     for epoch in range(num_epochs):
-        print(f"Epoch {epoch}")
+        print(f"[{dist.get_rank()}] : Epoch {epoch}")
         for batch in dataloader:
 
             def closure():
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
+                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+                loss /= world_size
                 loss.backward()
-                print(f"dummy loss {loss.item()}")
+                print(f"[{dist.get_rank()}] : loss {loss.item()}")
                 return loss
 
             optimizer.step(closure)
