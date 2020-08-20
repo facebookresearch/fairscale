@@ -1,18 +1,19 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 
+import os
+from typing import Any, List
+
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.models import resnet50
-import torch.nn as nn
-import torch
-from typing import List, Any
 from torchvision.transforms import ToTensor
-from fairscale.optim.oss import OSS
-import torch.distributed as dist
-import torch.multiprocessing as mp
-import os
 
+from fairscale.optim.oss import OSS
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 
@@ -65,5 +66,6 @@ def train(
 
 
 if __name__ == "__main__":
+    # TODO: really use DDP, not multiprocessing
     world_size = 2
     mp.spawn(train, args=(world_size,), nprocs=world_size, join=True)
