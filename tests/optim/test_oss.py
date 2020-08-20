@@ -165,7 +165,7 @@ def run_test_batch_broadcast(rank, world_size):
 
     # Set a very small buffer size to force the full param block to be broadcasted
     m_small = get_model()
-    o = optim.OSS(m_small.parameters(), lr=0.1, buffer_size=8)
+    o = optim.OSS(m_small.parameters(), lr=0.1, buffer_size=8, broadcast_buffer_skip=1)
     loss_fn = torch.nn.L1Loss().to(device=rank)
 
     def closure():

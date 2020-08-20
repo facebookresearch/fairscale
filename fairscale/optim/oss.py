@@ -118,7 +118,7 @@ class OSS(Optimizer):
             for param_group in param_groups:
                 # We assume that the whole param group is on the same device
                 # Make sure that the broadcast buffer matches it
-                if self._buffer.device != param_group["params"][0].device:
+                if self._buffer.device != param_group["params"][0].device or self._buffer.numel() == 1:
                     self._buffer = param_group["params"][0].new(self._buffer_size)
 
                 # Go through all the params, broadcast to replicas
