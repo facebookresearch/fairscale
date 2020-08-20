@@ -11,7 +11,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
-from torchvision.models import resnet50
+from torchvision.models import resnet101
 from torchvision.transforms import ToTensor
 
 from fairscale.optim.oss import OSS
@@ -31,8 +31,8 @@ def train(
     # DDP
     dist_init(rank, world_size)
 
-    # Standard RN50
-    model = resnet50(pretrained=False, progress=True).to(rank)
+    # Standard RN101
+    model = resnet101(pretrained=False, progress=True).to(rank)
 
     # Data setup, dummy data
     def collate(inputs: List[Any]):
@@ -52,9 +52,9 @@ def train(
 
     # Shard the optimizer
     optimizer = (
-        OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-4)
+        OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-4, momentum=0.9)
         if use_oss
-        else torch.optim.SGD(model.parameters(), lr=1e-4)
+        else torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9)
     )
 
     # Dummy training loop
@@ -62,7 +62,6 @@ def train(
     training_start = time.monotonic()
     model.train()
     for epoch in range(num_epochs):
-        _print(f"\n[{dist.get_rank()}] : Epoch {epoch}")
         epoch_start = time.monotonic()
 
         for batch in dataloader:
@@ -80,7 +79,7 @@ def train(
 
         epoch_end = time.monotonic()
         img_per_sec = data_size / (epoch_end - epoch_start)
-        _print(f"[{dist.get_rank()}] : processed {img_per_sec:.2f} img per sec")
+        _print(f"[{dist.get_rank()}] : Epoch {epoch} - processed {img_per_sec:.2f} img per sec")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
@@ -97,8 +96,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 64
     DATA_SIZE = 512
 
-    print("Benchmark OSS")
-    mp.spawn(train, args=(WORLD_SIZE, EPOCHS, BATCH_SIZE, DATA_SIZE, True), nprocs=WORLD_SIZE, join=True)
-
     print("Benchmark vanilla SGD")
     mp.spawn(train, args=(WORLD_SIZE, EPOCHS, BATCH_SIZE, DATA_SIZE, False), nprocs=WORLD_SIZE, join=True)
+
+    print("Benchmark OSS")
+    mp.spawn(train, args=(WORLD_SIZE, EPOCHS, BATCH_SIZE, DATA_SIZE, True), nprocs=WORLD_SIZE, join=True)
