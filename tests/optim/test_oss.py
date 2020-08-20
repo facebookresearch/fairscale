@@ -62,6 +62,9 @@ def test_state_dict():
     o.step()
     assert x == torch.tensor([0.9], device=DEVICE)
 
+    # Check that the exposed param_groups are on the proper device
+    assert o.param_groups[0]["params"][0].device == x.device
+
 
 def test_local_state_dict():
     x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
