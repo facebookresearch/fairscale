@@ -10,7 +10,7 @@ import pytest
 import torch
 
 try:
-    from fairscale.optim.adam import Adam, Precision
+    from fairscale.optim import Adam, Precision, GradScaler
 
     imported_adam = True
 except ImportError:
@@ -237,6 +237,26 @@ def test_step_pure_fp16_multigpu():
     assert optimizer.state[weight]["exp_avg_sq"].dtype == torch.float16
     assert optimizer.state[bias]["exp_avg"].dtype == torch.float16
     assert optimizer.state[bias]["exp_avg_sq"].dtype == torch.float16
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_step_with_grad_scaler():
+    weight, bias, input = make_half_precision_params()
+    optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.PURE_FP16)
+    scaler = GradScaler()
+    initial_value = None
+
+    for _i in range(5):
+        optimizer.zero_grad()
+        loss = (weight.mv(input) + bias).pow(2).sum()
+        if _i == 0:
+            initial_value = loss.item()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+    assert loss.item() < initial_value
 
 
 @skip_if_no_cuda

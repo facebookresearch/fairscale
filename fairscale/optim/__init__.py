@@ -7,4 +7,6 @@
 :mod:`fairgc.optim` is a package implementing various torch optimization algorithms.
 """
 
+from .adam import Adam, Precision
+from .grad_scaler import GradScaler
 from .oss import OSS
