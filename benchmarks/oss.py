@@ -8,9 +8,27 @@ import torch.nn as nn
 import torch
 from typing import List, Any
 from torchvision.transforms import ToTensor
+from fairscale.optim.oss import OSS
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
 
 
-def train(num_epochs: int = 10, batch_size: int = 64, device: torch.device = torch.device("cuda")):
+BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
+
+
+def dist_init(rank, world_size):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29501"
+    dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size)
+
+
+def train(
+    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 64, device: torch.device = torch.device("cuda")
+):
+    # DDP
+    dist_init(rank, world_size)
+
     # Standard RN50
     model = resnet50(pretrained=False, progress=True)
     print("Benchmarking model: ", model)
@@ -24,7 +42,9 @@ def train(num_epochs: int = 10, batch_size: int = 64, device: torch.device = tor
 
     dataloader = DataLoader(dataset=FakeData(transform=ToTensor(), size=200), batch_size=batch_size, collate_fn=collate)
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(params=model.parameters(), lr=1e-4)
+
+    # Shard the optimizer
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-4)
 
     # Dummy training loop
     model.to(device)
@@ -45,5 +65,5 @@ def train(num_epochs: int = 10, batch_size: int = 64, device: torch.device = tor
 
 
 if __name__ == "__main__":
-    # TODO: move all this to pytorch DDP
-    train()
+    world_size = 2
+    mp.spawn(train, args=(world_size,), nprocs=world_size, join=True)
