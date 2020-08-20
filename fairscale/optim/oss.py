@@ -76,7 +76,8 @@ class OSS(Optimizer):
 
         # Current device is set by the parameters allocated to this rank
         self._device = self.partition_parameters()[self.rank][0]["params"][0].device
-        self._buffer = torch.zeros(buffer_size).to(self._device)
+        self._buffer: torch.Tensor = torch.rand((1,))
+        self._buffer_size = buffer_size
 
     def partition_parameters(self) -> List[List[dict]]:
         """Partitions parameters across distributed ranks.
@@ -114,6 +115,11 @@ class OSS(Optimizer):
             buffered_elements = 0
 
             for param_group in param_groups:
+                # We assume that the whole param group is on the same device
+                # Make sure that the broadcast buffer matches it
+                self._buffer = param_group["params"][0].new(self._buffer_size)
+
+                # Go through all the params, broadcast to replicas
                 for param in param_group["params"]:
                     if param.numel() >= self._buffer.numel():
                         # Big param block, broadcast directly
