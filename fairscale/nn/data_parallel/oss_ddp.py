@@ -9,23 +9,17 @@ A distributed data parallel class that works with OSS optimizer.
 Adopted from LegacyDistributedDataParallel module from fairseq.
 """
 
+import copy
 from collections import OrderedDict
 from contextlib import contextmanager
-import copy
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, cast
+from typing import Any, Dict, Generator, List, Optional, cast
 
 import torch
-from torch import nn
 import torch.distributed as dist
+from torch import Tensor, nn
+from torch.nn import Parameter
 
-if TYPE_CHECKING:
-    from fairscale.optim import OSS
-    from torch import Tensor
-    from torch.nn import Parameter
-else:
-    OSS = Any
-    Tensor = Any
-    Parameter = Any
+from fairscale.optim import OSS
 
 
 class OssDdp(nn.Module):

@@ -5,19 +5,15 @@
 
 import copy
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type, Iterable
 
 import torch
 import torch.distributed as dist
+from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
-from .utils import batch_broadcast, broadcast_object, recursive_copy_to_device
 
-if TYPE_CHECKING:  # pragma: no cover
-    from torch.optim.optimizer import _params_t
-    from torch.nn import Parameter
-else:
-    _params_t = Any
+from .utils import batch_broadcast, broadcast_object, recursive_copy_to_device
 
 
 class OSS(Optimizer):
@@ -54,7 +50,7 @@ class OSS(Optimizer):
 
     def __init__(
         self,
-        params: _params_t,
+        params: Iterable[torch.Tensor],
         optim: Type[Optimizer] = SGD,
         group: Any = dist.group.WORLD,
         buffer_size: int = 2 ** 25,
@@ -76,7 +72,7 @@ class OSS(Optimizer):
 
         # Current device is set by the parameters allocated to this rank
         self._device = self.partition_parameters()[self.rank][0]["params"][0].device
-        self._buffer: torch.Tensor = torch.rand((1,))
+        self._buffer: torch.Tensor = torch.rand((1,), device=torch.device("cpu"))
         self._buffer_size = buffer_size
 
     def partition_parameters(self) -> List[List[dict]]:
@@ -117,7 +113,8 @@ class OSS(Optimizer):
             for param_group in param_groups:
                 # We assume that the whole param group is on the same device
                 # Make sure that the broadcast buffer matches it
-                self._buffer = param_group["params"][0].new(self._buffer_size)
+                if self._buffer.device != param_group["params"][0].device:
+                    self._buffer = param_group["params"][0].new(self._buffer_size)
 
                 # Go through all the params, broadcast to replicas
                 for param in param_group["params"]:

@@ -8,7 +8,6 @@ from typing import Any, List
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.models import resnet101
@@ -37,8 +36,8 @@ def train(
     # Data setup, dummy data
     def collate(inputs: List[Any]):
         return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(rank),
-            "label": torch.stack([i[1] for i in inputs]).to(rank),
+            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
+            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
         }
 
     def _print(msg):
@@ -48,7 +47,7 @@ def train(
     dataloader = DataLoader(
         dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
     )
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = torch.nn.CrossEntropyLoss()
 
     # Shard the optimizer
     optimizer = (
@@ -73,6 +72,7 @@ def train(
                 dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
+                _print(f"[{dist.get_rank()}] : Loss {loss.item()}")
                 return loss
 
             optimizer.step(closure)
@@ -92,7 +92,7 @@ def train(
 
 if __name__ == "__main__":
     WORLD_SIZE = 2
-    EPOCHS = 10
+    EPOCHS = 5
     BATCH_SIZE = 32
     DATA_SIZE = 512
 

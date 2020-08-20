@@ -4,18 +4,14 @@
 # LICENSE file in the root directory of this source tree.
 
 import io
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import Any, Dict, List
 
 import torch
-from torch._six import container_abcs
 import torch.distributed as dist
+from torch import Tensor
+from torch._six import container_abcs
+from torch.nn import Parameter
 
-if TYPE_CHECKING:  # pragma: no cover
-    from torch import Tensor
-    from torch.nn import Parameter
-else:
-    Tensor = Any
-    Parameter = Any
 
 # Credits:  classy_vision/generic/distributed_util.py
 def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.device) -> Any:
