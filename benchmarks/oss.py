@@ -87,17 +87,17 @@ def train(
     max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
 
     _print(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec overall")
-    print(f"[{dist.get_rank()}] Peak memory: {max_memory:.1f}MiB")
+    print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
 
 
 if __name__ == "__main__":
     WORLD_SIZE = 2
     EPOCHS = 10
-    BATCH_SIZE = 64
+    BATCH_SIZE = 32
     DATA_SIZE = 512
 
-    print("Benchmark vanilla SGD")
+    print("\nBenchmark vanilla SGD")
     mp.spawn(train, args=(WORLD_SIZE, EPOCHS, BATCH_SIZE, DATA_SIZE, False), nprocs=WORLD_SIZE, join=True)
 
-    print("Benchmark OSS")
+    print("\nBenchmark OSS")
     mp.spawn(train, args=(WORLD_SIZE, EPOCHS, BATCH_SIZE, DATA_SIZE, True), nprocs=WORLD_SIZE, join=True)
