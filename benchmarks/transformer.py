@@ -11,7 +11,7 @@ from torchtext.data.utils import get_tokenizer
 from fairscale.nn import Pipe
 
 try:
-    from fairscale.optim.adam import Adam  # type: ignore
+    from fairscale.optim.adam import Adam, Precision  # type: ignore
 
     can_benchmark = True
 except ImportError:
@@ -135,7 +135,7 @@ def make_model(device, ntokens):
 
     criterion = nn.CrossEntropyLoss()
     lr = 0.01  # learning rate
-    optimizer = Adam(p.parameters(), lr=lr, mixed_precision=True)
+    optimizer = Adam(p.parameters(), lr=lr, precision=Precision.MIXED_PRECISION)
 
     return p, criterion, optimizer
 
