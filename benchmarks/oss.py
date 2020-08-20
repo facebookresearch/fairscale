@@ -72,7 +72,6 @@ def train(
                 dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
-                _print(f"[{dist.get_rank()}] : Loss {loss.item()}")
                 return loss
 
             optimizer.step(closure)

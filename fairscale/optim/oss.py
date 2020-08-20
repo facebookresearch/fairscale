@@ -5,7 +5,7 @@
 
 import copy
 import logging
-from typing import Any, Callable, Dict, Iterable, List, Optional, Type
+from typing import Any, Callable, Dict, Iterable, List, Optional, Type, Union
 
 import torch
 import torch.distributed as dist
@@ -51,7 +51,7 @@ class OSS(Optimizer):
 
     def __init__(
         self,
-        params: Iterable[torch.Tensor],
+        params: Union[Iterable[torch.Tensor], Iterable[Dict[Any, Any]]],
         optim: Type[Optimizer] = SGD,
         group: Any = dist.group.WORLD,
         buffer_size: int = 2 ** 25,
