@@ -149,7 +149,7 @@ class OSS(Optimizer):
 
         # Restore the global param_groups
         self.param_groups = recursive_copy_to_device(
-            state_dict["param_groups"], non_blocking=False, device=self._device
+            state_dict["param_groups"], non_blocking=True, device=self._device
         )
 
     def add_param_group(self, param_group: dict) -> None:
