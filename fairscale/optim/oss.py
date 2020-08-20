@@ -5,13 +5,12 @@
 
 import copy
 import logging
-from typing import Any, Callable, Dict, List, Optional, Type, Iterable
+from typing import Any, Callable, Dict, Iterable, List, Optional, Type
 
 import torch
 import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
-
 
 from .utils import batch_broadcast, broadcast_object, recursive_copy_to_device
 
@@ -43,6 +42,8 @@ class OSS(Optimizer):
         buffer_size (int, optional): number of elements to buffer before
             performing reduce (default: 32M). Used to reduce multiple small
             params to avoid communication overhead.
+        broadcast_buffer_skip (int, optional): number of elements beyond which the 
+            broadcast is done without buffering. (default: 8M)
     """
 
     optim: Optimizer
@@ -54,6 +55,7 @@ class OSS(Optimizer):
         optim: Type[Optimizer] = SGD,
         group: Any = dist.group.WORLD,
         buffer_size: int = 2 ** 25,
+        broadcast_buffer_skip: int = 2 ** 23,
         **defaults: Any
     ):
         # Hold all the nmodel params in the root .param_groups
@@ -74,6 +76,9 @@ class OSS(Optimizer):
         self._device = self.partition_parameters()[self.rank][0]["params"][0].device
         self._buffer: torch.Tensor = torch.rand((1,), device=torch.device("cpu"))
         self._buffer_size = buffer_size
+        self._broadcast_buffer_skip = broadcast_buffer_skip
+
+        assert self._buffer_size > self._broadcast_buffer_skip
 
     def partition_parameters(self) -> List[List[dict]]:
         """Partitions parameters across distributed ranks.
@@ -118,7 +123,7 @@ class OSS(Optimizer):
 
                 # Go through all the params, broadcast to replicas
                 for param in param_group["params"]:
-                    if param.numel() >= self._buffer.numel():
+                    if param.numel() >= self._broadcast_buffer_skip:
                         # Big param block, broadcast directly
                         dist.broadcast(tensor=param, src=rank, group=self.group)
                     else:

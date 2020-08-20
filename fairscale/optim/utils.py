@@ -7,9 +7,9 @@ import io
 from typing import Any, Dict, List
 
 import torch
-import torch.distributed as dist
 from torch import Tensor
 from torch._six import container_abcs
+import torch.distributed as dist
 from torch.nn import Parameter
 
 

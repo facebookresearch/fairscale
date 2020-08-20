@@ -9,14 +9,14 @@ A distributed data parallel class that works with OSS optimizer.
 Adopted from LegacyDistributedDataParallel module from fairseq.
 """
 
-import copy
 from collections import OrderedDict
 from contextlib import contextmanager
+import copy
 from typing import Any, Dict, Generator, List, Optional, cast
 
 import torch
-import torch.distributed as dist
 from torch import Tensor, nn
+import torch.distributed as dist
 from torch.nn import Parameter
 
 from fairscale.optim import OSS
