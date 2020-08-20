@@ -148,7 +148,7 @@ class OSS(Optimizer):
         self.load_local_state_dict(state_dict["state"][self.rank])
 
         # Restore the global param_groups
-        self.param_groups = state_dict["param_groups"]
+        self.param_groups = recursive_copy_to_device(state_dict["param_groups"], non_blocking=True, device=self._device)
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
