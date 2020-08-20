@@ -10,11 +10,11 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
-from fairscale.optim.oss import OSS
 from torchvision.datasets import FakeData
 from torchvision.models import resnet50
 from torchvision.transforms import ToTensor
+
+from fairscale.optim.oss import OSS
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 
@@ -25,13 +25,14 @@ def dist_init(rank, world_size):
     dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size)
 
 
-def train(rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32):
+def train(
+    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, data_size: int = 200, use_oss: bool = True
+):
     # DDP
     dist_init(rank, world_size)
 
     # Standard RN50
     model = resnet50(pretrained=False, progress=True).to(rank)
-    print("Benchmarking model: ", model)
 
     # Data setup, dummy data
     def collate(inputs: List[Any]):
@@ -44,16 +45,21 @@ def train(rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32
         if dist.get_rank() == 0:
             print(msg)
 
-    num_images = 200
     dataloader = DataLoader(
-        dataset=FakeData(transform=ToTensor(), size=num_images), batch_size=batch_size, collate_fn=collate
+        dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
     )
     loss_fn = nn.CrossEntropyLoss()
 
     # Shard the optimizer
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-4)
+    optimizer = (
+        OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-4)
+        if use_oss
+        else torch.optim.SGD(model.parameters(), lr=1e-4)
+    )
 
     # Dummy training loop
+    torch.cuda.synchronize(rank)
+    training_start = time.monotonic()
     model.train()
     for epoch in range(num_epochs):
         _print(f"\n[{dist.get_rank()}] : Epoch {epoch}")
@@ -68,17 +74,31 @@ def train(rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32
                 dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
-                _print(f"[{dist.get_rank()}] : loss {loss.item():.2f}")
                 return loss
 
             optimizer.step(closure)
 
         epoch_end = time.monotonic()
-        img_per_sec = num_images / (epoch_end - epoch_start)
+        img_per_sec = data_size / (epoch_end - epoch_start)
         _print(f"[{dist.get_rank()}] : processed {img_per_sec:.2f} img per sec")
+
+    torch.cuda.synchronize(rank)
+    training_stop = time.monotonic()
+    img_per_sec = data_size / (training_stop - training_start) * num_epochs
+    max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
+
+    _print(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec overall")
+    print(f"[{dist.get_rank()}] Peak memory: {max_memory:.1f}MiB")
 
 
 if __name__ == "__main__":
-    # TODO: really use DDP, not multiprocessing
-    world_size = 2
-    mp.spawn(train, args=(world_size,), nprocs=world_size, join=True)
+    WORLD_SIZE = 2
+    EPOCHS = 10
+    BATCH_SIZE = 64
+    DATA_SIZE = 512
+
+    print("Benchmark OSS")
+    mp.spawn(train, args=(WORLD_SIZE, EPOCHS, BATCH_SIZE, DATA_SIZE, True), nprocs=WORLD_SIZE, join=True)
+
+    print("Benchmark vanilla SGD")
+    mp.spawn(train, args=(WORLD_SIZE, EPOCHS, BATCH_SIZE, DATA_SIZE, False), nprocs=WORLD_SIZE, join=True)
