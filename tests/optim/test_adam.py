@@ -86,13 +86,8 @@ def state_dict_test(optimizer, weight, bias, input):
         optimizer.step(fn)
         optimizer_c.step(fn_c)
 
-        # TODO: Optimizer state gets cast to FP16 and back to FP32 for
-        # mixed-precision and memory-efficient mixed-precision, resulting
-        # in a loss of precision, so we don't expect the parameters to
-        # remain the exact same. This therefore does NOT pass for all
-        # torch manual seeds
-        (weight - weight_c).to("cpu").detach().apply_(assert_almost_zero)
-        (bias - bias_c).to("cpu").detach().apply_(assert_almost_zero)
+        assert torch.equal(weight, weight_c)
+        assert torch.equal(bias, bias_c)
 
 
 def assert_almost_zero(x):
@@ -242,7 +237,12 @@ def test_state_dict_full_precision():
 
 @skip_if_no_cuda
 @skip_if_no_adam
+@pytest.mark.xfail
 def test_state_dict_mixed_precision():
+    # TODO: Optimizer state gets cast to FP16 and back to FP32 for
+    # mixed-precision and memory-efficient mixed-precision, resulting
+    # in a potential loss of precision. Thus, as training proceeds, we don't
+    # necessarily expect the parameters to remain the exact same.
     weight, bias, input = make_half_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.MIXED_PRECISION)
 
@@ -251,7 +251,12 @@ def test_state_dict_mixed_precision():
 
 @skip_if_no_cuda
 @skip_if_no_adam
+@pytest.mark.xfail
 def test_state_dict_memory_efficient():
+    # TODO: Optimizer state gets cast to FP16 and back to FP32 for
+    # mixed-precision and memory-efficient mixed-precision, resulting
+    # in a potential loss of precision. Thus, as training proceeds, we don't
+    # necessarily expect the parameters to remain the exact same.
     weight, bias, input = make_half_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.MEMORY_EFFICIENT_MIXED_PRECISION)
 
