@@ -49,7 +49,7 @@ class OSS(Optimizer):
     in_super_constructor: bool
 
     def __init__(self, params: _params_t, optim: Type[Optimizer] = SGD, group: Any = dist.group.WORLD, **defaults: Any):
-        # Hold all the nmodel params in the root .param_groups
+        # Hold all the model params in the root .param_groups
         self.in_super_constructor = True
         super().__init__(params, defaults)
         self.in_super_constructor = False
