@@ -1,6 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 
+import argparse
+import math
 import os
 import time
 from typing import Any, List
@@ -13,9 +15,8 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.models import resnet101
 from torchvision.transforms import ToTensor
+
 from fairscale.optim.oss import OSS
-import math
-import argparse
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 
