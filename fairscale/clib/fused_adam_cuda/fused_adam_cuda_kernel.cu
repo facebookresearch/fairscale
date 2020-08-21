@@ -30,7 +30,6 @@ struct AdamFunctor
         const float b2,
         const float eps,
         const float grad_scale,
-        const bool scale_optim,
         const float optim_scale,
         float* found_inf_ptr,
         const float step_size,
@@ -92,7 +91,7 @@ struct AdamFunctor
                 int j = i_start + threadIdx.x + ii*blockDim.x;
 
                 if(j < n && j < chunk_size) {
-                    if (scale_optim) {
+                    if (optim_scale != 1.0) {
                         // Optimizer state is in half precision and must be scaled
                         float scaled_grad = incoming_g[ii]/grad_scale;
                         float momentum = b1 * (incoming_m[ii] / optim_scale) + (1-b1)*scaled_grad;
@@ -167,7 +166,6 @@ void fused_adam_cuda(
     assert(tl_sz == 4 || tl_sz == 5);
     assert(tensor_lists[1][0].scalar_type() == tensor_lists[2][0].scalar_type());
 
-    bool scale_optim = (tensor_lists[1][0].scalar_type() == at::ScalarType::Half);
     float* found_inf_ptr = found_inf.data_ptr<float>();
 
     if(tl_sz == 5) {
@@ -185,7 +183,6 @@ void fused_adam_cuda(
             beta2,
             eps,
             grad_scale,
-            scale_optim,
             optim_scale,
             found_inf_ptr,
             step_size,
@@ -208,7 +205,6 @@ void fused_adam_cuda(
                 beta2,
                 eps,
                 grad_scale,
-                scale_optim,
                 optim_scale,
                 found_inf_ptr,
                 step_size,
@@ -229,7 +225,6 @@ void fused_adam_cuda(
                     beta2,
                     eps,
                     grad_scale,
-                    scale_optim,
                     optim_scale,
                     found_inf_ptr,
                     step_size,
@@ -248,7 +243,6 @@ void fused_adam_cuda(
                     beta2,
                     eps,
                     grad_scale,
-                    scale_optim,
                     optim_scale,
                     found_inf_ptr,
                     step_size,

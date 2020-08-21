@@ -308,7 +308,7 @@ def test_exploding_optimizer_state():
     input = torch.tensor([1.0]).half().cuda().requires_grad_()
 
     optimizer = Adam([weight], lr=1e-3, precision=Precision.PURE_FP16)
-    optimizer._optim_scale = 1.0
+    optimizer._optim_scale = 1.5
 
     optimizer.zero_grad()
     loss = (weight.mv(input)).pow(2).sum()
