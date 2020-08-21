@@ -298,6 +298,8 @@ def test_update_optim_scale():
     loss.backward()
     optimizer.step()
 
+    assert optimizer._optim_scale == 2 ** 16
+
 
 @skip_if_no_cuda
 @skip_if_no_adam
