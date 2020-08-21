@@ -148,7 +148,7 @@ try:
         def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
             super().load_state_dict(state_dict)
 
-            # TODO: Optimizer state gets cast to FP16 and back to FP32 for 
+            # TODO: Optimizer state gets cast to FP16 and back to FP32 for
             # mixed-precision and memory-efficient mixed-precision. Eventually
             # we want to fix this so that precision is not lost
             for group in self.param_groups:

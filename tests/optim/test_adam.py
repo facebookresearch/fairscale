@@ -86,7 +86,7 @@ def state_dict_test(optimizer, weight, bias, input):
         optimizer.step(fn)
         optimizer_c.step(fn_c)
 
-        # TODO: Optimizer state gets cast to FP16 and back to FP32 for 
+        # TODO: Optimizer state gets cast to FP16 and back to FP32 for
         # mixed-precision and memory-efficient mixed-precision, resulting
         # in a loss of precision, so we don't expect the parameters to
         # remain the exact same. This therefore does NOT pass for all
