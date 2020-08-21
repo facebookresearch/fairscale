@@ -150,7 +150,7 @@ try:
 
             # TODO: Optimizer state gets cast to FP16 and back to FP32 for
             # mixed-precision and memory-efficient mixed-precision. Eventually
-            # we want to fix this so that precision is not lost
+            # we want to fix this, as some precision may be lost
             for group in self.param_groups:
                 for p in group["params"]:
                     self.state[p]["exp_avg"] = self.state[p]["exp_avg"].type(self.optim_type)

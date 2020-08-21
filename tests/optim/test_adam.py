@@ -81,6 +81,19 @@ def state_dict_test(optimizer, weight, bias, input):
     # Load state dict
     state_dict = deepcopy(optimizer.state_dict())
     optimizer_c.load_state_dict(state_dict)
+
+    for group, group_c in zip(optimizer.param_groups, optimizer_c.param_groups):
+        for p, p_c in zip(group["params"], group_c["params"]):
+            assert torch.equal(optimizer.state[p]["exp_avg"], optimizer_c.state[p_c]["exp_avg"])
+            assert torch.equal(optimizer.state[p]["exp_avg_sq"], optimizer_c.state[p_c]["exp_avg_sq"])
+
+    if optimizer.fp32_param_groups:
+        # When using mixed precision, fp32_param_groups are made from FP16 params rather than
+        # copied via state_dict, introducing differences between the original optimizer and
+        # the copy. Because this test requires that they be the exact same, we copy the
+        # fp32 params from the original optimizer to the copy
+        optimizer_c.fp32_param_groups = deepcopy(optimizer.fp32_param_groups)
+
     # Run both optimizations in parallel
     for _i in range(5):
         optimizer.step(fn)
