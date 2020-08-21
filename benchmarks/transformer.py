@@ -9,6 +9,7 @@ import torchtext
 from torchtext.data.utils import get_tokenizer
 
 from fairscale.nn import Pipe
+from fairscale.optim import GradScaler
 
 try:
     from fairscale.optim.adam import Adam, Precision  # type: ignore
@@ -140,11 +141,12 @@ def make_model(device, ntokens):
         optimizer = Adam(p.parameters(), lr=lr, precision=Precision.PURE_FP16)
     except NameError:
         optimizer = Adam(p.parameters(), lr=lr)
+    scaler = GradScaler()
 
-    return p, criterion, optimizer
+    return p, criterion, optimizer, scaler
 
 
-def train(train_data, model, criterion, optimizer, bptt, ntokens):
+def train(train_data, model, criterion, optimizer, scaler, bptt, ntokens):
     model.train()
     total_loss = 0.0
     start_time = time.time()
@@ -155,10 +157,11 @@ def train(train_data, model, criterion, optimizer, bptt, ntokens):
         output = output.to(targets.device)
 
         loss = criterion(output.view(-1, ntokens), targets)
-        loss.backward()
-
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_value_(model.parameters(), 0.05)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         total_loss += loss.item()
         log_interval = 50
@@ -192,7 +195,7 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
-def benchmark_language_model(train_data, val_data, test_data, model, criterion, optimizer, ntokens):
+def benchmark_language_model(train_data, val_data, test_data, model, criterion, optimizer, scaler, ntokens):
     epoch = 1
     bptt = 35
     start_time = time.time()
@@ -201,7 +204,7 @@ def benchmark_language_model(train_data, val_data, test_data, model, criterion, 
     print("| start of epoch {:1d}".format(epoch))
     print("-" * 89)
     epoch_start_time = time.time()
-    train(train_data, model, criterion, optimizer, bptt, ntokens)
+    train(train_data, model, criterion, optimizer, scaler, bptt, ntokens)
     val_loss = evaluate(model, val_data, criterion, bptt, ntokens)
     print("-" * 89)
     print(
@@ -264,6 +267,6 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     device = torch.device("cuda")
     ntokens, train_data, val_data, test_data = get_data(device)
-    model, criterion, optimizer = make_model(device, ntokens)
-    benchmark_language_model(train_data, val_data, test_data, model, criterion, optimizer, ntokens)
+    model, criterion, optimizer, scaler = make_model(device, ntokens)
+    benchmark_language_model(train_data, val_data, test_data, model, criterion, optimizer, scaler, ntokens)
     del model
