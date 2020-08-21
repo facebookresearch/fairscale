@@ -135,7 +135,11 @@ def make_model(device, ntokens):
 
     criterion = nn.CrossEntropyLoss()
     lr = 0.01  # learning rate
-    optimizer = Adam(p.parameters(), lr=lr, precision=Precision.MIXED_PRECISION)
+
+    try:
+        optimizer = Adam(p.parameters(), lr=lr, precision=Precision.MIXED_PRECISION)
+    except NameError:
+        optimizer = Adam(p.parameters(), lr=lr)
 
     return p, criterion, optimizer
 
