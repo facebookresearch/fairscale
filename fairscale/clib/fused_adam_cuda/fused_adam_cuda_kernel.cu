@@ -7,7 +7,6 @@
 #include <assert.h>
 #include <cmath>
 #include "ATen/TensorUtils.h"
-// #include "ATen/Type.h"
 #include "ATen/AccumulateType.h"
 #include <THC/THCGeneral.h>
 #include "multi_tensor_apply.cuh"
@@ -31,6 +30,9 @@ struct AdamFunctor
         const float b2,
         const float eps,
         const float grad_scale,
+        const bool use_optim_scaling,
+        const float optim_scale,
+        float* found_inf_ptr,
         const float step_size,
         adamMode_t mode,
         const float decay)
@@ -90,19 +92,43 @@ struct AdamFunctor
                 int j = i_start + threadIdx.x + ii*blockDim.x;
 
                 if(j < n && j < chunk_size) {
-                    float scaled_grad = incoming_g[ii]/grad_scale;
-                    float momentum = b1 * incoming_m[ii] + (1-b1)*scaled_grad;
-                    float velocity = b2 * incoming_v[ii] + (1-b2)*scaled_grad*scaled_grad;
-                    m[j] = static_cast<OPTIM_T>(momentum);
-                    v[j] = static_cast<OPTIM_T>(velocity);
-                    float denom;
-                    if (mode == ADAM_MODE_0)
-                        denom = sqrtf(velocity + eps);
-                    else // Mode 1
-                        denom = sqrtf(velocity) + eps;
-                    float update = (momentum/denom) + (decay*incoming_p[ii]);
-                    p[j] = (PARAM_T)(incoming_p[ii] - (step_size*update));
-                    if (DEPTH == 5)  p_copy[j] = (at::Half) p[j];
+                    if (use_optim_scaling) {
+                        // Optimizer state is in half precision and must be scaled
+                        float scaled_grad = incoming_g[ii]/grad_scale;
+                        float momentum = b1 * (incoming_m[ii] / optim_scale) + (1-b1)*scaled_grad;
+                        float velocity = b2 * (incoming_v[ii] / optim_scale) + (1-b2)*scaled_grad*scaled_grad;
+
+                        m[j] = static_cast<OPTIM_T>(momentum * optim_scale);
+                        v[j] = static_cast<OPTIM_T>(velocity * optim_scale);
+
+                        if (!isfinite(m[j]) || !isfinite(v[j])) {
+                            *found_inf_ptr = 1.f;
+                        }
+
+                        float denom;
+                        if (mode == ADAM_MODE_0)
+                            denom = sqrtf(velocity + eps);
+                        else // Mode 1
+                            denom = sqrtf(velocity) + eps;
+                        float update = (momentum/denom) + (decay*incoming_p[ii]);
+                        p[j] = (PARAM_T)(incoming_p[ii] - (step_size*update));
+                        if (DEPTH == 5)  p_copy[j] = (at::Half) p[j];
+                    } else {
+                        // Optimizer state is in floating point precision
+                        float scaled_grad = incoming_g[ii]/grad_scale;
+                        float momentum = b1 * incoming_m[ii] + (1-b1)*scaled_grad;
+                        float velocity = b2 * incoming_v[ii] + (1-b2)*scaled_grad*scaled_grad;
+                        m[j] = static_cast<OPTIM_T>(momentum);
+                        v[j] = static_cast<OPTIM_T>(velocity);
+                        float denom;
+                        if (mode == ADAM_MODE_0)
+                            denom = sqrtf(velocity + eps);
+                        else // Mode 1
+                            denom = sqrtf(velocity) + eps;
+                        float update = (momentum/denom) + (decay*incoming_p[ii]);
+                        p[j] = (PARAM_T)(incoming_p[ii] - (step_size*update));
+                        if (DEPTH == 5)  p_copy[j] = (at::Half) p[j];
+                    }
                 }
             }
         }
@@ -118,6 +144,8 @@ void fused_adam_cuda(
     float beta2,
     float eps,
     float grad_scale,
+    float optim_scale,
+    at::Tensor& found_inf,
     int step,
     int mode,
     int bias_correction,
@@ -139,6 +167,9 @@ void fused_adam_cuda(
     assert(tl_sz == 4 || tl_sz == 5);
     assert(tensor_lists[1][0].scalar_type() == tensor_lists[2][0].scalar_type());
 
+    bool use_optim_scaling = (tensor_lists[1][0].scalar_type() == at::ScalarType::Half);
+    float* found_inf_ptr = found_inf.data_ptr<float>();
+
     if(tl_sz == 5) {
         // Mixed precision case
         assert(tensor_lists[0][0].scalar_type() == at::ScalarType::Float);
@@ -154,6 +185,9 @@ void fused_adam_cuda(
             beta2,
             eps,
             grad_scale,
+            use_optim_scaling,
+            optim_scale,
+            found_inf_ptr,
             step_size,
             (adamMode_t) mode,
             decay
@@ -174,13 +208,17 @@ void fused_adam_cuda(
                 beta2,
                 eps,
                 grad_scale,
+                use_optim_scaling,
+                optim_scale,
+                found_inf_ptr,
                 step_size,
                 (adamMode_t) mode,
                 decay
             );
         } else if (tensor_lists[0][0].scalar_type() == at::ScalarType::Half) {
             if(tensor_lists[1][0].scalar_type() == at::ScalarType::Float) {
-                // FP16 model parameters and gradients; FP32 optimizer state
+                // Memory-efficient mixed-precision case
+                // ie FP16 model parameters and gradients; FP32 optimizer state
                 multi_tensor_apply<4>(
                     BLOCK_SIZE,
                     chunk_size,
@@ -191,6 +229,9 @@ void fused_adam_cuda(
                     beta2,
                     eps,
                     grad_scale,
+                    use_optim_scaling,
+                    optim_scale,
+                    found_inf_ptr,
                     step_size,
                     (adamMode_t) mode,
                     decay
@@ -207,6 +248,9 @@ void fused_adam_cuda(
                     beta2,
                     eps,
                     grad_scale,
+                    use_optim_scaling,
+                    optim_scale,
+                    found_inf_ptr,
                     step_size,
                     (adamMode_t) mode,
                     decay

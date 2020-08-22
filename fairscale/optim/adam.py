@@ -22,6 +22,23 @@ try:
         MEMORY_EFFICIENT_MIXED_PRECISION = auto()
         PURE_FP16 = auto()
 
+    class _MultiDeviceReplicator(object):
+        """
+        Lazily serves copies of a tensor to requested devices.  Copies are cached per-device.
+        """
+
+        def __init__(self, master_tensor: torch.Tensor):
+            assert master_tensor.is_cuda
+            self.master = master_tensor
+            self._per_device_tensors: Dict[torch.device, torch.Tensor] = {}
+
+        def get(self, device: torch.device) -> torch.Tensor:
+            retval = self._per_device_tensors.get(device, None)
+            if retval is None:
+                retval = self.master.to(device=device, non_blocking=True, copy=True)
+                self._per_device_tensors[device] = retval
+            return retval
+
     class Adam(torch.optim.Optimizer):
         state: dict
         defaults: dict
@@ -81,7 +98,9 @@ try:
                 assert parameters[0].dtype == torch.float16
 
             self.optim_type = torch.float16 if precision is Precision.PURE_FP16 else torch.float32
-
+            self._optim_scale = float(2 ** 16) if precision is Precision.PURE_FP16 else 1.0
+            self._steps_since_optim_scale_change = 0
+            self._optim_scale_update_freq = 2000  # This is the value that GradScaler uses by default
             self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
 
             if amsgrad:
@@ -145,8 +164,14 @@ try:
         def mixed_precision(self) -> bool:
             return self.precision is Precision.MIXED_PRECISION
 
+        def state_dict(self) -> Dict[str, Any]:
+            d = super().state_dict()
+            d["optim_scale"] = self._optim_scale
+            return d
+
         def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
             super().load_state_dict(state_dict)
+            self._optim_scale = state_dict["optim_scale"]
 
             # TODO: Optimizer state gets cast to FP16 and back to FP32 for
             # mixed-precision and memory-efficient mixed-precision. Eventually
@@ -228,6 +253,9 @@ try:
                         for tl, t in zip(tensorlists[p.device], pl):
                             tl.append(t)
 
+                found_inf = torch.full((1,), 0.0, dtype=torch.float32, device=list(tensorlists.keys())[0])
+                per_device_found_inf = _MultiDeviceReplicator(found_inf)
+
                 for tensordevice, tensorlist in tensorlists.items():
                     with torch.cuda.device(tensordevice):
                         fused_adam_cuda.adam(
@@ -239,11 +267,32 @@ try:
                             beta2,
                             group["eps"],
                             scale,
+                            self._optim_scale,
+                            per_device_found_inf.get(tensordevice),
                             state["step"],
                             self.eps_mode,
                             bias_correction,
                             group["weight_decay"],
                         )
+
+                if sum(v.item() for v in per_device_found_inf._per_device_tensors.values()):
+                    self._steps_since_optim_scale_change = 0
+                    self._optim_scale /= 2
+
+                    if self._optim_scale < 1.0:
+                        raise RuntimeError("Optimizer state scale < 1. This may mean that gradients are exploding")
+
+                    for group in self.param_groups:
+                        for p in group["params"]:
+                            self.state[p]["exp_avg"] = torch.zeros_like(p, dtype=self.optim_type)
+                            self.state[p]["exp_avg_sq"] = torch.zeros_like(p, dtype=self.optim_type)
+                else:
+                    self._steps_since_optim_scale_change += 1
+
+                if self._steps_since_optim_scale_change == self._optim_scale_update_freq:
+                    self._steps_since_optim_scale_change = 0
+                    if self._optim_scale < 2 ** 16:
+                        self._optim_scale *= 2
 
             return loss
 

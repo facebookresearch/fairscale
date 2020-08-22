@@ -287,6 +287,38 @@ def test_state_dict_pure_fp16():
 
 @skip_if_no_cuda
 @skip_if_no_adam
+def test_update_optim_scale():
+    weight, bias, input = make_half_precision_params()
+    optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.PURE_FP16)
+    optimizer._optim_scale_update_freq = 1
+    optimizer._optim_scale = 2 ** 15
+
+    optimizer.zero_grad()
+    loss = (weight.mv(input) + bias).pow(2).sum()
+    loss.backward()
+    optimizer.step()
+
+    assert optimizer._optim_scale == 2 ** 16
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
+def test_exploding_optimizer_state():
+    weight = torch.tensor([[float("inf")]]).half().cuda().requires_grad_()
+    input = torch.tensor([1.0]).half().cuda().requires_grad_()
+
+    optimizer = Adam([weight], lr=1e-3, precision=Precision.PURE_FP16)
+    optimizer._optim_scale = 1.0
+
+    optimizer.zero_grad()
+    loss = (weight.mv(input)).pow(2).sum()
+    loss.backward()
+    with pytest.raises(RuntimeError):
+        optimizer.step()
+
+
+@skip_if_no_cuda
+@skip_if_no_adam
 def test_build_fp32_params():
     weight = torch.randn(10, 5).cuda().half().requires_grad_()
     bias = torch.randn(10).cuda().half().requires_grad_()

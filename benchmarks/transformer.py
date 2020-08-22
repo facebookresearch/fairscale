@@ -134,10 +134,10 @@ def make_model(device, ntokens):
     p = Pipe(model, balance)
 
     criterion = nn.CrossEntropyLoss()
-    lr = 0.01  # learning rate
+    lr = 0.0005  # learning rate
 
     try:
-        optimizer = Adam(p.parameters(), lr=lr, precision=Precision.MIXED_PRECISION)
+        optimizer = Adam(p.parameters(), lr=lr, precision=Precision.PURE_FP16)
     except NameError:
         optimizer = Adam(p.parameters(), lr=lr)
 
@@ -236,10 +236,10 @@ def benchmark_language_model(train_data, val_data, test_data, model, criterion, 
 
         # Assert that memory usage on each GPU is within 10% of golden run
         # Right-hand-side is golden run bytes * 110%
-        assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 210479616 * 1.1
+        assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 193206272 * 1.1
         assert torch.cuda.memory_stats(1)["allocated_bytes.all.peak"] < 640512 * 1.1
-        assert torch.cuda.memory_stats(2)["allocated_bytes.all.peak"] < 1605120 * 1.1
-        assert torch.cuda.memory_stats(3)["allocated_bytes.all.peak"] < 113801216 * 1.1
+        assert torch.cuda.memory_stats(2)["allocated_bytes.all.peak"] < 1412608 * 1.1
+        assert torch.cuda.memory_stats(3)["allocated_bytes.all.peak"] < 95364608 * 1.1
         print("No regression detected")
 
 
