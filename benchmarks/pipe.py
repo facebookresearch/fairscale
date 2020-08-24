@@ -231,13 +231,13 @@ def benchmark_language_model(train_data, val_data, test_data, model, criterion, 
     wps = nwords / elapsed_time
 
     test_loss = evaluate(model, test_data, criterion, bptt, ntokens)
-    print("=" * 89)
+    print("=" * 110)
     print(
         "| end of training | test loss {:5.2f} \n| time: {:5.2f}s | words: {:3d} | wps: {:5.2f}".format(
             test_loss, elapsed_time, nwords, wps
         )
     )
-    print("=" * 89)
+    print("=" * 110)
 
     if can_benchmark and len(model.balance) == 4:
         # Assert that words per second is within 3 standard deviations of the average
