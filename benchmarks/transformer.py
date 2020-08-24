@@ -12,7 +12,7 @@ from fairscale.nn import Pipe
 from fairscale.optim import GradScaler
 
 try:
-    from fairscale.optim.adam import Adam, Precision  # type: ignore
+    from fairscale.optim import Adam, Precision  # type: ignore
 
     can_benchmark = True
 except ImportError:
