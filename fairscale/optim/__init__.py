@@ -9,7 +9,7 @@
 
 try:
     from .adam import Adam, Precision
-except ImportError:  # pragma : no cover
-    pass
+except ImportError: # pragma: no cover
+    pass # pragma: no cover
 from .grad_scaler import GradScaler
 from .oss import OSS
