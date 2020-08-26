@@ -91,9 +91,9 @@ class OSS(Optimizer):
                     param_groups[rank].append(param_group_rank)
         return param_groups
 
-    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
+    def step(self, closure: Optional[Callable[[], float]] = None, **kwargs: Any) -> Optional[float]:
         # Run the optimizer step on this shard only
-        loss = self.optim.step(closure=closure)
+        loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
 
         # Sync all the states
         for rank, param_groups in enumerate(self.partition_parameters()):

@@ -66,6 +66,22 @@ def test_state_dict():
     assert o.param_groups[0]["params"][0].device == x.device
 
 
+class SGDWithStepKWArg(torch.optim.SGD):
+    def step(self, closure=None, kwarg=[]):
+        super().step()
+        kwarg.append(5)
+
+
+def test_step_with_kwargs():
+    kwarg = []
+    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+    o = optim.OSS([x], SGDWithStepKWArg, lr=0.1)
+    x.backward()
+    o.step(0, kwarg=kwarg)
+    assert kwarg == [5]
+    assert x == torch.tensor([0.9], device=DEVICE)
+
+
 def test_local_state_dict():
     x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
     o = optim.OSS([x], lr=0.1)
