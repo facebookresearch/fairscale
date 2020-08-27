@@ -59,10 +59,7 @@ def run_test(backend, device, world_size=2):
 def test_eval_mode():
     """ Testing eval mode make sure this is no asserts. """
     dist.init_process_group(
-        init_method=f"file://{tempfile.mkstemp()[1]}",
-        backend=dist.Backend.GLOO,
-        rank=0,
-        world_size=1
+        init_method=f"file://{tempfile.mkstemp()[1]}", backend=dist.Backend.GLOO, rank=0, world_size=1
     )
     model = Sequential(Linear(2, 3), Linear(3, 4))
     optimizer = OSS(model.parameters(), lr=0.1, momentum=0.99)
@@ -73,7 +70,7 @@ def test_eval_mode():
         input_tensor = torch.rand((64, 2))
         output = ddp(input_tensor)
 
-    ddp.train(True)
+    ddp.train()
     try:
         for _ in range(5):
             input_tensor = torch.rand((64, 2))

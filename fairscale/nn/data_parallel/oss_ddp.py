@@ -99,13 +99,14 @@ class OssDdp(nn.Module):
         attrs = copy.copy(self.__dict__)
         return attrs
 
-    def train(self, mode: bool) -> None:
+    def train(self, mode: bool = True) -> "OssDdp":
         pre_mode = self.module.training
         self.module.train(mode)
         if self.module.training:
             assert not self.need_reduction or pre_mode, "incorrect state transition"
         else:
             assert not self.need_reduction, "try to enter eval with grads unreduced"
+        return self
 
     @contextmanager
     def no_sync(self) -> Generator:
