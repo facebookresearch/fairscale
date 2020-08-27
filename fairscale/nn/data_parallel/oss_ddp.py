@@ -99,6 +99,14 @@ class OssDdp(nn.Module):
         attrs = copy.copy(self.__dict__)
         return attrs
 
+    def train(self, mode: bool) -> None:
+        pre_mode = self.module.training
+        self.module.train(mode)
+        if self.module.training:
+            assert not self.need_reduction or pre_mode, "incorrect state transition"
+        else:
+            assert not self.need_reduction, "try to enter eval with grads unreduced"
+
     @contextmanager
     def no_sync(self) -> Generator:
         """A context manager to disable gradient synchronization."""
@@ -108,10 +116,11 @@ class OssDdp(nn.Module):
         self.accumulate_grads = old_accumulate_grads
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
-        if self.need_reduction:
-            raise RuntimeError("OssDdp requires explicit reduction, must call OssDdp.reduce")
-        if not self.accumulate_grads:
-            self.need_reduction = True
+        if self.module.training:
+            if self.need_reduction:
+                raise RuntimeError("OssDdp requires explicit reduction, must call OssDdp.reduce")
+            if not self.accumulate_grads:
+                self.need_reduction = True
         return self.module(*inputs, **kwargs)
 
     def reduce(self) -> None:
@@ -119,6 +128,7 @@ class OssDdp(nn.Module):
         This function must be called explicitly after backward to reduce
         gradients. There is no automatic hook like c10d.
         """
+        assert self.module.training, "Cannot call reduce in training"
 
         def reduce_params(params: List[Parameter], params_rank: int) -> None:
             """ Helper to reduce a list of params that should fix in the buffer. """

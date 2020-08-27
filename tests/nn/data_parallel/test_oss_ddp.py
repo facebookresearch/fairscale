@@ -54,3 +54,31 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
 def run_test(backend, device, world_size=2):
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(run_one_step, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
+
+
+def test_eval_mode():
+    """ Testing eval mode make sure this is no asserts. """
+    dist.init_process_group(
+        init_method=f"file://{tempfile.mkstemp()[1]}",
+        backend=dist.Backend.GLOO,
+        rank=0,
+        world_size=1
+    )
+    model = Sequential(Linear(2, 3), Linear(3, 4))
+    optimizer = OSS(model.parameters(), lr=0.1, momentum=0.99)
+    ddp = OssDdp(model, optimizer, 1)
+
+    ddp.eval()
+    for _ in range(5):
+        input_tensor = torch.rand((64, 2))
+        output = ddp(input_tensor)
+
+    ddp.train(True)
+    try:
+        for _ in range(5):
+            input_tensor = torch.rand((64, 2))
+            output = ddp(input_tensor)
+    except RuntimeError:
+        pass
+    else:
+        assert False, "Multiple forward passes on training mode should not pass"
