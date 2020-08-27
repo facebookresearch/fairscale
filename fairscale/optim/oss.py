@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
+from itertools import chain
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
 
@@ -139,6 +140,19 @@ class OSS(Optimizer):
         """ Loads this rank's state_dict. """
 
         self.optim.load_state_dict(state_dict)
+
+        # Workaround PyTorch bug that casts state (https://github.com/pytorch/pytorch/issues/43706)
+        # Copied from https://github.com/pytorch/fairseq/blob/v0.9.0/fairseq/optim/fp16_optimizer.py#L251-L268
+        groups = self.optim.param_groups
+        saved_groups = state_dict["param_groups"]
+        id_map = {
+            old_id: p
+            for old_id, p in zip(chain(*(g["params"] for g in saved_groups)), chain(*(g["params"] for g in groups)))
+        }
+        for k, v in state_dict["state"].items():
+            if k in id_map:
+                param = id_map[k]
+                self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Restore the global parameter groups as well as the shard """
