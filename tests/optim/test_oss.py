@@ -41,7 +41,12 @@ def test_create():
 
 def test_state_dict():
     x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
-    o = optim.OSS([x], lr=0.1)
+    o = optim.OSS([x], lr=0.1, momentum=0.9)
+    x.backward()
+    o.step()
+    assert x == torch.tensor([0.9], device=DEVICE)
+    assert o.optim.state[x]["momentum_buffer"] == torch.tensor([1.0], device=DEVICE)
+    o.zero_grad()
     o.consolidate_state_dict()  # Sync state dict in between replicas - even if there are none
     state_dict = o.state_dict()
 
@@ -54,13 +59,16 @@ def test_state_dict():
     # Check that it's correctly loaded
     o = optim.OSS([x], lr=0.01)
     o.load_state_dict(state_dict)
+    # Check that state is correct and on proper device
+    assert o.optim.state[x]["momentum_buffer"] == torch.tensor([1.0], device=DEVICE)
 
     # We should now be using a lr of 0.1, both within the optimizer
     # and as exposed by the .param_groups attribute
     assert o.param_groups[0]["lr"] == 0.1
     x.backward()
     o.step()
-    assert x == torch.tensor([0.9], device=DEVICE)
+    assert x == torch.tensor([0.71], device=DEVICE)
+    assert o.optim.state[x]["momentum_buffer"] == torch.tensor([1.9], device=DEVICE)
 
     # Check that the exposed param_groups are on the proper device
     assert o.param_groups[0]["params"][0].device == x.device

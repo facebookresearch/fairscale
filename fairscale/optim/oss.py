@@ -139,10 +139,7 @@ class OSS(Optimizer):
     def load_local_state_dict(self, state_dict: dict) -> None:
         """ Loads this rank's state_dict. """
 
-        # Make sure that the state is on the appropriate device
-        state_dict_ondevice = recursive_copy_to_device(state_dict, non_blocking=False, device=self._device)
-
-        self.optim.load_state_dict(state_dict_ondevice)
+        self.optim.load_state_dict(state_dict)
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Restore the global parameter groups as well as the shard """
