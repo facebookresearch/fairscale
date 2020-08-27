@@ -85,10 +85,9 @@ class OSS(Optimizer):
                 param_lists[rank].append(param)
                 sizes[rank] += param.numel()
             for rank, params in enumerate(param_lists):
-                if len(params) > 0:
-                    param_group_rank = copy.copy(param_group)
-                    param_group_rank["params"] = params
-                    param_groups[rank].append(param_group_rank)
+                param_group_rank = copy.copy(param_group)
+                param_group_rank["params"] = params
+                param_groups[rank].append(param_group_rank)
         return param_groups
 
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
@@ -134,7 +133,7 @@ class OSS(Optimizer):
             len(self._all_states) > 0
         ), "The optimizer state is not materialized, please call consolidate_state_dict on every replica beforehand"
 
-        return {"state": self._all_states, "param_groups": self.param_groups}
+        return {"state": self._all_states}
 
     def load_local_state_dict(self, state_dict: dict) -> None:
         """ Loads this rank's state_dict. """
@@ -146,8 +145,11 @@ class OSS(Optimizer):
         # Dispatch this rank's state dictionary to the wrapped shard optimizer
         self.load_local_state_dict(state_dict["state"][self.rank])
 
-        # Restore the global param_groups
-        self.param_groups = recursive_copy_to_device(state_dict["param_groups"], non_blocking=True, device=self._device)
+        # Restore the global param_groups (the params themselves are already correct)
+        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
+            for k, v in local_group.items():
+                if k != "params":
+                    global_group[k] = v
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
