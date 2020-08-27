@@ -51,10 +51,10 @@ def test_state_dict():
     state_dict = o.state_dict()
 
     # Check that the pulled state is what we expect
-    assert state_dict["param_groups"][0]["lr"] == 0.1
+    assert state_dict["state"][0]["param_groups"][0]["lr"] == 0.1
 
     # Check that the pulled state and the .param_groups attribute are in sync
-    assert state_dict["param_groups"][0]["lr"] == o.param_groups[0]["lr"]
+    assert state_dict["state"][0]["param_groups"][0]["lr"] == o.param_groups[0]["lr"]
 
     # Check that it's correctly loaded
     o = optim.OSS([x], lr=0.01)
@@ -113,10 +113,7 @@ def run_test_add_param_group(rank, world_size):
     assert len(o.param_groups) == 2
     # Verify that added group is added to the correct partition making all have 8 elements.
     assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == 8
-    if rank == 1:
-        assert len(o.optim.param_groups) == 2
-    else:
-        assert len(o.optim.param_groups) == 1
+    assert len(o.optim.param_groups) == 2
 
 
 def test_add_param_group():
