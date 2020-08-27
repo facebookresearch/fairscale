@@ -128,7 +128,7 @@ class OssDdp(nn.Module):
         This function must be called explicitly after backward to reduce
         gradients. There is no automatic hook like c10d.
         """
-        assert self.module.training, "Cannot call reduce in training"
+        assert self.module.training, "Cannot call reduce in eval"
 
         def reduce_params(params: List[Parameter], params_rank: int) -> None:
             """ Helper to reduce a list of params that should fix in the buffer. """
