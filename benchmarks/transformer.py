@@ -98,8 +98,8 @@ def get_data(device):
     TEXT.build_vocab(train_txt)
     ntokens = len(TEXT.vocab.stoi)
 
-    batch_size = 20
-    eval_batch_size = 10
+    batch_size = 500
+    eval_batch_size = 200
     train_data = batchify(train_txt, batch_size, TEXT, device)
     val_data = batchify(val_txt, eval_batch_size, TEXT, device)
     test_data = batchify(test_txt, eval_batch_size, TEXT, device)
@@ -161,7 +161,7 @@ def train(train_data, model, criterion, optimizer, bptt, ntokens):
         optimizer.step()
 
         total_loss += loss.item()
-        log_interval = 200
+        log_interval = 50
         if batch % log_interval == 0 and batch > 0:
             cur_loss = total_loss / log_interval
             elapsed = time.time() - start_time
