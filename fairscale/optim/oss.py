@@ -91,6 +91,8 @@ class OSS(Optimizer):
                     param_groups[rank].append(param_group_rank)
         return param_groups
 
+    # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
+    # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
     def step(self, closure: Optional[Callable[[], float]] = None, **kwargs: Any) -> Optional[float]:
         # Run the optimizer step on this shard only
         loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
