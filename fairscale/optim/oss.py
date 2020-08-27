@@ -152,7 +152,7 @@ class OSS(Optimizer):
         for k, v in state_dict["state"].items():
             if k in id_map:
                 param = id_map[k]
-                self.optim.state[param] = v
+                self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Restore the global parameter groups as well as the shard """
