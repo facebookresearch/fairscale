@@ -56,7 +56,7 @@ def run_test(backend, device, world_size=2):
     mp.spawn(run_one_step, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
 
 
-def test_eval_mode():
+def run_eval_mode(_unused):
     """ Testing eval mode make sure this is no asserts. """
     dist.init_process_group(
         init_method=f"file://{tempfile.mkstemp()[1]}", backend=dist.Backend.GLOO, rank=0, world_size=1
@@ -79,3 +79,7 @@ def test_eval_mode():
         pass
     else:
         assert False, "Multiple forward passes on training mode should not pass"
+
+
+def test_eval_mode():
+    mp.spawn(run_eval_mode, args=(), join=True)
