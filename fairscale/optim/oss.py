@@ -94,6 +94,9 @@ class OSS(Optimizer):
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
     # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
     def step(self, closure: Optional[Callable[[], float]] = None, **kwargs: Any) -> Optional[float]:
+        # Sync lr in case its been update by an LRScheduler.
+        self._sync_lr()
+
         # Run the optimizer step on this shard only
         loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
 
@@ -112,6 +115,9 @@ class OSS(Optimizer):
         """ Update the consolidated state_dict list, one per rank.
 
         This needs to be called on all replicas """
+
+        # Sync lr in case its been update by an LRScheduler.
+        self._sync_lr()
 
         if self.rank == recipient_rank:
             # Pull the sharded state from all the other replicas
@@ -154,16 +160,16 @@ class OSS(Optimizer):
                 param = id_map[k]
                 self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
 
+        # Restore the global param_groups (the params themselves are already correct)
+        for global_group, local_group in zip(self.param_groups, groups):
+            for k, v in local_group.items():
+                if k != "params":
+                    global_group[k] = v
+
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Restore the global parameter groups as well as the shard """
         # Dispatch this rank's state dictionary to the wrapped shard optimizer
         self.load_local_state_dict(state_dict["state"][self.rank])
-
-        # Restore the global param_groups (the params themselves are already correct)
-        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
-            for k, v in local_group.items():
-                if k != "params":
-                    global_group[k] = v
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
@@ -171,6 +177,11 @@ class OSS(Optimizer):
             param_groups = self.partition_parameters()[self.rank]
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
+
+    def _sync_lr(self) -> None:
+        """Sync learning rate (needed to support LRScheduler)."""
+        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
+            local_group["lr"] = global_group["lr"]
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
         """
