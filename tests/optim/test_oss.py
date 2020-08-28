@@ -83,9 +83,11 @@ def test_lr_scheduler():
     s2 = torch.optim.lr_scheduler.StepLR(o2, 1)
     for _ in range(5):
         x.backward()
+        o.zero_grad()
         o.step()
         s.step()
         x2.backward()
+        o2.zero_grad()
         o2.step()
         s2.step()
         assert x == x2
