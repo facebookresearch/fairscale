@@ -160,16 +160,16 @@ class OSS(Optimizer):
                 param = id_map[k]
                 self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
 
+        # Restore the global param_groups (the params themselves are already correct)
+        for global_group, local_group in zip(self.param_groups, groups):
+            for k, v in local_group.items():
+                if k != "params":
+                    global_group[k] = v
+
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Restore the global parameter groups as well as the shard """
         # Dispatch this rank's state dictionary to the wrapped shard optimizer
         self.load_local_state_dict(state_dict["state"][self.rank])
-
-        # Restore the global param_groups (the params themselves are already correct)
-        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
-            for k, v in local_group.items():
-                if k != "params":
-                    global_group[k] = v
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)

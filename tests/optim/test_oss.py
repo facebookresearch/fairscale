@@ -116,6 +116,8 @@ def test_local_state_dict():
     o = optim.OSS([x], lr=0.01)
     o.load_local_state_dict(local_state_dict)
     # We should now be using a lr of 0.1.
+    assert o.optim.param_groups[0]["lr"] == 0.1
+    assert o.param_groups[0]["lr"] == 0.1
     x.backward()
     o.step()
     assert x == torch.tensor([0.9], device=DEVICE)
