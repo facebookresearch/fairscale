@@ -6,14 +6,17 @@
 import copy
 from itertools import chain
 import logging
-from typing import Any, Callable, Dict, Iterable, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
 
 import torch
 import torch.distributed as dist
-from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
-
 from .utils import batch_broadcast, broadcast_object, recursive_copy_to_device
+
+if TYPE_CHECKING:  # pragma: no cover
+    from torch.optim.optimizer import _params_t
+else:
+    _params_t = Any
 
 
 class OSS(Optimizer):
@@ -50,7 +53,15 @@ class OSS(Optimizer):
     optim: Optimizer
     in_super_constructor: bool
 
-    def __init__(self, params: _params_t, optim: Type[Optimizer] = SGD, group: Any = dist.group.WORLD, **defaults: Any):
+    def __init__(
+        self,
+        params: _params_t,
+        optim: Type[Optimizer] = SGD,
+        group: Any = dist.group.WORLD,
+        buffer_size: int = 2 ** 25,
+        broadcast_buffer_skip: int = 2 ** 23,
+        **defaults: Any
+    ):
         # Hold all the model params in the root .param_groups
         self.in_super_constructor = True
         super().__init__(params, defaults)
@@ -92,9 +103,10 @@ class OSS(Optimizer):
                 param_lists[rank].append(param)
                 sizes[rank] += param.numel()
             for rank, params in enumerate(param_lists):
-                param_group_rank = copy.copy(param_group)
-                param_group_rank["params"] = params
-                param_groups[rank].append(param_group_rank)
+                if len(params) > 0:
+                    param_group_rank = copy.copy(param_group)
+                    param_group_rank["params"] = params
+                    param_groups[rank].append(param_group_rank)
         return param_groups
 
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.

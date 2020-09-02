@@ -12,14 +12,20 @@ Adopted from LegacyDistributedDataParallel module from fairseq.
 from collections import OrderedDict
 from contextlib import contextmanager
 import copy
-from typing import Any, Dict, Generator, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, cast
 
 import torch
-from torch import Tensor, nn
+from torch import nn
 import torch.distributed as dist
-from torch.nn import Parameter
 
-from fairscale.optim import OSS
+if TYPE_CHECKING:
+    from fairscale.optim import OSS
+    from torch import Tensor
+    from torch.nn import Parameter
+else:
+    OSS = Any
+    Tensor = Any
+    Parameter = Any
 
 
 class OssDdp(nn.Module):

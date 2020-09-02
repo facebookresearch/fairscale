@@ -46,8 +46,8 @@ def train(
     # Data setup, dummy data
     def collate(inputs: List[Any]):
         return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(rank),
-            "label": torch.stack([i[1] for i in inputs]).to(rank),
+            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
+            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
         }
 
     def _print(msg):
