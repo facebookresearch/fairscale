@@ -4,8 +4,8 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
-import logging
 from itertools import chain
+import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
 
 import torch
