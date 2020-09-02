@@ -1,6 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 
+import argparse
+import math
 import os
 import time
 from typing import Any, List
@@ -8,6 +10,7 @@ from typing import Any, List
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.models import resnet101
@@ -25,7 +28,14 @@ def dist_init(rank, world_size):
 
 
 def train(
-    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, data_size: int = 200, use_oss: bool = True
+    rank: int,
+    world_size: int,
+    num_epochs: int = 10,
+    batch_size: int = 32,
+    data_size: int = 200,
+    use_oss: bool = True,
+    check_regression: bool = True,
+    reference_speed: float = -1.0,
 ):
     # DDP
     dist_init(rank, world_size)
@@ -36,8 +46,8 @@ def train(
     # Data setup, dummy data
     def collate(inputs: List[Any]):
         return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
-            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
+            "inputs": torch.stack([i[0] for i in inputs]).to(rank),
+            "label": torch.stack([i[1] for i in inputs]).to(rank),
         }
 
     def _print(msg):
@@ -47,7 +57,7 @@ def train(
     dataloader = DataLoader(
         dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
     )
-    loss_fn = torch.nn.CrossEntropyLoss()
+    loss_fn = nn.CrossEntropyLoss()
 
     # Shard the optimizer
     optimizer = (
@@ -60,6 +70,9 @@ def train(
     torch.cuda.synchronize(rank)
     training_start = time.monotonic()
     model.train()
+
+    measurements = []
+
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
 
@@ -77,26 +90,61 @@ def train(
             optimizer.step(closure)
 
         epoch_end = time.monotonic()
-        img_per_sec = data_size / (epoch_end - epoch_start)
-        _print(f"[{dist.get_rank()}] : Epoch {epoch} - processed {img_per_sec:.2f} img per sec")
+        measurements.append(data_size / (epoch_end - epoch_start))
+        _print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
     img_per_sec = data_size / (training_stop - training_start) * num_epochs
     max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
 
-    _print(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec overall")
+    print(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec overall")
     print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
+
+    if use_oss and check_regression and dist.get_rank() == 0:
+        # Compute the mean and average img per second
+        mean = sum(measurements) / len(measurements)
+        diff = map(lambda x: pow(x - mean, 2.0), measurements)
+        std = math.sqrt(sum(diff) / (len(measurements) - 1))
+        print(f"[Regression Test] Mean: {mean:.2f} +/- {std:.2f}")
+        assert (mean - 3.0 * std) < reference_speed, "Regression detected"
+        print("[Regression Test] VALID")
 
 
 if __name__ == "__main__":
-    WORLD_SIZE = 2
-    EPOCHS = 5
-    BATCH_SIZE = 32
-    DATA_SIZE = 512
+
+    parser = argparse.ArgumentParser(
+        description="Benchmark the optimizer state sharding, on a typical computer vision workload"
+    )
+    parser.add_argument("--world_size", action="store", default=2, type=int)
+    parser.add_argument("--epochs", action="store", default=10, type=int)
+    parser.add_argument("--batch_size", action="store", default=32, type=int)
+    parser.add_argument("--data_size", action="store", default=512, type=int)
+    parser.add_argument("--check_regression", action="store", default=True, type=bool)
+    parser.add_argument("--reference_speed", action="store", default=39.82, type=float)
+
+    args = parser.parse_args()
 
     print("\nBenchmark vanilla SGD")
-    mp.spawn(train, args=(WORLD_SIZE, EPOCHS, BATCH_SIZE, DATA_SIZE, False), nprocs=WORLD_SIZE, join=True)
+    mp.spawn(
+        train,
+        args=(args.world_size, args.epochs, args.batch_size, args.data_size, False, False),
+        nprocs=args.world_size,
+        join=True,
+    )
 
     print("\nBenchmark OSS")
-    mp.spawn(train, args=(WORLD_SIZE, EPOCHS, BATCH_SIZE, DATA_SIZE, True), nprocs=WORLD_SIZE, join=True)
+    mp.spawn(
+        train,
+        args=(
+            args.world_size,
+            args.epochs,
+            args.batch_size,
+            args.data_size,
+            True,
+            args.check_regression,
+            args.reference_speed,
+        ),
+        nprocs=args.world_size,
+        join=True,
+    )

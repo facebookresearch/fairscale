@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
+from itertools import chain
 import logging
 from typing import Any, Callable, Dict, Iterable, List, Optional, Type, Union
 
@@ -42,23 +43,15 @@ class OSS(Optimizer):
         buffer_size (int, optional): number of elements to buffer before
             performing reduce (default: 32M). Used to reduce multiple small
             params to avoid communication overhead.
-        broadcast_buffer_skip (int, optional): number of elements beyond which the 
+        broadcast_buffer_skip (int, optional): number of elements beyond which the
             broadcast is done without buffering. (default: 8M)
     """
 
     optim: Optimizer
     in_super_constructor: bool
 
-    def __init__(
-        self,
-        params: Union[Iterable[torch.Tensor], Iterable[Dict[Any, Any]]],
-        optim: Type[Optimizer] = SGD,
-        group: Any = dist.group.WORLD,
-        buffer_size: int = 2 ** 25,
-        broadcast_buffer_skip: int = 2 ** 23,
-        **defaults: Any
-    ):
-        # Hold all the nmodel params in the root .param_groups
+    def __init__(self, params: _params_t, optim: Type[Optimizer] = SGD, group: Any = dist.group.WORLD, **defaults: Any):
+        # Hold all the model params in the root .param_groups
         self.in_super_constructor = True
         super().__init__(params, defaults)
         self.in_super_constructor = False
@@ -99,15 +92,19 @@ class OSS(Optimizer):
                 param_lists[rank].append(param)
                 sizes[rank] += param.numel()
             for rank, params in enumerate(param_lists):
-                if len(params) > 0:
-                    param_group_rank = copy.copy(param_group)
-                    param_group_rank["params"] = params
-                    param_groups[rank].append(param_group_rank)
+                param_group_rank = copy.copy(param_group)
+                param_group_rank["params"] = params
+                param_groups[rank].append(param_group_rank)
         return param_groups
 
-    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
+    # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
+    # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
+    def step(self, closure: Optional[Callable[[], float]] = None, **kwargs: Any) -> Optional[float]:
+        # Sync lr in case its been update by an LRScheduler.
+        self._sync_lr()
+
         # Run the optimizer step on this shard only
-        loss = self.optim.step(closure=closure)
+        loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
 
         # Sync all the states
         for rank, param_groups in enumerate(self.partition_parameters()):
@@ -154,6 +151,9 @@ class OSS(Optimizer):
 
         This needs to be called on all replicas """
 
+        # Sync lr in case its been update by an LRScheduler.
+        self._sync_lr()
+
         if self.rank == recipient_rank:
             # Pull the sharded state from all the other replicas
             # Store all the states in order, rank by rank
@@ -175,23 +175,36 @@ class OSS(Optimizer):
             len(self._all_states) > 0
         ), "The optimizer state is not materialized, please call consolidate_state_dict on every replica beforehand"
 
-        return {"state": self._all_states, "param_groups": self.param_groups}
+        return {"state": self._all_states}
 
     def load_local_state_dict(self, state_dict: dict) -> None:
         """ Loads this rank's state_dict. """
 
-        # Make sure that the state is on the appropriate device
-        state_dict_ondevice = recursive_copy_to_device(state_dict, non_blocking=False, device=self._device)
+        self.optim.load_state_dict(state_dict)
 
-        self.optim.load_state_dict(state_dict_ondevice)
+        # Workaround PyTorch bug that casts state (https://github.com/pytorch/pytorch/issues/43706)
+        # Copied from https://github.com/pytorch/fairseq/blob/v0.9.0/fairseq/optim/fp16_optimizer.py#L251-L268
+        groups = self.optim.param_groups
+        saved_groups = state_dict["param_groups"]
+        id_map = {
+            old_id: p
+            for old_id, p in zip(chain(*(g["params"] for g in saved_groups)), chain(*(g["params"] for g in groups)))
+        }
+        for k, v in state_dict["state"].items():
+            if k in id_map:
+                param = id_map[k]
+                self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
+
+        # Restore the global param_groups (the params themselves are already correct)
+        for global_group, local_group in zip(self.param_groups, groups):
+            for k, v in local_group.items():
+                if k != "params":
+                    global_group[k] = v
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Restore the global parameter groups as well as the shard """
         # Dispatch this rank's state dictionary to the wrapped shard optimizer
         self.load_local_state_dict(state_dict["state"][self.rank])
-
-        # Restore the global param_groups
-        self.param_groups = recursive_copy_to_device(state_dict["param_groups"], non_blocking=True, device=self._device)
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
@@ -199,6 +212,11 @@ class OSS(Optimizer):
             param_groups = self.partition_parameters()[self.rank]
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
+
+    def _sync_lr(self) -> None:
+        """Sync learning rate (needed to support LRScheduler)."""
+        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
+            local_group["lr"] = global_group["lr"]
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
         """

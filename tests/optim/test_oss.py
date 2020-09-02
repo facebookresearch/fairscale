@@ -42,29 +42,72 @@ def test_create():
 
 def test_state_dict():
     x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
-    o = optim.OSS([x], lr=0.1)
+    o = optim.OSS([x], lr=0.1, momentum=0.9)
+    x.backward()
+    o.step()
+    assert x == torch.tensor([0.9], device=DEVICE)
+    assert o.optim.state[x]["momentum_buffer"] == torch.tensor([1.0], device=DEVICE)
+    o.zero_grad()
     o.consolidate_state_dict()  # Sync state dict in between replicas - even if there are none
     state_dict = o.state_dict()
 
     # Check that the pulled state is what we expect
-    assert state_dict["param_groups"][0]["lr"] == 0.1
+    assert state_dict["state"][0]["param_groups"][0]["lr"] == 0.1
 
     # Check that the pulled state and the .param_groups attribute are in sync
-    assert state_dict["param_groups"][0]["lr"] == o.param_groups[0]["lr"]
+    assert state_dict["state"][0]["param_groups"][0]["lr"] == o.param_groups[0]["lr"]
 
     # Check that it's correctly loaded
     o = optim.OSS([x], lr=0.01)
     o.load_state_dict(state_dict)
+    # Check that state is correct and on proper device
+    assert o.optim.state[x]["momentum_buffer"] == torch.tensor([1.0], device=DEVICE)
 
     # We should now be using a lr of 0.1, both within the optimizer
     # and as exposed by the .param_groups attribute
     assert o.param_groups[0]["lr"] == 0.1
     x.backward()
     o.step()
-    assert x == torch.tensor([0.9], device=DEVICE)
+    assert x == torch.tensor([0.71], device=DEVICE)
+    assert o.optim.state[x]["momentum_buffer"] == torch.tensor([1.9], device=DEVICE)
 
     # Check that the exposed param_groups are on the proper device
     assert o.param_groups[0]["params"][0].device == x.device
+
+
+def test_lr_scheduler():
+    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+    x2 = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+    o = optim.OSS([x], lr=0.01)
+    o2 = torch.optim.SGD([x2], lr=0.01)
+    s = torch.optim.lr_scheduler.StepLR(o, 1)
+    s2 = torch.optim.lr_scheduler.StepLR(o2, 1)
+    for _ in range(5):
+        x.backward()
+        o.zero_grad()
+        o.step()
+        s.step()
+        x2.backward()
+        o2.zero_grad()
+        o2.step()
+        s2.step()
+        assert x == x2
+
+
+class SGDWithStepKWArg(torch.optim.SGD):
+    def step(self, closure=None, kwarg=[]):
+        super().step()
+        kwarg.append(5)
+
+
+def test_step_with_kwargs():
+    kwarg = []
+    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+    o = optim.OSS([x], SGDWithStepKWArg, lr=0.1)
+    x.backward()
+    o.step(0, kwarg=kwarg)
+    assert kwarg == [5]
+    assert x == torch.tensor([0.9], device=DEVICE)
 
 
 def test_local_state_dict():
@@ -74,6 +117,8 @@ def test_local_state_dict():
     o = optim.OSS([x], lr=0.01)
     o.load_local_state_dict(local_state_dict)
     # We should now be using a lr of 0.1.
+    assert o.optim.param_groups[0]["lr"] == 0.1
+    assert o.param_groups[0]["lr"] == 0.1
     x.backward()
     o.step()
     assert x == torch.tensor([0.9], device=DEVICE)
@@ -90,10 +135,7 @@ def run_test_add_param_group(rank, world_size):
     assert len(o.param_groups) == 2
     # Verify that added group is added to the correct partition making all have 8 elements.
     assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == 8
-    if rank == 1:
-        assert len(o.optim.param_groups) == 2
-    else:
-        assert len(o.optim.param_groups) == 1
+    assert len(o.optim.param_groups) == 2
 
 
 def test_add_param_group():
