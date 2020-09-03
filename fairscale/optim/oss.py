@@ -106,10 +106,9 @@ class OSS(Optimizer):
                 param_lists[rank].append(param)
                 sizes[rank] += param.numel()
             for rank, params in enumerate(param_lists):
-                if len(params) > 0:
-                    param_group_rank = copy.copy(param_group)
-                    param_group_rank["params"] = params
-                    param_groups[rank].append(param_group_rank)
+                param_group_rank = copy.copy(param_group)
+                param_group_rank["params"] = params
+                param_groups[rank].append(param_group_rank)
         return param_groups
 
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
