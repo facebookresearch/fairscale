@@ -38,6 +38,9 @@ def train(
     reference_speed: float = -1.0,
     reference_memory: float = -1.0,
 ):
+    # Reset the memory use counter
+    torch.cuda.reset_max_memory_allocated(rank)
+
     # DDP
     dist_init(rank, world_size)
 
