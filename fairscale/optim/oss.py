@@ -46,10 +46,10 @@ class OSS(Optimizer):
         group (group):
             torch.distributed group (default: group.WORLD)
         buffer_size (int, optional): number of elements to buffer before
-            performing reduce (default: 64M). Used to reduce multiple small
+            performing reduce (default: 32M). Used to reduce multiple small
             params to avoid communication overhead.
         broadcast_buffer_skip (int, optional): number of elements beyond which the
-            broadcast is done without buffering. (default: 4M)
+            broadcast is done without buffering. (default: 2M)
     """
 
     optim: Optimizer
@@ -60,8 +60,8 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Any = dist.group.WORLD,
-        buffer_size: int = 2 ** 26,
-        broadcast_buffer_skip: int = 2 ** 22,
+        buffer_size: int = 2 ** 25,
+        broadcast_buffer_skip: int = 2 ** 21,
         **defaults: Any
     ):
         # Hold all the model params in the root .param_groups
