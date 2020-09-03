@@ -5,7 +5,7 @@ import argparse
 import math
 import os
 import time
-from typing import Any, List, Union, Optional, cast
+from typing import Any, List, Optional, Union, cast
 
 import torch
 import torch.distributed as dist
