@@ -12,6 +12,7 @@ import torch
 import torch.distributed as dist
 from torch.optim import SGD, Optimizer
 from .utils import batch_broadcast, broadcast_object, recursive_copy_to_device
+from torch.nn import Parameter
 
 if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
@@ -70,18 +71,19 @@ class OSS(Optimizer):
         # Build the wrapped optimizer, responsible for a shard of the params
         self.group = group
         self.rank = dist.get_rank(group)
-        param_groups = self.partition_parameters()
-        self.optim = optim(param_groups[self.rank], **defaults)
+        split_param_groups = self.partition_parameters()
+        self.optim = optim(split_param_groups[self.rank], **defaults)
 
         # Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []
 
         # Current device is set by the parameters allocated to this rank
-        self._device = self.partition_parameters()[self.rank][0]["params"][0].device
+        self._device = split_param_groups[self.rank][0]["params"][0].device
+
+        # Broadcast buffer settings
         self._buffer: torch.Tensor = torch.rand((1,), device=torch.device("cpu"))
         self._buffer_size = buffer_size
         self._broadcast_buffer_skip = broadcast_buffer_skip
-
         assert self._buffer_size > self._broadcast_buffer_skip
 
     def partition_parameters(self) -> List[List[dict]]:
@@ -169,7 +171,7 @@ class OSS(Optimizer):
         if self.rank == recipient_rank:
             # Pull the sharded state from all the other replicas
             # Store all the states in order, rank by rank
-            logging.debug("Pulling the sharded SGD state from all replicas")
+            logging.debug("Pulling the sharded optimizer state from all replicas")
             self._all_states = self._collect_sharded_states()
         else:
             # Acknowledge broadcasts, and send this rank's shard when needed
@@ -187,7 +189,10 @@ class OSS(Optimizer):
             len(self._all_states) > 0
         ), "The optimizer state is not materialized, please call consolidate_state_dict on every replica beforehand"
 
-        return {"state": self._all_states}
+        return {
+            "state": [s["state"] for s in self._all_states],
+            "param_groups": [s["param_groups"] for s in self._all_states],
+        }
 
     def load_local_state_dict(self, state_dict: dict) -> None:
         """ Loads this rank's state_dict. """
@@ -216,7 +221,12 @@ class OSS(Optimizer):
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Restore the global parameter groups as well as the shard """
         # Dispatch this rank's state dictionary to the wrapped shard optimizer
-        self.load_local_state_dict(state_dict["state"][self.rank])
+        self.load_local_state_dict(
+            {"state": state_dict["state"][self.rank], "param_groups": state_dict["param_groups"][self.rank]}
+        )
+
+        # Update the param_groups attribute for this instance
+        # TODO(ben)
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
@@ -271,7 +281,7 @@ class OSS(Optimizer):
             if rank == self.rank:
                 # Send the state to the reference replica
                 logging.debug(
-                    "Sending the sharded SGD state to the reference replica from rank %s", rank,
+                    "Sending the sharded optimizer state to the reference replica from rank %s", rank,
                 )
                 broadcast_object(self.local_state_dict(), src_rank=rank, group=self.group, dist_device=self._device)
             else:

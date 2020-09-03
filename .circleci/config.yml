@@ -90,11 +90,11 @@ run_flake8: &run_flake8
       command: |
         flake8 --show-source --statistics
 
-run_transformer_benchmark: &run_transformer_benchmark
+run_pipe_benchmark: &run_pipe_benchmark
   - run:
-      name: Run Transformer Benchmark
+      name: Run Pipe Benchmark
       command: |
-        python benchmarks/transformer.py
+        python benchmarks/pipe.py
 
 run_oss_benchmark: &run_oss_benchmark
   - run:
@@ -248,7 +248,7 @@ jobs:
 
       - <<: *install_repo_gpu
 
-      - <<: *run_transformer_benchmark
+      - <<: *run_pipe_benchmark
 
       - <<: *run_oss_benchmark
 

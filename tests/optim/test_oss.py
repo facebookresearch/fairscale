@@ -51,11 +51,15 @@ def test_state_dict():
     o.consolidate_state_dict()  # Sync state dict in between replicas - even if there are none
     state_dict = o.state_dict()
 
+    # Check that the state dict is pytorch-compliant key wise
+    assert "param_groups" in state_dict.keys()
+    assert "state" in state_dict.keys()
+
     # Check that the pulled state is what we expect
-    assert state_dict["state"][0]["param_groups"][0]["lr"] == 0.1
+    assert state_dict["param_groups"][0][0]["lr"] == 0.1
 
     # Check that the pulled state and the .param_groups attribute are in sync
-    assert state_dict["state"][0]["param_groups"][0]["lr"] == o.param_groups[0]["lr"]
+    assert state_dict["param_groups"][0][0]["lr"] == o.param_groups[0]["lr"]
 
     # Check that it's correctly loaded
     o = optim.OSS([x], lr=0.01)

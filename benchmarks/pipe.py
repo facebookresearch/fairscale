@@ -9,9 +9,10 @@ import torchtext
 from torchtext.data.utils import get_tokenizer
 
 from fairscale.nn import Pipe
+from fairscale.optim import GradScaler
 
 try:
-    from fairscale.optim.adam import Adam, Precision  # type: ignore
+    from fairscale.optim import Adam, Precision  # type: ignore
 
     can_benchmark = True
 except ImportError:
@@ -134,17 +135,18 @@ def make_model(device, ntokens):
     p = Pipe(model, balance, chunks=len(balance))
 
     criterion = nn.CrossEntropyLoss()
-    lr = 0.0005  # learning rate
+    lr = 0.001  # learning rate
 
     try:
         optimizer = Adam(p.parameters(), lr=lr, precision=Precision.PURE_FP16)
     except NameError:
         optimizer = Adam(p.parameters(), lr=lr)
+    scaler = GradScaler()
 
-    return p, criterion, optimizer
+    return p, criterion, optimizer, scaler
 
 
-def train(train_data, model, criterion, optimizer, bptt, ntokens):
+def train(train_data, model, criterion, optimizer, scaler, bptt, ntokens):
     model.train()
     total_loss = 0.0
     start_time = time.time()
@@ -155,22 +157,35 @@ def train(train_data, model, criterion, optimizer, bptt, ntokens):
         output = output.to(targets.device)
 
         loss = criterion(output.view(-1, ntokens), targets)
-        loss.backward()
-
-        torch.nn.utils.clip_grad_value_(model.parameters(), 0.05)
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)  # scaler.step automatically unscale if unscale has not yet been performed
+        scaler.update()
 
         total_loss += loss.item()
         log_interval = 50
         if batch % log_interval == 0 and batch > 0:
             cur_loss = total_loss / log_interval
             elapsed = time.time() - start_time
-            print(
-                "| {:5d}/{:5d} batches | ms/batch {:5.2f} | "
-                "loss {:5.2f} | ppl {:8.2f}".format(
-                    batch, len(train_data) // bptt, elapsed * 1000 / log_interval, cur_loss, math.exp(cur_loss)
+            try:
+                print(
+                    "| {:5d}/{:5d} batches | ms/batch {:5.2f} | "
+                    "loss {:5.2f} | ppl {:8.2f} | grad scale {:3d} | optim scale {:3d}".format(
+                        batch,
+                        len(train_data) // bptt,
+                        elapsed * 1000 / log_interval,
+                        cur_loss,
+                        math.exp(cur_loss),
+                        int(scaler.get_scale()),
+                        int(optimizer._optim_scale),
+                    )
                 )
-            )
+            except AttributeError:
+                print(
+                    "| {:5d}/{:5d} batches | ms/batch {:5.2f} | "
+                    "loss {:5.2f} | ppl {:8.2f}".format(
+                        batch, len(train_data) // bptt, elapsed * 1000 / log_interval, cur_loss, math.exp(cur_loss)
+                    )
+                )
             total_loss = 0
             start_time = time.time()
 
@@ -192,37 +207,37 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
-def benchmark_language_model(train_data, val_data, test_data, model, criterion, optimizer, ntokens):
+def benchmark_language_model(train_data, val_data, test_data, model, criterion, optimizer, scaler, ntokens):
     epoch = 1
     bptt = 35
     start_time = time.time()
 
-    print("-" * 89)
+    print("-" * 110)
     print("| start of epoch {:1d}".format(epoch))
-    print("-" * 89)
+    print("-" * 110)
     epoch_start_time = time.time()
-    train(train_data, model, criterion, optimizer, bptt, ntokens)
+    train(train_data, model, criterion, optimizer, scaler, bptt, ntokens)
     val_loss = evaluate(model, val_data, criterion, bptt, ntokens)
-    print("-" * 89)
+    print("-" * 110)
     print(
         "| end of epoch {:1d} | time: {:5.2f}s | valid loss {:5.2f} ".format(
             epoch, (time.time() - epoch_start_time), val_loss
         )
     )
-    print("-" * 89)
+    print("-" * 110)
 
     elapsed_time = time.time() - start_time
     nwords = get_number_of_words(train_data) + get_number_of_words(val_data)
     wps = nwords / elapsed_time
 
     test_loss = evaluate(model, test_data, criterion, bptt, ntokens)
-    print("=" * 89)
+    print("=" * 110)
     print(
         "| end of training | test loss {:5.2f} \n| time: {:5.2f}s | words: {:3d} | wps: {:5.2f}".format(
             test_loss, elapsed_time, nwords, wps
         )
     )
-    print("=" * 89)
+    print("=" * 110)
 
     if can_benchmark and len(model.balance) == 4:
         # Assert that words per second is within 3 standard deviations of the average
@@ -264,6 +279,6 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     device = torch.device("cuda")
     ntokens, train_data, val_data, test_data = get_data(device)
-    model, criterion, optimizer = make_model(device, ntokens)
-    benchmark_language_model(train_data, val_data, test_data, model, criterion, optimizer, ntokens)
+    model, criterion, optimizer, scaler = make_model(device, ntokens)
+    benchmark_language_model(train_data, val_data, test_data, model, criterion, optimizer, scaler, ntokens)
     del model
