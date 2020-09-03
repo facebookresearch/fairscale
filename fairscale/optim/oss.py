@@ -49,7 +49,7 @@ class OSS(Optimizer):
             performing reduce (default: 32M). Used to reduce multiple small
             params to avoid communication overhead.
         broadcast_buffer_skip (int, optional): number of elements beyond which the
-            broadcast is done without buffering. (default: 2M)
+            broadcast is done without buffering. (default: 8M)
     """
 
     optim: Optimizer
@@ -61,7 +61,7 @@ class OSS(Optimizer):
         optim: Type[Optimizer] = SGD,
         group: Any = dist.group.WORLD,
         buffer_size: int = 2 ** 25,
-        broadcast_buffer_skip: int = 2 ** 21,
+        broadcast_buffer_skip: int = 2 ** 23,
         **defaults: Any
     ):
         # Hold all the model params in the root .param_groups

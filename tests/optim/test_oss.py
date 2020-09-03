@@ -199,6 +199,7 @@ def run_test_batch_broadcast(rank, world_size):
     target = torch.zeros([batch_size, width_multiplier * world_size], device=rank)
     error = math.factorial(width_multiplier * world_size - 1)
 
+    # Dummy MLP with varying param sizes
     def get_model():
         layers = [torch.nn.Linear(i, i + 1) for i in range(world_size, width_multiplier * world_size)]
         for l in layers:
@@ -206,44 +207,41 @@ def run_test_batch_broadcast(rank, world_size):
             l.bias.data.fill_(0.0)
 
         m = torch.nn.Sequential(*layers)
+        print(m)
         m.to(rank)
         return m
 
-    # Set a very small buffer size to force the full param block to be broadcasted
-    m_small = get_model()
-    o = optim.OSS(m_small.parameters(), lr=0.1, buffer_size=8, broadcast_buffer_skip=1)
-    loss_fn = torch.nn.L1Loss().to(device=rank)
+    # Do a FW + BW, sanity check the results
+    def test_loop(model, optimizer):
+        loss_fn = torch.nn.L1Loss().to(device=rank)
 
-    def closure():
-        o.zero_grad()
-        output = m_small(x)
-        loss = loss_fn(output, target)
-        loss.backward()
-        return loss
+        def closure():
+            optimizer.zero_grad()
+            output = model(x)
+            loss = loss_fn(output, target)
+            loss.backward()
+            return loss
 
-    loss = o.step(closure=closure)
-    assert round(loss.item()) == error, f"{loss} vs. expected: {error}"
+        loss = optimizer.step(closure=closure)
+        assert round(loss.item()) == error, f"{loss} vs. expected: {error}"
 
-    loss_update = o.step(closure=closure)
-    assert loss_update.item() < loss.item(), f"{loss.item()} vs {loss_update.item()} loss should decrease"
+        loss_update = optimizer.step(closure=closure)
+        assert loss_update.item() < loss.item(), f"{loss.item()} vs {loss_update.item()} loss should decrease"
+
+    # Set a very small buffer size to force the full param block to be broadcasted everytime
+    m = get_model()
+    o = optim.OSS(m.parameters(), lr=0.1, buffer_size=8, broadcast_buffer_skip=1)
+    test_loop(m, o)
 
     # Set a very big buffer size to force all the params to be packed
-    m_large = get_model()
-    o = optim.OSS(m_large.parameters(), lr=0.1, buffer_size=2 ** 26)
-    loss_fn = torch.nn.L1Loss().to(device=rank)
+    m = get_model()
+    o = optim.OSS(m.parameters(), lr=0.1, buffer_size=2 ** 26)
+    test_loop(m, o)
 
-    def closure():
-        o.zero_grad()
-        output = m_large(x)
-        loss = loss_fn(output, target)
-        loss.backward()
-        return loss
-
-    loss = o.step(closure=closure)
-    assert round(loss.item()) == error, f"{loss} vs. expected: {error}"
-
-    loss_update = o.step(closure=closure)
-    assert loss_update.item() < loss.item(), f"{loss.item()} vs {loss_update.item()} loss should decrease"
+    # Set an intermediate buffer size to force all fill/empty cycles
+    m = get_model()
+    o = optim.OSS(m.parameters(), lr=0.1, buffer_size=16, broadcast_buffer_skip=15)
+    test_loop(m, o)
 
 
 @skip_if_no_cuda
