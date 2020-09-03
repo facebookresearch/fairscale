@@ -119,7 +119,7 @@ def train(
     print(f"[{dist.get_rank()}] : Mean speed: {mean:.2f} +/- {std:.2f}")
 
     if use_oss and check_regression and dist.get_rank() == 0:
-        assert (mean - 3.0 * std) < reference_speed, "Speed regression detected"
+        assert (mean + 3.0 * std) > reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
         print("[Regression Test] VALID")
 
@@ -138,6 +138,7 @@ if __name__ == "__main__":
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
 
     args = parser.parse_args()
+    print(f"Benchmark arguments: {args}")
 
     print("\nBenchmark vanilla optimizer")
     mp.spawn(

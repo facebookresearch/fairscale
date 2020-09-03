@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type, cas
 
 import torch
 import torch.distributed as dist
-from torch.optim import SGD, Optimizer
-from .utils import batch_broadcast, broadcast_object, recursive_copy_to_device
 from torch.nn import Parameter
+from torch.optim import SGD, Optimizer
+
+from .utils import batch_broadcast, broadcast_object, recursive_copy_to_device
 
 if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
@@ -45,10 +46,10 @@ class OSS(Optimizer):
         group (group):
             torch.distributed group (default: group.WORLD)
         buffer_size (int, optional): number of elements to buffer before
-            performing reduce (default: 32M). Used to reduce multiple small
+            performing reduce (default: 64M). Used to reduce multiple small
             params to avoid communication overhead.
         broadcast_buffer_skip (int, optional): number of elements beyond which the
-            broadcast is done without buffering. (default: 8M)
+            broadcast is done without buffering. (default: 4M)
     """
 
     optim: Optimizer
@@ -59,8 +60,8 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Any = dist.group.WORLD,
-        buffer_size: int = 2 ** 25,
-        broadcast_buffer_skip: int = 2 ** 23,
+        buffer_size: int = 2 ** 26,
+        broadcast_buffer_skip: int = 2 ** 22,
         **defaults: Any
     ):
         # Hold all the model params in the root .param_groups
@@ -154,6 +155,7 @@ class OSS(Optimizer):
 
             # Sync whatever is left in the batch buffer before moving to the next rank
             if buffered_elements > 0:
+                self._buffer = cast(torch.Tensor, self._buffer)
                 batch_broadcast(buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group)
 
         return loss
