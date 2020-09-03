@@ -19,6 +19,7 @@ from torchvision.transforms import ToTensor
 from fairscale.optim.oss import OSS
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
+OPTIM = torch.optim.RMSprop
 
 
 def dist_init(rank, world_size):
@@ -60,9 +61,9 @@ def train(
     loss_fn = nn.CrossEntropyLoss()
 
     # Shard the optimizer
-    optimizer: Union[OSS, torch.optim.SGD] = OSS(
-        params=model.parameters(), optim=torch.optim.RMSprop, lr=1e-4, momentum=0.9
-    ) if use_oss else torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9)
+    optimizer: Union[OSS, OPTIM] = OSS(
+        params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9
+    ) if use_oss else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
 
     # Dummy training loop
     torch.cuda.synchronize(rank)
@@ -133,7 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_size", action="store", default=512, type=int)
     parser.add_argument("--check_regression", action="store", default=True, type=bool)
     parser.add_argument("--reference_speed", action="store", default=39.82, type=float)
-    parser.add_argument("--reference_memory", action="store", default=4373.6, type=float)
+    parser.add_argument("--reference_memory", action="store", default=4475, type=float)
 
     args = parser.parse_args()
 
