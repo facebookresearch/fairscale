@@ -6,7 +6,7 @@
 import copy
 from itertools import chain
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type, cast
 
 import torch
 import torch.distributed as dist
@@ -81,7 +81,7 @@ class OSS(Optimizer):
         self._device = split_param_groups[self.rank][0]["params"][0].device
 
         # Broadcast buffer settings
-        self._buffer: torch.Tensor = torch.rand((1,), device=torch.device("cpu"))
+        self._buffer: Optional[torch.Tensor] = None
         self._buffer_size = buffer_size
         self._broadcast_buffer_skip = broadcast_buffer_skip
         assert self._buffer_size > self._broadcast_buffer_skip
@@ -129,8 +129,10 @@ class OSS(Optimizer):
             for param_group in param_groups:
                 # We assume that the whole param group is on the same device
                 # Make sure that the broadcast buffer matches it
-                if self._buffer.device != param_group["params"][0].device or self._buffer.numel() == 1:
+                if self._buffer is None or self._buffer.device != param_group["params"][0].device:
                     self._buffer = param_group["params"][0].new(self._buffer_size)
+
+                self._buffer = cast(torch.Tensor, self._buffer)
 
                 # Go through all the params, broadcast to replicas
                 for param in param_group["params"]:
