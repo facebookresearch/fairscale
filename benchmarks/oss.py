@@ -50,7 +50,7 @@ def train(
             "label": torch.stack([i[1] for i in inputs]).to(rank),
         }
 
-    def _print(msg):
+    def print_(msg):
         if dist.get_rank() == 0:
             print(msg)
 
@@ -91,7 +91,7 @@ def train(
 
         epoch_end = time.monotonic()
         measurements.append(data_size / (epoch_end - epoch_start))
-        _print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec")
+        print_(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
