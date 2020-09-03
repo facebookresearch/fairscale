@@ -39,8 +39,6 @@ def train(
     reference_speed: float = -1.0,
     reference_memory: float = -1.0,
 ):
-    # Reset the memory use counter
-    torch.cuda.reset_peak_memory_stats(rank)
 
     # DDP
     dist_init(rank, world_size)
@@ -59,6 +57,9 @@ def train(
         dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
     )
     loss_fn = nn.CrossEntropyLoss()
+
+    # Reset the memory use counter
+    torch.cuda.reset_peak_memory_stats(rank)
 
     # Shard the optimizer
     optimizer: Union[OSS, OPTIM] = OSS(
