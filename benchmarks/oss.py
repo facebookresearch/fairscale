@@ -39,7 +39,7 @@ def train(
     reference_memory: float = -1.0,
 ):
     # Reset the memory use counter
-    torch.cuda.reset_max_memory_allocated(rank)
+    torch.cuda.reset_peak_memory_stats(rank)
 
     # DDP
     dist_init(rank, world_size)
@@ -93,9 +93,9 @@ def train(
             # Check the checkpointing in the case of the OSS optimizer
             # Memory usage could spill over from there
             optimizer = cast(OSS, optimizer)
-            optimizer.consolidate_state_dict()
+            # optimizer.consolidate_state_dict()
             if dist.get_rank() == 0:
-                _ = optimizer.state_dict()
+                # _ = optimizer.state_dict()
                 print("... State dict collected")
 
         measurements.append(data_size / (epoch_end - epoch_start))
@@ -110,12 +110,13 @@ def train(
     print(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec overall")
     print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
 
+    # Compute the mean and average img per second
+    mean = sum(measurements) / len(measurements)
+    diff = map(lambda x: pow(x - mean, 2.0), measurements)
+    std = math.sqrt(sum(diff) / (len(measurements) - 1))
+    print(f"[{dist.get_rank()}] : Mean speed: {mean:.2f} +/- {std:.2f}")
+
     if use_oss and check_regression and dist.get_rank() == 0:
-        # Compute the mean and average img per second
-        mean = sum(measurements) / len(measurements)
-        diff = map(lambda x: pow(x - mean, 2.0), measurements)
-        std = math.sqrt(sum(diff) / (len(measurements) - 1))
-        print(f"[Regression Test] Mean speed: {mean:.2f} +/- {std:.2f}")
         assert (mean - 3.0 * std) < reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
         print("[Regression Test] VALID")
@@ -155,6 +156,7 @@ if __name__ == "__main__":
             True,
             args.check_regression,
             args.reference_speed,
+            args.reference_memory,
         ),
         nprocs=args.world_size,
         join=True,
