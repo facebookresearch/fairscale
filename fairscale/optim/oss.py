@@ -6,7 +6,7 @@
 import copy
 from itertools import chain
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
 import torch
 import torch.distributed as dist
