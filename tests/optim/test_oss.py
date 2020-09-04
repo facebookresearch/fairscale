@@ -55,10 +55,10 @@ def test_state_dict():
     assert "state" in state_dict.keys()
 
     # Check that the pulled state is what we expect
-    assert state_dict["param_groups"][0][0]["lr"] == 0.1
+    assert state_dict["param_groups"][0]["lr"] == 0.1
 
     # Check that the pulled state and the .param_groups attribute are in sync
-    assert state_dict["param_groups"][0][0]["lr"] == o.param_groups[0]["lr"]
+    assert state_dict["param_groups"][0]["lr"] == o.param_groups[0]["lr"]
 
     # Check that it's correctly loaded
     o = optim.OSS([x], lr=0.01)

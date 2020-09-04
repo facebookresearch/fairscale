@@ -6,7 +6,7 @@
 import copy
 from itertools import chain
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type, Tuple
 
 import torch
 import torch.distributed as dist
@@ -140,9 +140,22 @@ class OSS(Optimizer):
             len(self._all_states) > 0
         ), "The optimizer state is not materialized, please call consolidate_state_dict on every replica beforehand"
 
+        # Flatten the state_dict, save the partition
+        # The partition indexes the flat param_groups list,
+        # and logs the rank <> shard correspondence
+        partition: Dict[int, Tuple[int, int]] = {}
+        param_groups: List[Dict[Any, Any]] = []
+
+        i_global = 0
+        for i, s in enumerate(self._all_states):
+            param_groups.extend(s["param_groups"])
+            partition[i] = (i_global, i_global + len(s["param_groups"]))
+            i_global = partition[i][1]
+
         return {
-            "state": [s["state"] for s in self._all_states],
-            "param_groups": [s["param_groups"] for s in self._all_states],
+            "state": {i: s["state"] for i, s in enumerate(self._all_states)},
+            "param_groups": param_groups,
+            "partition": partition,
         }
 
     def load_local_state_dict(self, state_dict: dict) -> None:
@@ -171,13 +184,13 @@ class OSS(Optimizer):
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Restore the global parameter groups as well as the shard """
-        # Dispatch this rank's state dictionary to the wrapped shard optimizer
-        self.load_local_state_dict(
-            {"state": state_dict["state"][self.rank], "param_groups": state_dict["param_groups"][self.rank]}
-        )
 
-        # Update the param_groups attribute for this instance
-        # TODO(ben)
+        # Get this optimizer's param_groups shard
+        param_groups = state_dict["param_groups"][
+            state_dict["partition"][self.rank][0] : state_dict["partition"][self.rank][1]
+        ]
+        # Dispatch this rank's state dictionary to the wrapped shard optimizer
+        self.load_local_state_dict({"state": state_dict["state"][self.rank], "param_groups": param_groups})
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
