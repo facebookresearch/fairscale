@@ -101,7 +101,7 @@ class OSS(Optimizer):
     # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
     def step(self, closure: Optional[Callable[[], float]] = None, **kwargs: Any) -> Optional[float]:
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
-        self._sync_pg_attributes()
+        self._sync_param_groups()
 
         # Run the optimizer step on this shard only
         loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
@@ -123,7 +123,7 @@ class OSS(Optimizer):
         This needs to be called on all replicas """
 
         # Sync lr and other attributes in case its been updated
-        self._sync_pg_attributes()
+        self._sync_param_groups()
 
         if self.rank == recipient_rank:
             # Pull the sharded state from all the other replicas
@@ -189,7 +189,7 @@ class OSS(Optimizer):
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
 
-    def _sync_pg_attributes(self) -> None:
+    def _sync_param_groups(self) -> None:
         """Sync learning rate and other optimizer attributes (needed to support schedulers)."""
         for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
             for k in local_group.keys():
