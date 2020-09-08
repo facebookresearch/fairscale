@@ -1,0 +1,42 @@
+{% set name = "fairscale" %}
+{% set version = "0.0.2" %}
+
+package:
+  name: "{{ name|lower }}"
+  version: "{{ version }}"
+
+source:
+  git_url: ../
+
+build:
+  number: 0
+  script: "{{ PYTHON }} -m pip install . --no-deps --ignore-installed -vv "
+
+requirements:
+  host:
+    - python
+    - pytorch >=1.4.0
+
+  run:
+    - python
+    - pytorch >=1.4.0
+
+test:
+  imports:
+    - fairscale
+    - fairscale.nn
+    - fairscale.nn.data_parallel
+    - fairscale.nn.model_parallel
+    - fairscale.nn.pipe
+    - fairscale.nn.pipe.balance
+    - fairscale.nn.pipe.skip
+    - fairscale.optim
+
+about:
+  home: "The package home page"
+  license: "BSD"
+  license_family: "BSD"
+  license_file: ""
+  summary: "fairscale: A PyTorch library for large-scale and high-performance training."
+  doc_url: ""
+  dev_url: ""
