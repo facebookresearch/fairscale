@@ -54,11 +54,17 @@ def test_state_dict():
     assert "param_groups" in state_dict.keys()
     assert "state" in state_dict.keys()
 
-    # Check that the pulled state is what we expect
+    # Check that the pulled state is what we expect, and that we have all the expected keys
     assert state_dict["param_groups"][0][0]["lr"] == 0.1
+    assert state_dict["param_groups"][0][0]["momentum"] == 0.9
+    assert not state_dict["param_groups"][0][0]["nesterov"]
+    assert state_dict["param_groups"][0][0]["weight_decay"] == 0.0
+    assert state_dict["param_groups"][0][0]["dampening"] == 0.0
 
     # Check that the pulled state and the .param_groups attribute are in sync
-    assert state_dict["param_groups"][0][0]["lr"] == o.param_groups[0]["lr"]
+    for k in state_dict["param_groups"][0][0].keys():
+        if k != "params":
+            assert state_dict["param_groups"][0][0][k] == o.param_groups[0][k]
 
     # Check that it's correctly loaded
     o = optim.OSS([x], lr=0.01)
