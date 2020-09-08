@@ -82,7 +82,6 @@ class OSS(Optimizer):
         self._device = split_param_groups[self.rank][0]["params"][0].device
 
         # Broadcast buffer settings
-        self._buffer: Optional[torch.Tensor] = None
         self._buffer_size = buffer_size
         self._broadcast_buffer_skip = broadcast_buffer_skip
         assert self._buffer_size > self._broadcast_buffer_skip
@@ -92,6 +91,22 @@ class OSS(Optimizer):
             for k, v in local_group.items():
                 if k != "params":
                     global_group[k] = v
+
+        # make per-device lists of parameters
+        self.per_device_params: Dict[torch.device, Any] = {}
+        for param_group in self.param_groups:
+            for param in param_group["params"]:
+                device = param.device
+                if self.per_device_params.get(device) is None:
+                    self.per_device_params[device] = []
+                self.per_device_params[device] += [param]
+
+        # also build a device-to-rank table, useful for broadcasting
+        self.param_rank = {}
+        for rank, param_groups in enumerate(split_param_groups):
+            for param_group in param_groups:
+                for param in param_group["params"]:
+                    self.param_rank[param] = rank
 
     def partition_parameters(self) -> List[List[dict]]:
         """Partitions parameters across distributed ranks.
@@ -126,42 +141,8 @@ class OSS(Optimizer):
         # Run the optimizer step on this shard only
         loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
 
-        # Sync all the states
-        for rank, param_groups in enumerate(self.partition_parameters()):
-            # Batch smaller params in a broadcast buffer to speed up the communication
-            buffered_params: List[Parameter] = []
-            buffered_elements = 0
-
-            for param_group in param_groups:
-                # We assume that the whole param group is on the same device
-                # Make sure that the broadcast buffer matches it
-                if self._buffer is None or self._buffer.device != param_group["params"][0].device:
-                    self._buffer = param_group["params"][0].new(self._buffer_size)
-
-                self._buffer = cast(torch.Tensor, self._buffer)
-
-                # Go through all the params, broadcast to replicas
-                for param in param_group["params"]:
-                    if param.numel() >= self._broadcast_buffer_skip:
-                        # Big param block, broadcast directly
-                        dist.broadcast(tensor=param, src=rank, group=self.group)
-                    else:
-                        if (buffered_elements + param.numel()) >= self._buffer.numel():
-                            # Batch buffer is full, sync
-                            batch_broadcast(
-                                buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group
-                            )
-                            buffered_params.clear()
-                            buffered_elements = 0
-
-                        # Keep async and batch sync later
-                        buffered_params.append(param)
-                        buffered_elements += param.numel()
-
-            # Sync whatever is left in the batch buffer before moving to the next rank
-            if buffered_elements > 0:
-                self._buffer = cast(torch.Tensor, self._buffer)
-                batch_broadcast(buffered_params, source_rank=rank, buffer=self._buffer, process_group=self.group)
+        # Sync across ranks
+        self._sync_ranks()
 
         return loss
 
@@ -241,14 +222,6 @@ class OSS(Optimizer):
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
 
-    def _sync_param_groups(self) -> None:
-        """Sync learning rate and other optimizer attributes (needed to support schedulers)."""
-        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
-            for k in local_group.keys():
-                if k != "params":
-                    # Params have been sharded and should not be synced here
-                    local_group[k] = global_group[k]
-
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
         """
         Collect all the state shards, in CPU memory.
@@ -297,3 +270,54 @@ class OSS(Optimizer):
                 # Discard this tensor/rank, broadcast necessary for syncing
                 logging.debug("Discarding broadcast from rank %s", rank)
                 broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
+
+    def _sync_param_groups(self) -> None:
+        """Sync learning rate and other optimizer attributes (needed to support schedulers)."""
+        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
+            for k in local_group.keys():
+                if k != "params":
+                    # Params have been sharded and should not be synced here
+                    local_group[k] = global_group[k]
+
+    def _sync_ranks(self) -> None:
+        """ Sync all the params across the replicas, typically after each shard got an update. This makes use of broadcast bucketing whenever possible"""
+
+        for device, params_list in self.per_device_params.items():
+            # List the params in the same broadcast bucket
+            buffered_params: List[Parameter] = []
+            buffered_elements = 0
+
+            # Initialize the buffer to current device
+            buffer = params_list[0].new(self._buffer_size)
+
+            # Go through all the params, broadcast to replicas
+            param_rank: Optional[int] = None
+
+            for param in params_list:
+                last_param_rank: Optional[int] = param_rank
+                param_rank = self.param_rank[param]
+
+                if param.numel() >= self._broadcast_buffer_skip:
+                    # Big param block, broadcast directly
+                    dist.broadcast(tensor=param, src=param_rank, group=self.group)
+                else:
+                    if (buffered_elements + param.numel()) >= buffer.numel() or (
+                        last_param_rank is not None and last_param_rank != param_rank
+                    ):
+                        # Batch buffer is full or rank changed, sync
+                        assert last_param_rank is not None
+
+                        batch_broadcast(
+                            buffered_params, source_rank=last_param_rank, buffer=buffer, process_group=self.group
+                        )
+                        buffered_params.clear()
+                        buffered_elements = 0
+
+                    # Keep async and batch sync later
+                    buffered_params.append(param)
+                    buffered_elements += param.numel()
+
+            # Sync whatever is left in the batch buffer before moving to the next device
+            if buffered_elements > 0:
+                assert param_rank is not None
+                batch_broadcast(buffered_params, source_rank=param_rank, buffer=buffer, process_group=self.group)

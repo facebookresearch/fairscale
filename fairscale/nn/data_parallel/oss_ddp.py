@@ -132,7 +132,7 @@ class OssDdp(nn.Module):
         assert self.module.training, "Cannot call reduce in eval"
 
         def reduce_params(params: List[Parameter], params_rank: int) -> None:
-            """ Helper to reduce a list of params that should fix in the buffer. """
+            """ Helper to reduce a list of params that should fit in the buffer. """
             assert self.buffer is not None
             buffer: Tensor = cast(Tensor, self.buffer)
             nonzero_buffer = False
