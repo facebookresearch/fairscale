@@ -81,11 +81,6 @@ class OSS(Optimizer):
         # Current device is set by the parameters allocated to this rank
         self._device = split_param_groups[self.rank][0]["params"][0].device
 
-        # Broadcast buffer settings
-        self._buffer_size = buffer_size
-        self._broadcast_buffer_skip = broadcast_buffer_skip
-        assert self._buffer_size > self._broadcast_buffer_skip
-
         # Sync local and global param_groups keys
         for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
             for k, v in local_group.items():
@@ -107,6 +102,13 @@ class OSS(Optimizer):
             for param_group in param_groups:
                 for param in param_group["params"]:
                     self.param_rank[param] = rank
+
+        # pre-allocate per device buffers
+        assert buffer_size > broadcast_buffer_skip
+        self._broadcast_buffer_skip = broadcast_buffer_skip
+        self._broadcast_buffer: Dict[torch.device, torch.Tensor] = {}
+        for device in self.per_device_params.keys():
+            self._broadcast_buffer[device] = torch.zeros(buffer_size).to(device)
 
     def partition_parameters(self) -> List[List[dict]]:
         """Partitions parameters across distributed ranks.
@@ -300,9 +302,6 @@ class OSS(Optimizer):
             buffered_params: List[Parameter] = []
             buffered_elements = 0
 
-            # Initialize the buffer to current device
-            buffer = params_list[0].new(self._buffer_size)
-
             # Go through all the params, broadcast to replicas
             param_rank: Optional[int] = None
 
@@ -314,14 +313,17 @@ class OSS(Optimizer):
                     # Big param block, broadcast directly
                     dist.broadcast(tensor=param, src=param_rank, group=self.group)
                 else:
-                    if (buffered_elements + param.numel()) >= buffer.numel() or (
+                    if (buffered_elements + param.numel()) >= self._broadcast_buffer[device].numel() or (
                         last_param_rank is not None and last_param_rank != param_rank
                     ):
                         # Batch buffer is full or rank changed, sync
                         assert last_param_rank is not None
 
                         batch_broadcast(
-                            buffered_params, source_rank=last_param_rank, buffer=buffer, process_group=self.group
+                            buffered_params,
+                            source_rank=last_param_rank,
+                            buffer=self._broadcast_buffer[device],
+                            process_group=self.group,
                         )
                         buffered_params.clear()
                         buffered_elements = 0
@@ -333,4 +335,9 @@ class OSS(Optimizer):
             # Sync whatever is left in the batch buffer before moving to the next device
             if buffered_elements > 0:
                 assert param_rank is not None
-                batch_broadcast(buffered_params, source_rank=param_rank, buffer=buffer, process_group=self.group)
+                batch_broadcast(
+                    buffered_params,
+                    source_rank=param_rank,
+                    buffer=self._broadcast_buffer[device],
+                    process_group=self.group,
+                )
