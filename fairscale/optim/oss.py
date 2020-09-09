@@ -46,8 +46,8 @@ class OSS(Optimizer):
         group (group):
             torch.distributed group (default: group.WORLD)
         buffer_size (int, optional): number of elements to buffer before
-            performing reduce (default: 32M). Used to reduce multiple small
-            params to avoid communication overhead.
+            performing reduce. Used to reduce multiple small
+            params to avoid communication overhead. (default: 32M)
         broadcast_buffer_skip (int, optional): number of elements beyond which the
             broadcast is done without buffering. (default: 2M)
     """
@@ -141,7 +141,7 @@ class OSS(Optimizer):
         # Run the optimizer step on this shard only
         loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
 
-        # Sync across ranks
+        # Broadcast all per shard changes
         self._sync_ranks()
 
         return loss
@@ -222,10 +222,26 @@ class OSS(Optimizer):
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
 
+    def _broadcast_state_dict(self) -> None:
+        """
+        Broadcast this rank's state shard, discard others
+        """
+        empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
+
+        for rank in range(dist.get_world_size(group=self.group)):
+            if rank == self.rank:
+                # Send the state to the reference replica
+                logging.debug(
+                    "Sending the sharded optimizer state to the reference replica from rank %s", rank,
+                )
+                broadcast_object(self.local_state_dict(), src_rank=rank, group=self.group, dist_device=self._device)
+            else:
+                # Discard this tensor/rank, broadcast necessary for syncing
+                logging.debug("Discarding broadcast from rank %s", rank)
+                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
+
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
-        """
-        Collect all the state shards, in CPU memory.
-        """
+        """ Collect all the state shards, in CPU memory. """
         empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
         all_states: List[Dict[str, Any]] = []
 
@@ -253,26 +269,8 @@ class OSS(Optimizer):
 
         return all_states
 
-    def _broadcast_state_dict(self) -> None:
-        """
-        Broadcast this rank's state shard, discard others
-        """
-        empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
-
-        for rank in range(dist.get_world_size(group=self.group)):
-            if rank == self.rank:
-                # Send the state to the reference replica
-                logging.debug(
-                    "Sending the sharded optimizer state to the reference replica from rank %s", rank,
-                )
-                broadcast_object(self.local_state_dict(), src_rank=rank, group=self.group, dist_device=self._device)
-            else:
-                # Discard this tensor/rank, broadcast necessary for syncing
-                logging.debug("Discarding broadcast from rank %s", rank)
-                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
-
     def _sync_param_groups(self) -> None:
-        """Sync learning rate and other optimizer attributes (needed to support schedulers)."""
+        """ Sync learning rate and other optimizer attributes (needed to support schedulers). """
         for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
             for k in local_group.keys():
                 if k != "params":
@@ -280,7 +278,7 @@ class OSS(Optimizer):
                     local_group[k] = global_group[k]
 
     def _sync_ranks(self) -> None:
-        """ Sync all the params across the replicas, typically after each shard got an update. This makes use of broadcast bucketing whenever possible"""
+        """ Sync all the params across the replicas, typically after each shard got an update. This makes use of broadcast bucketing whenever possible """
 
         for device, params_list in self.per_device_params.items():
             # List the params in the same broadcast bucket
