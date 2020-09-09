@@ -49,8 +49,8 @@ def train(
     # Data setup, dummy data
     def collate(inputs: List[Any]):
         return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(rank),
-            "label": torch.stack([i[1] for i in inputs]).to(rank),
+            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
+            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
         }
 
     dataloader = DataLoader(
@@ -119,7 +119,7 @@ def train(
     print(f"[{dist.get_rank()}] : Mean speed: {mean:.2f} +/- {std:.2f}")
 
     if use_oss and check_regression and dist.get_rank() == 0:
-        assert (mean - 3.0 * std) < reference_speed, "Speed regression detected"
+        assert (mean + 3.0 * std) > reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
         print("[Regression Test] VALID")
 
@@ -133,11 +133,12 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", action="store", default=10, type=int)
     parser.add_argument("--batch_size", action="store", default=32, type=int)
     parser.add_argument("--data_size", action="store", default=512, type=int)
-    parser.add_argument("--check_regression", action="store", default=True, type=bool)
-    parser.add_argument("--reference_speed", action="store", default=39.82, type=float)
+    parser.add_argument("--check_regression", action="store_true", default=False)
+    parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
 
     args = parser.parse_args()
+    print(f"Benchmark arguments: {args}")
 
     print("\nBenchmark vanilla optimizer")
     mp.spawn(
