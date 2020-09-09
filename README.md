@@ -42,7 +42,9 @@ See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.
 ## License
 
 fairscale is licensed under the [BSD-3-Clause License](LICENSE).
+
 fairscale.nn.pipe is forked from [torchgpipe](https://github.com/kakaobrain/torchgpipe), Copyright 2019, Kakao Brain, licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
+
 fairscale.nn.model_parallel is forked from [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), Copyright 2020, NVIDIA CORPORATION, licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
 
 ## References
