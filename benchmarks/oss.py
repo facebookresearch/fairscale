@@ -134,11 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", action="store", default=32, type=int)
     parser.add_argument("--data_size", action="store", default=512, type=int)
     parser.add_argument("--check_regression", action="store_true", default=False)
-<<<<<<< HEAD
-    parser.add_argument("--reference_speed", action="store", default=33, type=float)
-=======
     parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
->>>>>>> upstream/master
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
 
     args = parser.parse_args()
