@@ -146,20 +146,19 @@ class OSS(Optimizer):
             len(self._all_states) > 0
         ), "The optimizer state is not materialized, please call consolidate_state_dict on every replica beforehand"
 
-        # Flatten the state_dict, save the partition
-        # The partition indexes the flat param_groups list,
-        # and logs the rank <> shard correspondence
-        partition: Dict[int, Tuple[int, int]] = {}
+        # Flatten the param_groups, save the partition which logs the rank <> shard correspondence
+        partition: List[Tuple[int, int]] = []
         param_groups: List[Dict[Any, Any]] = []
 
-        i_global = 0
+        start = 0
         for i, s in enumerate(self._all_states):
             param_groups.extend(s["param_groups"])
-            partition[i] = (i_global, i_global + len(s["param_groups"]))
-            i_global = partition[i][1]
+            end = start + len(s["param_groups"])
+            partition.append((start, end))
+            start = end
 
         return {
-            "state": {i: s["state"] for i, s in enumerate(self._all_states)},
+            "state": [s["state"] for s in self._all_states],
             "param_groups": param_groups,
             "partition": partition,
         }
