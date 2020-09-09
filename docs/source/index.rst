@@ -7,9 +7,11 @@ Welcome to fairscale's documentation!
 =====================================
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+   :maxdepth: 1
+   :caption: API Reference
 
+   api/optim/oss
+   api/nn/pipe
 
 
 Indices and tables
