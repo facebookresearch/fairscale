@@ -133,11 +133,12 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", action="store", default=10, type=int)
     parser.add_argument("--batch_size", action="store", default=32, type=int)
     parser.add_argument("--data_size", action="store", default=512, type=int)
-    parser.add_argument("--check_regression", action="store", default=True, type=bool)
-    parser.add_argument("--reference_speed", action="store", default=39.82, type=float)
+    parser.add_argument("--check_regression", action="store_true", default=False)
+    parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
 
     args = parser.parse_args()
+    print(f"Benchmark arguments: {args}")
 
     print("\nBenchmark vanilla optimizer")
     mp.spawn(
