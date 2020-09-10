@@ -106,7 +106,7 @@ class OSS(Optimizer):
         # Run the optimizer step on this shard only
         loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
 
-        # Sync all the states. Broadcast requests are issues async, we check completeness before moving on
+        # Sync all the states. Broadcast requests are issued async, we check completeness before moving on
         requests = []
         for rank, param_groups in enumerate(self.partition_parameters()):
             for param_group in param_groups:
