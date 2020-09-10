@@ -305,6 +305,8 @@ class OSS(Optimizer):
     def _sync_ranks(self) -> None:
         """ Sync all the params across the replicas, typically after each shard got an update. This makes use of broadcast bucketing whenever possible """
 
+        deferred_requests = []
+
         for device, params_list in self._per_device_params.items():
             # List the params in the same broadcast bucket
             buffered_params: List[Parameter] = []
@@ -319,7 +321,7 @@ class OSS(Optimizer):
 
                 if param.numel() >= self._broadcast_buffer_skip:
                     # Big param block, broadcast directly
-                    dist.broadcast(tensor=param, src=param_rank, group=self.group)
+                    deferred_requests.append(dist.broadcast(tensor=param, src=param_rank, group=self.group))
                 else:
                     if (buffered_elements + param.numel()) >= self._broadcast_buffer[device].numel() or (
                         last_param_rank is not None and last_param_rank != param_rank
@@ -349,3 +351,6 @@ class OSS(Optimizer):
                     buffer=self._broadcast_buffer[device],
                     process_group=self.group,
                 )
+
+        # Make sure that the async coms are done
+        _ = list(map(lambda x: x.wait(), deferred_requests))
