@@ -107,10 +107,13 @@ class OSS(Optimizer):
         loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
 
         # Sync all the states
+        requests = []
         for rank, param_groups in enumerate(self.partition_parameters()):
             for param_group in param_groups:
                 for param in param_group["params"]:
-                    dist.broadcast(tensor=param, src=rank, group=self.group)
+                    requests.append(dist.broadcast(tensor=param, src=rank, group=self.group, async_op=True))
+
+        map(lambda x: x.wait(), requests)
         return loss
 
     def local_state_dict(self) -> dict:
