@@ -106,11 +106,14 @@ class OSS(Optimizer):
         # Run the optimizer step on this shard only
         loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
 
-        # Sync all the states
+        # Sync all the states. Broadcast requests are issued async, we check completeness before moving on
+        requests = []
         for rank, param_groups in enumerate(self.partition_parameters()):
             for param_group in param_groups:
                 for param in param_group["params"]:
-                    dist.broadcast(tensor=param, src=rank, group=self.group)
+                    requests.append(dist.broadcast(tensor=param, src=rank, group=self.group, async_op=True))
+
+        _ = list(map(lambda x: x.wait(), requests))
         return loss
 
     def local_state_dict(self) -> dict:
