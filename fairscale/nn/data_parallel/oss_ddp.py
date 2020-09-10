@@ -75,20 +75,10 @@ class OssDdp(nn.Module):
         #     since their size shouldn't change.
 
         # make per-device lists of parameters
-        paramlists: OrderedDict = OrderedDict()
-        for param in self.module.parameters():
-            device = param.device
-            if paramlists.get(device) is None:
-                paramlists[device] = []
-            paramlists[device] += [param]
-        self.per_device_params = list(paramlists.values())
+        self.per_device_params = oss.per_device_params
 
-        # query oss and build a param-to-rank table
-        self.param_rank = {}
-        for rank, param_groups in enumerate(oss.partition_parameters()):
-            for param_group in param_groups:
-                for param in param_group["params"]:
-                    self.param_rank[param] = rank
+        # query the oss param-to-rank table
+        self.param_rank = oss.param_rank
 
         # sanity checks
         assert len(self.param_rank) == len(list(self.module.parameters())), "number of params do not match"
@@ -190,7 +180,7 @@ class OssDdp(nn.Module):
             if self.buffer is None:
                 self.buffer = next(self.module.parameters()).new(self.buffer_size)  # type: ignore
 
-            for params in self.per_device_params:
+            for _, params in self.per_device_params.items():
                 # Reduce the gradients in buckets
                 offset = 0
                 buffered_params: List[Parameter] = []

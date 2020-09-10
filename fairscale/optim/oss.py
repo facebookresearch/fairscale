@@ -88,20 +88,20 @@ class OSS(Optimizer):
                     global_group[k] = v
 
         # make per-device lists of parameters
-        self.per_device_params: Dict[torch.device, Any] = {}
+        self._per_device_params: Dict[torch.device, Any] = {}
         for param_group in self.param_groups:
             for param in param_group["params"]:
                 device = param.device
-                if self.per_device_params.get(device) is None:
-                    self.per_device_params[device] = []
-                self.per_device_params[device] += [param]
+                if self._per_device_params.get(device) is None:
+                    self._per_device_params[device] = []
+                self._per_device_params[device] += [param]
 
         # also build a device-to-rank table, useful for broadcasting
-        self.param_rank = {}
+        self._param_rank = {}
         for rank, param_groups in enumerate(split_param_groups):
             for param_group in param_groups:
                 for param in param_group["params"]:
-                    self.param_rank[param] = rank
+                    self._param_rank[param] = rank
 
         # pre-allocate per device buffers
         assert buffer_size > broadcast_buffer_skip
@@ -133,6 +133,14 @@ class OSS(Optimizer):
                 param_group_rank["params"] = params
                 param_groups[rank].append(param_group_rank)
         return param_groups
+
+    @property
+    def param_rank(self) -> Dict[torch.Tensor, int]:
+        return self._param_rank
+
+    @property
+    def per_device_params(self) -> Dict[torch.device, Any]:
+        return self._per_device_params
 
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
     # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
@@ -297,7 +305,7 @@ class OSS(Optimizer):
     def _sync_ranks(self) -> None:
         """ Sync all the params across the replicas, typically after each shard got an update. This makes use of broadcast bucketing whenever possible """
 
-        for device, params_list in self.per_device_params.items():
+        for device, params_list in self._per_device_params.items():
             # List the params in the same broadcast bucket
             buffered_params: List[Parameter] = []
             buffered_elements = 0
@@ -307,7 +315,7 @@ class OSS(Optimizer):
 
             for param in params_list:
                 last_param_rank: Optional[int] = param_rank
-                param_rank = self.param_rank[param]
+                param_rank = self._param_rank[param]
 
                 if param.numel() >= self._broadcast_buffer_skip:
                     # Big param block, broadcast directly
