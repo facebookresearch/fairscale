@@ -22,8 +22,8 @@ Let us start with a toy model that contains two linear layers.
 
     model = ToyModel()
 
-To run this model on 2 GPUs we need to convert it to the model
-to ``torch.nn.Sequential`` and then wrap with ``fairscale.nn.Pipe``.
+To run this model on 2 GPUs we need to convert the model
+to ``torch.nn.Sequential`` and then wrap it with ``fairscale.nn.Pipe``.
 
 .. code-block:: default
 
