@@ -16,8 +16,6 @@ import sys
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-# At the bottom of conf.py
-import pytorch_sphinx_theme
 from recommonmark.transform import AutoStructify
 
 sys.path.insert(0, os.path.abspath("../.."))
