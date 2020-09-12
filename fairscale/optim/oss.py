@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
+import inspect
 from itertools import chain
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
@@ -61,6 +62,9 @@ class OSS(Optimizer):
         split_param_groups = self.partition_parameters()
         self.optim = optim(split_param_groups[self.rank], **defaults)
 
+        # Check if this optimnizer accepts a closure
+        self._pass_closure = "closure" in inspect.signature(self.optim.step).parameters.keys()
+
         # Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []
 
@@ -103,8 +107,11 @@ class OSS(Optimizer):
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         self._sync_param_groups()
 
-        # Run the optimizer step on this shard only
-        loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
+        # Run the optimizer step on this shard only:
+        if self._pass_closure:
+            loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
+        else:
+            loss = self.optim.step(**kwargs)
 
         # Sync all the states. Broadcast requests are issued async, we check completeness before moving on
         requests = []
