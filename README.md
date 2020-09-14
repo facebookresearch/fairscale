@@ -48,16 +48,14 @@ def train(
     model.train()
     for e in range(epochs):
         for batch in dataloader:
-            def closure():
-                model.zero_grad()
-                outputs = model(batch["inputs"])
-                loss = loss_fn(outputs, batch["label"])
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
-                loss /= world_size
-                loss.backward()
-                return loss
-
-            optimizer.step(closure)
+            # Train
+            model.zero_grad()
+            outputs = model(batch["inputs"])
+            loss = loss_fn(outputs, batch["label"])
+            torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
+            loss /= world_size
+            loss.backward()
+            optimizer.step()
 
 if __name__ == "__main__":
     # supposing that WORLD_SIZE and EPOCHS are somehow defined somewhere
