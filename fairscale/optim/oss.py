@@ -4,7 +4,6 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
-import inspect
 from itertools import chain
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
@@ -62,9 +61,6 @@ class OSS(Optimizer):
         split_param_groups = self.partition_parameters()
         self.optim = optim(split_param_groups[self.rank], **defaults)
 
-        # Check if this optimnizer accepts a closure
-        self._pass_closure = "closure" in inspect.signature(self.optim.step).parameters.keys()
-
         # Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []
 
@@ -108,7 +104,7 @@ class OSS(Optimizer):
         self._sync_param_groups()
 
         # Run the optimizer step on this shard only:
-        if self._pass_closure:
+        if closure is not None:
             loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
         else:
             loss = self.optim.step(**kwargs)
