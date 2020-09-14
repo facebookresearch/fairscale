@@ -103,19 +103,30 @@ def test_lr_scheduler():
         assert x == x2
 
 
-class SGDWithStepKWArg(torch.optim.SGD):
-    def step(self, closure=None, kwarg=[]):
-        super().step()
-        kwarg.append(5)
-
-
 def test_step_with_kwargs():
+    class SGDWithStepKWArg(torch.optim.SGD):
+        def step(self, closure=None, kwarg=[]):
+            super().step()
+            kwarg.append(5)
+
     kwarg = []
     x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
     o = optim.OSS([x], SGDWithStepKWArg, lr=0.1)
     x.backward()
     o.step(0, kwarg=kwarg)
     assert kwarg == [5]
+    assert x == torch.tensor([0.9], device=DEVICE)
+
+
+def test_step_without_closure():
+    class SGDWithoutClosure(torch.optim.SGD):
+        def step(self):
+            return super().step()
+
+    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+    o = optim.OSS([x], SGDWithoutClosure, lr=0.1)
+    x.backward()
+    o.step()
     assert x == torch.tensor([0.9], device=DEVICE)
 
 
