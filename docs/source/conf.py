@@ -16,8 +16,6 @@ import sys
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-# At the bottom of conf.py
-import pytorch_sphinx_theme
 from recommonmark.transform import AutoStructify
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -54,7 +52,6 @@ exclude_patterns = []
 
 
 html_theme = "pytorch_sphinx_theme"
-html_theme_path = [pytorch_sphinx_theme.get_html_theme_path()]
 templates_path = ["_templates"]
 
 # Add any paths that contain custom static files (such as style sheets) here,
@@ -64,7 +61,7 @@ templates_path = ["_templates"]
 #
 html_theme_options = {
     "includehidden": False,
-    "canonical_url": "https://mmf.sh/api/",
+    "canonical_url": "https://fairscale.readthedocs.io",
     "pytorch_project": "docs",
 }
 

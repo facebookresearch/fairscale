@@ -104,13 +104,12 @@ def test_lr_scheduler():
         assert x == x2
 
 
-class SGDWithStepKWArg(torch.optim.SGD):
-    def step(self, closure=None, kwarg=[]):
-        super().step()
-        kwarg.append(5)
-
-
 def test_step_with_kwargs():
+    class SGDWithStepKWArg(torch.optim.SGD):
+        def step(self, closure=None, kwarg=[]):
+            super().step()
+            kwarg.append(5)
+
     kwarg = []
     x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
     o = optim.OSS([x], SGDWithStepKWArg, lr=0.1)
@@ -120,12 +119,38 @@ def test_step_with_kwargs():
     assert x == torch.tensor([0.9], device=DEVICE)
 
 
+def test_step_without_closure():
+    class SGDWithoutClosure(torch.optim.SGD):
+        def step(self):
+            return super().step()
+
+    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+    o = optim.OSS([x], SGDWithoutClosure, lr=0.1)
+    x.backward()
+    o.step()
+    assert x == torch.tensor([0.9], device=DEVICE)
+
+
 def test_local_state_dict():
     x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
     o = optim.OSS([x], lr=0.1)
     local_state_dict = o.local_state_dict()
     o = optim.OSS([x], lr=0.01)
     o.load_local_state_dict(local_state_dict)
+    # We should now be using a lr of 0.1.
+    assert o.optim.param_groups[0]["lr"] == 0.1
+    assert o.param_groups[0]["lr"] == 0.1
+    x.backward()
+    o.step()
+    assert x == torch.tensor([0.9], device=DEVICE)
+
+
+def test_implicit_local_state_dict():
+    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+    o = optim.OSS([x], lr=0.1)
+    local_state_dict = o.state_dict()
+    o = optim.OSS([x], lr=0.01)
+    o.load_state_dict(local_state_dict)
     # We should now be using a lr of 0.1.
     assert o.optim.param_groups[0]["lr"] == 0.1
     assert o.param_groups[0]["lr"] == 0.1
