@@ -141,8 +141,9 @@ class OSS(Optimizer):
         """
         Return the last known global optimizer state, which consist of a list of the shards.
 
-        NOTE: If the state has not been consolidated, this returns
-        NOTE: Returning the global state is limited to the replica which was responsible for the consolidation.
+        NOTE:
+        - If the state has not been consolidated, this returns a shard's worth, not the global state.
+        - Returning the global state is limited to the replica which was responsible for the consolidation.
         The state may also not be up to date, depending on when `consolidate_state_dict` was last called.
         """
 
