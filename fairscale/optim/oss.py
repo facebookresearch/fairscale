@@ -103,8 +103,11 @@ class OSS(Optimizer):
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         self._sync_param_groups()
 
-        # Run the optimizer step on this shard only
-        loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
+        # Run the optimizer step on this shard only:
+        if closure is not None:
+            loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
+        else:
+            loss = self.optim.step(**kwargs)
 
         # Sync all the states. Broadcast requests are issued async, we check completeness before moving on
         requests = []
