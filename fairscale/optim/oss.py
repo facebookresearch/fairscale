@@ -141,13 +141,17 @@ class OSS(Optimizer):
         """
         Return the last known global optimizer state, which consist of a list of the shards.
 
-        NOTE: This is limited to the replica which was responsible for the consolidation.
+        NOTE: If the state has not been consolidated, this returns
+        NOTE: Returning the global state is limited to the replica which was responsible for the consolidation.
         The state may also not be up to date, depending on when `consolidate_state_dict` was last called.
         """
 
-        assert (
-            len(self._all_states) > 0
-        ), "The optimizer state is not materialized, please call consolidate_state_dict on every replica beforehand"
+        if len(self._all_states) == 0:
+            logging.warning("Optimizer state has not been consolidated. Returning the local state")
+            logging.warning("Please call `consolidate_state_dict()` beforehand if you meant to save the global state")
+            state_dict = self.local_state_dict()
+            state_dict["local_state_dict"] = True
+            return state_dict
 
         # Flatten the param_groups, save the partition which logs the rank <> shard correspondence
         partition: List[Tuple[int, int]] = []
@@ -164,6 +168,7 @@ class OSS(Optimizer):
             "state": [s["state"] for s in self._all_states],
             "param_groups": param_groups,
             "partition": partition,
+            "local_state_dict": False,
         }
 
     def load_local_state_dict(self, state_dict: dict) -> None:
@@ -193,12 +198,16 @@ class OSS(Optimizer):
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """ Restore the global parameter groups as well as the shard """
 
-        # Get this optimizer's param_groups shard
-        param_groups = state_dict["param_groups"][
-            state_dict["partition"][self.rank][0] : state_dict["partition"][self.rank][1]
-        ]
-        # Dispatch this rank's state dictionary to the wrapped shard optimizer
-        self.load_local_state_dict({"state": state_dict["state"][self.rank], "param_groups": param_groups})
+        # Check whether we got a local or global dict
+        if state_dict["local_state_dict"]:
+            self.load_local_state_dict(state_dict)
+        else:
+            # Get this optimizer's param_groups shard
+            param_groups = state_dict["param_groups"][
+                state_dict["partition"][self.rank][0] : state_dict["partition"][self.rank][1]
+            ]
+            # Dispatch this rank's state dictionary to the wrapped shard optimizer
+            self.load_local_state_dict({"state": state_dict["state"][self.rank], "param_groups": param_groups})
 
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
