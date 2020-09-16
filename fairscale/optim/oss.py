@@ -55,17 +55,21 @@ class OSS(Optimizer):
         super().__init__(params, default)
         self.in_super_constructor = False
 
+        # Partition information. lazy evaluation, computed if requested
+        self._per_device_params: Dict[torch.device, Any] = {}
+        self._param_rank: Dict[torch.Tensor, int] = {}
+        self._partition_parameters: List[List[dict]] = []
+
         # Build the wrapped optimizer, responsible for a shard of the params
         self.group = group if group is not None else dist.group.WORLD
         self.rank = dist.get_rank(self.group)
-        split_param_groups = self.partition_parameters()
-        self.optim = optim(split_param_groups[self.rank], **default)
+        self.optim = optim(self.partition_parameters()[self.rank], **default)
 
         # Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []
 
         # Current device is set by the parameters allocated to this rank
-        self._device = split_param_groups[self.rank][0]["params"][0].device
+        self._device = self.partition_parameters()[self.rank][0]["params"][0].device
 
         # Sync local and global param_groups keys
         for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
@@ -73,6 +77,7 @@ class OSS(Optimizer):
                 if k != "params":
                     global_group[k] = v
 
+    # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
         """Partitions parameters across distributed ranks.
 
@@ -81,21 +86,48 @@ class OSS(Optimizer):
         corresponds to rank 0, etc. We need all the ranks for the broadcast
         inside step().
         """
-        world_size = dist.get_world_size(self.group)
-        param_groups: List[List] = [list() for _ in range(world_size)]
-        sizes = [0] * world_size
-        for param_group in self.param_groups:
-            param_lists: List[List] = [list() for _ in range(world_size)]
-            for param in param_group["params"]:
-                # Add this param to rank with smallest size.
-                rank = sizes.index(min(sizes))
-                param_lists[rank].append(param)
-                sizes[rank] += param.numel()
-            for rank, params in enumerate(param_lists):
-                param_group_rank = copy.copy(param_group)
-                param_group_rank["params"] = params
-                param_groups[rank].append(param_group_rank)
-        return param_groups
+        if len(self._partition_parameters) == 0:
+            world_size = dist.get_world_size(self.group)
+            self._partition_parameters = [list() for _ in range(world_size)]
+            sizes = [0] * world_size
+            for param_group in self.param_groups:
+                param_lists: List[List] = [list() for _ in range(world_size)]
+                for param in param_group["params"]:
+                    # Add this param to rank with smallest size.
+                    rank = sizes.index(min(sizes))
+                    param_lists[rank].append(param)
+                    sizes[rank] += param.numel()
+                for rank, params in enumerate(param_lists):
+                    param_group_rank = copy.copy(param_group)
+                    param_group_rank["params"] = params
+                    self._partition_parameters[rank].append(param_group_rank)
+
+        return self._partition_parameters
+
+    def per_device_params(self) -> Dict[torch.device, Any]:
+        # TODO (Min): The algorithm here can be improved. We are sorting params by device
+        #     and by rank. Then in reduction_fn below, we pack smaller ones into
+        #     a buffer for reduction.
+        #     We can pre-sort them here and simplify the reduction_fn logic below
+        #     since their size shouldn't change.
+
+        if len(self._per_device_params) == 0:
+            for param_group in self.param_groups:
+                for param in param_group["params"]:
+                    device = param.device
+                    if self._per_device_params.get(device) is None:
+                        self._per_device_params[device] = []
+                    self._per_device_params[device] += [param]
+
+        return self._per_device_params
+
+    def param_to_rank(self) -> Dict[torch.Tensor, int]:
+        if len(self._param_rank) == 0:
+            for rank, param_groups in enumerate(self.partition_parameters()):
+                for param_group in param_groups:
+                    for param in param_group["params"]:
+                        self._param_rank[param] = rank
+        return self._param_rank
 
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
     # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
@@ -216,6 +248,8 @@ class OSS(Optimizer):
     def add_param_group(self, param_group: dict) -> None:
         super().add_param_group(param_group)
         if not self.in_super_constructor:
+            self._partition_parameters.clear()  # Force a re-partitioning
+
             param_groups = self.partition_parameters()[self.rank]
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])

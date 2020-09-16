@@ -39,7 +39,9 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
 
     model = Sequential(Linear(2, 3), Linear(3, 4)).to(device)
 
-    ddp = OssDdp(module=model, optimizer=torch.optim.SGD, optimizer_params={"lr": 0.1, "momentum": 0.99}, world_size=world_size)
+    ddp = OssDdp(
+        module=model, optimizer=torch.optim.SGD, optimizer_params={"lr": 0.1, "momentum": 0.99}, world_size=world_size
+    )
     optimizer = ddp.optimizer
 
     input_tensor = torch.rand((64, 2)).to(device)

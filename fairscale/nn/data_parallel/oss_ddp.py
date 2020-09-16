@@ -12,11 +12,13 @@ Adopted from LegacyDistributedDataParallel module from fairseq.
 from collections import OrderedDict
 from contextlib import contextmanager
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, cast, Type
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, Type, cast
 
 import torch
 from torch import nn
 import torch.distributed as dist
+
+from fairscale.optim import OSS
 
 if TYPE_CHECKING:
     from fairscale.optim import OSS
@@ -26,8 +28,6 @@ else:
     OSS = Any
     Tensor = Any
     Parameter = Any
-
-from fairscale.optim import OSS
 
 
 class OssDdp(nn.Module):
@@ -77,33 +77,11 @@ class OssDdp(nn.Module):
         self.accumulate_grads = False
 
         # Build the sharded optimizer
-        self.sharded_optimizer = OSS(
-            self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params
-        )
+        self.sharded_optimizer = OSS(self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params)
 
-        # Handle the heterogeneous communication / sharding
-        # - make per-device lists of parameters
-
-        # TODO (Min): The algorithm here can be improved. We are sorting params by device
-        #     and by rank. Then in reduction_fn below, we pack smaller ones into
-        #     a buffer for reduction.
-        #     We can pre-sort them here and simplify the reduction_fn logic below
-        #     since their size shouldn't change.
-
-        paramlists: OrderedDict = OrderedDict()
-        for param in self.module.parameters():
-            device = param.device
-            if paramlists.get(device) is None:
-                paramlists[device] = []
-            paramlists[device] += [param]
-        self.per_device_params = list(paramlists.values())
-
-        # - query the sharded optimizer and build a param-to-rank table
-        self.param_rank = {}
-        for rank, param_groups in enumerate(self.sharded_optimizer.partition_parameters()):
-            for param_group in param_groups:
-                for param in param_group["params"]:
-                    self.param_rank[param] = rank
+        # Handle the heterogeneous communication / sharding. The sharded optimizer owns the partitions
+        self.per_device_params = self.sharded_optimizer.per_device_params()
+        self.param_rank = self.sharded_optimizer.param_to_rank()
 
         # sanity checks
         assert len(self.param_rank) == len(list(self.module.parameters())), "number of params do not match"
