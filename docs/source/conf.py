@@ -1,3 +1,4 @@
+# type: ignore
 # Configuration file for the Sphinx documentation builder.
 #
 # This file only contains a selection of the most common options. For a full
@@ -73,10 +74,7 @@ html_static_path = ["_static"]
 def setup(app):
     app.add_config_value(
         "recommonmark_config",
-        {
-            "url_resolver": lambda url: github_doc_root + url,
-            "auto_toc_tree_section": "Contents",
-        },
+        {"url_resolver": lambda url: github_doc_root + url, "auto_toc_tree_section": "Contents"},
         True,
     )
     app.add_transform(AutoStructify)

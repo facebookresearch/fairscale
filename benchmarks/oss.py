@@ -5,7 +5,7 @@ import argparse
 import math
 import os
 import time
-from typing import Any, List, Union, cast
+from typing import Any, List, cast
 
 import torch
 import torch.distributed as dist
@@ -62,7 +62,7 @@ def train(
     torch.cuda.reset_peak_memory_stats(rank)
 
     # Shard the optimizer
-    optimizer: Union[OSS, OPTIM] = OSS(
+    optimizer: torch.optim.Optimizer = OSS(
         params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9
     ) if use_oss else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
 
