@@ -16,8 +16,8 @@ from torchvision.datasets import FakeData
 from torchvision.models import resnet101
 from torchvision.transforms import ToTensor
 
-from fairscale.optim.oss import OSS
 from fairscale.nn.data_parallel import OssDdp
+from fairscale.optim.oss import OSS
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 OPTIM = torch.optim.RMSprop
