@@ -7,6 +7,7 @@ import copy
 from itertools import chain
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
+from collections import OrderedDict
 
 import torch
 import torch.distributed as dist
@@ -56,12 +57,14 @@ class OSS(Optimizer):
         self.in_super_constructor = False
 
         # Partition information. lazy evaluation, computed if requested
-        self._per_device_params: Dict[torch.device, Any] = {}
+        self._per_device_params: List[List[torch.Tensor]] = []
         self._param_rank: Dict[torch.Tensor, int] = {}
         self._partition_parameters: List[List[dict]] = []
 
         # Build the wrapped optimizer, responsible for a shard of the params
         self.group = group if group is not None else dist.group.WORLD
+        self.world_size = dist.get_world_size(self.group)
+
         self.rank = dist.get_rank(self.group)
         self.optim = optim(self.partition_parameters()[self.rank], **default)
 
@@ -87,16 +90,16 @@ class OSS(Optimizer):
         inside step().
         """
         if len(self._partition_parameters) == 0:
-            world_size = dist.get_world_size(self.group)
-            self._partition_parameters = [list() for _ in range(world_size)]
-            sizes = [0] * world_size
+            self._partition_parameters = [list() for _ in range(self.world_size)]
+            sizes = [0] * self.world_size
             for param_group in self.param_groups:
-                param_lists: List[List] = [list() for _ in range(world_size)]
+                param_lists: List[List] = [list() for _ in range(self.world_size)]
                 for param in param_group["params"]:
                     # Add this param to rank with smallest size.
                     rank = sizes.index(min(sizes))
                     param_lists[rank].append(param)
                     sizes[rank] += param.numel()
+
                 for rank, params in enumerate(param_lists):
                     param_group_rank = copy.copy(param_group)
                     param_group_rank["params"] = params
@@ -104,7 +107,8 @@ class OSS(Optimizer):
 
         return self._partition_parameters
 
-    def per_device_params(self) -> Dict[torch.device, Any]:
+    @property
+    def per_device_params(self) -> List[List[torch.device]]:
         # TODO (Min): The algorithm here can be improved. We are sorting params by device
         #     and by rank. Then in reduction_fn below, we pack smaller ones into
         #     a buffer for reduction.
@@ -113,14 +117,17 @@ class OSS(Optimizer):
 
         if len(self._per_device_params) == 0:
             for param_group in self.param_groups:
+                param_lists: OrderedDict = OrderedDict()
                 for param in param_group["params"]:
                     device = param.device
-                    if self._per_device_params.get(device) is None:
-                        self._per_device_params[device] = []
-                    self._per_device_params[device] += [param]
+                    if param_lists.get(device) is None:
+                        param_lists[device] = []
+                    param_lists[device] += [param]
+            self._per_device_params = list(param_lists.values())
 
         return self._per_device_params
 
+    @property
     def param_to_rank(self) -> Dict[torch.Tensor, int]:
         if len(self._param_rank) == 0:
             for rank, param_groups in enumerate(self.partition_parameters()):

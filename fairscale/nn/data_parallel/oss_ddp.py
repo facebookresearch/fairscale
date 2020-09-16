@@ -9,25 +9,16 @@ A distributed data parallel class that works with OSS optimizer.
 Adopted from LegacyDistributedDataParallel module from fairseq.
 """
 
-from collections import OrderedDict
 from contextlib import contextmanager
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, Type, cast
+from typing import Any, Dict, Generator, List, Optional, Type, cast
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 import torch.distributed as dist
+from torch.nn import Parameter
 
 from fairscale.optim import OSS
-
-if TYPE_CHECKING:
-    from fairscale.optim import OSS
-    from torch import Tensor
-    from torch.nn import Parameter
-else:
-    OSS = Any
-    Tensor = Any
-    Parameter = Any
 
 
 class OssDdp(nn.Module):
@@ -80,8 +71,7 @@ class OssDdp(nn.Module):
         self.sharded_optimizer = OSS(self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params)
 
         # Handle the heterogeneous communication / sharding. The sharded optimizer owns the partitions
-        self.per_device_params = self.sharded_optimizer.per_device_params()
-        self.param_rank = self.sharded_optimizer.param_to_rank()
+        self.param_rank = self.sharded_optimizer.param_to_rank
 
         # sanity checks
         assert len(self.param_rank) == len(list(self.module.parameters())), "number of params do not match"
@@ -187,7 +177,7 @@ class OssDdp(nn.Module):
             if self.buffer is None:
                 self.buffer = next(self.module.parameters()).new(self.buffer_size)  # type: ignore
 
-            for params in self.per_device_params:
+            for params in self.sharded_optimizer.per_device_params:
                 # Reduce the gradients in buckets
                 offset = 0
                 buffered_params: List[Parameter] = []
