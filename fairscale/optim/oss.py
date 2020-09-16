@@ -49,17 +49,17 @@ class OSS(Optimizer):
     optim: Optimizer
     in_super_constructor: bool
 
-    def __init__(self, params: _params_t, optim: Type[Optimizer] = SGD, group: Any = dist.group.WORLD, **defaults: Any):
+    def __init__(self, params: _params_t, optim: Type[Optimizer] = SGD, group: Optional[Any] = None, **default: Any):
         # Hold all the model params in the root .param_groups
         self.in_super_constructor = True
-        super().__init__(params, defaults)
+        super().__init__(params, default)
         self.in_super_constructor = False
 
         # Build the wrapped optimizer, responsible for a shard of the params
-        self.group = group
-        self.rank = dist.get_rank(group)
+        self.group = group if group is not None else dist.group.WORLD
+        self.rank = dist.get_rank(self.group)
         split_param_groups = self.partition_parameters()
-        self.optim = optim(split_param_groups[self.rank], **defaults)
+        self.optim = optim(split_param_groups[self.rank], **default)
 
         # Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []

@@ -12,7 +12,7 @@ Adopted from LegacyDistributedDataParallel module from fairseq.
 from collections import OrderedDict
 from contextlib import contextmanager
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, cast, Type
 
 import torch
 from torch import nn
@@ -26,6 +26,8 @@ else:
     OSS = Any
     Tensor = Any
     Parameter = Any
+
+from fairscale.optim import OSS
 
 
 class OssDdp(nn.Module):
@@ -48,7 +50,13 @@ class OssDdp(nn.Module):
     """
 
     def __init__(
-        self, module: nn.Module, oss: OSS, world_size: int, process_group: Any = None, buffer_size: int = 2 ** 28
+        self,
+        module: nn.Module,
+        optimizer: Type[torch.optim.Optimizer],
+        optimizer_params: Dict[str, Any],
+        world_size: int,
+        process_group: Any = None,
+        buffer_size: int = 2 ** 28,
     ):
         super().__init__()
 
@@ -68,13 +76,20 @@ class OssDdp(nn.Module):
         # gradients-reduce at some later time
         self.accumulate_grads = False
 
+        # Build the sharded optimizer
+        self.sharded_optimizer = OSS(
+            self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params
+        )
+
+        # Handle the heterogeneous communication / sharding
+        # - make per-device lists of parameters
+
         # TODO (Min): The algorithm here can be improved. We are sorting params by device
         #     and by rank. Then in reduction_fn below, we pack smaller ones into
         #     a buffer for reduction.
         #     We can pre-sort them here and simplify the reduction_fn logic below
         #     since their size shouldn't change.
 
-        # make per-device lists of parameters
         paramlists: OrderedDict = OrderedDict()
         for param in self.module.parameters():
             device = param.device
@@ -83,9 +98,9 @@ class OssDdp(nn.Module):
             paramlists[device] += [param]
         self.per_device_params = list(paramlists.values())
 
-        # query oss and build a param-to-rank table
+        # - query the sharded optimizer and build a param-to-rank table
         self.param_rank = {}
-        for rank, param_groups in enumerate(oss.partition_parameters()):
+        for rank, param_groups in enumerate(self.sharded_optimizer.partition_parameters()):
             for param_group in param_groups:
                 for param in param_group["params"]:
                     self.param_rank[param] = rank
@@ -98,6 +113,10 @@ class OssDdp(nn.Module):
     def __getstate__(self) -> Dict:
         attrs = copy.copy(self.__dict__)
         return attrs
+
+    @property
+    def optimizer(self) -> torch.optim.Optimizer:
+        return self.sharded_optimizer
 
     def train(self, mode: bool = True) -> "OssDdp":
         pre_mode = self.module.training
