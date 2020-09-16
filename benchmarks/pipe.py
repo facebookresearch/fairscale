@@ -301,17 +301,8 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
     for i, batch in enumerate(lm_dataloader):
         if args.max_batch and i > args.max_batch:
             break
-        # for p in model.parameters():
-        #    p.grad = None
         optimizer.zero_grad()
-        try:
-            output = model(batch["input"].to(get_first_device(model)))
-        except RuntimeError as e:
-            print(f"failed on {model.group.rank()}, iter {i}, inner iter count: {iteration_count} ")
-            dump_cuda_tensors()
-            raise e
-        # if i == 0 and model.group.rank() == 0:
-        #    dump_cuda_tensors()
+        output = model(batch["input"].to(get_first_device(model)))
 
         if model.group is None or model.group.rank() == model.group.size() - 1:
             target = batch["target"].to(get_last_device(model))
@@ -545,20 +536,8 @@ best_device_map = {
 
 
 def bench_mpi(args):
-    if True:  # disabled for mvapich
-        guess_rank = int(os.environ["OMPI_COMM_WORLD_RANK"])
-        rank_options = [
-            os.environ["OMPI_COMM_WORLD_LOCAL_RANK"],
-            os.environ["OMPI_COMM_WORLD_NODE_RANK"],
-            os.environ["OMPI_COMM_WORLD_RANK"],
-        ]
-        os.environ["UCX_NET_DEVICES"] = best_device_map[guess_rank]
-    else:
-        os.environ["OMPI_COMM_WORLD_SIZE"] = os.environ["MV2_COMM_WORLD_SIZE"]
-        os.environ["OMPI_COMM_WORLD_LOCAL_SIZE"] = os.environ["MV2_COMM_WORLD_LOCAL_SIZE"]
-        os.environ["OMPI_COMM_WORLD_LOCAL_RANK"] = os.environ["MV2_COMM_WORLD_LOCAL_RANK"]
-        os.environ["OMPI_COMM_WORLD_RANK"] = os.environ["MV2_COMM_WORLD_RANK"]
-        os.environ["OMPI_COMM_WORLD_NODE_RANK"] = os.environ["MV2_COMM_WORLD_RANK"]
+    guess_rank = int(os.environ["OMPI_COMM_WORLD_RANK"])
+    os.environ["UCX_NET_DEVICES"] = best_device_map[guess_rank]
 
     torch.distributed.init_process_group(backend="mpi")
     os.environ["MASTER_ADDR"] = args.host

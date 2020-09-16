@@ -37,6 +37,7 @@ repos:
     rev: 4.3.20
     hooks:
     -   id: isort
+        exclude: README.md
         additional_dependencies: [toml]
 
 -   repo: https://github.com/pre-commit/mirrors-mypy

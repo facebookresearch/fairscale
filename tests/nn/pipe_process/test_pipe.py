@@ -780,7 +780,17 @@ def lazy_construction():
     assert init_count == 2
 
 
-# @torch_spawn([2]) skipped
+@pytest.mark.skipif("OMPI_COMM_WORLD_RANK" in os.environ, reason="doesn't apply to mpi")
+@torch_spawn([2])
+def missing_worker_map():
+    model = nn.Sequential(nn.ReLU(), nn.ReLU())
+
+    with pytest.raises(ValueError, match="'PipelineStyle.MultiProcess' requires 'worker_map' to be set"):
+        Pipe(model, [1, 1], style=Pipe.MultiProcess)
+
+
+@torch_spawn([2])
+@pytest.mark.skip(reason="currently broken")
 def verify_module_duplicate_parameters_on_distinct_partitions():
     class Surrogate(nn.Module):
         def __init__(self, module):

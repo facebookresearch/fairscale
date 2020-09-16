@@ -314,16 +314,11 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
         return
 
     if not skip_dist_init:
-        print(f"running dist_init..")
         dist_init(rank, world_size)
     else:
-        print(f"NOT! U running dist_init..")
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = "29502"
         rpc.init_rpc(f"Test{rank}", rank=rank, world_size=world_size)
-
-        # rpc.init_rpc(f"Test{rank}", backend=rpc.BackendType.TENSORPIPE, rank=rank, world_size=world_size)
-        # rpc.init_rpc(f"Test{rank}", rank=rank, world_size=world_size)
 
     mpu.initialize_model_parallel(world_size / pipe_world_size, pipe_world_size)
     model_parallel_size = mpu.get_model_parallel_world_size()
@@ -379,19 +374,6 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
                 result += "\n" + grad_graph(depth + 1, x[0])
         return result
 
-    def dump_grad(output, key=""):
-        if not hasattr(output, "grad_fn") or output.grad_fn is None:
-            return
-        if torch.__version__ != "1.6.0":
-            pass
-            # import torchviz
-
-            # dot = torchviz.make_dot(output)
-            # dot.render(f"/private/home/tbirch/dot_{key}")
-        segments = []
-        grad = grad_graph(0, output.grad_fn)
-        print(f"grad {key} = \n{grad}")
-
     def check_weights(x, y, key: str, index=None):
         for i in [2, 0]:
             if index is not None and i != index:
@@ -415,33 +397,26 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
         optimizer.zero_grad()
         model_.zero_grad()
         output = model_(identity())
-        # dump_grad(output)
         loss = nn.MSELoss()
         model_.zero_grad()
         if step:
             loss(output, target).backward()
             saved_weight_0 = model_[0].weight.data.clone()
             saved_weight_2 = model_[2].weight.data.clone()
-            # print(f"model grad = {model_[0].weight.grad}")
             dump_opt_params(optimizer)
             optimizer.step()
             assert not torch.allclose(saved_weight_0, model_[0].weight.data, atol=1.0e-6)
             assert not torch.allclose(saved_weight_2, model_[2].weight.data, atol=1.0e-6)
         return output
 
-    # print(f"ref weight[0] {reference[0].weight.data}")
-    # print(f"ref weight[2] {reference[2].weight.data}")
-
     output = forward_model(model, target)
     reference_output = forward_model(reference, target)
-    # print(f"ref_out= {reference_output}, {target}")
 
     error = reference_output.sub(output).max()
     torch.distributed.barrier()
     assert error < 1.0e-6
 
     output = forward_model(model, target)
-    # dump_grad(output, "mp_model")
     error = reference_output.sub(output).max()
     torch.distributed.barrier()
     assert error < 1.0e-6
@@ -504,7 +479,6 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
         forward_model(reference, target, step=True)
 
         print(f"pipe_output {rank} = {pipe_output}")
-        dump_grad(pipe_output, f"pipe_model{rank}")
         print(f"reference_output {rank} = {reference_output}")
 
         torch.distributed.barrier()
@@ -610,4 +584,4 @@ def test_pipe_layer():
 def test_eight_pipe_layer():
     world_sizes = [x for x in get_world_sizes() if x <= torch.cuda.device_count() / 2]
 
-    spawn_for_all_world_sizes(run_test_pipe, [8])  # , world_sizes)
+    spawn_for_all_world_sizes(run_test_pipe, [8])

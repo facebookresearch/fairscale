@@ -54,7 +54,6 @@ def x1to3(balance, checkpoint):
             self.conv = nn.Conv2d(3, 3, 1)
 
         def forward(self, input):
-            # print(f"conv input is {input}")
             output = self.conv(input)
             return output
 
@@ -166,7 +165,7 @@ def lazy_skippable_error():
 
     model = [lambda: Layer1(10, 10), lambda: nn.Linear(10, 10), lambda: Layer3(10, 10)]
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Can't use Skippable layers with multi-process pipe and lazy construction"):
         Pipe(
             model, [2, 1], style=Pipe.MultiProcess, worker_map=get_worker_map(),
         )

@@ -386,9 +386,6 @@ class Pipe(Module):
             if group is None:
                 group = get_pipeline_parallel_group()
 
-            if worker_map is None:
-                raise ValueError("'PipelineStyle.MultiProcess' requires 'worker_map' to be set")
-
             if devices is not None:
                 raise ValueError("'devices' argument only applies to 'PipelineStyle.SingleProcess'")
 

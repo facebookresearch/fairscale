@@ -351,6 +351,13 @@ class Pipeline:
             assert self.devices is not None
             (self.in_queues, self.out_queues) = create_workers(self.devices)
 
+        if (
+            self.style is PipelineStyle.MultiProcess
+            and self.transport_config.worker_map is None
+            and self.transport_config.use_rpc is True
+        ):
+            raise ValueError("'PipelineStyle.MultiProcess' requires 'worker_map' to be set")
+
     def __del__(self) -> None:
         if self.style is PipelineStyle.SingleProcess:
             join_workers(self.in_queues, self.out_queues)

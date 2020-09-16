@@ -63,8 +63,5 @@ def pytest_runtest_setup(item):
 def pytest_runtest_teardown(item):
     if "OMPI_COMM_WORLD_RANK" in os.environ:
         destroy_model_parallel()
-        # print(f"OMPI_COMM_WORLD_RANK teardown mpi function called on {torch.distributed.get_rank()}")
         if torch.distributed.is_initialized():
             torch.distributed.destroy_process_group()
-    else:
-        pass  # torch.distributed.rpc.shutdown()

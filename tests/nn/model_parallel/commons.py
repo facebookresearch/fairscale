@@ -61,8 +61,6 @@ def dist_init(rank, world_size, hostname=None):
     os.environ["MASTER_PORT"] = "10638"
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
-    # os.environ["GLOO_SOCKET_IFNAME"] = "enp1s0f0"
-    # os.environ["TP_SOCKET_IFNAME"] = "enp1s0f0"
 
     if version.parse(torch.__version__).release >= (1, 6, 0):
         init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
@@ -139,7 +137,7 @@ def torch_spawn(world_sizes=None):
                 else:
                     pytest.skip(f"requested world size doesn't match current world size")
             else:
-                spawn_for_all_world_sizes(helper, world_sizes, (func, args))  # , world_sizes)
+                spawn_for_all_world_sizes(helper, world_sizes, (func, args))
 
         caller_module = inspect.getmodule(inspect.currentframe().f_back)
         setattr(caller_module, f"test_{name}", replacement)
