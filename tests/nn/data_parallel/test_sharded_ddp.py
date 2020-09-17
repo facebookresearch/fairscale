@@ -15,7 +15,8 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn import Linear, Sequential
 
-from fairscale.nn.data_parallel import OssDdp
+from fairscale.nn.data_parallel import ShardedDataParallel
+
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
@@ -39,19 +40,29 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
 
     model = Sequential(Linear(2, 3), Linear(3, 4)).to(device)
 
-    ddp = OssDdp(
+    ddp = ShardedDataParallel(
         module=model, optimizer=torch.optim.SGD, optimizer_params={"lr": 0.1, "momentum": 0.99}, world_size=world_size
     )
     optimizer = ddp.optimizer
 
     input_tensor = torch.rand((64, 2)).to(device)
-    output = ddp(input_tensor).sum()
+    output = ddp(input_tensor).abs().sum() / input_tensor.numel()
     output.backward()
     ddp.reduce()
+
+    # Check that all the grads have been populated, for the shard
+    if device == torch.device("cuda"):
+        torch.cuda.synchronize()  # flush any remaining cuda op, just in case
+
+    for pg in optimizer.optim.param_groups:
+        for param in pg["params"]:
+            if param.requires_grad:
+                assert param.grad.abs().sum().item() > 0.0, "The reduce step should have populated all the gradients"
+
+    # Check that the optimization process makes sense (ie. loss goes down for the same data)
     optimizer.step()
-    # TODO (Min): I need to figure out a way to verify the grads are reduced correctly
-    #     between the ranks. I haven't found the best way yet. Will need to come
-    #     back here before this is used in real training.
+    new_eval = ddp(input_tensor).abs().sum() / input_tensor.numel()
+    # assert new_eval.item() < output.item()
 
 
 def run_test(backend, device, world_size=2):
@@ -66,7 +77,7 @@ def run_eval_mode(_unused):
     )
     model = Sequential(Linear(2, 3), Linear(3, 4))
     optimizer_params = {"lr": 0.1, "momentum": 0.99}
-    ddp = OssDdp(model, torch.optim.SGD, optimizer_params, 1)
+    ddp = ShardedDataParallel(model, torch.optim.SGD, optimizer_params, 1)
     optimizer = ddp.optimizer
 
     ddp.eval()

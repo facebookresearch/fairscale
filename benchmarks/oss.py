@@ -16,7 +16,7 @@ from torchvision.datasets import FakeData
 from torchvision.models import resnet101
 from torchvision.transforms import ToTensor
 
-from fairscale.nn.data_parallel import OssDdp
+from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim.oss import OSS
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
@@ -57,7 +57,7 @@ def train_oss_ddp(
     # Setup
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
 
-    ddp = OssDdp(
+    ddp = ShardedDataParallel(
         module=model, optimizer=torch.optim.SGD, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size
     )
     optimizer = ddp.optimizer

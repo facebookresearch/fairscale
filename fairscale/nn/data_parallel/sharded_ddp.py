@@ -21,7 +21,7 @@ from torch.nn import Parameter
 from fairscale.optim import OSS
 
 
-class OssDdp(nn.Module):
+class ShardedDataParallel(nn.Module):
     """Implements distributed data parallel training with optimizer state sharding.
 
     A simplified version of :class:`torch.nn.parallel.DistributedDataParallel`.
@@ -30,7 +30,8 @@ class OssDdp(nn.Module):
 
     Args:
         module (~torch.nn.Module): module to be parallelized
-        oss (fairscale.optim.OSS): shared state optimizer
+        optimizer (~torch.optim.Optimizer): optimizer to be used for training
+        optimizer_params(Dict): extra parameters for the optimizer
         world_size (int): number of parallel workers
         process_group (optional): the c10d process group to be used for
             distributed gradient reduction. If None, the default WORLD process group
@@ -86,7 +87,7 @@ class OssDdp(nn.Module):
     def optimizer(self) -> torch.optim.Optimizer:
         return self.sharded_optimizer
 
-    def train(self, mode: bool = True) -> "OssDdp":
+    def train(self, mode: bool = True) -> "ShardedDataParallel":
         pre_mode = self.module.training
         self.module.train(mode)
         if self.module.training:
