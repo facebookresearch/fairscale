@@ -22,8 +22,8 @@ Let's suppose that your trainer looks likemake html
         dataloader = mySuperFastDataloader()
         loss = myVeryRelevantLoss()
 
-        base_optimizer_arguments = {} # pass any optimizer specific arguments here, or directly below when instantiating OSS
-        optimizer = torch.optim.SGD(params=model.parameters() **base_optimizer_arguments)
+        base_optimizer_arguments = {} # any optimizer specific arguments, LR, momentum, etc...
+        optimizer = torch.optim.SGD(params=model.parameters(), **base_optimizer_arguments)
 
         # Any relevant training loop, nothing specific to OSS. For example:
         model.train()
@@ -44,7 +44,7 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
 .. code-block:: default
 
 
-    :emphasize-lines: 45, 59, 62
+    :emphasize-lines: 49, 65, 66
     import torch
     from fairscale.optim.oss import OSS
 
@@ -60,9 +60,9 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
         model = myAwesomeModel()
         dataloader = mySuperFastDataloader()
         loss = myVeryRelevantLoss()
-        base_optimizer = torch.optim.SGD  # any pytorch compliant optimizer
-        base_optimizer_arguments = {}  # pass any optimizer specific arguments here, or directly below when instantiating OSS
 
+        base_optimizer_arguments = {}  # pass any optimizer specific arguments here, or directly below when instantiating OSS
+        base_optimizer = torch.optim.SGD  # any pytorch compliant optimizer
         optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)
 
         # Any relevant training loop, nothing specific to OSS. For example:
