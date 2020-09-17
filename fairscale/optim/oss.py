@@ -8,10 +8,10 @@ import copy
 from itertools import chain
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
-from torch.nn import Parameter
 
 import torch
 import torch.distributed as dist
+from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
 from .utils import broadcast_object, recursive_copy_to_device
