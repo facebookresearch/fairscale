@@ -21,10 +21,11 @@ model = fairscale.nn.Pipe(model, balance=[2, 2], devices=[0, 1], chunks=8)
 ```
 
 ### Optimizer state sharding (ZeRO)
-See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/oss_async_broadcast/benchmarks/oss.py), but a minimal example could look like the following :
+See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/master/benchmarks/oss.py), but a minimal example could look like the following :
 
 ```python
 import torch
+import torch.multiprocessing as mp
 from fairscale.optim.oss import OSS
 
 def train(
