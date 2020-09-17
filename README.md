@@ -11,7 +11,7 @@ fairscale supports:
 
 Run a 4-layer model on 2 GPUs. The first two layers run on cuda:0 and the next two layers run on cuda:1.
 
-```bash
+```python
 import torch
 
 import fairscale
@@ -23,7 +23,7 @@ model = fairscale.nn.Pipe(model, balance=[2, 2], devices=[0, 1], chunks=8)
 ### Optimizer state sharding (ZeRO)
 See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/oss_async_broadcast/benchmarks/oss.py), but a minimal example could look like the following :
 
-```bash
+```python
 import torch
 from fairscale.optim.oss import OSS
 
@@ -58,7 +58,7 @@ def train(
             optimizer.step()
 
 if __name__ == "__main__":
-    # supposing that WORLD_SIZE and EPOCHS are somehow defined somewhere
+    # Supposing that WORLD_SIZE and EPOCHS are somehow defined somewhere
     mp.spawn(
         train,
         args=(

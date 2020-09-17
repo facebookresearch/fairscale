@@ -46,7 +46,9 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
     """
 
+    #: The optimizer used for a given shard
     optim: Optimizer
+
     in_super_constructor: bool
 
     def __init__(self, params: _params_t, optim: Type[Optimizer] = SGD, group: Any = dist.group.WORLD, **defaults: Any):
@@ -61,10 +63,10 @@ class OSS(Optimizer):
         split_param_groups = self.partition_parameters()
         self.optim = optim(split_param_groups[self.rank], **defaults)
 
-        # Optional consolidated optimizer state
+        #  Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []
 
-        # Current device is set by the parameters allocated to this rank
+        #  Current device is set by the parameters allocated to this rank
         self._device = split_param_groups[self.rank][0]["params"][0].device
 
         # Sync local and global param_groups keys
