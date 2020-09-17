@@ -1,10 +1,35 @@
 # fairscale
-fairscale is a PyTorch extension library for high performance and large scale training.
+fairscale is a PyTorch extension library for high performance and large scale training for optimizing training on one or across multiple machines/nodes. This library extend basic pytorch capabilities while adding new experimental ones.
 
 fairscale supports:
-* pipeline parallelism (fairscale.nn.Pipe)
-* tensor parallelism (fairscale.nn.model_parallel)
-* optimizer state sharding (fairscale.optim.oss)
+* Model Parallelism:
+   * pipeline parallelism (fairscale.nn.Pipe)
+   * tensor parallelism (fairscale.nn.model_parallel)
+* Optimization:
+   * optimizer state sharding (fairscale.optim.oss)
+
+## Requirements
+
+* PyTorch >= 1.4
+* NVIDIA GPU / CUDA
+
+## Installation
+
+Normal installation:
+```bash
+git clone https://github.com/facebookresearch/fairscale
+cd fairscale
+pip install .
+```
+
+Development mode:
+```bash
+git clone https://github.com/facebookresearch/fairscale
+cd fairscale
+pip install -e .
+```
+## Getting Started
+The full documentation (https://fairscale.readthedocs.io/) contains instructions for getting started and extending fairscale.
 
 ## Examples
 ### Pipe
@@ -71,21 +96,7 @@ if __name__ == "__main__":
 ```
 
 
-## Requirements
 
-* PyTorch >= 1.4
-
-## Installation
-
-Normal installation:
-```bash
-pip install .
-```
-
-Development mode:
-```bash
-pip install -e .
-```
 
 ## Contributors
 
