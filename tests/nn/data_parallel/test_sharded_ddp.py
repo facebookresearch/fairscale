@@ -17,7 +17,6 @@ from torch.nn import Linear, Sequential
 
 from fairscale.nn.data_parallel import ShardedDataParallel
 
-
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
 

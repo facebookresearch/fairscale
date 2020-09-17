@@ -104,7 +104,7 @@ run_oss_benchmark: &run_oss_benchmark
 
 run_oss_ddp_benchmark: &run_oss_ddp_benchmark
   - run:
-      name: Run OSS Benchmark
+      name: Run OSS DDP Benchmark
       command: |
         python benchmarks/oss.py --oss_ddp
 
