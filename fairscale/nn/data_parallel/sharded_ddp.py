@@ -9,26 +9,19 @@ A distributed data parallel class that works with OSS optimizer.
 Adopted from LegacyDistributedDataParallel module from fairseq.
 """
 
-from collections import OrderedDict
 from contextlib import contextmanager
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, cast
+from typing import Any, Dict, Generator, List, Optional, Type, cast
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 import torch.distributed as dist
+from torch.nn import Parameter
 
-if TYPE_CHECKING:
-    from fairscale.optim import OSS
-    from torch import Tensor
-    from torch.nn import Parameter
-else:
-    OSS = Any
-    Tensor = Any
-    Parameter = Any
+from fairscale.optim import OSS
 
 
-class OssDdp(nn.Module):
+class ShardedDataParallel(nn.Module):
     """Implements distributed data parallel training with optimizer state sharding.
 
     A simplified version of :class:`torch.nn.parallel.DistributedDataParallel`.
@@ -37,7 +30,8 @@ class OssDdp(nn.Module):
 
     Args:
         module (~torch.nn.Module): module to be parallelized
-        oss (fairscale.optim.OSS): shared state optimizer
+        optimizer (~torch.optim.Optimizer): optimizer to be used for training
+        optimizer_params(Dict): extra parameters for the optimizer
         world_size (int): number of parallel workers
         process_group (optional): the c10d process group to be used for
             distributed gradient reduction. If None, the default WORLD process group
@@ -48,7 +42,13 @@ class OssDdp(nn.Module):
     """
 
     def __init__(
-        self, module: nn.Module, oss: OSS, world_size: int, process_group: Any = None, buffer_size: int = 2 ** 28
+        self,
+        module: nn.Module,
+        optimizer: Type[torch.optim.Optimizer],
+        optimizer_params: Dict[str, Any],
+        world_size: int,
+        process_group: Any = None,
+        buffer_size: int = 2 ** 28,
     ):
         super().__init__()
 
@@ -68,38 +68,25 @@ class OssDdp(nn.Module):
         # gradients-reduce at some later time
         self.accumulate_grads = False
 
-        # TODO (Min): The algorithm here can be improved. We are sorting params by device
-        #     and by rank. Then in reduction_fn below, we pack smaller ones into
-        #     a buffer for reduction.
-        #     We can pre-sort them here and simplify the reduction_fn logic below
-        #     since their size shouldn't change.
-
-        # make per-device lists of parameters
-        paramlists: OrderedDict = OrderedDict()
-        for param in self.module.parameters():
-            device = param.device
-            if paramlists.get(device) is None:
-                paramlists[device] = []
-            paramlists[device] += [param]
-        self.per_device_params = list(paramlists.values())
-
-        # query oss and build a param-to-rank table
-        self.param_rank = {}
-        for rank, param_groups in enumerate(oss.partition_parameters()):
-            for param_group in param_groups:
-                for param in param_group["params"]:
-                    self.param_rank[param] = rank
+        # Build the sharded optimizer
+        self.sharded_optimizer = OSS(self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params)
 
         # sanity checks
-        assert len(self.param_rank) == len(list(self.module.parameters())), "number of params do not match"
+        assert len(self.sharded_optimizer.param_to_rank) == len(
+            list(self.module.parameters())
+        ), "number of params do not match"
         for param in self.module.parameters():
-            assert param in self.param_rank, f"{param} not in the optimizer"
+            assert param in self.sharded_optimizer.param_to_rank, f"{param} not in the optimizer"
 
     def __getstate__(self) -> Dict:
         attrs = copy.copy(self.__dict__)
         return attrs
 
-    def train(self, mode: bool = True) -> "OssDdp":
+    @property
+    def optimizer(self) -> torch.optim.Optimizer:
+        return self.sharded_optimizer
+
+    def train(self, mode: bool = True) -> "ShardedDataParallel":
         pre_mode = self.module.training
         self.module.train(mode)
         if self.module.training:
@@ -176,10 +163,9 @@ class OssDdp(nn.Module):
                         p.grad = buffer[offset : offset + sz].view_as(p).clone()
                     offset += sz
             else:
-                # zero the grads
+                # wipe the grads
                 for p in params:
-                    if p.grad is not None:
-                        p.grad.data.zero_()
+                    p.grad = None
 
         def reduction_fn() -> None:
             # This function only needs to be called once
@@ -190,16 +176,17 @@ class OssDdp(nn.Module):
             if self.buffer is None:
                 self.buffer = next(self.module.parameters()).new(self.buffer_size)  # type: ignore
 
-            for params in self.per_device_params:
+            for params in self.sharded_optimizer.per_device_params:
                 # Reduce the gradients in buckets
                 offset = 0
                 buffered_params: List[Parameter] = []
                 param_rank: Optional[int] = None
                 for param in params:
                     last_param_rank: Optional[int] = param_rank
-                    param_rank = self.param_rank[param]
+                    param_rank = self.sharded_optimizer.param_to_rank[param]
                     if not param.requires_grad:
                         continue
+
                     if param.grad is None:
                         param.grad = torch.zeros_like(param)
                     if param.grad.requires_grad:
@@ -219,7 +206,7 @@ class OssDdp(nn.Module):
                             reduce_params(buffered_params, cast(int, last_param_rank))
                             offset = 0
                             buffered_params.clear()
-                        buffered_params.append(param)
+                        buffered_params.append(cast(Parameter, param))
                         offset += sz
 
                 if len(buffered_params) > 0:
