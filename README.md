@@ -80,13 +80,19 @@ if __name__ == "__main__":
 
 Normal installation:
 ```bash
-pip install .
+pip install fairscale
 ```
 
 Development mode:
 ```bash
+cd fairscale
+pip install -r requirements.txt
 pip install -e .
 ```
+
+# Testing
+
+We use circleci to test on PyTorch versions 1.5.1 and 1.6.0 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
 ## Contributors
 
