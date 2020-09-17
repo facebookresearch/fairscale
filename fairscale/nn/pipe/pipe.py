@@ -266,8 +266,23 @@ class Pipe(Module):
             list of number of layers in each partition
 
     Keyword Args:
+        style (PipelineStyle):
+            whether to use a single process for all pipeline stages or to assign
+            one stage per process
         devices (iterable of devices):
             devices to use (default: all CUDA devices)
+        group (ProcessGroup):
+            specific to `style=MultiProcess`, the process group that all
+            pipeline stages are a member of. Defaults to
+            `get_pipeline_parallel_group()`
+        worker_map (Dict[int, str]):
+            a map from worker name (the first argument to
+            `torch.distributed.rpc.init_rpc`) to global rank (i.e.
+            `torch.distributed.get_rank()`) needed in order for pipeline stages
+            to communicate with each other
+        input_device (device):
+            the device on which tensors should be located before being passed to
+            the first module in a given pipeline stage
         chunks (int):
             number of micro-batches (default: ``1``)
         checkpoint (str):
@@ -277,6 +292,16 @@ class Pipe(Module):
             whether to use deferred BatchNorm moving statistics (default:
             :data:`False`, see :ref:`Deferred Batch Normalization` for more
             details)
+        pipelined_backward (bool, optional):
+            if True, call torch.autograd.backward once per microbatch on the
+            backward pass (instead of once for the whole batch). This works
+            around a potential deadlock in pytorch when using tensor parallelism
+            at the same time. Defaults to `True` if
+            `get_model_parallel_group.size() > 1`
+            (default: `None`)
+        retain_graph (bool):
+            The value passed to `torch.autograd.backwards(..., retain_graph=<value>)
+            (default: = `True`)
 
     Raises:
         TypeError:

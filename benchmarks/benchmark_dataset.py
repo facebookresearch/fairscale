@@ -27,16 +27,11 @@ class BenchmarkLMDataset(Dataset):
     """
     Dataset to benchmark a translation like seq2seq task.
     Args:
-        benchmark_lm (bool): If the task is to benchmark language modeling
-        vary_sequence_length (bool): vary sequence lengths
-        src_dict (~fairseq.data.Dictionary): source vocabulary
-        tgt_dict (~fairseq.data.Dictionary): target vocabulary
+        vocab_size (int, optional): size of the vocabulary (default 10000).
         max_source_positions (int, optional): max number of tokens in the
             source sentence (default: 1024).
-        max_target_positions (int, optional): max number of tokens in the
-            target sentence (default: 1024).
-        input_feeding (bool, optional): create a shifted version of the targets
-            to be passed into the model for teacher forcing (default: True).
+        total_samples (int, optional): the total number of rows in the
+            dataset (default: 10000).
     """
 
     def __init__(
