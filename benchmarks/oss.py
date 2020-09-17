@@ -48,11 +48,7 @@ def get_problem(rank, data_size, batch_size):
 
 
 def train_oss_ddp(
-    rank: int,
-    world_size: int,
-    num_epochs: int = 10,
-    batch_size: int = 32,
-    data_size: int = 200,
+    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, data_size: int = 200,
 ):
 
     # DDP
