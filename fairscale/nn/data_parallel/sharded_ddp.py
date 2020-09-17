@@ -71,19 +71,12 @@ class ShardedDataParallel(nn.Module):
         # Build the sharded optimizer
         self.sharded_optimizer = OSS(self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params)
 
-        # The gradients will be routed to the shards directly, remove the top level buffers
-        for pg in self.sharded_optimizer.param_groups:
-            for param in pg["params"]:
-                if param.requires_grad:
-                    param.grad = None
-
-        # Handle the heterogeneous communication / sharding. The sharded optimizer owns the partitions
-        self.param_rank = self.sharded_optimizer.param_to_rank
-
         # sanity checks
-        assert len(self.param_rank) == len(list(self.module.parameters())), "number of params do not match"
+        assert len(self.sharded_optimizer.param_to_rank) == len(
+            list(self.module.parameters())
+        ), "number of params do not match"
         for param in self.module.parameters():
-            assert param in self.param_rank, f"{param} not in the optimizer"
+            assert param in self.sharded_optimizer.param_to_rank, f"{param} not in the optimizer"
 
     def __getstate__(self) -> Dict:
         attrs = copy.copy(self.__dict__)
@@ -170,10 +163,9 @@ class ShardedDataParallel(nn.Module):
                         p.grad = buffer[offset : offset + sz].view_as(p).clone()
                     offset += sz
             else:
-                # zero the grads
+                # wipe the grads
                 for p in params:
-                    if p.grad is not None:
-                        p.grad.data.zero_()
+                    p.grad = None
 
         def reduction_fn() -> None:
             # This function only needs to be called once
@@ -191,7 +183,7 @@ class ShardedDataParallel(nn.Module):
                 param_rank: Optional[int] = None
                 for param in params:
                     last_param_rank: Optional[int] = param_rank
-                    param_rank = self.param_rank[param]
+                    param_rank = self.sharded_optimizer.param_to_rank[param]
                     if not param.requires_grad:
                         continue
 

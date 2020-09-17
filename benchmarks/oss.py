@@ -48,7 +48,11 @@ def get_problem(rank, data_size, batch_size):
 
 
 def train_oss_ddp(
-    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, data_size: int = 200,
+    rank: int,
+    world_size: int,
+    num_epochs: int = 10,
+    batch_size: int = 32,
+    data_size: int = 200,
 ):
 
     # DDP
@@ -85,7 +89,7 @@ def train_oss_ddp(
                 loss /= world_size
                 loss.backward()
                 if dist.get_rank() == 0:
-                    print(f"[{dist.get_rank()}] : Loss: {loss.item()}")
+                    print(f"Loss: {loss.item()}")
 
                 ddp.reduce()  # Send the gradients to the appropriate shards
                 return loss
