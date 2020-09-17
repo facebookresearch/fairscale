@@ -11,7 +11,7 @@ fairscale supports:
 
 Run a 4-layer model on 2 GPUs. The first two layers run on cuda:0 and the next two layers run on cuda:1.
 
-```bash
+```python
 import torch
 
 import fairscale
@@ -21,10 +21,11 @@ model = fairscale.nn.Pipe(model, balance=[2, 2], devices=[0, 1], chunks=8)
 ```
 
 ### Optimizer state sharding (ZeRO)
-See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/oss_async_broadcast/benchmarks/oss.py), but a minimal example could look like the following :
+See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/master/benchmarks/oss.py), but a minimal example could look like the following :
 
-```bash
+```python
 import torch
+import torch.multiprocessing as mp
 from fairscale.optim.oss import OSS
 
 def train(
@@ -38,7 +39,7 @@ def train(
     # Problem statement
     model = myAwesomeModel()
     dataloader = mySuperFastDataloader()
-    loss = myVeryRelevantLoss()
+    loss_fn = myVeryRelevantLoss()
     base_optimizer = torch.optim.SGD # pick any pytorch compliant optimizer here
     base_optimizer_arguments = {} # pass any optimizer specific arguments here, or directly below when instantiating OSS
 
@@ -58,7 +59,7 @@ def train(
             optimizer.step()
 
 if __name__ == "__main__":
-    # supposing that WORLD_SIZE and EPOCHS are somehow defined somewhere
+    # Supposing that WORLD_SIZE and EPOCHS are somehow defined somewhere
     mp.spawn(
         train,
         args=(
@@ -79,13 +80,19 @@ if __name__ == "__main__":
 
 Normal installation:
 ```bash
-pip install .
+pip install fairscale
 ```
 
 Development mode:
 ```bash
+cd fairscale
+pip install -r requirements.txt
 pip install -e .
 ```
+
+# Testing
+
+We use circleci to test on PyTorch versions 1.5.1 and 1.6.0 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
 ## Contributors
 
