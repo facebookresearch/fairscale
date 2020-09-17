@@ -48,14 +48,15 @@ def get_problem(rank, data_size, batch_size):
 
 
 def train_oss_ddp(
-    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, data_size: int = 200,
+    rank: int,
+    world_size: int,
+    num_epochs: int = 10,
+    batch_size: int = 32,
+    data_size: int = 200,
 ):
 
     # DDP
     dist_init(rank, world_size)
-
-    # Reset the memory use counter
-    torch.cuda.reset_peak_memory_stats(rank)
 
     # Setup
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
@@ -64,6 +65,9 @@ def train_oss_ddp(
         module=model, optimizer=torch.optim.SGD, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size
     )
     optimizer = ddp.optimizer
+
+    # Reset the memory use counter
+    torch.cuda.reset_peak_memory_stats(rank)
 
     # Dummy training loop
     torch.cuda.synchronize(rank)
@@ -127,16 +131,18 @@ def train(
     # DDP
     dist_init(rank, world_size)
 
-    # Reset the memory use counter
-    torch.cuda.reset_peak_memory_stats(rank)
-
     # Setup
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
 
     # Shard the optimizer
-    optimizer: torch.optim.Optimizer = OSS(
-        params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9
-    ) if use_oss else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
+    optimizer: torch.optim.Optimizer = (
+        OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
+        if use_oss
+        else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
+    )
+
+    # Reset the memory use counter
+    torch.cuda.reset_peak_memory_stats(rank)
 
     # Dummy training loop
     torch.cuda.synchronize(rank)
