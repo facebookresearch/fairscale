@@ -39,7 +39,7 @@ def train(
     # Problem statement
     model = myAwesomeModel()
     dataloader = mySuperFastDataloader()
-    loss = myVeryRelevantLoss()
+    loss_fn = myVeryRelevantLoss()
     base_optimizer = torch.optim.SGD # pick any pytorch compliant optimizer here
     base_optimizer_arguments = {} # pass any optimizer specific arguments here, or directly below when instantiating OSS
 
