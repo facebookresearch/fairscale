@@ -125,10 +125,11 @@ def test_adjacency(monkeypatch):
     for group in new_groups:
         buckets[len(group)].append(group)
 
-    assert sorted(list(buckets.keys())) == [model_parallel_size, data_parallel_size]
+    assert sorted(list(buckets.keys())) == [model_parallel_size, pipeline_length, data_parallel_size]
 
     assert len(buckets[model_parallel_size]) == pipeline_length * data_parallel_size
     assert len(buckets[data_parallel_size]) == model_parallel_size * pipeline_length
+    assert len(buckets[pipeline_length]) == model_parallel_size * data_parallel_size
 
     # Check that model_parallel groups are contiguous
     for group in buckets[model_parallel_size]:

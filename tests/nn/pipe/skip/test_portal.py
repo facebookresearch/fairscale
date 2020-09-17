@@ -27,7 +27,7 @@ from fairscale.nn.pipe.stream import default_stream
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 def test_copy_returns_on_next_device():
-    portal = Portal(torch.rand(1), tensor_life=1)
+    portal = Portal(torch.rand(1), tensor_life=1, index=0)
 
     prev_stream = default_stream(torch.device("cpu"))
     next_stream = default_stream(torch.device("cuda"))
@@ -52,7 +52,7 @@ def test_blue_orange():
     # tensor1 ------------ Join -- Fork --- Mul --- Add -- output
     #
     main = tensor1
-    portal = Portal(tensor2, tensor_life=2)
+    portal = Portal(tensor2, tensor_life=2, index=0)
     phony = portal.blue()
     main = join(main, phony)
     main, phony = fork(main)
@@ -78,7 +78,7 @@ def test_blue_orange_not_requires_grad():
     # tensor1 ------------ Join -- Fork --- Mul --- Add -- output
     #
     main = tensor1
-    portal = Portal(tensor2, tensor_life=2)
+    portal = Portal(tensor2, tensor_life=2, index=0)
     phony = portal.blue()
     main = join(main, phony)
     main, phony = fork(main)
@@ -93,7 +93,7 @@ def test_blue_orange_not_requires_grad():
 
 def test_use_grad():
     tensor = torch.rand(1, requires_grad=True)
-    portal = Portal(tensor, tensor_life=1)
+    portal = Portal(tensor, tensor_life=1, index=0)
 
     portal.put_grad(tensor)
     assert portal.use_grad() is tensor
@@ -111,7 +111,7 @@ class TestTensorLife:
         def new_portal(tensor_life):
             nonlocal portal
             tensor = torch.rand(1, requires_grad=True)
-            portal = Portal(tensor, tensor_life)
+            portal = Portal(tensor, tensor_life, 0)
             return portal, tensor
 
         yield new_portal

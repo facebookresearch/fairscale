@@ -13,6 +13,7 @@
 #
 import os
 import sys
+from typing import Any, List
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
@@ -46,7 +47,7 @@ templates_path = ["_templates"]
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = []
+exclude_patterns: List[Any] = []
 
 
 # -- Options for HTML output -------------------------------------------------
