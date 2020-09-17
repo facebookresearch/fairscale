@@ -8,6 +8,7 @@ import copy
 from itertools import chain
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
+from torch.nn import Parameter
 
 import torch
 import torch.distributed as dist
@@ -57,7 +58,7 @@ class OSS(Optimizer):
         self.in_super_constructor = False
 
         # Partition information. lazy evaluation, computed if requested
-        self._per_device_params: List[List[torch.Tensor]] = []
+        self._per_device_params: List[List[Parameter]] = []
         self._param_rank: Dict[torch.Tensor, int] = {}
         self._partition_parameters: List[List[dict]] = []
 
@@ -108,7 +109,7 @@ class OSS(Optimizer):
         return self._partition_parameters
 
     @property
-    def per_device_params(self) -> List[List[torch.device]]:
+    def per_device_params(self) -> List[List[Parameter]]:
         # TODO (Min): The algorithm here can be improved. We are sorting params by device
         #     and by rank. Then in reduction_fn below, we pack smaller ones into
         #     a buffer for reduction.

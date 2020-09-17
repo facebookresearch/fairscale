@@ -187,6 +187,7 @@ class OssDdp(nn.Module):
                     param_rank = self.param_rank[param]
                     if not param.requires_grad:
                         continue
+
                     if param.grad is None:
                         param.grad = torch.zeros_like(param)
                     if param.grad.requires_grad:
@@ -206,7 +207,7 @@ class OssDdp(nn.Module):
                             reduce_params(buffered_params, cast(int, last_param_rank))
                             offset = 0
                             buffered_params.clear()
-                        buffered_params.append(param)
+                        buffered_params.append(cast(Parameter, param))
                         offset += sz
 
                 if len(buffered_params) > 0:
