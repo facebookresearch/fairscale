@@ -10,7 +10,10 @@ from torch.optim.lr_scheduler import StepLR
 
 import time
 from fairscale.optim.oss import OSS
+import torch.multiprocessing as mp
 
+# how is world_size defined?
+WORLD_SIZE = 10
 
 class Net(nn.Module):
     def __init__(self):
@@ -39,12 +42,18 @@ class Net(nn.Module):
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
+    # DDP -- Imported from?
+    # rank defined where?
+    dist_init(rank, WORLD_SIZE)
+
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
         loss = F.nll_loss(output, target)
+        torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
+        loss /= world_size
         loss.backward()
         optimizer.step()
         if batch_idx % args.log_interval == 0:
@@ -128,6 +137,15 @@ def main():
     print("\n\n",model.parameters(), args.lr,"\n\n")
     optimizer = OSS(params=model.parameters(), optim=optim.Adadelta, lr=args.lr)
 
+    mp.spawn(
+            train,
+            args=(
+                WORLD_SIZE,
+                args.epochs,
+            ),
+            nprocs=WORLD_SIZE,
+            join=True,
+        )
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     for epoch in range(1, args.epochs + 1):
