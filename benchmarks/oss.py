@@ -2,6 +2,7 @@
 
 
 import argparse
+from enum import Enum
 import math
 import os
 import time
@@ -72,10 +73,7 @@ def train(
 
     if use_sdp:
         ddp = ShardedDataParallel(
-            module=model,
-            optimizer=torch.optim.SGD,
-            optimizer_params={"lr": 1e-4, "momentum": 0.9},
-            world_size=world_size,
+            module=model, optimizer=OPTIM, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size,
         )
         optimizer = ddp.optimizer
     else:
@@ -152,8 +150,13 @@ def train(
         print("[Regression Test] VALID")
 
 
-if __name__ == "__main__":
+class OptimType(str, Enum):
+    vanilla = "pytorch"
+    oss = "oss"
+    oss_sdp = "oss_sdp"
 
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Benchmark the optimizer state sharding, on a typical computer vision workload"
     )
@@ -164,15 +167,14 @@ if __name__ == "__main__":
     parser.add_argument("--check_regression", action="store_true", default=False)
     parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
+    parser.add_argument("--optim_type", type=OptimType, choices=[o.value for o in OptimType])
 
-    # beta - test sharded data parallel
-    parser.add_argument("--use_sdp", action="store_true", default=False)
-
+    # Parse and run
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
 
-    if args.use_sdp:
-        print("\nBenchmark OSS DDP")
+    if args.optim_type == OptimType.vanilla:
+        print("\nBenchmark vanilla optimizer")
         mp.spawn(
             train,
             args=(
@@ -180,24 +182,15 @@ if __name__ == "__main__":
                 args.epochs,
                 args.batch_size,
                 args.data_size,
-                True,
-                True,
-                args.check_regression,
-                args.reference_speed,
-                args.reference_memory,
+                False,  # OSS
+                False,  # SDP
+                False,  # no regression check
             ),
             nprocs=args.world_size,
             join=True,
         )
-    else:
-        print("\nBenchmark vanilla optimizer")
-        mp.spawn(
-            train,
-            args=(args.world_size, args.epochs, args.batch_size, args.data_size, False, False, False),
-            nprocs=args.world_size,
-            join=True,
-        )
 
+    if args.optim_type == OptimType.oss:
         print("\nBenchmark OSS")
         mp.spawn(
             train,
@@ -206,8 +199,27 @@ if __name__ == "__main__":
                 args.epochs,
                 args.batch_size,
                 args.data_size,
-                True,
-                False,
+                True,  # OSS
+                False,  # SDP
+                args.check_regression,
+                args.reference_speed,
+                args.reference_memory,
+            ),
+            nprocs=args.world_size,
+            join=True,
+        )
+
+    if args.optim_type == OptimType.oss_sdp:
+        print("\nBenchmark OSS DDP")
+        mp.spawn(
+            train,
+            args=(
+                args.world_size,
+                args.epochs,
+                args.batch_size,
+                args.data_size,
+                True,  # OSS
+                True,  # SDP
                 args.check_regression,
                 args.reference_speed,
                 args.reference_memory,
