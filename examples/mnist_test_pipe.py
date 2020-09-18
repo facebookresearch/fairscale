@@ -111,7 +111,6 @@ def main():
     train_loader = torch.utils.data.DataLoader(dataset1,**kwargs)
     test_loader = torch.utils.data.DataLoader(dataset2, **kwargs)
 
-    # model = Net().to(device)
     model = net.to(device)
     
     model = fairscale.nn.Pipe(model, balance=[6, 6], devices=[0, 1], chunks=2)
