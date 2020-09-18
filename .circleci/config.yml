@@ -104,9 +104,9 @@ run_oss_benchmark: &run_oss_benchmark
 
 run_oss_ddp_benchmark: &run_oss_ddp_benchmark
   - run:
-      name: Run OSS DDP Benchmark
+      name: Run SDP Benchmark
       command: |
-        python benchmarks/oss.py --oss_ddp
+        python benchmarks/oss.py --use_sdp
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
