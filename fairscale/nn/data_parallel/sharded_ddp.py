@@ -25,13 +25,14 @@ class ShardedDataParallel(nn.Module):
     """Implements distributed data parallel training with optimizer state sharding.
 
     A simplified version of :class:`torch.nn.parallel.DistributedDataParallel`.
-    This version uses a c10d process group for communication and does not
+    This version uses a c10d process group for communication and optionally
     broadcast buffers.
 
     Args:
         module (~torch.nn.Module): module to be parallelized
         optimizer (~torch.optim.Optimizer): optimizer to be used for training
         optimizer_params(Dict): extra parameters for the optimizer
+        broadcast_buffers (bool): enable syncing of the module at the beginning of the forward function
         world_size (int): number of parallel workers
         process_group (optional): the c10d process group to be used for
             distributed gradient reduction. If None, the default WORLD process group
@@ -47,6 +48,7 @@ class ShardedDataParallel(nn.Module):
         optimizer: Type[torch.optim.Optimizer],
         optimizer_params: Dict[str, Any],
         world_size: int,
+        broadcast_buffers: bool = True,
         process_group: Any = None,
         buffer_size: int = 2 ** 28,
     ):
@@ -54,6 +56,7 @@ class ShardedDataParallel(nn.Module):
 
         self.module = module
         self.world_size = world_size
+        self.broadcast_buffers = broadcast_buffers
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.rank = dist.get_rank(self.process_group)
 
@@ -71,7 +74,7 @@ class ShardedDataParallel(nn.Module):
         # Build the sharded optimizer
         self.sharded_optimizer = OSS(self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params)
 
-        # sanity checks
+        # Sanity checks
         assert len(self.sharded_optimizer.param_to_rank) == len(
             list(self.module.parameters())
         ), "number of params do not match"
@@ -118,52 +121,36 @@ class ShardedDataParallel(nn.Module):
         """
         assert self.module.training, "Cannot call reduce in eval"
 
-        def reduce_params(params: List[Parameter], params_rank: int) -> None:
-            """ Helper to reduce a list of params that should fix in the buffer. """
+        def reduce_grads(params: List[Parameter], params_rank: int) -> None:
+            """ Helper to reduce a list of params that should fit in the buffer.
+            NOTE: All param gradients are assumed to exist"""
             assert self.buffer is not None
+
+            # Fill in the packed IO buffer
             buffer: Tensor = cast(Tensor, self.buffer)
             nonzero_buffer = False
             if len(params) > 1:
                 offset = 0
                 for p in params:
                     sz = p.numel()
-                    if p.grad is not None:
-                        # The type error could have been fixed in later
-                        # version of pytorch. Same elsewhere.
-                        buffer[offset : offset + sz].copy_(p.grad.data.view(-1))  # type: ignore
-                        nonzero_buffer = True
-                    else:
-                        buffer[offset : offset + sz].zero_()
+                    buffer[offset : offset + sz].copy_(p.grad.data.view(-1))  # type: ignore
                     offset += sz
             else:
                 # we only have a single grad to reduce
-                p = params[0]
-                if p.grad is not None:
-                    buffer = p.grad.data
-                    nonzero_buffer = True
-                elif p.numel() <= self.buffer.numel():
-                    buffer = buffer[: p.numel()]
-                    buffer.zero_()
-                else:
-                    buffer = torch.zeros_like(p)
+                buffer = params[0].grad.data  # type: ignore
 
-            if nonzero_buffer:
-                buffer.div_(self.world_size)  # type: ignore
+            # Reduce
+            buffer.div_(self.world_size)  # type: ignore
+            dist.reduce(tensor=buffer, dst=params_rank, group=self.process_group)  # type: ignore
 
-            dist.reduce(buffer, params_rank, group=self.process_group)  # type: ignore
-
+            # Copy reduced grads back into their original place, or free corresponding memory
             if params_rank == self.rank:
-                # copy reduced grads back into their original place
                 offset = 0
                 for p in params:
                     sz = p.numel()
-                    if p.grad is not None:
-                        p.grad.data.copy_(buffer[offset : offset + sz].view_as(p))  # type: ignore
-                    else:
-                        p.grad = buffer[offset : offset + sz].view_as(p).clone()
+                    p.grad.data.copy_(buffer[offset : offset + sz].view_as(p))  # type: ignore
                     offset += sz
             else:
-                # wipe the grads
                 for p in params:
                     p.grad = None
 
@@ -195,7 +182,7 @@ class ShardedDataParallel(nn.Module):
                     if sz > self.buffer.numel():
                         # reduce big params directly
                         assert param_rank is not None
-                        reduce_params([param], cast(int, param_rank))
+                        reduce_grads([param], cast(int, param_rank))
                     else:
                         # smaller params are packed together from the same device
                         # and same rank.
@@ -203,7 +190,7 @@ class ShardedDataParallel(nn.Module):
                             last_param_rank is not None and last_param_rank != param_rank
                         ):
                             assert last_param_rank is not None
-                            reduce_params(buffered_params, cast(int, last_param_rank))
+                            reduce_grads(buffered_params, cast(int, last_param_rank))
                             offset = 0
                             buffered_params.clear()
                         buffered_params.append(cast(Parameter, param))
@@ -211,6 +198,6 @@ class ShardedDataParallel(nn.Module):
 
                 if len(buffered_params) > 0:
                     assert param_rank is not None
-                    reduce_params(buffered_params, cast(int, param_rank))
+                    reduce_grads(buffered_params, cast(int, param_rank))
 
         reduction_fn()

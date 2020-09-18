@@ -5,7 +5,7 @@ import argparse
 import math
 import os
 import time
-from typing import Any, List, cast
+from typing import Any, List, Optional, cast
 
 import torch
 import torch.distributed as dist
@@ -47,72 +47,6 @@ def get_problem(rank, data_size, batch_size):
     return model, dataloader, loss_fn
 
 
-def train_oss_ddp(
-    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, data_size: int = 200,
-):
-
-    # DDP
-    dist_init(rank, world_size)
-
-    # Setup
-    model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
-
-    ddp = ShardedDataParallel(
-        module=model, optimizer=torch.optim.SGD, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size
-    )
-    optimizer = ddp.optimizer
-
-    # Reset the memory use counter
-    torch.cuda.reset_peak_memory_stats(rank)
-
-    # Dummy training loop
-    torch.cuda.synchronize(rank)
-    training_start = time.monotonic()
-    model.train()
-
-    measurements = []
-
-    for epoch in range(num_epochs):
-        epoch_start = time.monotonic()
-
-        for batch in dataloader:
-
-            def closure():
-                model.zero_grad()
-                outputs = model(batch["inputs"])
-                loss = loss_fn(outputs, batch["label"])
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
-                loss /= world_size
-                loss.backward()
-                if dist.get_rank() == 0:
-                    print(f"Loss: {loss.item()}")
-
-                ddp.reduce()  # Send the gradients to the appropriate shards
-                return loss
-
-            optimizer.step(closure)
-
-        epoch_end = time.monotonic()
-
-        measurements.append(data_size / (epoch_end - epoch_start))
-        if dist.get_rank() == 0:
-            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec")
-
-    torch.cuda.synchronize(rank)
-    training_stop = time.monotonic()
-    img_per_sec = data_size / (training_stop - training_start) * num_epochs
-    max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
-
-    print(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec overall")
-    print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
-
-    # Compute the mean and average img per second
-    mean = sum(measurements) / len(measurements)
-    diff = map(lambda x: pow(x - mean, 2.0), measurements)
-    std = math.sqrt(sum(diff) / (len(measurements) - 1))
-    print(f"[{dist.get_rank()}] : Mean speed: {mean:.2f} +/- {std:.2f}")
-
-
 def train(
     rank: int,
     world_size: int,
@@ -120,22 +54,36 @@ def train(
     batch_size: int = 32,
     data_size: int = 200,
     use_oss: bool = True,
+    use_sdp: bool = False,
     check_regression: bool = True,
     reference_speed: float = -1.0,
     reference_memory: float = -1.0,
 ):
+    assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
+
     # DDP
     dist_init(rank, world_size)
+    torch.cuda.set_device(rank)
 
     # Setup
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
 
-    # Shard the optimizer
-    optimizer: torch.optim.Optimizer = (
-        OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
-        if use_oss
-        else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
-    )
+    optimizer: Optional[torch.optim.Optimizer] = None
+
+    if use_sdp:
+        ddp = ShardedDataParallel(
+            module=model,
+            optimizer=torch.optim.SGD,
+            optimizer_params={"lr": 1e-4, "momentum": 0.9},
+            world_size=world_size,
+        )
+        optimizer = ddp.optimizer
+    else:
+        optimizer = (
+            OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
+            if use_oss
+            else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
+        )
 
     # Reset the memory use counter
     torch.cuda.reset_peak_memory_stats(rank)
@@ -159,6 +107,12 @@ def train(
                 dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
+
+                if use_sdp:
+                    ddp.reduce()  # Send the gradients to the appropriate shards
+
+                if dist.get_rank() == 0:
+                    print(f"Loss: {loss.item()}")
                 return loss
 
             optimizer.step(closure)
@@ -211,17 +165,27 @@ if __name__ == "__main__":
     parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
 
-    # beta - test oss_ddp
-    parser.add_argument("--oss_ddp", action="store_true", default=False)
+    # beta - test sharded data parallel
+    parser.add_argument("--use_sdp", action="store_true", default=False)
 
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
 
-    if args.oss_ddp:
+    if args.use_sdp:
         print("\nBenchmark OSS DDP")
         mp.spawn(
-            train_oss_ddp,
-            args=(args.world_size, args.epochs, args.batch_size, args.data_size),
+            train,
+            args=(
+                args.world_size,
+                args.epochs,
+                args.batch_size,
+                args.data_size,
+                True,
+                True,
+                args.check_regression,
+                args.reference_speed,
+                args.reference_memory,
+            ),
             nprocs=args.world_size,
             join=True,
         )
@@ -229,7 +193,7 @@ if __name__ == "__main__":
         print("\nBenchmark vanilla optimizer")
         mp.spawn(
             train,
-            args=(args.world_size, args.epochs, args.batch_size, args.data_size, False, False),
+            args=(args.world_size, args.epochs, args.batch_size, args.data_size, False, False, False),
             nprocs=args.world_size,
             join=True,
         )
@@ -243,6 +207,7 @@ if __name__ == "__main__":
                 args.batch_size,
                 args.data_size,
                 True,
+                False,
                 args.check_regression,
                 args.reference_speed,
                 args.reference_memory,
