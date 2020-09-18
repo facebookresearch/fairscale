@@ -115,13 +115,6 @@ def main():
     
     model = fairscale.nn.Pipe(model, balance=[6, 6], devices=[0, 1], chunks=2)
     
-    print("\n\n",model.parameters(), args.lr,"\n\n")
-    ### Replacing 
-    optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
-    ### With
-    # optimizer = OSS(params=model.parameters(), optim=optim.Adadelta, lr=args.lr)
-
-
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     for epoch in range(1, args.epochs + 1):
         tic = time.perf_counter()
