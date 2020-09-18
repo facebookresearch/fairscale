@@ -1,1 +1,2 @@
+dataclasses >= 0.7
 torch >= 1.4.0
