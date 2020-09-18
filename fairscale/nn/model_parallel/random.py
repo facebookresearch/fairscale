@@ -182,11 +182,12 @@ def model_parallel_cuda_manual_seed(seed: int) -> None:
             ),
             flush=True,
         )
-    _CUDA_RNG_STATE_TRACKER.reset()
-    # Set the default state.
-    torch.cuda.manual_seed(data_parallel_seed)
-    # and model parallel state.
-    _CUDA_RNG_STATE_TRACKER.add(_MODEL_PARALLEL_RNG_TRACKER_NAME, model_parallel_seed)
+    if torch.cuda.is_available():
+        _CUDA_RNG_STATE_TRACKER.reset()
+        # Set the default state.
+        torch.cuda.manual_seed(data_parallel_seed)
+        # and model parallel state.
+        _CUDA_RNG_STATE_TRACKER.add(_MODEL_PARALLEL_RNG_TRACKER_NAME, model_parallel_seed)
 
 
 class CheckpointFunction(torch.autograd.Function):

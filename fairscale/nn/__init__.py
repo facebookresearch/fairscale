@@ -4,6 +4,6 @@
 # LICENSE file in the root directory of this source tree.
 
 from .moe import MOELayer, Top2Gate
-from .pipe import Pipe
+from .pipe import LazyModule, Pipe
 
-__all__ = ["Pipe", "Top2Gate"]
+__all__ = ["Pipe", "Top2Gate", "LazyModule"]

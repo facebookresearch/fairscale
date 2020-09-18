@@ -307,6 +307,10 @@ def run_test_row_parallel_linear(rank, model_parallel_size):
         print(" >> passed the test :-)")
 
 
+def a_barrier():
+    torch.distributed.barrier()
+
+
 def run_test_pipe(rank, world_size, skip_dist_init=False):
     pipe_world_size = 2
 
@@ -413,17 +417,17 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
     reference_output = forward_model(reference, target)
 
     error = reference_output.sub(output).max()
-    torch.distributed.barrier()
+    a_barrier()
     assert error < 1.0e-6
 
     output = forward_model(model, target)
     error = reference_output.sub(output).max()
-    torch.distributed.barrier()
+    a_barrier()
     assert error < 1.0e-6
 
     output = forward_model(model, target)
     error = reference_output.sub(output).max()
-    torch.distributed.barrier()
+    a_barrier()
     assert error < 1.0e-6
 
     check_weights(model, reference, "before")
@@ -436,6 +440,7 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
     model[2].weight.data = saved_weight_2
 
     worker_map = {i: f"Test{i}" for i in range(torch.distributed.get_world_size())}
+    style = Pipe.MultiProcess  # Pipe.AsyncSchedule
 
     if pipe_world_size == 2:
         print(f"actually doing pipe stuff now")
@@ -444,14 +449,14 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
         pipe_model = Pipe(
             model,
             [2, 1],
-            style=Pipe.MultiProcess,
+            style=style,
             group=pipeline_devices,
             worker_map=worker_map,
             input_device=torch.cuda.current_device(),
             chunks=chunk_size,
             pipelined_backward=True,
         ).cuda()
-        torch.distributed.barrier()
+        a_barrier()
         pipe_rank = torch.distributed.get_rank(group=mpu.get_pipeline_parallel_group())
         print(f"pipe rank is {pipe_rank}")
         if pipe_rank == 0:
@@ -474,6 +479,7 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
         else:
             check_weights(model, reference, "pre-pipe", index=0)
 
+        # pipe_mode.eval()
         pipe_output = pipe_model(identity())
         print(f"exited pipe for {rank}")
         forward_model(reference, target, step=True)
@@ -481,7 +487,8 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
         print(f"pipe_output {rank} = {pipe_output}")
         print(f"reference_output {rank} = {reference_output}")
 
-        torch.distributed.barrier()
+        if style == Pipe.MultiProcess:
+            a_barrier()
 
         if torch.distributed.get_rank(mpu.get_pipeline_parallel_group()) == 1:
             error = reference_output.sub(pipe_output.cuda()).max()
@@ -511,7 +518,8 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
             failed = False
             with torch.autograd.profiler.profile() as prof:
                 try:
-                    pipe_model.back_helper(pipe_output)
+                    if style == Pipe.MultiProcess:
+                        pipe_model.back_helper(pipe_output)
                 except Exception as e:
                     failed = True
                     print(f"got {e} while doing backward, deadlock?")
@@ -525,15 +533,16 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
             print(f"waiting for barrier on slave")
 
         pipe_model.zero_grad()
-        torch.distributed.barrier()
+        a_barrier()
 
+        pipe_model.eval()
         pipe_output = pipe_model(identity())
         updated_ref_output = forward_model(reference, target)
         if torch.distributed.get_rank(mpu.get_pipeline_parallel_group()) == 1:
             error = updated_ref_output.sub(pipe_output.cuda()).max()
             print(f"outputs are ref:\n{updated_ref_output}\npipe:\n{pipe_output}")
             assert error < 1.0e-6
-        torch.distributed.barrier()
+        a_barrier()
 
         print(f"finished waiting for barrier on, pid={os.getpid()}")
 

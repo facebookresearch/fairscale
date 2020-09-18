@@ -39,8 +39,9 @@ def _reduce(ctx: Any, input_: torch.Tensor) -> torch.Tensor:
         return input_
 
     # All-reduce.
-    print(f"doing all_reduce on {torch.distributed.get_rank()}")
+    print(f">> doing all_reduce on {torch.distributed.get_rank()}")
     torch.distributed.all_reduce(input_, group=group)
+    print(f"<< doing all_reduce on {torch.distributed.get_rank()}")
 
     return input_
 

@@ -110,7 +110,7 @@ def test_adjacency(monkeypatch):
         def get_world_size(self):
             return data_parallel_size * pipeline_length * model_parallel_size
 
-        def new_group(self, args):
+        def new_group(self, args, backend=None):
             new_groups.append(args.copy())
             return ()
 

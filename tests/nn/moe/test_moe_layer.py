@@ -23,12 +23,14 @@ else:
 os.environ["MASTER_ADDR"] = "localhost"
 os.environ["MASTER_PORT"] = "29501"
 if "OMPI_COMM_WORLD_SIZE" in os.environ:
-    dist.init_process_group(backend=dist.Backend.MPI)
+    pass  # dist.init_process_group(backend=dist.Backend.MPI)
 
 
 def setup_module(module):
     if "OMPI_COMM_WORLD_SIZE" not in os.environ:
         dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
+    else:
+        dist.init_process_group(backend=dist.Backend.MPI)
 
 
 def teardown_module(module):

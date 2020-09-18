@@ -27,11 +27,17 @@ from tests.nn.model_parallel.commons import get_worker_map, torch_spawn
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-def inplace_on_requires_grad():
+@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
+def inplace_on_requires_grad(pipeline_style):
     model = nn.Sequential(nn.Linear(1, 1), nn.ReLU(inplace=True))
-    model = Pipe(model, [1, 1], style=Pipe.MultiProcess, worker_map=get_worker_map(), checkpoint="always")
+    model = Pipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map(), checkpoint="always")
 
     x = torch.rand(1)
+
+    if pipeline_style == Pipe.AsyncSchedule and model.group.rank() == 0:
+        # With AsyncSchedule, model will wait forever for gradients if not eval
+        model.eval()
+
     y = model(x)
 
     message = r"a leaf Variable that requires grad .* used in an in-place operation."
@@ -44,11 +50,12 @@ def inplace_on_requires_grad():
 
 @torch_spawn([1])
 @pytest.mark.xfail(strict=True)
-def inplace_on_not_requires_grad():
+@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
+def inplace_on_not_requires_grad(pipeline_style):
     # In-place operation on a tensor not requiring grad doesn't cause a
     # RuntimeError. Currently, we cannot detect this case.
     model = nn.Sequential(nn.ReLU(inplace=True))
-    model = Pipe(model, [1], style=Pipe.MultiProcess, worker_map=get_worker_map(), checkpoint="always")
+    model = Pipe(model, [1], style=pipeline_style, worker_map=get_worker_map(), checkpoint="always")
 
     x = torch.rand(1)
     y = model(x)
@@ -63,7 +70,8 @@ def inplace_on_not_requires_grad():
 
 @torch_spawn([1])
 @pytest.mark.xfail(strict=True)
-def inplace_incorrect_grad():
+@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
+def inplace_incorrect_grad(pipeline_style):
     class M(nn.Module):
         def forward(self, foo_bar):
             # 'foo' requires grad but 'bar' does not. In-place operation on
@@ -80,7 +88,7 @@ def inplace_incorrect_grad():
             return foo * bar
 
     model = nn.Sequential(M())
-    model = Pipe(model, [1], style=Pipe.MultiProcess, worker_map=get_worker_map(), checkpoint="always")
+    model = Pipe(model, [1], style=pipeline_style, worker_map=get_worker_map(), checkpoint="always")
 
     foo = torch.tensor([1.0], requires_grad=True)
     bar = torch.tensor([1.0])

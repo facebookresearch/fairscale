@@ -46,9 +46,10 @@ class Pop(nn.Module):
 @torch_spawn([2])
 @pytest.mark.parametrize("train", [True, False], ids=["train", "eval"])
 @pytest.mark.parametrize("checkpoint", ["always", "except_last", "never"])
+@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" in os.environ, reason="broken on mpi")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-def delete_portal_tensor(train, checkpoint):
+def delete_portal_tensor(train, checkpoint, pipeline_style):
     # Without checkpointing:
     # +- Stash --+  +--- Pop ----+ - - - layers
     # | 2,blue,1 |--| 1,orange,0 | - - - tensor_life and portal function
@@ -58,6 +59,9 @@ def delete_portal_tensor(train, checkpoint):
     # +- Stash --+  +--- Pop ----+  +--- Pop'----+  +- Stash'--+
     # | 3,blue,2 |--| 2,orange,1 |--| 1,orange,0 |--| 1,blue,0 |
     # +----------+  +------------+  +------------+  +----------+
+
+    if pipeline_style == Pipe.AsyncSchedule:
+        pytest.skip("Skip tensors NYI for AsyncSchedule")
 
     def portal_tensor_life_is(tensor_life, skip_tracker=None):
         if skip_tracker is None:
@@ -111,7 +115,7 @@ def delete_portal_tensor(train, checkpoint):
 
     model = nn.Sequential(NoPortalTensorAtBackward(), stash_, pop_)
     model = Pipe(
-        model, balance=[2, 1], style=Pipe.MultiProcess, worker_map=get_worker_map(), chunks=2, checkpoint=checkpoint,
+        model, balance=[2, 1], style=pipeline_style, worker_map=get_worker_map(), chunks=2, checkpoint=checkpoint,
     )
 
     input = torch.rand(10, requires_grad=True)

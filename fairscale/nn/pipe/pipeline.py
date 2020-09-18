@@ -17,202 +17,56 @@
 # limitations under the License.
 
 """The pipeline parallelism of Pipe."""
-from enum import Enum, auto
 import os
-import pickle
 from queue import Empty as QueueEmpty
 from queue import Queue
+from threading import Event
+import time
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Type, Union, cast
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Type, Union, cast
 
-from dataclasses import dataclass
-import numpy as np
 import torch
 from torch import Tensor, nn
 from torch.autograd.profiler import record_function
 
 from fairscale.nn.model_parallel import get_pipeline_parallel_ranks
 
+from .async_schedule import AsyncEventLoop, ModuleWrapper
 from .checkpoint import Checkpointing
 from .copy import Copy, Wait
 from .dependency import fork, join
+from .messages import get_out_of_order, recv_message, send_message
 from .microbatch import Batch
 from .skip import Namespace
 from .skip.layout import SkipLayout
 from .skip.tracker import SkipTrackerThroughPotals, use_skip_tracker
 from .stream import AbstractStream, current_stream, use_device
+from .types import (
+    ACTIVATIONS_GRADS_QUEUE,
+    PORTAL_QUEUE,
+    SKIP_TENSOR_QUEUE,
+    PipelineStyle,
+    PipeMessage,
+    Schedule,
+    TensorOrTensors,
+    Tensors,
+    TransportConfig,
+)
 from .worker import Task, create_workers, join_workers
 
 __all__: List[str] = []
 
 
-Tensors = Tuple[Tensor, ...]
-TensorOrTensors = Union[Tensor, Tensors]
-
-InputDevice = Union[None, int, str, torch.device]
-Schedule = List[Tuple[int, int]]
-
 ExcInfo = Tuple[Type[BaseException], BaseException, TracebackType]
 
-MessageQueues: List[Queue] = [Queue(), Queue(), Queue()]
-ACTIVATIONS_GRADS_QUEUE = 0
-SKIP_TENSOR_QUEUE = 1
-PORTAL_QUEUE = 2
-MESSAGE_GENERATION_START = 3
+
+debug_fd = None
 
 
-# FIXME Why is 256 ok for training but not for tests?
-MESSAGE_TENSOR_SIZE = 512  # 256
-
-MessageGeneration = MESSAGE_GENERATION_START
-
-
-class PipelineStyle(Enum):
-    SingleProcess = auto()
-    MultiProcess = auto()
-
-
-@dataclass(frozen=True)
-class TransportConfig:
-    use_rpc: bool
-    worker_map: Optional[Dict[int, str]]
-
-
-@dataclass
-class PipeMessage:
-    src: int
-    dest: int
-    queue_name: int
-    args: Any
-    tensors: Tensors
-    tensor_shapes: List[torch.Size]
-    tensor_dtypes: List[torch.dtype]
-    tag: int = 0
-
-    def __init__(self, src: int, dest: int, queue_name: int, args: Any, tensors: Tensors):
-        self.src = src
-        self.dest = dest
-        self.queue_name = queue_name
-        self.args = args
-        self.tensors = tensors
-
-        global MessageGeneration
-        self.tag = MessageGeneration
-        MessageGeneration += len(tensors)
-
-
-def rpc_push_queue(message: PipeMessage) -> None:
-    globals()["MessageQueues"][message.queue_name].put(message)
-
-
-def pyobject_to_tensor(obj: Any) -> Tensor:
-    pickled = pickle.dumps(obj)
-    nparray = np.frombuffer(pickled, dtype=np.uint8).copy()
-    nparray.setflags(write=True)
-    result = torch.from_numpy(nparray)
-    delta = MESSAGE_TENSOR_SIZE - len(result)
-    if delta < 0:
-        raise ValueError(
-            f"message too big to send, increase MESSAGE_TENSOR_SIZE? - {len(result)} > {MESSAGE_TENSOR_SIZE}"
-        )
-    elif delta > 0:
-        result = torch.cat((result, torch.zeros(delta, dtype=torch.uint8)))
-
-    return result.cuda()
-
-
-def tensor_to_pyobject(tensor: Tensor) -> Any:
-    nparray = tensor.numpy()
-    return pickle.loads(nparray.tobytes())
-
-
-def send_message(config: TransportConfig, message: PipeMessage, sync: bool = False) -> None:
-    if config.use_rpc:
-        message.tensors = tuple(t.cpu() for t in message.tensors)
-        assert config.worker_map
-        name = config.worker_map[message.dest]
-        if sync:
-            torch.distributed.rpc.rpc_sync(name, rpc_push_queue, args=(message,))
-        else:
-            torch.distributed.rpc.rpc_async(name, rpc_push_queue, args=(message,))
-    else:
-        tensors = message.tensors
-        message.tensors = tuple()
-        message.tensor_shapes = [t.size() for t in tensors]
-        message.tensor_dtypes = [t.dtype for t in tensors]
-        torch.cuda.current_stream().synchronize()
-        torch.distributed.send(pyobject_to_tensor(message), message.dest, tag=0)
-        for index, t in enumerate(tensors):
-            if t.device.type == "cpu":
-                t = t.cuda()
-            torch.distributed.send(t, message.dest, tag=message.tag + index)
-
-
-def recv_message(
-    config: TransportConfig, queue_name: int, *, nowait: bool = False, input_device: InputDevice = None
-) -> PipeMessage:
-    if config.use_rpc:
-        queue = globals()["MessageQueues"][queue_name]
-        if nowait:
-            result = queue.get_nowait()
-        else:
-            result = queue.get()
-        result.tensors = to_input_device(result.tensors, input_device)
-        return result
-    else:
-        # FIXME(handle nowait)
-        if nowait:
-            raise QueueEmpty
-
-        tensor = torch.empty(MESSAGE_TENSOR_SIZE, dtype=torch.uint8, device=input_device)
-        torch.distributed.recv(tensor, src=-1, tag=queue_name)
-        message = tensor_to_pyobject(tensor.cpu())
-
-        torch.cuda.current_stream().synchronize()
-
-        message_tensors = []
-        for index, (shape, dtype) in enumerate(zip(message.tensor_shapes, message.tensor_dtypes)):
-            t = torch.empty(*shape, dtype=dtype, device=input_device)
-            torch.distributed.recv(t, message.src, tag=message.tag + index)
-            message_tensors.append(t)
-
-        message.tensors = tuple(message_tensors)
-
-        torch.cuda.current_stream().synchronize()
-        return message
-
-
-def get_out_of_order(config: TransportConfig, queue_name: int, index: int, *, input_device: InputDevice) -> Tensors:
-    """Receive a message with a known microbatch index, and handle out-of-order
-    messages by placing them back on the queue"""
-
-    if config.use_rpc:
-        queue = globals()["MessageQueues"][queue_name]
-        out_of_order: List[PipeMessage] = []
-        while True:
-            message = recv_message(config, queue_name, input_device=input_device)
-            got_index = message.args
-            value = message.tensors
-            if got_index == index:
-                for b in out_of_order:
-                    queue.put(b)
-                return value
-            else:
-                out_of_order.append(message)
-    else:
-        message = recv_message(config, queue_name, input_device=input_device)
-        assert message.args == index
-        return message.tensors
-
-
-def to_input_device(tensors: TensorOrTensors, input_device: InputDevice) -> TensorOrTensors:
-    if input_device is None:
-        return tensors
-    else:
-        if isinstance(tensors, Tensor):
-            return tensors.to(input_device)
-        else:
-            return tuple(t.to(input_device) for t in tensors)
+def dprint(s: str) -> None:
+    print(f"{time.monotonic()}: {s}")
+    # debug_fd.write(f"{time.monotonic()}: {s}\n")
+    # debug_fd.flush()
 
 
 class SendOperator(torch.autograd.Function):
@@ -318,6 +172,57 @@ def clock_cycles(m: int, n: int) -> Iterable[Schedule]:
         yield [(k - j, j) for j in range(max(1 + k - m, 0), min(1 + k, n))]
 
 
+def create_task(
+    style: PipelineStyle,
+    checkpoint_stop: int,
+    i: int,
+    j: int,
+    batch: Batch,
+    partition: nn.Sequential,
+    skip_trackers: List[SkipTrackerThroughPotals],
+    streams: List[AbstractStream],
+) -> Task:
+    # Determine whether checkpointing or not.
+    if i < checkpoint_stop:
+
+        def function(
+            input: TensorOrTensors,
+            partition: nn.Sequential = partition,
+            skip_tracker: SkipTrackerThroughPotals = skip_trackers[i],
+            chunk_id: int = i,
+            part_id: int = j,
+        ) -> TensorOrTensors:
+            with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
+                return partition(input)
+
+        chk = Checkpointing(function, batch)
+        if style is PipelineStyle.SingleProcess:
+            task = Task(streams[j], compute=chk.checkpoint, finalize=chk.recompute)
+        elif style in [PipelineStyle.MultiProcess, PipelineStyle.AsyncSchedule]:
+            task = Task(None, compute=chk.checkpoint, finalize=chk.recompute)
+        del function, chk  # TODO(tom) maybe remove
+
+    else:
+
+        def compute(
+            batch: Batch = batch,
+            partition: nn.Sequential = partition,
+            skip_tracker: SkipTrackerThroughPotals = skip_trackers[i],
+            chunk_id: int = i,
+            part_id: int = j,
+        ) -> Batch:
+            with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
+                return batch.call(partition)
+
+        if style is PipelineStyle.SingleProcess:
+            task = Task(streams[j], compute=compute, finalize=None)
+        elif style in [PipelineStyle.MultiProcess, PipelineStyle.AsyncSchedule]:
+            task = Task(None, compute=compute, finalize=None)
+        del compute  # TODO(tom) maybe remove
+
+    return task
+
+
 class Pipeline:
     """The pipeline parallelism for Pipe."""
 
@@ -332,52 +237,68 @@ class Pipeline:
         group: Optional[torch.distributed.ProcessGroup] = None,
         worker_map: Optional[Dict[int, str]] = None,
         input_device: Union[None, int, str, torch.device] = None,
+        final_stage: bool = False,
     ) -> None:
-        self.partitions = partitions
+        if style == PipelineStyle.SingleProcess:
+            self.partitions = partitions
+        else:
+            self.mp_partitions: List[ModuleWrapper] = cast(List[ModuleWrapper], partitions)
         self.devices = devices
         self.copy_streams = copy_streams
         self.skip_layout = skip_layout
-        self.checkpoint_stop = checkpoint_stop
+        self.__checkpoint_stop = checkpoint_stop
         self.style = style
         self.group = group
+        self.training: bool
         self.transport_config = TransportConfig(
-            use_rpc=("OMPI_COMM_WORLD_RANK" not in os.environ), worker_map=worker_map
+            use_rpc=("OMPI_COMM_WORLD_RANK" not in os.environ) or ("FORCE_RPC" in os.environ), worker_map=worker_map
         )
 
         self.input_device = input_device
         self.all_at_once = False
         self.callcount = 0
+        self.final_stage = final_stage
         if self.style is PipelineStyle.SingleProcess:
             assert self.devices is not None
             (self.in_queues, self.out_queues) = create_workers(self.devices)
 
         if (
-            self.style is PipelineStyle.MultiProcess
+            self.style in [PipelineStyle.MultiProcess, PipelineStyle.AsyncSchedule]
             and self.transport_config.worker_map is None
             and self.transport_config.use_rpc is True
         ):
             raise ValueError("'PipelineStyle.MultiProcess' requires 'worker_map' to be set")
 
+    @property
+    def checkpoint_stop(self) -> int:
+        # Disable checkpointing if in eval mode.
+        if self.style == PipelineStyle.SingleProcess:
+            training = self.partitions[0].training
+        else:
+            training = self.mp_partitions[0].module.training
+        if not training:
+            return 0
+        return self.__checkpoint_stop
+
     def __del__(self) -> None:
         if self.style is PipelineStyle.SingleProcess:
             join_workers(self.in_queues, self.out_queues)
 
-    def run(self, batches: List[Batch]) -> None:
+    def run(self, training: bool, batches: List[Batch], event: Optional[Event]) -> None:
 
         """Runs pipeline parallelism.
 
         It modifies the given batches in place.
 
         """
-        partitions = self.partitions
-        devices = self.devices
+        self.training = training
 
         m = len(batches)
-        n = len(partitions)
 
         skip_trackers = [SkipTrackerThroughPotals(self.skip_layout, i) for i in range(len(batches))]
 
         if self.style is PipelineStyle.SingleProcess:
+            n = len(self.partitions)
             for schedule in clock_cycles(m, n):
                 self.fence(batches, schedule, skip_trackers)
                 self.compute(batches, schedule, skip_trackers)
@@ -385,6 +306,32 @@ class Pipeline:
             assert self.group
             schedule = [(i, self.group.rank()) for i in range(m)]
             self.compute(batches, schedule, skip_trackers)
+        elif self.style is PipelineStyle.AsyncSchedule:
+            assert self.group
+            rank = self.group.rank()
+            dprint(f">>> start barrier")
+            # torch.distributed.barrier(group=self.group)
+            event_loop = AsyncEventLoop(
+                self.mp_partitions,
+                self.group,
+                self.transport_config,
+                self.training,
+                self.input_device,
+                self.checkpoint_stop,
+            )
+            dprint(f"<<< start barrier")
+            if rank == 0 and not self.final_stage:
+                dprint(f"{torch.distributed.get_rank()}: entered event head")
+                event_loop.event_loop_head(batches, skip_trackers, event)
+                dprint(f"{torch.distributed.get_rank()}: exited event head")
+            elif self.final_stage:
+                dprint(f"{torch.distributed.get_rank()}: entered event tail")
+                event_loop.event_loop_tail(batches, skip_trackers)
+                dprint(f"{torch.distributed.get_rank()}: exited event tail")
+            else:
+                dprint(f"{torch.distributed.get_rank()}: entered event loop")
+                event_loop.event_loop(len(batches), skip_trackers)
+                dprint(f"{torch.distributed.get_rank()}: exited event loop")
 
         self.callcount += 1
 
@@ -481,7 +428,7 @@ class Pipeline:
         assert self.group
         rank = self.group.rank()
 
-        if rank != self.group.size() - 1:
+        if self.style is PipelineStyle.MultiProcess and not self.final_stage:
             ranks = get_pipeline_parallel_ranks()
             this_rank = torch.distributed.get_rank()
 
@@ -534,72 +481,16 @@ class Pipeline:
         if exc_info is not None:
             raise exc_info[0].with_traceback(exc_info[1], exc_info[2])
 
-    def create_task(
-        self,
-        i: int,
-        j: int,
-        batch: Batch,
-        checkpoint_stop: int,
-        partition: nn.Sequential,
-        skip_trackers: List[SkipTrackerThroughPotals],
-        streams: List[AbstractStream],
-    ) -> Task:
-        # Determine whether checkpointing or not.
-        if i < checkpoint_stop:
-
-            def function(
-                input: TensorOrTensors,
-                partition: nn.Sequential = partition,
-                skip_tracker: SkipTrackerThroughPotals = skip_trackers[i],
-                chunk_id: int = i,
-                part_id: int = j,
-            ) -> TensorOrTensors:
-                with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
-                    return partition(input)
-
-            chk = Checkpointing(function, batch)
-            if self.style is PipelineStyle.SingleProcess:
-                task = Task(streams[j], compute=chk.checkpoint, finalize=chk.recompute)
-            elif self.style is PipelineStyle.MultiProcess:
-                task = Task(None, compute=chk.checkpoint, finalize=chk.recompute)
-            del function, chk  # TODO(tom) maybe remove
-
-        else:
-
-            def compute(
-                batch: Batch = batch,
-                partition: nn.Sequential = partition,
-                skip_tracker: SkipTrackerThroughPotals = skip_trackers[i],
-                chunk_id: int = i,
-                part_id: int = j,
-            ) -> Batch:
-                with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
-                    return batch.call(partition)
-
-            if self.style is PipelineStyle.SingleProcess:
-                task = Task(streams[j], compute=compute, finalize=None)
-            elif self.style is PipelineStyle.MultiProcess:
-                task = Task(None, compute=compute, finalize=None)
-            del compute  # TODO(tom) maybe remove
-
-        return task
-
     def compute(
-        self, batches: List[Batch], schedule: List[Tuple[int, int]], skip_trackers: List[SkipTrackerThroughPotals],
+        self, batches: List[Batch], schedule: List[Tuple[int, int]], skip_trackers: List[SkipTrackerThroughPotals]
     ) -> None:
         """Runs tasks with synchronization to copy streams."""
-        partitions = self.partitions
         devices = self.devices
         copy_streams = self.copy_streams
-        checkpoint_stop = self.checkpoint_stop
-
-        # Disable checkpointing if in eval mode.
-        if not self.partitions[0].training:
-            checkpoint_stop = 0
 
         if self.style is PipelineStyle.SingleProcess:
             assert devices is not None
-            n = len(partitions)
+            n = len(self.partitions)
             streams = [current_stream(d) for d in devices]
         elif self.style is PipelineStyle.MultiProcess:
             assert self.group
@@ -635,25 +526,28 @@ class Pipeline:
             batch = batches[i]
 
             if self.style is PipelineStyle.SingleProcess:
-                partition = partitions[j]
+                partition = self.partitions[j]
                 # Synchronize with the copied input. ([1] in the diagram)
                 assert copy_streams
                 if j != 0:
                     wait(batch, copy_streams[j][i], streams[j])
+
+                task = create_task(self.style, self.checkpoint_stop, i, j, batch, partition, skip_trackers, streams)
+
+                # Compute tasks in parallel. ([2] in the diagram)
+                self.in_queues[j].put(task)
             elif self.style is PipelineStyle.MultiProcess:
-                assert len(self.partitions) == 1
-                partition = self.partitions[0]
+                assert len(self.mp_partitions) == 1
+                mp_partition = self.mp_partitions[0]
 
                 assert self.group
                 if self.group.rank() != 0:
                     batch = self.get_batch_from_previous_stage(i, skip_trackers, batches)
 
-            task = self.create_task(i, j, batch, checkpoint_stop, partition, skip_trackers, streams)
+                task = create_task(
+                    self.style, self.checkpoint_stop, i, j, batch, mp_partition.module, skip_trackers, streams
+                )
 
-            if self.style is PipelineStyle.SingleProcess:
-                # Compute tasks in parallel. ([2] in the diagram)
-                self.in_queues[j].put(task)
-            elif self.style is PipelineStyle.MultiProcess:
                 batches[i] = self.execute_task(task, i, skip_trackers)
 
         if self.style is PipelineStyle.SingleProcess:
@@ -689,6 +583,9 @@ class Pipeline:
         return result
 
     def back_helper(self, output: List[Batch]) -> None:
+        if self.style == PipelineStyle.AsyncSchedule:
+            return
+
         o = list(output)
 
         tensors: Tensors
@@ -732,4 +629,4 @@ class Pipeline:
                 try:
                     torch.autograd.backward(final_tensors, grad_tensors=grads, retain_graph=True)
                 except Exception as e:
-                    raise RuntimeError("Autograd failed") from e
+                    raise RuntimeError(f"Autograd failed on {torch.distributed.get_rank()}") from e

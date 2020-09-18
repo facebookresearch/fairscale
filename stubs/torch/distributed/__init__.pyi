@@ -5,6 +5,7 @@ from torch import Tensor
 import datetime
 
 from . import rpc as rpc
+from . import distributed_c10d as distributed_c10d
 
 class Backend:
     GLOO: str
