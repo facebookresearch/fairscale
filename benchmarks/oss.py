@@ -30,24 +30,6 @@ def dist_init(rank, world_size):
     dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size)
 
 
-def get_problem(rank, data_size, batch_size):
-    # Standard RN101
-    model = resnet101(pretrained=False, progress=True).to(rank)
-
-    # Data setup, dummy data
-    def collate(inputs: List[Any]):
-        return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
-            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
-        }
-
-    dataloader = DataLoader(
-        dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
-    )
-    loss_fn = nn.CrossEntropyLoss()
-    return model, dataloader, loss_fn
-
-
 def train(
     rank: int,
     world_size: int,
@@ -67,7 +49,18 @@ def train(
     torch.cuda.set_device(rank)
 
     # Setup
-    model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
+    model = resnet101(pretrained=False, progress=True).to(rank)
+
+    def collate(inputs: List[Any]):
+        return {
+            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
+            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
+        }
+
+    dataloader = DataLoader(
+        dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
+    )
+    loss_fn = nn.CrossEntropyLoss()
 
     optimizer: Optional[torch.optim.Optimizer] = None
 
@@ -75,7 +68,9 @@ def train(
         ddp = ShardedDataParallel(
             module=model, optimizer=OPTIM, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size,
         )
+        ddp.train()
         optimizer = ddp.optimizer
+        model = ddp
     else:
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
