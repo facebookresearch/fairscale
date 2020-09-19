@@ -87,6 +87,7 @@ def train(
     model.train()
 
     measurements = []
+    final_loss: Optional[float] = -1.0
 
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
@@ -104,11 +105,9 @@ def train(
                 if use_sdp:
                     ddp.reduce()  # Send the gradients to the appropriate shards
 
-                if dist.get_rank() == 0:
-                    print(f"Loss: {loss.item()}")
                 return loss
 
-            optimizer.step(closure)
+            final_loss = optimizer.step(closure)
 
         epoch_end = time.monotonic()
 
@@ -123,7 +122,7 @@ def train(
 
         measurements.append(data_size / (epoch_end - epoch_start))
         if dist.get_rank() == 0:
-            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec\n")
+            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. loss {final_loss}\n")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
