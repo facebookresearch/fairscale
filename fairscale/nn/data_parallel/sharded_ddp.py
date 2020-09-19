@@ -11,7 +11,6 @@ Adopted from LegacyDistributedDataParallel module from fairseq.
 
 from contextlib import contextmanager
 import copy
-import gc
 from typing import Any, Dict, Generator, List, Optional, Type, cast
 
 import torch
@@ -154,9 +153,6 @@ class ShardedDataParallel(nn.Module):
             else:
                 for p in params:
                     p.grad = None
-
-                gc.collect()
-                torch.cuda.empty_cache()
 
         def reduction_fn() -> None:
             # This function only needs to be called once

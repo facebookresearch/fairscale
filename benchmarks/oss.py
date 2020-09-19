@@ -123,7 +123,7 @@ def train(
 
         measurements.append(data_size / (epoch_end - epoch_start))
         if dist.get_rank() == 0:
-            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec")
+            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec\n")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
