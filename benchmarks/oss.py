@@ -27,7 +27,7 @@ OPTIM = torch.optim.RMSprop
 def dist_init(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "29501"
-    dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size)
+    dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size, store=None)
 
 
 def train(
@@ -41,12 +41,14 @@ def train(
     check_regression: bool = True,
     reference_speed: float = -1.0,
     reference_memory: float = -1.0,
+    reference_loss: float = -1.0,
 ):
     assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
 
     # DDP
-    dist_init(rank, world_size)
-    torch.cuda.set_device(rank)
+    dist_init(rank=rank, world_size=world_size)
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
 
     # Setup
     model = resnet101(pretrained=False, progress=True).to(rank)
@@ -92,15 +94,17 @@ def train(
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
 
-        for batch in dataloader:
+        for i, batch in enumerate(dataloader):
 
             def closure():
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
-                loss /= world_size
                 loss.backward()
+
+                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+
+                loss /= world_size
 
                 if use_sdp:
                     ddp.reduce()  # Send the gradients to the appropriate shards
@@ -141,6 +145,7 @@ def train(
     if use_oss and check_regression and dist.get_rank() == 0:
         assert (mean + 3.0 * std) > reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
+        assert cast(float, final_loss) < reference_loss, "Loss regression detected"
         print("[Regression Test] VALID")
 
 
@@ -148,6 +153,7 @@ class OptimType(str, Enum):
     vanilla = "pytorch"
     oss = "oss"
     oss_sdp = "oss_sdp"
+    everyone = "everyone"
 
 
 if __name__ == "__main__":
@@ -161,13 +167,16 @@ if __name__ == "__main__":
     parser.add_argument("--check_regression", action="store_true", default=False)
     parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
-    parser.add_argument("--optim_type", type=OptimType, choices=[o.value for o in OptimType])
+    parser.add_argument("--reference_loss", action="store", default=0.67, type=float)
+    parser.add_argument(
+        "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
+    )
 
     # Parse and run
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
 
-    if args.optim_type == OptimType.vanilla:
+    if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         print("\nBenchmark vanilla optimizer")
         mp.spawn(
             train,
@@ -184,7 +193,7 @@ if __name__ == "__main__":
             join=True,
         )
 
-    if args.optim_type == OptimType.oss:
+    if args.optim_type == OptimType.oss or args.optim_type == OptimType.everyone:
         print("\nBenchmark OSS")
         mp.spawn(
             train,
@@ -198,12 +207,13 @@ if __name__ == "__main__":
                 args.check_regression,
                 args.reference_speed,
                 args.reference_memory,
+                args.reference_loss,
             ),
             nprocs=args.world_size,
             join=True,
         )
 
-    if args.optim_type == OptimType.oss_sdp:
+    if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
         print("\nBenchmark OSS DDP")
         mp.spawn(
             train,
@@ -217,6 +227,7 @@ if __name__ == "__main__":
                 args.check_regression,
                 args.reference_speed,
                 args.reference_memory,
+                args.reference_loss,
             ),
             nprocs=args.world_size,
             join=True,

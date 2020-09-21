@@ -33,9 +33,11 @@ Let's suppose that your trainer looks likemake html
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
+                loss.backward()
+
                 torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 loss /= world_size
-                loss.backward()
+
                 optimizer.step()
 
 
@@ -44,7 +46,6 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
 .. code-block:: default
 
 
-    :emphasize-lines: 49, 65, 66
     import torch
     from fairscale.optim.oss import OSS
 
@@ -73,8 +74,9 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
+                loss.backward()
+
                 torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 loss /= world_size
-                loss.backward()
-                optimizer.step()
 
+                optimizer.step()
