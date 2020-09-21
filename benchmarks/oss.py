@@ -4,7 +4,6 @@
 import argparse
 from enum import Enum
 import math
-import os
 import time
 from typing import Any, List, Optional, cast
 
@@ -25,9 +24,9 @@ OPTIM = torch.optim.RMSprop
 
 
 def dist_init(rank, world_size):
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29501"
-    dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size, store=None)
+    dist.init_process_group(
+        backend=BACKEND, init_method="tcp://localhost:29501", rank=rank, world_size=world_size, store=None
+    )
 
 
 def train(
@@ -49,14 +48,15 @@ def train(
     dist_init(rank=rank, world_size=world_size)
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
+    torch.cuda.set_device(rank)
 
     # Setup
-    model = resnet101(pretrained=False, progress=True).to(rank)
+    model = resnet101(pretrained=False, progress=True).cuda()
 
     def collate(inputs: List[Any]):
         return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
-            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
+            "inputs": torch.stack([i[0] for i in inputs]).cuda(),
+            "label": torch.stack([i[1] for i in inputs]).cuda(),
         }
 
     dataloader = DataLoader(
@@ -84,15 +84,17 @@ def train(
     torch.cuda.reset_peak_memory_stats(rank)
 
     # Dummy training loop
-    torch.cuda.synchronize(rank)
+    print(f"Rank {rank} ready")
     training_start = time.monotonic()
     model.train()
+    print("a")
 
     measurements = []
     final_loss: Optional[float] = -1.0
 
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
+        print("b")
 
         for i, batch in enumerate(dataloader):
 
@@ -101,17 +103,22 @@ def train(
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
                 loss.backward()
+                print("ca")
 
                 dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+                print("cb")
 
                 loss /= world_size
 
                 if use_sdp:
                     ddp.reduce()  # Send the gradients to the appropriate shards
-
+                print("cc")
                 return loss
 
+            print("c")
+
             final_loss = optimizer.step(closure)
+            print("d")
 
         epoch_end = time.monotonic()
 
@@ -224,10 +231,7 @@ if __name__ == "__main__":
                 args.data_size,
                 True,  # OSS
                 True,  # SDP
-                args.check_regression,
-                args.reference_speed,
-                args.reference_memory,
-                args.reference_loss,
+                False,  # no regression check
             ),
             nprocs=args.world_size,
             join=True,
