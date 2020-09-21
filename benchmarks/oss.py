@@ -19,7 +19,7 @@ from torchvision.transforms import ToTensor
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim.oss import OSS
 
-BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
+BACKEND = dist.Backend.GLOO  # type: ignore  # dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO
 OPTIM = torch.optim.RMSprop
 
 
@@ -87,14 +87,12 @@ def train(
     print(f"Rank {rank} ready")
     training_start = time.monotonic()
     model.train()
-    print("a")
 
     measurements = []
     final_loss: Optional[float] = -1.0
 
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
-        print("b")
 
         for i, batch in enumerate(dataloader):
 
@@ -103,10 +101,9 @@ def train(
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
                 loss.backward()
+                loss /= world_size
 
                 dist.all_reduce(loss, op=dist.ReduceOp.SUM)
-
-                loss /= world_size
 
                 if use_sdp:
                     ddp.reduce()  # Send the gradients to the appropriate shards
