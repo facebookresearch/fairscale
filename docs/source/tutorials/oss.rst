@@ -33,9 +33,9 @@ Let's suppose that your trainer looks likemake html
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
+                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 optimizer.step()
 
 
@@ -73,8 +73,7 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
+                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 optimizer.step()
-

@@ -3,10 +3,10 @@
 
 import argparse
 import math
-import os
 import time
 from typing import Any, List, cast
 
+from pyparsing import Optional
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -23,9 +23,9 @@ OPTIM = torch.optim.RMSprop
 
 
 def dist_init(rank, world_size):
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29501"
-    dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size)
+    dist.init_process_group(
+        backend=BACKEND, init_method="tcp://localhost:29501", rank=rank, world_size=world_size, store=None
+    )
 
 
 def train(
@@ -42,6 +42,9 @@ def train(
 
     # DDP
     dist_init(rank, world_size)
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    print(f"Rank {rank} initialized")
 
     # Standard RN101
     model = resnet101(pretrained=False, progress=True).to(rank)
@@ -58,13 +61,12 @@ def train(
     )
     loss_fn = nn.CrossEntropyLoss()
 
-    # Reset the memory use counter
-    torch.cuda.reset_peak_memory_stats(rank)
-
     # Shard the optimizer
-    optimizer: torch.optim.Optimizer = OSS(
-        params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9
-    ) if use_oss else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
+    optimizer: torch.optim.Optimizer = (
+        OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
+        if use_oss
+        else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
+    )
 
     # Dummy training loop
     torch.cuda.synchronize(rank)
@@ -72,6 +74,7 @@ def train(
     model.train()
 
     measurements = []
+    final_loss: Optional[float] = -1.0
 
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
@@ -82,12 +85,14 @@ def train(
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
+
+                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+
                 return loss
 
-            optimizer.step(closure)
+            final_loss = optimizer.step(closure)
 
         epoch_end = time.monotonic()
 
@@ -97,12 +102,12 @@ def train(
             optimizer = cast(OSS, optimizer)
             # optimizer.consolidate_state_dict()
             if dist.get_rank() == 0:
-                # _ = optimizer.state_dict()
+                _ = optimizer.state_dict()
                 print("... State dict collected")
 
         measurements.append(data_size / (epoch_end - epoch_start))
         if dist.get_rank() == 0:
-            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec")
+            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss}")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
