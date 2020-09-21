@@ -33,11 +33,9 @@ Let's suppose that your trainer looks likemake html
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                loss.backward()
-
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 loss /= world_size
-
+                loss.backward()
+                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 optimizer.step()
 
 
@@ -64,7 +62,7 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
 
         base_optimizer_arguments = {}  # pass any optimizer specific arguments here, or directly below when instantiating OSS
         base_optimizer = torch.optim.SGD  # any pytorch compliant optimizer
-        optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)
+        optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)  # ** NEW **
 
         # Any relevant training loop, nothing specific to OSS. For example:
         model.train()
@@ -74,9 +72,7 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                loss.backward()
-
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 loss /= world_size
-
+                loss.backward()
+                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 optimizer.step()
