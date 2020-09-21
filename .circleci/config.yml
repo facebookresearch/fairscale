@@ -102,6 +102,12 @@ run_oss_benchmark: &run_oss_benchmark
       command: |
         python benchmarks/oss.py
 
+run_oss_ddp_benchmark: &run_oss_ddp_benchmark
+  - run:
+      name: Run OSS DDP Benchmark
+      command: |
+        python benchmarks/oss.py --oss_ddp
+
 # -------------------------------------------------------------------------------------
 # Jobs to run
 # -------------------------------------------------------------------------------------
@@ -143,7 +149,7 @@ jobs:
       - run:
           name: Run type-checking (mypy)
           command: |
-            mypy --pretty .
+            mypy --ignore-missing-imports --scripts-are-modules --pretty .
 
       - <<: *run_flake8
 
@@ -251,6 +257,8 @@ jobs:
       - <<: *run_pipe_benchmark
 
       - <<: *run_oss_benchmark
+
+      - <<: *run_oss_ddp_benchmark
 
 
 

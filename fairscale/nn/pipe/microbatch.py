@@ -53,9 +53,14 @@ class Batch:
 
     """
 
-    def __init__(self, value: TensorOrTensors) -> None:
+    def __init__(self, value: TensorOrTensors, index: int) -> None:
         self.value = value
         self.atomic = torch.is_tensor(value)
+        self.__index = index
+
+    @property
+    def index(self) -> int:
+        return self.__index
 
     @property
     def tensor(self) -> Tensor:
@@ -80,7 +85,7 @@ class Batch:
         """Calls a function by the underlying tensor or tensors. It also wraps
         the output with :class:`Batch`.
         """
-        return Batch(function(self.value))
+        return Batch(function(self.value), self.index)
 
     def __repr__(self) -> str:
         return f"Batch[atomic={self.atomic!r}]({self.value!r})"
@@ -176,7 +181,7 @@ def scatter(input: TensorOrTensors, chunks: int) -> List[Batch]:
 
         inputs = zip(*rotated)
 
-    return [Batch(x) for x in inputs]
+    return [Batch(x, i) for i, x in enumerate(inputs)]
 
 
 def gather(outputs: List[Batch]) -> TensorOrTensors:

@@ -26,7 +26,7 @@ from fairscale.nn.pipe.microbatch import Batch, check, gather, scatter
 
 def test_batch_atomic():
     x = torch.tensor(42)
-    b = Batch(x)
+    b = Batch(x, 0)
 
     assert b.atomic
 
@@ -41,7 +41,7 @@ def test_batch_atomic():
 
 def test_batch_non_atomic():
     x, y = torch.tensor(42), torch.tensor(21)
-    b = Batch((x, y))
+    b = Batch((x, y), 0)
 
     assert not b.atomic
 
@@ -56,8 +56,8 @@ def test_batch_non_atomic():
 
 
 def test_batch_call():
-    a = Batch(torch.tensor(42))
-    b = Batch((torch.tensor(42), torch.tensor(21)))
+    a = Batch(torch.tensor(42), 0)
+    b = Batch((torch.tensor(42), torch.tensor(21)), 0)
 
     def f(x):
         return x
@@ -67,8 +67,8 @@ def test_batch_call():
 
 
 def test_batch_setitem_by_index():
-    a = Batch(torch.tensor(42))
-    b = Batch((torch.tensor(42), torch.tensor(21)))
+    a = Batch(torch.tensor(42), 0)
+    b = Batch((torch.tensor(42), torch.tensor(21)), 0)
 
     a[0] = torch.tensor(0)
     b[0] = torch.tensor(0)
@@ -83,8 +83,8 @@ def test_batch_setitem_by_index():
 
 
 def test_batch_setitem_by_slice():
-    a = Batch(torch.tensor(42))
-    b = Batch((torch.tensor(42), torch.tensor(21)))
+    a = Batch(torch.tensor(42), 0)
+    b = Batch((torch.tensor(42), torch.tensor(21)), 0)
 
     a[:] = (torch.tensor(0),)
     b[:] = (torch.tensor(0),)
@@ -115,7 +115,7 @@ def test_gather_tensors():
     a = torch.zeros(1, 1)
     b = torch.zeros(1, 1)
 
-    ab = gather([Batch(a), Batch(b)])
+    ab = gather([Batch(a, 0), Batch(b, 0)])
 
     assert ab.size() == (2, 1)
 
@@ -124,7 +124,7 @@ def test_gather_tuples():
     a = (torch.zeros(1, 1), torch.zeros(2, 2))
     b = (torch.zeros(1, 1), torch.zeros(2, 2))
 
-    ab = gather([Batch(a), Batch(b)])
+    ab = gather([Batch(a, 0), Batch(b, 0)])
 
     assert isinstance(ab, tuple)
     assert ab[0].size() == (2, 1)
