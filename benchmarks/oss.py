@@ -4,9 +4,8 @@
 import argparse
 import math
 import time
-from typing import Any, List, cast
+from typing import Any, List, Optional, cast
 
-from pyparsing import Optional
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
