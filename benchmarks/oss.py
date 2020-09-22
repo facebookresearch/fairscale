@@ -29,7 +29,7 @@ def dist_init(rank, world_size, backend):
 
 def get_problem(rank, data_size, batch_size):
     # Standard RN101
-    model = resnet101(pretrained=False, progress=True).to(rank)
+    model = resnet101(pretrained=False, progress=True).to(torch.device(rank))
 
     # Data setup, dummy data
     def collate(inputs: List[Any]):
@@ -64,16 +64,14 @@ def train(
     # DDP
     dist_init(rank=rank, world_size=world_size, backend=backend)
     torch.manual_seed(0)
-    torch.cuda.manual_seed(0)
-    torch.cuda.set_device(rank)
 
     # Setup
-    model = resnet101(pretrained=False, progress=True).cuda()
+    model = resnet101(pretrained=False, progress=True).to(rank)
 
     def collate(inputs: List[Any]):
         return {
-            "inputs": torch.stack([i[0] for i in inputs]).cuda(),
-            "label": torch.stack([i[1] for i in inputs]).cuda(),
+            "inputs": torch.stack([i[0] for i in inputs]).to(rank),
+            "label": torch.stack([i[1] for i in inputs]).to(rank),
         }
 
     dataloader = DataLoader(
@@ -102,7 +100,6 @@ def train(
 
     # Dummy training loop
     torch.cuda.synchronize(rank)
-    print(f"Rank {rank} ready")
     training_start = time.monotonic()
     model.train()
 
@@ -112,7 +109,7 @@ def train(
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
 
-        for i, batch in enumerate(dataloader):
+        for batch in dataloader:
 
             def closure():
                 model.zero_grad()
@@ -143,7 +140,7 @@ def train(
 
         measurements.append(data_size / (epoch_end - epoch_start))
         if dist.get_rank() == 0:
-            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss}")
+            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss:.3f}")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
@@ -194,6 +191,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
     backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
+    torch.cuda.manual_seed_all(0)  # type: ignore
 
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         print("\nBenchmark vanilla optimizer")
