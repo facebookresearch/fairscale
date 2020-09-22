@@ -25,8 +25,7 @@ else:
 class OSS(Optimizer):
     """Wraps an arbitrary :class:`optim.Optimizer <torch.optim.Optimizer>`
     optimizer and shards its state as described by ZeRO_.
-    ::
-        opt = OSS(params, optim=torch.optim.Adam, lr=0.01)
+    :: opt = OSS(params, optim=torch.optim.Adam, lr=0.01)
 
     .. _ZeRO: https://arxiv.org/abs/1910.02054
 
@@ -142,6 +141,14 @@ class OSS(Optimizer):
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
     # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
     def step(self, closure: Optional[Callable[[], float]] = None, **kwargs: Any) -> Optional[float]:
+        """Performs a single optimization step (parameter update).
+
+        Arguments:
+            closure (callable): A closure that reevaluates the model and
+                returns the loss. Optional for most optimizers.
+
+        .. note: Any extra parameter is passed to the base optimizer as-is"""
+
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         self._sync_param_groups()
 
@@ -172,13 +179,22 @@ class OSS(Optimizer):
         return loss
 
     def local_state_dict(self) -> dict:
-        """ Gets this rank's state_dict. """
+        """Gets this rank's state_dict.
+
+        Returns:
+            The state of the optimizer as a :class:`dict`.
+            It contains two entries:
+
+            * state - a dict holding current optimization state. Its content
+                differs between optimizer classes.
+            * param_groups - a dict containing all parameter groups
+        """
         return self.optim.state_dict()
 
     def consolidate_state_dict(self, recipient_rank: int = 0) -> None:
-        """ Update the consolidated state_dict list, one per rank.
+        """Update the consolidated state_dict list, one per rank.
 
-        This needs to be called on all replicas """
+        .. warning: This needs to be called on all replicas"""
 
         # Sync lr and other attributes in case its been updated
         self._sync_param_groups()
@@ -193,13 +209,14 @@ class OSS(Optimizer):
             self._broadcast_state_dict()
 
     def state_dict(self) -> Dict[str, Any]:
-        """
-        Return the last known global optimizer state, which consist of a list of the shards.
+        """Return the last known global optimizer state, which consist of a list of the shards.
 
-        NOTE:
-        - If the state has not been consolidated, this returns a shard's worth, not the global state.
-        - Returning the global state is limited to the replica which was responsible for the consolidation.
-        The state may also not be up to date, depending on when `consolidate_state_dict` was last called.
+        .. warning:
+            If the state has not been consolidated, this returns a shard's worth, not the global state.
+
+        .. warning:
+            Returning the global state is limited to the replica which was responsible for the consolidation.
+            The state may also not be up to date, depending on when `consolidate_state_dict` was last called.
         """
 
         if len(self._all_states) == 0:
@@ -228,7 +245,10 @@ class OSS(Optimizer):
         }
 
     def load_local_state_dict(self, state_dict: dict) -> None:
-        """ Loads this rank's state_dict. """
+        """Loads this rank's state_dict.
+
+        .. warning: This is not meant to load the global state dict.
+        """
 
         self.optim.load_state_dict(state_dict)
 
@@ -252,7 +272,12 @@ class OSS(Optimizer):
                     global_group[k] = v
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
-        """ Restore the global parameter groups as well as the shard """
+        """Restore the global parameter groups as well as the shard.
+
+        Arguments:
+            state_dict (dict): optimizer state. Should be an object returned
+                from a call to :meth:`state_dict`
+        """
 
         # Check whether we got a local or global dict
         if state_dict["local_state_dict"]:
@@ -266,6 +291,18 @@ class OSS(Optimizer):
             self.load_local_state_dict({"state": state_dict["state"][self.rank], "param_groups": param_groups})
 
     def add_param_group(self, param_group: dict) -> None:
+        """Add a param group to the :class:`Optimizer` s `param_groups`.
+
+        This can be useful when fine tuning a pre-trained network as frozen layers can be made
+        trainable and added to the :class:`Optimizer` as training progresses.
+
+        Arguments:
+            param_group (dict): Specifies what Tensors should be optimized along with group
+            specific optimization options
+
+        .. warning: This handles updating the shards on all partitions, but needs to be called on all ranks.
+        """
+
         super().add_param_group(param_group)
         if not self.in_super_constructor:
             self._partition_parameters.clear()  # Force a re-partitioning
@@ -283,9 +320,7 @@ class OSS(Optimizer):
                     local_group[k] = global_group[k]
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
-        """
-        Collect all the state shards, in CPU memory.
-        """
+        """Collect all the state shards, in CPU memory."""
         empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
         all_states: List[Dict[str, Any]] = []
 
@@ -314,9 +349,7 @@ class OSS(Optimizer):
         return all_states
 
     def _broadcast_state_dict(self) -> None:
-        """
-        Broadcast this rank's state shard, discard others
-        """
+        """Broadcast this rank's state shard, discard others"""
         empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
 
         for rank in range(dist.get_world_size(group=self.group)):

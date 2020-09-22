@@ -3,9 +3,8 @@
 
 import argparse
 import math
-import os
 import time
-from typing import Any, List, cast
+from typing import Any, List, Optional, cast
 
 import torch
 import torch.distributed as dist
@@ -24,9 +23,7 @@ OPTIM = torch.optim.RMSprop
 
 def dist_init(rank, world_size, backend):
     print(f"Using backend: {backend}")
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29501"
-    dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 
 def get_problem(rank, data_size, batch_size):
@@ -81,9 +78,11 @@ def train_oss_ddp(
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
+
+                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+
                 if dist.get_rank() == 0:
                     print(f"Loss: {loss.item()}")
 
@@ -147,6 +146,7 @@ def train(
     model.train()
 
     measurements = []
+    final_loss: Optional[float] = -1.0
 
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
@@ -157,12 +157,14 @@ def train(
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
+
+                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+
                 return loss
 
-            optimizer.step(closure)
+            final_loss = optimizer.step(closure)
 
         epoch_end = time.monotonic()
 
@@ -177,7 +179,7 @@ def train(
 
         measurements.append(data_size / (epoch_end - epoch_start))
         if dist.get_rank() == 0:
-            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec")
+            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss}")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
