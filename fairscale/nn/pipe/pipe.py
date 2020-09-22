@@ -290,7 +290,7 @@ class Pipe(Module):
             ``'except_last'``, or ``'never'`` (default: ``'except_last'``)
         deferred_batch_norm (bool):
             whether to use deferred BatchNorm moving statistics (default:
-            :data:`False`, see :ref:`Deferred Batch Normalization` for more
+            :data:`False`, see :class:`DeferredBatchNorm` for more
             details)
         pipelined_backward (bool, optional):
             if True, call torch.autograd.backward once per microbatch on the
@@ -527,15 +527,15 @@ class Pipe(Module):
         return super().cpu()
 
     def to(self, *args: Any, **kwargs: Any) -> "Pipe":
-        # Deny these usages:
-        #
-        # - to(device[, dtype, non_blocking])
-        # - to(tensor[, non_blocking])
-        #
-        # But allow this:
-        #
-        # - to(dtype[, non_blocking])
-        #
+        """ Restrict .to() options.
+
+        Deny these usages:
+         - to(device[, dtype, non_blocking])
+         - to(tensor[, non_blocking])
+
+         But allow this:
+         - to(dtype[, non_blocking])
+        """
         if self.devices:
             if "device" in kwargs or "tensor" in kwargs:
                 raise MOVING_DENIED

@@ -16,6 +16,8 @@ from torch.optim import SGD, Optimizer
 
 from .utils import broadcast_object, recursive_copy_to_device
 
+__all__ = ["OSS"]
+
 if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
 else:
@@ -25,7 +27,9 @@ else:
 class OSS(Optimizer):
     """Wraps an arbitrary :class:`optim.Optimizer <torch.optim.Optimizer>`
     optimizer and shards its state as described by ZeRO_.
-    :: opt = OSS(params, optim=torch.optim.Adam, lr=0.01)
+    ::
+
+        opt = OSS(params, optim=torch.optim.Adam, lr=0.01)
 
     .. _ZeRO: https://arxiv.org/abs/1910.02054
 
