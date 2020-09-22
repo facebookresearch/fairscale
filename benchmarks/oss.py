@@ -27,24 +27,6 @@ def dist_init(rank, world_size, backend):
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 
-def get_problem(rank, data_size, batch_size):
-    # Standard RN101
-    model = resnet101(pretrained=False, progress=True).to(torch.device(rank))
-
-    # Data setup, dummy data
-    def collate(inputs: List[Any]):
-        return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
-            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
-        }
-
-    dataloader = DataLoader(
-        dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
-    )
-    loss_fn = nn.CrossEntropyLoss()
-    return model, dataloader, loss_fn
-
-
 def train(
     rank: int,
     world_size: int,
@@ -75,7 +57,9 @@ def train(
         }
 
     dataloader = DataLoader(
-        dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
+        dataset=FakeData(transform=ToTensor(), size=data_size, random_offset=rank * data_size),
+        batch_size=batch_size,
+        collate_fn=collate,
     )
     loss_fn = nn.CrossEntropyLoss()
 
