@@ -2,9 +2,9 @@ Optimizer state sharding
 ========================
 
 Using torch.nn.parallel.DistributedDataParallel leads to some wasted communications, but it is possible and makes OSS a drop in solution in your existing torch distributed code.
-Let's suppose that your trainer looks likemake html
+Let's suppose that your trainer looks like
 
-.. code-block:: default
+.. code-block:: python
 
 
     import torch
@@ -23,7 +23,9 @@ Let's suppose that your trainer looks likemake html
         loss = myVeryRelevantLoss()
 
         base_optimizer_arguments = {} # any optimizer specific arguments, LR, momentum, etc...
-        optimizer = torch.optim.SGD(params=model.parameters(), **base_optimizer_arguments)
+        optimizer = torch.optim.SGD(
+            params=model.parameters(),
+            **base_optimizer_arguments)
 
         # Any relevant training loop, nothing specific to OSS. For example:
         model.train()
@@ -41,7 +43,7 @@ Let's suppose that your trainer looks likemake html
 
 Then sharding the optimizer state is merely a matter of wrapping your optimizer in fairscale.optim.OSS, as follows
 
-.. code-block:: default
+.. code-block:: python
 
 
     import torch
@@ -60,9 +62,14 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
         dataloader = mySuperFastDataloader()
         loss = myVeryRelevantLoss()
 
-        base_optimizer_arguments = {}  # pass any optimizer specific arguments here, or directly below when instantiating OSS
+        base_optimizer_arguments = {}  # any optimizer specific arguments, LR, momentum, etc...
+
+        # ** NEW ** Wrap a base optimizer into OSS
         base_optimizer = torch.optim.SGD  # any pytorch compliant optimizer
-        optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)  # ** NEW **
+        optimizer = OSS(
+            params=model.parameters(),
+            optim=base_optimizer,
+            **base_optimizer_arguments)
 
         # Any relevant training loop, nothing specific to OSS. For example:
         model.train()
