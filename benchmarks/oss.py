@@ -229,13 +229,13 @@ if __name__ == "__main__":
             join=True,
         )
     else:
-        # print("\nBenchmark vanilla optimizer")
-        # mp.spawn(
-        #     train,
-        #     args=(args.world_size, args.epochs, args.batch_size, args.data_size, False, False),
-        #     nprocs=args.world_size,
-        #     join=True,
-        # )
+        print("\nBenchmark vanilla optimizer")
+        mp.spawn(
+            train,
+            args=(args.world_size, args.epochs, args.batch_size, args.data_size, backend, False, False),
+            nprocs=args.world_size,
+            join=True,
+        )
 
         print("\nBenchmark OSS")
         mp.spawn(
