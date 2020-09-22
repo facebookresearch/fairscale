@@ -34,8 +34,9 @@ TModule = TypeVar("TModule", bound=nn.Module)
 
 
 class DeferredBatchNorm(_BatchNorm):
-    """A BatchNorm layer tracks multiple micro-batches to update running
+    """ A BatchNorm layer tracks multiple micro-batches to update running
     statistics per mini-batch.
+    .. _DeferredBatchNorm
     """
 
     sum: Tensor
