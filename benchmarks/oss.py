@@ -19,14 +19,30 @@ from torchvision.transforms import ToTensor
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim.oss import OSS
 
-BACKEND = dist.Backend.GLOO  # type: ignore  # dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO
 OPTIM = torch.optim.RMSprop
 
 
-def dist_init(rank, world_size):
-    dist.init_process_group(
-        backend=BACKEND, init_method="tcp://localhost:29501", rank=rank, world_size=world_size, store=None
+def dist_init(rank, world_size, backend):
+    print(f"Using backend: {backend}")
+    dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
+
+
+def get_problem(rank, data_size, batch_size):
+    # Standard RN101
+    model = resnet101(pretrained=False, progress=True).to(rank)
+
+    # Data setup, dummy data
+    def collate(inputs: List[Any]):
+        return {
+            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
+            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
+        }
+
+    dataloader = DataLoader(
+        dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
     )
+    loss_fn = nn.CrossEntropyLoss()
+    return model, dataloader, loss_fn
 
 
 def train(
@@ -35,6 +51,7 @@ def train(
     num_epochs: int = 10,
     batch_size: int = 32,
     data_size: int = 200,
+    backend: str = "gloo",
     use_oss: bool = True,
     use_sdp: bool = False,
     check_regression: bool = True,
@@ -45,7 +62,7 @@ def train(
     assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
 
     # DDP
-    dist_init(rank=rank, world_size=world_size)
+    dist_init(rank=rank, world_size=world_size, backend=backend)
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.set_device(rank)
@@ -84,6 +101,7 @@ def train(
     torch.cuda.reset_peak_memory_stats(rank)
 
     # Dummy training loop
+    torch.cuda.synchronize(rank)
     print(f"Rank {rank} ready")
     training_start = time.monotonic()
     model.train()
@@ -100,13 +118,14 @@ def train(
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                loss.backward()
                 loss /= world_size
+                loss.backward()
 
                 dist.all_reduce(loss, op=dist.ReduceOp.SUM)
 
                 if use_sdp:
                     ddp.reduce()  # Send the gradients to the appropriate shards
+
                 return loss
 
             final_loss = optimizer.step(closure)
@@ -169,10 +188,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
     )
+    parser.add_argument("--gloo", action="store_true", default=False)
 
     # Parse and run
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
+    backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
 
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         print("\nBenchmark vanilla optimizer")
@@ -183,6 +204,7 @@ if __name__ == "__main__":
                 args.epochs,
                 args.batch_size,
                 args.data_size,
+                backend,
                 False,  # OSS
                 False,  # SDP
                 False,  # no regression check
@@ -200,6 +222,7 @@ if __name__ == "__main__":
                 args.epochs,
                 args.batch_size,
                 args.data_size,
+                backend,
                 True,  # OSS
                 False,  # SDP
                 args.check_regression,
@@ -220,6 +243,7 @@ if __name__ == "__main__":
                 args.epochs,
                 args.batch_size,
                 args.data_size,
+                backend,
                 True,  # OSS
                 True,  # SDP
                 False,  # no regression check
