@@ -3,9 +3,8 @@
 
 import argparse
 import math
-import os
 import time
-from typing import Any, List, cast
+from typing import Any, List, Optional, cast
 
 import torch
 import torch.distributed as dist
@@ -19,14 +18,12 @@ from torchvision.transforms import ToTensor
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim.oss import OSS
 
-BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 OPTIM = torch.optim.RMSprop
 
 
-def dist_init(rank, world_size):
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29501"
-    dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size)
+def dist_init(rank, world_size, backend):
+    print(f"Using backend: {backend}")
+    dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 
 def get_problem(rank, data_size, batch_size):
@@ -48,11 +45,11 @@ def get_problem(rank, data_size, batch_size):
 
 
 def train_oss_ddp(
-    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, data_size: int = 200,
+    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, data_size: int = 200, backend: str = "gloo",
 ):
 
     # DDP
-    dist_init(rank, world_size)
+    dist_init(rank, world_size, backend)
 
     # Setup
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
@@ -81,9 +78,11 @@ def train_oss_ddp(
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
+
+                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+
                 if dist.get_rank() == 0:
                     print(f"Loss: {loss.item()}")
 
@@ -119,13 +118,14 @@ def train(
     num_epochs: int = 10,
     batch_size: int = 32,
     data_size: int = 200,
+    backend: str = "gloo",
     use_oss: bool = True,
     check_regression: bool = True,
     reference_speed: float = -1.0,
     reference_memory: float = -1.0,
 ):
     # DDP
-    dist_init(rank, world_size)
+    dist_init(rank, world_size, backend)
 
     # Setup
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
@@ -146,6 +146,7 @@ def train(
     model.train()
 
     measurements = []
+    final_loss: Optional[float] = -1.0
 
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
@@ -156,12 +157,14 @@ def train(
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 loss /= world_size
                 loss.backward()
+
+                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+
                 return loss
 
-            optimizer.step(closure)
+            final_loss = optimizer.step(closure)
 
         epoch_end = time.monotonic()
 
@@ -176,7 +179,7 @@ def train(
 
         measurements.append(data_size / (epoch_end - epoch_start))
         if dist.get_rank() == 0:
-            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec")
+            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss}")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
@@ -210,6 +213,7 @@ if __name__ == "__main__":
     parser.add_argument("--check_regression", action="store_true", default=False)
     parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
+    parser.add_argument("--gloo", action="store_true", default=False)
 
     # beta - test oss_ddp
     parser.add_argument("--oss_ddp", action="store_true", default=False)
@@ -217,11 +221,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
 
+    backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
     if args.oss_ddp:
         print("\nBenchmark OSS DDP")
         mp.spawn(
             train_oss_ddp,
-            args=(args.world_size, args.epochs, args.batch_size, args.data_size),
+            args=(args.world_size, args.epochs, args.batch_size, args.data_size, backend),
             nprocs=args.world_size,
             join=True,
         )
@@ -229,7 +234,7 @@ if __name__ == "__main__":
         print("\nBenchmark vanilla optimizer")
         mp.spawn(
             train,
-            args=(args.world_size, args.epochs, args.batch_size, args.data_size, False, False),
+            args=(args.world_size, args.epochs, args.batch_size, args.data_size, backend, False, False),
             nprocs=args.world_size,
             join=True,
         )
@@ -242,6 +247,7 @@ if __name__ == "__main__":
                 args.epochs,
                 args.batch_size,
                 args.data_size,
+                backend,
                 True,
                 args.check_regression,
                 args.reference_speed,
