@@ -100,7 +100,7 @@ run_oss_benchmark: &run_oss_benchmark
   - run:
       name: Run OSS Benchmark
       command: |
-        python benchmarks/oss.py --check_regression
+        python benchmarks/oss.py --check_regression --world_size 4
         python benchmarks/oss.py --gloo
 
 

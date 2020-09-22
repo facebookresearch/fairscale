@@ -32,7 +32,6 @@ class ShardedDataParallel(nn.Module):
         module (~torch.nn.Module): module to be parallelized
         optimizer (~torch.optim.Optimizer): optimizer to be used for training
         optimizer_params(Dict): extra parameters for the optimizer
-        broadcast_buffers (bool): enable syncing of the module at the beginning of the forward function
         world_size (int): number of parallel workers
         process_group (optional): the c10d process group to be used for
             distributed gradient reduction. If None, the default WORLD process group
@@ -48,7 +47,6 @@ class ShardedDataParallel(nn.Module):
         optimizer: Type[torch.optim.Optimizer],
         optimizer_params: Dict[str, Any],
         world_size: int,
-        broadcast_buffers: bool = True,
         process_group: Any = None,
         buffer_size: int = 2 ** 28,
     ):
@@ -56,7 +54,6 @@ class ShardedDataParallel(nn.Module):
 
         self.module = module
         self.world_size = world_size
-        self.broadcast_buffers = broadcast_buffers
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.rank = dist.get_rank(self.process_group)
 
