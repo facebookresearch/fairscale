@@ -153,12 +153,22 @@ class OSS(Optimizer):
 
         # Sync all the states. Broadcast requests are issued async, we check completeness before moving on
         requests = []
+        requires_grad = []
         for rank, param_groups in enumerate(self.partition_parameters()):
             for param_group in param_groups:
                 for param in param_group["params"]:
+                    # NOTE: Broadcast is in-place and not differentiable
+                    # Gloo will rightly assert on this operation for any tensor that requires grad.
+                    # We save and restore the grad requirement state to work around that, in our case
+                    # the grad is only useful on the source rank.
+                    requires_grad.append((param, param.requires_grad))
+                    param.requires_grad = False
                     requests.append(dist.broadcast(tensor=param, src=rank, group=self.group, async_op=True))
 
-        _ = list(map(lambda x: x.wait(), requests))
+        for fut, req_grad in zip(requests, requires_grad):
+            fut.wait()
+            req_grad[0].requires_grad = req_grad[1]
+
         return loss
 
     def local_state_dict(self) -> dict:
