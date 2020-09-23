@@ -2,6 +2,7 @@
 from __future__ import print_function
 import argparse
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -11,9 +12,16 @@ from torch.optim.lr_scheduler import StepLR
 import time
 from fairscale.optim.oss import OSS
 import torch.multiprocessing as mp
+from fairscale.nn.data_parallel import ShardedDataParallel
 
 # how is world_size defined?
-WORLD_SIZE = 10
+WORLD_SIZE = 2
+OPTIM = torch.optim.RMSprop
+BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
+
+def dist_init(rank, world_size, backend):
+    print(f"Using backend: {backend}")
+    dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 class Net(nn.Module):
     def __init__(self):
@@ -41,46 +49,55 @@ class Net(nn.Module):
         return output
 
 
-def train(args, model, device, train_loader, optimizer, epoch):
-    # DDP -- Imported from?
-    # rank defined where?
-    dist_init(rank, WORLD_SIZE)
+def train(rank, args, model, device, train_loader, num_epochs):
+    ##############
+    # SETUP 
+    dist_init(rank, WORLD_SIZE, BACKEND)
+    ddp = ShardedDataParallel(
+        module=model, optimizer=torch.optim.Adadelta, optimizer_params={"lr": 1e-4}, world_size=WORLD_SIZE
+    )
+    optimizer = ddp.optimizer
+    # Reset the memory use counter
+    torch.cuda.reset_peak_memory_stats(rank)
 
+    # Dummy training loop
+    torch.cuda.synchronize(rank)
+    training_start = time.monotonic()
+
+    loss_fn = nn.CrossEntropyLoss()
+    ##############
+
+    
     model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        data, target = data.to(device), target.to(device)
-        optimizer.zero_grad()
-        output = model(data)
-        loss = F.nll_loss(output, target)
-        torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
-        loss /= world_size
-        loss.backward()
-        optimizer.step()
-        if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                100. * batch_idx / len(train_loader), loss.item()))
-            if args.dry_run:
-                break
-
-
-def test(model, device, test_loader):
-    model.eval()
-    test_loss = 0
-    correct = 0
-    with torch.no_grad():
-        for data, target in test_loader:
+    measurements = []
+    for epoch in range(num_epochs):
+        epoch_start = time.monotonic()
+        for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
-            output = model(data)
-            test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
-            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-            correct += pred.eq(target.view_as(pred)).sum().item()
 
-    test_loss /= len(test_loader.dataset)
+            def closure():
+                model.zero_grad()
+                outputs = model(data)
+                loss = loss_fn(outputs, target)
+                loss /= WORLD_SIZE
+                loss.backward()
 
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-        test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
+                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+
+                # if dist.get_rank() == 0:
+                #     print(f"Loss: {loss.item()}")
+
+                ddp.reduce()  # Send the gradients to the appropriate shards
+                return loss
+
+            optimizer.step(closure)
+
+        epoch_end = time.monotonic()
+
+    torch.cuda.synchronize(rank)
+    training_stop = time.monotonic()
+    print("Total Time:",training_stop-training_start)
+
 
 
 def main():
@@ -135,33 +152,17 @@ def main():
     ### optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
     ### With
     print("\n\n",model.parameters(), args.lr,"\n\n")
-    optimizer = OSS(params=model.parameters(), optim=optim.Adadelta, lr=args.lr)
-
+    
     mp.spawn(
             train,
-            args=(
-                WORLD_SIZE,
-                args.epochs,
-            ),
+            args=(args, model, device, train_loader, args.epochs),
             nprocs=WORLD_SIZE,
             join=True,
         )
 
-    scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
-    for epoch in range(1, args.epochs + 1):
-        tic = time.perf_counter()
-        train(args, model, device, train_loader, optimizer, epoch)
-        toc = time.perf_counter()
-        print(f">>> TRANING Time {toc - tic:0.4f} seconds")
 
-        tic = time.perf_counter()
-        test(model, device, test_loader)
-        toc = time.perf_counter()
-        print(f">>> TESTING Time {toc - tic:0.4f} seconds")
-        scheduler.step()
-
-    if args.save_model:
-        torch.save(model.state_dict(), "mnist_cnn.pt")
+    # if args.save_model:
+    #     torch.save(model.state_dict(), "mnist_cnn.pt")
 
 
 if __name__ == '__main__':
