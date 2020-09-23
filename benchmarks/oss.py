@@ -4,6 +4,7 @@
 import argparse
 from enum import Enum
 import math
+import os
 import time
 from typing import Any, List, Optional, cast
 
@@ -24,7 +25,10 @@ OPTIM = torch.optim.RMSprop
 
 def dist_init(rank, world_size, backend):
     print(f"Using backend: {backend}")
-    dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29501"
+    os.environ["GLOO_SOCKET_IFNAME"] = "en0"
+    dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
 
 
 def train(
@@ -67,7 +71,11 @@ def train(
 
     if use_sdp:
         ddp = ShardedDataParallel(
-            module=model, optimizer=OPTIM, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size,
+            module=model,
+            optimizer=OPTIM,
+            optimizer_params={"lr": 1e-4, "momentum": 0.9},
+            world_size=world_size,
+            broadcast_buffers=False,
         )
         ddp.train()
         optimizer = ddp.optimizer
@@ -163,9 +171,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", action="store", default=32, type=int)
     parser.add_argument("--data_size", action="store", default=512, type=int)
     parser.add_argument("--check_regression", action="store_true", default=False)
-    parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
-    parser.add_argument("--reference_memory", action="store", default=4475, type=float)
-    parser.add_argument("--reference_loss", action="store", default=0.67, type=float)
+    parser.add_argument("--reference_speed", action="store", default=13.70, type=float)
+    parser.add_argument("--reference_memory", action="store", default=4637.0, type=float)
+    parser.add_argument("--reference_loss", action="store", default=0.941, type=float)
     parser.add_argument(
         "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
     )

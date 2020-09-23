@@ -33,6 +33,8 @@ class ShardedDataParallel(nn.Module):
         optimizer (~torch.optim.Optimizer): optimizer to be used for training
         optimizer_params(Dict): extra parameters for the optimizer
         world_size (int): number of parallel workers
+        broadcast_buffers (bool): flag that enables syncing (broadcasting) buffers of
+        the module at beginning of the forward function. (default: ``True``)
         process_group (optional): the c10d process group to be used for
             distributed gradient reduction. If None, the default WORLD process group
             will be used.
@@ -47,6 +49,7 @@ class ShardedDataParallel(nn.Module):
         optimizer: Type[torch.optim.Optimizer],
         optimizer_params: Dict[str, Any],
         world_size: int,
+        broadcast_buffers: bool,
         process_group: Any = None,
         buffer_size: int = 2 ** 28,
     ):
@@ -56,6 +59,8 @@ class ShardedDataParallel(nn.Module):
         self.world_size = world_size
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.rank = dist.get_rank(self.process_group)
+        self.broadcast_buffers = broadcast_buffers
+        self.authoritative_rank = 0
 
         # Never use a bigger buffer than the number of model params
         self.buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
@@ -109,6 +114,9 @@ class ShardedDataParallel(nn.Module):
                 raise RuntimeError("OssDdp requires explicit reduction, must call OssDdp.reduce")
             if not self.accumulate_grads:
                 self.need_reduction = True
+            if self.broadcast_buffers and len(list(self.module.buffers())) > 0:
+                self._sync_buffers()
+
         return self.module(*inputs, **kwargs)
 
     def reduce(self) -> None:
@@ -198,3 +206,14 @@ class ShardedDataParallel(nn.Module):
                     reduce_grads(buffered_params, cast(int, param_rank))
 
         reduction_fn()
+
+    def _sync_buffers(self) -> None:
+        _ = list(
+            map(
+                lambda x: x.wait(),
+                map(
+                    lambda x: dist.broadcast(x, self.authoritative_rank, self.process_group, async_op=True),
+                    self.module.buffers(),
+                ),
+            )
+        )
