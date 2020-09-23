@@ -27,7 +27,6 @@ def dist_init(rank, world_size, backend):
     print(f"Using backend: {backend}")
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "29501"
-    os.environ["GLOO_SOCKET_IFNAME"] = "en0"
     dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
 
 
