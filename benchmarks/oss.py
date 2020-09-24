@@ -157,7 +157,7 @@ def train(
     if use_oss and check_regression and dist.get_rank() == 0:
         assert (mean + 3.0 * std) > reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
-        assert cast(float, final_loss) < reference_loss, "Loss regression detected"
+        assert abs(cast(float, final_loss) - reference_loss) < 1e-3, "Loss regression detected"
 
         print("[Regression Test] VALID")
 
@@ -178,9 +178,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", action="store", default=32, type=int)
     parser.add_argument("--data_size", action="store", default=512, type=int)
     parser.add_argument("--check_regression", action="store_true", default=False)
-    parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
+    parser.add_argument("--reference_speed", action="store", default=29.7, type=float)
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
-    parser.add_argument("--reference_loss", action="store", default=0.941, type=float)
+    parser.add_argument("--reference_loss", action="store", default=0.866, type=float)
     parser.add_argument(
         "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
     )

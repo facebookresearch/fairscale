@@ -103,11 +103,6 @@ run_oss_benchmark: &run_oss_benchmark
         python benchmarks/oss.py --check_regression
         python benchmarks/oss.py --gloo --optim_type oss
 
-run_oss_ddp_benchmark: &run_oss_ddp_benchmark
-  - run:
-      name: Run OSS DDP Benchmark
-      command: |
-        python benchmarks/oss.py --oss_ddp
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
