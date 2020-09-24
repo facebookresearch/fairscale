@@ -7,6 +7,7 @@ import math
 import time
 from typing import Any, List, Optional, cast
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -45,74 +46,6 @@ def get_problem(rank, data_size, batch_size):
     return model, dataloader, loss_fn
 
 
-def train_oss_ddp(
-    rank: int, world_size: int, num_epochs: int = 10, batch_size: int = 32, data_size: int = 200, backend: str = "gloo",
-):
-
-    # DDP
-    dist_init(rank, world_size, backend)
-
-    # Setup
-    model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
-
-    ddp = ShardedDataParallel(
-        module=model, optimizer=torch.optim.SGD, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size
-    )
-    optimizer = ddp.optimizer
-
-    # Reset the memory use counter
-    torch.cuda.reset_peak_memory_stats(rank)
-
-    # Dummy training loop
-    torch.cuda.synchronize(rank)
-    training_start = time.monotonic()
-    model.train()
-
-    measurements = []
-
-    for epoch in range(num_epochs):
-        epoch_start = time.monotonic()
-
-        for batch in dataloader:
-
-            def closure():
-                model.zero_grad()
-                outputs = model(batch["inputs"])
-                loss = loss_fn(outputs, batch["label"])
-                loss /= world_size
-                loss.backward()
-
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
-
-                if dist.get_rank() == 0:
-                    print(f"Loss: {loss.item()}")
-
-                ddp.reduce()  # Send the gradients to the appropriate shards
-                return loss
-
-            optimizer.step(closure)
-
-        epoch_end = time.monotonic()
-
-        measurements.append(data_size / (epoch_end - epoch_start))
-        if dist.get_rank() == 0:
-            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec")
-
-    torch.cuda.synchronize(rank)
-    training_stop = time.monotonic()
-    img_per_sec = data_size / (training_stop - training_start) * num_epochs
-    max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
-
-    print(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec overall")
-    print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
-
-    # Compute the mean and average img per second
-    mean = sum(measurements) / len(measurements)
-    diff = map(lambda x: pow(x - mean, 2.0), measurements)
-    std = math.sqrt(sum(diff) / (len(measurements) - 1))
-    print(f"[{dist.get_rank()}] : Mean speed: {mean:.2f} +/- {std:.2f}")
-
-
 def train(
     rank: int,
     world_size: int,
@@ -130,7 +63,6 @@ def train(
     assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
     # DDP
     dist_init(rank, world_size, backend)
-    torch.manual_seed(0)
 
     # Setup
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
@@ -249,7 +181,10 @@ if __name__ == "__main__":
     print(f"Benchmark arguments: {args}")
 
     backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
-    torch.cuda.manual_seed_all(0)  # type: ignore
+    torch.manual_seed(0)  # also sets the cuda seed
+    np.random.seed(0)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         print("\nBenchmark vanilla optimizer")
@@ -293,7 +228,7 @@ if __name__ == "__main__":
     if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
         print("\nBenchmark OSS DDP")
         mp.spawn(
-            train_oss_ddp,
+            train,
             args=(
                 args.world_size,
                 args.epochs,
