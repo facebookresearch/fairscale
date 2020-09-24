@@ -2,6 +2,7 @@
 
 
 import argparse
+from enum import Enum
 import math
 import time
 from typing import Any, List, Optional, cast
@@ -120,22 +121,36 @@ def train(
     data_size: int = 200,
     backend: str = "gloo",
     use_oss: bool = True,
+    use_sdp: bool = False,
     check_regression: bool = True,
     reference_speed: float = -1.0,
     reference_memory: float = -1.0,
+    reference_loss: float = -1.0,
 ):
+    assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
     # DDP
     dist_init(rank, world_size, backend)
+    torch.manual_seed(0)
 
     # Setup
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
 
     # Shard the optimizer
-    optimizer: torch.optim.Optimizer = (
-        OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
-        if use_oss
-        else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
-    )
+    optimizer: Optional[torch.optim.Optimizer] = None
+
+    if use_sdp:
+        ddp = ShardedDataParallel(
+            module=model, optimizer=OPTIM, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size,
+        )
+        ddp.train()
+        optimizer = ddp.optimizer
+        model = ddp
+    else:
+        optimizer = (
+            OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
+            if use_oss
+            else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
+        )
 
     # Reset the memory use counter
     torch.cuda.reset_peak_memory_stats(rank)
@@ -162,6 +177,9 @@ def train(
 
                 dist.all_reduce(loss, op=dist.ReduceOp.SUM)
 
+                if use_sdp:
+                    ddp.reduce()  # Send the gradients to the appropriate shards
+
                 return loss
 
             final_loss = optimizer.step(closure)
@@ -179,7 +197,7 @@ def train(
 
         measurements.append(data_size / (epoch_end - epoch_start))
         if dist.get_rank() == 0:
-            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss}")
+            print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss:.3f}")
 
     torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
@@ -198,10 +216,18 @@ def train(
     if use_oss and check_regression and dist.get_rank() == 0:
         assert (mean + 3.0 * std) > reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
+        assert cast(float, final_loss) < reference_loss, "Loss regression detected"
+
         print("[Regression Test] VALID")
 
 
 if __name__ == "__main__":
+
+    class OptimType(str, Enum):
+        vanilla = "pytorch"
+        oss = "oss"
+        oss_sdp = "oss_sdp"
+        everyone = "everyone"
 
     parser = argparse.ArgumentParser(
         description="Benchmark the optimizer state sharding, on a typical computer vision workload"
@@ -213,32 +239,37 @@ if __name__ == "__main__":
     parser.add_argument("--check_regression", action="store_true", default=False)
     parser.add_argument("--reference_speed", action="store", default=32.32, type=float)
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
+    parser.add_argument("--reference_loss", action="store", default=0.941, type=float)
+    parser.add_argument(
+        "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
+    )
     parser.add_argument("--gloo", action="store_true", default=False)
-
-    # beta - test oss_ddp
-    parser.add_argument("--oss_ddp", action="store_true", default=False)
 
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
 
     backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
-    if args.oss_ddp:
-        print("\nBenchmark OSS DDP")
-        mp.spawn(
-            train_oss_ddp,
-            args=(args.world_size, args.epochs, args.batch_size, args.data_size, backend),
-            nprocs=args.world_size,
-            join=True,
-        )
-    else:
+    torch.cuda.manual_seed_all(0)  # type: ignore
+
+    if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         print("\nBenchmark vanilla optimizer")
         mp.spawn(
             train,
-            args=(args.world_size, args.epochs, args.batch_size, args.data_size, backend, False, False),
+            args=(
+                args.world_size,
+                args.epochs,
+                args.batch_size,
+                args.data_size,
+                backend,
+                False,  # OSS
+                False,  # SDP
+                False,  # no regression check
+            ),
             nprocs=args.world_size,
             join=True,
         )
 
+    if args.optim_type == OptimType.oss or args.optim_type == OptimType.everyone:
         print("\nBenchmark OSS")
         mp.spawn(
             train,
@@ -248,10 +279,30 @@ if __name__ == "__main__":
                 args.batch_size,
                 args.data_size,
                 backend,
-                True,
+                True,  # OSS
+                False,  # SDP
                 args.check_regression,
                 args.reference_speed,
                 args.reference_memory,
+                args.reference_loss,
+            ),
+            nprocs=args.world_size,
+            join=True,
+        )
+
+    if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
+        print("\nBenchmark OSS DDP")
+        mp.spawn(
+            train_oss_ddp,
+            args=(
+                args.world_size,
+                args.epochs,
+                args.batch_size,
+                args.data_size,
+                backend,
+                True,  # OSS
+                True,  # SDP
+                False,  # no regression check
             ),
             nprocs=args.world_size,
             join=True,
