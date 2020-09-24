@@ -4,10 +4,10 @@
 import argparse
 from enum import Enum
 import math
-import os
 import time
 from typing import Any, List, Optional, cast
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -25,9 +25,25 @@ OPTIM = torch.optim.RMSprop
 
 def dist_init(rank, world_size, backend):
     print(f"Using backend: {backend}")
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29501"
-    dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
+
+
+def get_problem(rank, data_size, batch_size):
+    # Standard RN101
+    model = resnet101(pretrained=False, progress=True).to(rank)
+
+    # Data setup, dummy data
+    def collate(inputs: List[Any]):
+        return {
+            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
+            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
+        }
+
+    dataloader = DataLoader(
+        dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
+    )
+    loss_fn = nn.CrossEntropyLoss()
+    return model, dataloader, loss_fn
 
 
 def train(
@@ -45,27 +61,23 @@ def train(
     reference_loss: float = -1.0,
 ):
     assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
-
     # DDP
     dist_init(rank=rank, world_size=world_size, backend=backend)
     torch.manual_seed(0)
 
     # Setup
-    model = resnet101(pretrained=False, progress=True).to(rank)
+    torch.cuda.set_device(rank)
+    torch.cuda.manual_seed(0)
+    torch.manual_seed(0)  # also sets the cuda seed
+    np.random.seed(0)
 
-    def collate(inputs: List[Any]):
-        return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(rank),
-            "label": torch.stack([i[1] for i in inputs]).to(rank),
-        }
+    if backend == "nccl":
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
-    dataloader = DataLoader(
-        dataset=FakeData(transform=ToTensor(), size=data_size, random_offset=rank * data_size),
-        batch_size=batch_size,
-        collate_fn=collate,
-    )
-    loss_fn = nn.CrossEntropyLoss()
+    model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
 
+    # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
 
     if use_sdp:
@@ -150,18 +162,19 @@ def train(
     if use_oss and check_regression and dist.get_rank() == 0:
         assert (mean + 3.0 * std) > reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
-        assert cast(float, final_loss) < reference_loss, "Loss regression detected"
+        assert abs(cast(float, final_loss) - reference_loss) < 1e-3, "Loss regression detected"
+
         print("[Regression Test] VALID")
 
 
-class OptimType(str, Enum):
-    vanilla = "pytorch"
-    oss = "oss"
-    oss_sdp = "oss_sdp"
-    everyone = "everyone"
-
-
 if __name__ == "__main__":
+
+    class OptimType(str, Enum):
+        vanilla = "pytorch"
+        oss = "oss"
+        oss_sdp = "oss_sdp"
+        everyone = "everyone"
+
     parser = argparse.ArgumentParser(
         description="Benchmark the optimizer state sharding, on a typical computer vision workload"
     )
@@ -170,19 +183,18 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", action="store", default=32, type=int)
     parser.add_argument("--data_size", action="store", default=512, type=int)
     parser.add_argument("--check_regression", action="store_true", default=False)
-    parser.add_argument("--reference_speed", action="store", default=13.70, type=float)
-    parser.add_argument("--reference_memory", action="store", default=4637.0, type=float)
-    parser.add_argument("--reference_loss", action="store", default=0.941, type=float)
+    parser.add_argument("--reference_speed", action="store", default=29.7, type=float)
+    parser.add_argument("--reference_memory", action="store", default=4475, type=float)
+    parser.add_argument("--reference_loss", action="store", default=0.866, type=float)
     parser.add_argument(
         "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
     )
     parser.add_argument("--gloo", action="store_true", default=False)
 
-    # Parse and run
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
+
     backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
-    torch.cuda.manual_seed_all(0)  # type: ignore
 
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         print("\nBenchmark vanilla optimizer")
