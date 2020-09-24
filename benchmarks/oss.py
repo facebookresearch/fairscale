@@ -70,6 +70,10 @@ def train(
     torch.manual_seed(0)  # also sets the cuda seed
     np.random.seed(0)
 
+    if backend == "nccl":
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
 
     # Shard the optimizer
@@ -186,8 +190,6 @@ if __name__ == "__main__":
     print(f"Benchmark arguments: {args}")
 
     backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         print("\nBenchmark vanilla optimizer")
