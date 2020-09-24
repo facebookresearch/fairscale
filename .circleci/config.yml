@@ -254,8 +254,6 @@ jobs:
 
       - <<: *run_oss_benchmark
 
-      - <<: *run_oss_ddp_benchmark
-
 
 
 workflows:
