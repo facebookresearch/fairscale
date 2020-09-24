@@ -65,6 +65,11 @@ def train(
     dist_init(rank, world_size, backend)
 
     # Setup
+    torch.cuda.set_device(rank)
+    torch.cuda.manual_seed(0)
+    torch.manual_seed(0)  # also sets the cuda seed
+    np.random.seed(0)
+
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
 
     # Shard the optimizer
@@ -181,8 +186,6 @@ if __name__ == "__main__":
     print(f"Benchmark arguments: {args}")
 
     backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
-    torch.manual_seed(0)  # also sets the cuda seed
-    np.random.seed(0)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
