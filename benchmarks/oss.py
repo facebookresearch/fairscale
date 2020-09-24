@@ -63,7 +63,6 @@ def train(
     assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
     # DDP
     dist_init(rank=rank, world_size=world_size, backend=backend)
-    torch.manual_seed(0)
 
     # Setup
     torch.cuda.set_device(rank)
