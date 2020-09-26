@@ -4,13 +4,16 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-A distributed data parallel class that shards the model into pieces
+A distributed data parallel class that shards the model and the optimizer into pieces
 """
 
+from functools import partial
 from typing import Any, Dict, Iterable, List, Type, cast
 
 import torch
 from torch import Tensor, nn
+import torch.distributed as dist
+from torch.distributed.algorithms.ddp_comm_hooks import DDPCommHookType, register_ddp_comm_hook
 
 
 def _slice_module(module: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
@@ -23,7 +26,35 @@ def _slice_module(module: nn.Sequential, number_shards: int) -> List[List[nn.Mod
     return list(chunks(list(module.modules()), number_shards))
 
 
-class ShardedDataParallel(nn.Module):
+def _ddp_comm_hook_wrapper(comm_hook: Any, model: torch.nn.parallel.DistributedDataParallel, state: Any) -> None:
+    model._register_comm_hook(state, comm_hook)  # type: ignore
+
+
+def _reduce_hook(process_group: torch.distributed.group, bucket: dist._GradBucket) -> torch.futures.Future:  # type: ignore
+    """
+       Reduce all gradients onto rank 0. Destroy the gradients on every other rank
+    """
+    # FIXME: this is utterly broken
+
+    world_size = process_group.size()  # type: ignore
+
+    tensor = bucket.get_tensors()[0]
+    fut = dist.reduce(tensor, dst=0, group=process_group, async_op=True).get_future()  # type: ignore
+
+    def then_callback(fut: Any) -> Any:
+        if dist.get_rank() == 0:
+            return [fut.value()[0].div_(world_size)]
+        else:
+            return None
+
+    return fut.then(then_callback)
+
+
+class CustomHooks(DDPCommHookType):
+    REDUCE = partial(_ddp_comm_hook_wrapper, comm_hook=_reduce_hook)
+
+
+class ShardedDataParallelExperimental(nn.Module):
     """Implements distributed data parallel training with optimizer state sharding.
 
     This experiments with a novel way to get to the full zero suite
@@ -59,7 +90,7 @@ class ShardedDataParallel(nn.Module):
         module_slices = _slice_module(module, self.world_size)
 
         # Create one data parallel process group per shard.
-        self.ddp_shards: List[nn.Module] = []
+        self.ddp_shards: List[torch.nn.parallel.DistributedDataParallel] = []
 
         for i_slice, module_shard in enumerate(module_slices):
             # Authoritative rank moves with the slices
@@ -81,8 +112,9 @@ class ShardedDataParallel(nn.Module):
             # - All ranks other than the authoritative one can let go of the parameters after the FW
             # pass, DDP will re-broadcast them at the next step
             # TODO: Ben
+            register_ddp_comm_hook(comm_hook_type=CustomHooks.REDUCE, model=ddp, state=process_group)
 
-            # - Bring the grads back to the authoritative rank (reduce)
+            # - Bring the grads back to the authoritative rank (reduce, not all-reduce)
             # TODO: Ben
 
             # - All ranks other than the authoritative one can let go of the grads after the FW
@@ -96,9 +128,16 @@ class ShardedDataParallel(nn.Module):
                 self.optim = optimizer(nn.Sequential(*module_shard).parameters(), **optimizer_params)
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
-        # Go through the data parallel instances
-        # The batch is spread during the FW pass
-        for ddp in self.ddp_shards:
-            inputs = ddp(*inputs, **kwargs)
+        outputs: List[Tensor] = []
+        for input in inputs:
+            # Go through the data parallel instances, they represent the model sequentially
+            for ddp in self.ddp_shards:
+                # The batch is spread over all ranks during the FW pass
+                # Lock classic grad sync out
+                with ddp.no_sync():  # type: ignore
+                    inputs = ddp(*inputs, **kwargs).backward()
+
+                # Fetch all the grads on the corresponding rank
+                # FIXME Should be done in the hook
 
         return cast(Tensor, inputs)  # FIXME
