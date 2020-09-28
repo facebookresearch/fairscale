@@ -4,3 +4,4 @@
 # LICENSE file in the root directory of this source tree.
 
 from .sharded_ddp import ShardedDataParallel
+from .sharded_ddp_experimental import ShardedDataParallelExperimental
