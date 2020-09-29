@@ -280,6 +280,9 @@ class ColumnParallelLinear(torch.nn.Module):
             return_master_weight=keep_master_weight_for_test,
         )
 
+    def get_master_weight(self) -> torch.Tensor:
+        return gather_from_model_parallel_region(self.weight.data.transpose(0, 1)).transpose_(0, 1)
+
     def forward(self, input_: torch.Tensor) -> torch.Tensor:  # type: ignore
         # Set up backprop all-reduce.
         input_parallel = copy_to_model_parallel_region(input_)
@@ -363,6 +366,9 @@ class RowParallelLinear(torch.nn.Module):
             stride=stride,
             return_master_weight=keep_master_weight_for_test,
         )
+
+    def get_master_weight(self) -> torch.Tensor:
+        return gather_from_model_parallel_region(self.weight.data)
 
     def forward(self, input_: torch.Tensor) -> torch.Tensor:  # type:ignore
         # Set up backprop all-reduce.

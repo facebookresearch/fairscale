@@ -21,7 +21,7 @@
 CPU device.
 """
 from contextlib import contextmanager
-from typing import Generator, List, Union, cast
+from typing import Generator, List, Optional, Union, cast
 
 import torch
 
@@ -72,8 +72,12 @@ def use_device(device: torch.device) -> Generator[None, None, None]:
 
 
 @contextmanager
-def use_stream(stream: AbstractStream) -> Generator[None, None, None]:
+def use_stream(stream: Optional[AbstractStream]) -> Generator[None, None, None]:
     """:func:`torch.cuda.stream` for either CPU or CUDA stream."""
+    if not stream:
+        yield
+        return
+
     if not is_cuda(stream):
         yield
         return
@@ -120,7 +124,7 @@ def record_stream(tensor: torch.Tensor, stream: AbstractStream) -> None:
         tensor.record_stream(as_cuda(stream))
 
 
-def is_cuda(stream: AbstractStream) -> bool:
+def is_cuda(stream: Optional[AbstractStream]) -> bool:
     """Returns ``True`` if the given stream is a valid CUDA stream."""
     return stream is not CPUStream
 

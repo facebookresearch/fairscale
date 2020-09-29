@@ -1,3 +1,4 @@
+# type: ignore
 # Configuration file for the Sphinx documentation builder.
 #
 # This file only contains a selection of the most common options. For a full
@@ -12,6 +13,7 @@
 #
 import os
 import sys
+from typing import Any, List
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
@@ -35,9 +37,7 @@ release = "0.0.2"
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = [
-    "sphinx.ext.autodoc",
-]
+extensions = ["sphinx.ext.autodoc", "sphinx.ext.autosectionlabel"]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -45,7 +45,7 @@ templates_path = ["_templates"]
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = []
+exclude_patterns: List[Any] = []
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -73,10 +73,7 @@ html_static_path = ["_static"]
 def setup(app):
     app.add_config_value(
         "recommonmark_config",
-        {
-            "url_resolver": lambda url: github_doc_root + url,
-            "auto_toc_tree_section": "Contents",
-        },
+        {"url_resolver": lambda url: github_doc_root + url, "auto_toc_tree_section": "Contents"},
         True,
     )
     app.add_transform(AutoStructify)

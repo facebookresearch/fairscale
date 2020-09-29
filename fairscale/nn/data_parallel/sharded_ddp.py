@@ -9,36 +9,32 @@ A distributed data parallel class that works with OSS optimizer.
 Adopted from LegacyDistributedDataParallel module from fairseq.
 """
 
-from collections import OrderedDict
 from contextlib import contextmanager
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, cast
+from typing import Any, Dict, Generator, List, Optional, Type, cast
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 import torch.distributed as dist
+from torch.nn import Parameter
 
-if TYPE_CHECKING:
-    from fairscale.optim import OSS
-    from torch import Tensor
-    from torch.nn import Parameter
-else:
-    OSS = Any
-    Tensor = Any
-    Parameter = Any
+from fairscale.optim import OSS
 
 
-class OssDdp(nn.Module):
+class ShardedDataParallel(nn.Module):
     """Implements distributed data parallel training with optimizer state sharding.
 
     A simplified version of :class:`torch.nn.parallel.DistributedDataParallel`.
-    This version uses a c10d process group for communication and does not
+    This version uses a c10d process group for communication and optionally
     broadcast buffers.
 
     Args:
         module (~torch.nn.Module): module to be parallelized
-        oss (fairscale.optim.OSS): shared state optimizer
+        optimizer (~torch.optim.Optimizer): optimizer to be used for training
+        optimizer_params(Dict): extra parameters for the optimizer
         world_size (int): number of parallel workers
+        broadcast_buffers (bool): flag that enables syncing (broadcasting) buffers of
+        the module at beginning of the forward function. (default: ``True``)
         process_group (optional): the c10d process group to be used for
             distributed gradient reduction. If None, the default WORLD process group
             will be used.
@@ -48,7 +44,14 @@ class OssDdp(nn.Module):
     """
 
     def __init__(
-        self, module: nn.Module, oss: OSS, world_size: int, process_group: Any = None, buffer_size: int = 2 ** 28
+        self,
+        module: nn.Module,
+        optimizer: Type[torch.optim.Optimizer],
+        optimizer_params: Dict[str, Any],
+        world_size: int,
+        broadcast_buffers: bool,
+        process_group: Any = None,
+        buffer_size: int = 2 ** 28,
     ):
         super().__init__()
 
@@ -56,6 +59,8 @@ class OssDdp(nn.Module):
         self.world_size = world_size
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.rank = dist.get_rank(self.process_group)
+        self.broadcast_buffers = broadcast_buffers
+        self.authoritative_rank = 0
 
         # Never use a bigger buffer than the number of model params
         self.buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
@@ -68,28 +73,25 @@ class OssDdp(nn.Module):
         # gradients-reduce at some later time
         self.accumulate_grads = False
 
-        # TODO (Min): The algorithm here can be improved. We are sorting params by device
-        #     and by rank. Then in reduction_fn below, we pack smaller ones into
-        #     a buffer for reduction.
-        #     We can pre-sort them here and simplify the reduction_fn logic below
-        #     since their size shouldn't change.
+        # Build the sharded optimizer
+        self.sharded_optimizer = OSS(self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params)
 
-        # make per-device lists of parameters
-        self.per_device_params = oss.per_device_params
-
-        # query the oss param-to-rank table
-        self.param_rank = oss.param_rank
-
-        # sanity checks
-        assert len(self.param_rank) == len(list(self.module.parameters())), "number of params do not match"
+        # Sanity checks
+        assert len(self.sharded_optimizer.param_to_rank) == len(
+            list(self.module.parameters())
+        ), "number of params do not match"
         for param in self.module.parameters():
-            assert param in self.param_rank, f"{param} not in the optimizer"
+            assert param in self.sharded_optimizer.param_to_rank, f"{param} not in the optimizer"
 
     def __getstate__(self) -> Dict:
         attrs = copy.copy(self.__dict__)
         return attrs
 
-    def train(self, mode: bool = True) -> "OssDdp":
+    @property
+    def optimizer(self) -> torch.optim.Optimizer:
+        return self.sharded_optimizer
+
+    def train(self, mode: bool = True) -> "ShardedDataParallel":
         pre_mode = self.module.training
         self.module.train(mode)
         if self.module.training:
@@ -112,6 +114,9 @@ class OssDdp(nn.Module):
                 raise RuntimeError("OssDdp requires explicit reduction, must call OssDdp.reduce")
             if not self.accumulate_grads:
                 self.need_reduction = True
+            if self.broadcast_buffers and len(list(self.module.buffers())) > 0:
+                self._sync_buffers()
+
         return self.module(*inputs, **kwargs)
 
     def reduce(self) -> None:
@@ -121,55 +126,37 @@ class OssDdp(nn.Module):
         """
         assert self.module.training, "Cannot call reduce in eval"
 
-        def reduce_params(params: List[Parameter], params_rank: int) -> None:
-            """ Helper to reduce a list of params that should fit in the buffer. """
+        def reduce_grads(params: List[Parameter], params_rank: int) -> None:
+            """ Helper to reduce a list of params that should fit in the buffer.
+            NOTE: All param gradients are assumed to exist"""
             assert self.buffer is not None
+
+            # Fill in the packed IO buffer
             buffer: Tensor = cast(Tensor, self.buffer)
-            nonzero_buffer = False
             if len(params) > 1:
                 offset = 0
                 for p in params:
                     sz = p.numel()
-                    if p.grad is not None:
-                        # The type error could have been fixed in later
-                        # version of pytorch. Same elsewhere.
-                        buffer[offset : offset + sz].copy_(p.grad.data.view(-1))  # type: ignore
-                        nonzero_buffer = True
-                    else:
-                        buffer[offset : offset + sz].zero_()
+                    buffer[offset : offset + sz].copy_(p.grad.data.view(-1))  # type: ignore
                     offset += sz
             else:
                 # we only have a single grad to reduce
-                p = params[0]
-                if p.grad is not None:
-                    buffer = p.grad.data
-                    nonzero_buffer = True
-                elif p.numel() <= self.buffer.numel():
-                    buffer = buffer[: p.numel()]
-                    buffer.zero_()
-                else:
-                    buffer = torch.zeros_like(p)
+                buffer = params[0].grad.data  # type: ignore
 
-            if nonzero_buffer:
-                buffer.div_(self.world_size)  # type: ignore
+            # Reduce
+            buffer.div_(self.world_size)  # type: ignore
+            dist.reduce(tensor=buffer, dst=params_rank, group=self.process_group)  # type: ignore
 
-            dist.reduce(buffer, params_rank, group=self.process_group)  # type: ignore
-
+            # Copy reduced grads back into their original place, or free corresponding memory
             if params_rank == self.rank:
-                # copy reduced grads back into their original place
                 offset = 0
                 for p in params:
                     sz = p.numel()
-                    if p.grad is not None:
-                        p.grad.data.copy_(buffer[offset : offset + sz].view_as(p))  # type: ignore
-                    else:
-                        p.grad = buffer[offset : offset + sz].view_as(p).clone()
+                    p.grad.data.copy_(buffer[offset : offset + sz].view_as(p))  # type: ignore
                     offset += sz
             else:
-                # zero the grads
                 for p in params:
-                    if p.grad is not None:
-                        p.grad.data.zero_()
+                    p.grad = None
 
         def reduction_fn() -> None:
             # This function only needs to be called once
@@ -180,16 +167,17 @@ class OssDdp(nn.Module):
             if self.buffer is None:
                 self.buffer = next(self.module.parameters()).new(self.buffer_size)  # type: ignore
 
-            for _, params in self.per_device_params.items():
+            for params in self.sharded_optimizer.per_device_params:
                 # Reduce the gradients in buckets
                 offset = 0
                 buffered_params: List[Parameter] = []
                 param_rank: Optional[int] = None
                 for param in params:
                     last_param_rank: Optional[int] = param_rank
-                    param_rank = self.param_rank[param]
+                    param_rank = self.sharded_optimizer.param_to_rank[param]
                     if not param.requires_grad:
                         continue
+
                     if param.grad is None:
                         param.grad = torch.zeros_like(param)
                     if param.grad.requires_grad:
@@ -198,7 +186,7 @@ class OssDdp(nn.Module):
                     if sz > self.buffer.numel():
                         # reduce big params directly
                         assert param_rank is not None
-                        reduce_params([param], cast(int, param_rank))
+                        reduce_grads([param], cast(int, param_rank))
                     else:
                         # smaller params are packed together from the same device
                         # and same rank.
@@ -206,14 +194,29 @@ class OssDdp(nn.Module):
                             last_param_rank is not None and last_param_rank != param_rank
                         ):
                             assert last_param_rank is not None
-                            reduce_params(buffered_params, cast(int, last_param_rank))
+                            reduce_grads(buffered_params, cast(int, last_param_rank))
                             offset = 0
                             buffered_params.clear()
-                        buffered_params.append(param)
+                        buffered_params.append(cast(Parameter, param))
                         offset += sz
 
                 if len(buffered_params) > 0:
                     assert param_rank is not None
-                    reduce_params(buffered_params, cast(int, param_rank))
+                    reduce_grads(buffered_params, cast(int, param_rank))
 
         reduction_fn()
+
+    def _sync_buffers(self) -> None:
+        """
+        Sync all the param buffers in between ranks.
+        TODO: Could be worth bucketing ?
+        """
+        _ = list(
+            map(
+                lambda x: x.wait(),
+                map(
+                    lambda x: dist.broadcast(x, self.authoritative_rank, self.process_group, async_op=True),
+                    self.module.buffers(),
+                ),
+            )
+        )
