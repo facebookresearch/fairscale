@@ -26,7 +26,6 @@ OPTIM = torch.optim.RMSprop
 def dist_init(rank, world_size, backend):
     print(f"Using backend: {backend}")
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
-    return torch.distributed.new_group(ranks=list(range(world_size)), backend=backend)
 
 
 def get_problem(rank, data_size, batch_size):
@@ -63,8 +62,7 @@ def train(
 ):
     assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
     # DDP
-    group = dist_init(rank=rank, world_size=world_size, backend=backend)
-    torch.distributed.all_reduce(torch.zeros(1).cuda())
+    dist_init(rank=rank, world_size=world_size, backend=backend)
 
     # Setup
     torch.cuda.set_device(rank)
@@ -88,14 +86,13 @@ def train(
             optimizer_params={"lr": 1e-4, "momentum": 0.9},
             world_size=world_size,
             broadcast_buffers=False,
-            process_group=group,
         )
         ddp.train()
         optimizer = ddp.optimizer
         model = ddp
     else:
         optimizer = (
-            OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9, group=group)
+            OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
             if use_oss
             else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
         )
@@ -172,7 +169,7 @@ def train(
 if __name__ == "__main__":
 
     class OptimType(str, Enum):
-        vanilla = "pytorch"
+        pytorch = "pytorch"
         oss = "oss"
         oss_sdp = "oss_sdp"
         everyone = "everyone"
@@ -198,8 +195,8 @@ if __name__ == "__main__":
 
     backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
 
-    if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
-        print("\nBenchmark vanilla optimizer")
+    if args.optim_type == OptimType.pytorch or args.optim_type == OptimType.everyone:
+        print("\nBenchmark pytorch optimizer")
         mp.spawn(
             train,
             args=(
@@ -238,7 +235,7 @@ if __name__ == "__main__":
         )
 
     if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS DDP")
+        print("\nBenchmark OSS SDP")
         mp.spawn(
             train,
             args=(

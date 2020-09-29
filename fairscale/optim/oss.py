@@ -51,9 +51,9 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
         buffer_size (int, optional): number of elements to buffer before
             performing reduce. Used to reduce multiple small
-            params to avoid communication overhead. (default: 8M)
+            params to avoid communication overhead. (default: 64M)
         broadcast_buffer_skip (int, optional): number of elements beyond which the
-            broadcast is done without buffering. (default: 2M)
+            broadcast is done without buffering. (default: 16M)
     """
 
     #: The optimizer used for a given shard
@@ -66,8 +66,8 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Any = dist.group.WORLD,
-        buffer_size: int = 2 ** 23,
-        broadcast_buffer_skip: int = 2 ** 21,
+        buffer_size: int = 2 ** 26,
+        broadcast_buffer_skip: int = 2 ** 24,
         **default: Any,
     ):
         # Hold all the model params in the root .param_groups
@@ -99,7 +99,7 @@ class OSS(Optimizer):
                 if k != "params":
                     global_group[k] = v
 
-        # pre-allocate per device buffers
+        # Broadcast bucketing
         assert buffer_size > broadcast_buffer_skip
         self._broadcast_buffer_skip = broadcast_buffer_skip
         self._broadcast_buffer_size = buffer_size
@@ -345,6 +345,9 @@ class OSS(Optimizer):
         # TODO: restore Gloo compatibility
         # TODO: async per device, something a little smarter
 
+        requests = []
+        params_require_grad = []
+
         for device, params_list in enumerate(self.per_device_params):
             # List the params in the same broadcast bucket
             buffered_params: List[Parameter] = []
@@ -360,10 +363,11 @@ class OSS(Optimizer):
 
                 if param.numel() >= self._broadcast_buffer_skip:
                     # Big param block, broadcast directly.
-                    # Walk around Gloo which correctly flags this op as non-differentiable
+                    # Walk around Gloo which flags this op as non-differentiable
                     requires_grad, param.requires_grad = param.requires_grad, False
-                    dist.broadcast(tensor=param, src=param_rank, group=self.group, async_op=True)
-                    param.requires_grad = requires_grad
+                    requests.append(dist.broadcast(tensor=param, src=param_rank, group=self.group, async_op=True))
+                    if requires_grad:
+                        params_require_grad.append(param)
                 else:
                     if (buffered_elements + param.numel()) >= buffer.numel() or (
                         last_param_rank is not None and last_param_rank != param_rank
@@ -383,10 +387,14 @@ class OSS(Optimizer):
             # Sync whatever is left in the batch buffer before moving to the next device
             if buffered_elements > 0:
                 assert param_rank is not None
-
                 batch_broadcast(
                     buffered_params, source_rank=param_rank, buffer=buffer, process_group=self.group,
                 )
+
+        # Consume all the async broadcasts, and restore requires_grad attribute
+        _ = list(map(lambda x: x.wait(), requests))
+        for p in params_require_grad:
+            p.requires_grad = True
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
         """ Collect all the state shards, in CPU memory. """

@@ -82,12 +82,11 @@ def batch_broadcast(buffered_params: List[Parameter], source_rank: int, buffer: 
 
     for p in buffered_params:
         sz = p.numel()
-        p.requires_grad = False
         buffer[offset : offset + p.numel()].copy_(p.data.view(-1))  # type: ignore
         offset += sz
         assert offset < buffer.numel()
 
-    fut = dist.broadcast(tensor=buffer, src=source_rank, group=process_group)
+    dist.broadcast(tensor=buffer, src=source_rank, group=process_group)
 
     # copy brodcasted grads back into their original place
     offset = 0
