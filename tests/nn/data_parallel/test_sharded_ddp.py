@@ -37,12 +37,20 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     if device == torch.device("cuda"):
         torch.cuda.set_device(rank)
 
+    # Any model works. Add one different buffer per rank
     model = Sequential(Linear(2, 3), Linear(3, 4)).to(device)
+    model.register_buffer("test_buffer", torch.ones((1)) * rank)
+    model.to(device)
 
     ddp = ShardedDataParallel(
-        module=model, optimizer=torch.optim.SGD, optimizer_params={"lr": 0.1, "momentum": 0.99}, world_size=world_size
+        module=model,
+        optimizer=torch.optim.SGD,
+        optimizer_params={"lr": 0.01, "momentum": 0.99},
+        world_size=world_size,
+        broadcast_buffers=True,
     )
     optimizer = ddp.optimizer
+    model = ddp.module
 
     input_tensor = torch.rand((64, 2)).to(device)
     output = ddp(input_tensor).abs().sum() / input_tensor.numel()
@@ -58,10 +66,9 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
             if param.requires_grad:
                 assert param.grad.abs().sum().item() > 0.0, "The reduce step should have populated all the gradients"
 
-    # Check that the optimization process makes sense (ie. loss goes down for the same data)
-    optimizer.step()
-    new_eval = ddp(input_tensor).abs().sum() / input_tensor.numel()
-    # assert new_eval.item() < output.item()
+    # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
+    for b in model.buffers():
+        assert b.cpu().item() == 0.0
 
 
 def run_test(backend, device, world_size=2):
@@ -76,7 +83,7 @@ def run_eval_mode(_unused):
     )
     model = Sequential(Linear(2, 3), Linear(3, 4))
     optimizer_params = {"lr": 0.1, "momentum": 0.99}
-    ddp = ShardedDataParallel(model, torch.optim.SGD, optimizer_params, 1)
+    ddp = ShardedDataParallel(model, torch.optim.SGD, optimizer_params, 1, broadcast_buffers=False)
     optimizer = ddp.optimizer
 
     ddp.eval()

@@ -62,7 +62,7 @@ def train(
 ):
     assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
     # DDP
-    dist_init(rank, world_size, backend)
+    dist_init(rank=rank, world_size=world_size, backend=backend)
 
     # Setup
     torch.cuda.set_device(rank)
@@ -81,7 +81,11 @@ def train(
 
     if use_sdp:
         ddp = ShardedDataParallel(
-            module=model, optimizer=OPTIM, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size,
+            module=model,
+            optimizer=OPTIM,
+            optimizer_params={"lr": 1e-4, "momentum": 0.9},
+            world_size=world_size,
+            broadcast_buffers=False,
         )
         ddp.train()
         optimizer = ddp.optimizer
