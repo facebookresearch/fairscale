@@ -1,10 +1,39 @@
 # fairscale
-fairscale is a PyTorch extension library for high performance and large scale training.
+![PyPI](https://img.shields.io/pypi/v/fairscale)
+[![Documentation Status](https://readthedocs.org/projects/fairscale/badge/?version=latest)](https://fairscale.readthedocs.io/en/latest/?badge=latest)
+[![CircleCI](https://circleci.com/gh/facebookresearch/fairscale.svg?style=shield)](https://app.circleci.com/pipelines/github/facebookresearch/fairscale/) ![PyPI - License](https://img.shields.io/pypi/l/fairscale) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/facebookresearch/fairscale/blob/master/CONTRIBUTING.md)
+
+## Description
+fairscale is a PyTorch extension library for high performance and large scale training for optimizing training on one or across multiple machines/nodes. This library extend basic pytorch capabilities while adding new experimental ones.
 
 fairscale supports:
-* pipeline parallelism (fairscale.nn.Pipe)
-* tensor parallelism (fairscale.nn.model_parallel)
-* optimizer state sharding (fairscale.optim.oss)
+* Parallelism:
+   * pipeline parallelism (fairscale.nn.Pipe)
+   * tensor parallelism (fairscale.nn.model_parallel)
+* Optimization:
+   * optimizer state sharding (fairscale.optim.oss)
+
+
+## Requirements
+
+* PyTorch >= 1.4
+
+## Installation
+
+Normal installation:
+```bash
+pip install fairscale
+```
+
+Development mode:
+```bash
+cd fairscale
+pip install -r requirements.txt
+pip install -e .
+```
+
+## Getting Started
+The full documentation (https://fairscale.readthedocs.io/) contains instructions for getting started and extending fairscale.
 
 ## Examples
 ### Pipe
@@ -72,23 +101,6 @@ if __name__ == "__main__":
 ```
 
 
-## Requirements
-
-* PyTorch >= 1.4
-
-## Installation
-
-Normal installation:
-```bash
-pip install fairscale
-```
-
-Development mode:
-```bash
-cd fairscale
-pip install -r requirements.txt
-pip install -e .
-```
 
 # Testing
 
