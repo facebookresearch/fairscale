@@ -345,51 +345,67 @@ class OSS(Optimizer):
         # TODO: restore Gloo compatibility
         # TODO: async per device, something a little smarter
 
-        requests = []
-        params_require_grad = []
+        with torch.no_grad():
+            requests = []
+            restore_require_grad = []
 
-        for device, params_list in enumerate(self.per_device_params):
-            # List the params in the same broadcast bucket
-            buffered_params: List[Parameter] = []
-            buffered_elements = 0
+            for params_list in self.per_device_params:
+                device = params_list[0].device
 
-            # Go through all the params, broadcast to replicas
-            param_rank: Optional[int] = None
-            buffer = torch.zeros(self._broadcast_buffer_size).to(device)
+                # List the params in the same broadcast bucket
+                buffered_params: List[Parameter] = []
+                buffered_elements = 0
 
-            for param in params_list:
-                last_param_rank: Optional[int] = param_rank
-                param_rank = self.param_to_rank[param]
+                # Go through all the params, broadcast to replicas
+                param_rank: Optional[int] = None
+                buffer = torch.zeros(self._broadcast_buffer_size).to(device)
 
-                if param.numel() >= self._broadcast_buffer_skip:
-                    # Big param block, broadcast directly.
-                    # Walk around Gloo which flags this op as non-differentiable
-                    requires_grad, param.requires_grad = param.requires_grad, False
-                    requests.append(dist.broadcast(tensor=param, src=param_rank, group=self.group, async_op=True))
-                    if requires_grad:
-                        params_require_grad.append(param)
-                else:
-                    if (buffered_elements + param.numel()) >= buffer.numel() or (
-                        last_param_rank is not None and last_param_rank != param_rank
-                    ):
-                        # Batch buffer is full or rank changed, sync
-                        assert last_param_rank is not None
-                        batch_broadcast(
-                            buffered_params, source_rank=last_param_rank, buffer=buffer, process_group=self.group,
-                        )
-                        buffered_params.clear()
-                        buffered_elements = 0
+                for param in params_list:
+                    last_param_rank: Optional[int] = param_rank
+                    param_rank = self.param_to_rank[param]
 
-                    # Keep async and batch sync later
-                    buffered_params.append(param)
-                    buffered_elements += param.numel()
+                    if param.numel() >= self._broadcast_buffer_skip:
+                        # Big param block, broadcast directly.
+                        # Walk around Gloo which flags this op as non-differentiable
+                        requires_grad, param.requires_grad = param.requires_grad, False
+                        requests.append(dist.broadcast(tensor=param, src=param_rank, group=self.group, async_op=True))
+                        if requires_grad:
+                            restore_require_grad.append(param)
+                    else:
+                        if (buffered_elements + param.numel()) >= buffer.numel() or (
+                            last_param_rank is not None and last_param_rank != param_rank
+                        ):
+                            # Batch buffer is full or rank changed, sync
+                            assert last_param_rank is not None
+                            batch_broadcast(
+                                buffered_params,
+                                src_rank=last_param_rank,
+                                cur_rank=self.rank,
+                                buffer=buffer,
+                                process_group=self.group,
+                            )
+                            buffered_params.clear()
+                            buffered_elements = 0
 
-            # Sync whatever is left in the batch buffer before moving to the next device
-            if buffered_elements > 0:
-                assert param_rank is not None
-                batch_broadcast(
-                    buffered_params, source_rank=param_rank, buffer=buffer, process_group=self.group,
-                )
+                        # Keep async and batch sync later
+                        buffered_params.append(param)
+                        buffered_elements += param.numel()
+
+                # Sync whatever is left in the batch buffer before moving to the next device
+                if buffered_elements > 0:
+                    assert param_rank is not None
+                    batch_broadcast(
+                        buffered_params,
+                        src_rank=param_rank,
+                        cur_rank=self.rank,
+                        buffer=buffer,
+                        process_group=self.group,
+                    )
+
+            # Consume all the async broadcasts, and restore requires_grad attribute
+            _ = list(map(lambda x: x.wait(), requests))
+            for p in restore_require_grad:
+                p.requires_grad = True
 
         # Consume all the async broadcasts, and restore requires_grad attribute
         _ = list(map(lambda x: x.wait(), requests))

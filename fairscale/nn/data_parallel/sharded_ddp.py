@@ -168,6 +168,7 @@ class ShardedDataParallel(nn.Module):
                 self.buffer = next(self.module.parameters()).new(self.buffer_size)  # type: ignore
 
             for params in self.sharded_optimizer.per_device_params:
+
                 # Reduce the gradients in buckets
                 offset = 0
                 buffered_params: List[Parameter] = []
