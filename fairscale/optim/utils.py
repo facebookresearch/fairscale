@@ -72,21 +72,22 @@ def broadcast_object(
     return obj
 
 
-def batch_broadcast(
-    buffered_params: List[Parameter], source_rank: int, buffer: Tensor, process_group: Any = None
-) -> None:
+def batch_broadcast(buffered_params: List[Parameter], source_rank: int, buffer: Tensor, process_group: Any) -> None:
     """ Helper to broadcast a list of params batched into a bigger buffer.
+
     NOTE: This skips the grads on purpose, only broadcasts the tensor parameters.
     NOTE: This also asserts that the parameters will fit in the buffer """
 
     offset = 0
+
     for p in buffered_params:
         sz = p.numel()
+        p.requires_grad = False
         buffer[offset : offset + p.numel()].copy_(p.data.view(-1))  # type: ignore
         offset += sz
         assert offset < buffer.numel()
 
-    dist.broadcast(tensor=buffer, src=source_rank, group=process_group)
+    fut = dist.broadcast(tensor=buffer, src=source_rank, group=process_group)
 
     # copy brodcasted grads back into their original place
     offset = 0

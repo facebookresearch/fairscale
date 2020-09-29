@@ -26,6 +26,7 @@ OPTIM = torch.optim.RMSprop
 def dist_init(rank, world_size, backend):
     print(f"Using backend: {backend}")
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
+    return torch.distributed.new_group(ranks=list(range(world_size)), backend=backend)
 
 
 def get_problem(rank, data_size, batch_size):
@@ -62,7 +63,8 @@ def train(
 ):
     assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
     # DDP
-    dist_init(rank=rank, world_size=world_size, backend=backend)
+    group = dist_init(rank=rank, world_size=world_size, backend=backend)
+    torch.distributed.all_reduce(torch.zeros(1).cuda())
 
     # Setup
     torch.cuda.set_device(rank)
@@ -86,13 +88,14 @@ def train(
             optimizer_params={"lr": 1e-4, "momentum": 0.9},
             world_size=world_size,
             broadcast_buffers=False,
+            process_group=group,
         )
         ddp.train()
         optimizer = ddp.optimizer
         model = ddp
     else:
         optimizer = (
-            OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
+            OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9, group=group)
             if use_oss
             else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
         )
