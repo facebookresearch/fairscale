@@ -133,7 +133,6 @@ class ShardedDataParallel(nn.Module):
 
             # Fill in the packed IO buffer
             buffer: Tensor = cast(Tensor, self.buffer)
-            nonzero_buffer = False
             if len(params) > 1:
                 offset = 0
                 for p in params:
@@ -208,6 +207,10 @@ class ShardedDataParallel(nn.Module):
         reduction_fn()
 
     def _sync_buffers(self) -> None:
+        """
+        Sync all the param buffers in between ranks.
+        TODO: Could be worth bucketing ?
+        """
         _ = list(
             map(
                 lambda x: x.wait(),
