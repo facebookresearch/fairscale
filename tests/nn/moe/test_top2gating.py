@@ -25,7 +25,11 @@ def test_forward():
     assert dispatch_mask.shape == (3, 12, 6, 4)
     assert torch.equal(combine_weights.bool(), dispatch_mask)
     assert torch.all(torch.sum(dispatch_mask, axis=(1, 3)) <= capacity)
-    assert pytest.approx(torch.sum(combine_weights).item(), 36.0)
+    assert torch.all(combine_weights >= 0.0)
+    assert torch.all(combine_weights <= 1.0)
+    weights_sum = torch.sum(combine_weights).item()
+    assert round(weights_sum) == pytest.approx(weights_sum)
+    assert weights_sum == pytest.approx(36.0)
 
 
 def test_top1s():
