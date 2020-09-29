@@ -11,23 +11,30 @@ See https://github.com/pytorch/pytorch/issues/42849 for more context
 """
 
 # from functools import partial
-from typing import Any, Dict, Iterable, List, Type
+# from functools import reduce
+from typing import Any, Dict, List, Type
 
 import torch
 from torch import nn
+import torch.distributed as dist
 
-# import torch.distributed as dist
 # from torch.distributed.algorithms.ddp_comm_hooks import DDPCommHookType, register_ddp_comm_hook
 
 
-def _slice_module(module: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
+def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
     # Naive sharding for now, slice by the number of layers
     # This is probably suboptimal if the complexity or size of the layers vary by a lot
-    def chunks(lst: List[nn.Module], n: int) -> Iterable[List[nn.Module]]:
-        for i in range(0, len(lst), n):
-            yield lst[i : i + n]
+    splits: List[List[nn.Module]] = [[] for _ in range(number_shards)]
+    i = 0
+    n = len(modules) // number_shards
 
-    return list(chunks(list(module.modules()), number_shards))
+    for m in modules:
+        if splits and len(splits[i]) == n and (i < number_shards - 1):
+            i += 1
+
+        splits[i].append(m)
+
+    return splits
 
 
 class ModelShard(nn.Module):
@@ -39,29 +46,36 @@ class ModelShard(nn.Module):
         super().__init__()
         self.owner_rank = owner_rank
         self.process_group = pg
+        self.model_shard = cpu_model_shard
 
-        for i, (_, param) in enumerate(cpu_model_shard.named_parameters()):
-            self.register_parameter(str(i), param)
+    def forward(self, *inputs):  # type: ignore
+        return self.model_shard(inputs)
 
     def forward_load(self) -> None:
         # materialize local GPU parameters, can be enhance with bucketing
         _ = list(
             map(
                 lambda x: x.wait(),
-                map(lambda p: self.process_group.broadcast(p, self.owner_rank, async_op=True), self.parameters()),
+                map(
+                    lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
+                    self.model_shard.parameters(),
+                ),
             )
         )
 
     def forward_drop(self) -> None:
         # drop all local parameters
-        for p in self.parameters():
-            p.data.set_(torch.zeros([0]))
+        for p in self.model_shard.parameters():
+            p.set_(torch.zeros([0]))
 
     def reduce_grads(self) -> None:
         _ = list(
             map(
                 lambda x: x.wait(),
-                map(lambda p: self.process_group.reduce(p, self.owner_rank, async_op=True), self.parameters()),
+                map(
+                    lambda p: dist.reduce(p, dst=self.owner_rank, group=self.process_group, async_op=True,),  # type: ignore
+                    self.parameters(),
+                ),
             )
         )
 
@@ -158,16 +172,16 @@ class ShardedDataParallelExperimental(nn.Module):
         self.module = module
         self.world_size = world_size
         self.process_group = process_group if process_group is not None else torch.distributed.group.WORLD
-        self.rank = torch.distributed.get_rank(self.process_group)
-        self.backend = torch.distributed.get_backend(group=self.process_group)  # type: ignore
+        self.rank = dist.get_rank(self.process_group)
+        self.backend = dist.get_backend(group=self.process_group)  # type: ignore
 
         # Slice the model
-        module_slices = _slice_module(module, self.world_size)
+        splits = _split(module, self.world_size)
 
         # Create one data parallel process group per shard.
         self.shards: List[nn.Module] = []
 
-        for i_slice, module_shard in enumerate(module_slices):
+        for i_slice, module_shard in enumerate(splits):
             self.shards.append(ModelShard(nn.Sequential(*module_shard), owner_rank=i_slice, pg=self.process_group))
 
             # Use one normal optimizer per shard
@@ -176,7 +190,7 @@ class ShardedDataParallelExperimental(nn.Module):
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         for prev, next in zip([None, *self.shards], [*self.shards, None]):
-            inputs = prev(inputs) if prev else inputs
+            inputs = prev(*inputs) if prev else inputs
             inputs = ShardSyncLayer.apply(prev, next, *inputs)
 
         return inputs
