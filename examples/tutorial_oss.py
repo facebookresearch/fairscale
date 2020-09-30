@@ -6,6 +6,7 @@ from torchvision import datasets, transforms
 import torch.nn as nn
 import torch.multiprocessing as mp
 
+import torch.nn.functional as F
 import time
 
 WORLD_SIZE = 2
@@ -18,33 +19,22 @@ def dist_init(rank, world_size):
     print(f"Using backend: {backend}")
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
-def myAwesomeModel():
+def getModel():
     return nn.Sequential(
-    nn.Conv2d(1, 32, 3, 1),
-    nn.ReLU(),
-    nn.Conv2d(32, 64, 3, 1),
-    nn.ReLU(),
-    nn.MaxPool2d(kernel_size=2),
-    nn.Dropout2d(0.25),
-    nn.Flatten(1),
-    nn.Linear(9216, 128),
-    nn.ReLU(),
-    nn.Dropout2d(0.5),
-    nn.Linear(128, 10),
-    nn.LogSoftmax(dim=1))
+            torch.nn.Linear(10, 10),
+            torch.nn.ReLU(),
+            torch.nn.Linear(10, 5)
+        )
+
+def getData():
+    target = torch.randint(0,2,size=(20,1)).squeeze()
+    data = torch.randn(20, 10)
+    return [(data, target)]
+
+def getLossFun():
+    return F.nll_loss
 
 
-def mySuperFastDataloader():
-    transform=transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
-    dataset = datasets.MNIST('../data', train=True, download=True,
-                       transform=transform)
-    return torch.utils.data.DataLoader(dataset)
-
-def myVeryRelevantLoss():
-    return nn.CrossEntropyLoss()
 
 def train(
     rank: int,
@@ -57,9 +47,9 @@ def train(
     dist_init(rank, world_size)
 
     # Problem statement
-    model = myAwesomeModel().to(rank)
-    dataloader = mySuperFastDataloader()
-    loss_fn = myVeryRelevantLoss()
+    model = getModel().to(rank)
+    dataloader = getData()
+    loss_fn = getLossFun()
 
     base_optimizer_arguments = { "lr": 1e-4} # any optimizer specific arguments, LR, momentum, etc...
     if ~use_oss:
@@ -87,7 +77,7 @@ def train(
             loss.backward()
             torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
             optimizer.step()
-            # print(f"Loss: {loss.item()}")
+            print(f"Loss: {loss.item()}")
     
     training_end = time.monotonic()
     max_memory = torch.cuda.max_memory_allocated(rank)
