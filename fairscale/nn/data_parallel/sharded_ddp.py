@@ -169,7 +169,7 @@ class ShardedDataParallel(nn.Module):
             # Copy small gradients into per-GPU buffers and then async reduce
             i_p = 0
             offset = 0
-            while offset + rank_params[i_p].numel() < buffer_size:
+            while i_p < len(rank_params) and offset + rank_params[i_p].numel() < buffer_size:
                 end = offset + rank_params[i_p].numel()
                 if rank == self_rank:
                     buffer[offset:end].copy_(rank_params[i_p].grad.data.view(-1))  # type: ignore
@@ -199,7 +199,7 @@ class ShardedDataParallel(nn.Module):
                 # Copy bucketed grads back into their original place
                 offset = 0
                 i_p = 0
-                while offset + rank_params[i_p].numel() < buffer_size:
+                while i_p < len(rank_params) and offset + rank_params[i_p].numel() < buffer_size:
                     end = offset + rank_params[i_p].numel()
                     rank_params[i_p].grad.data.copy_(buffer[offset:end].view_as(rank_params[i_p]))  # type: ignore
                     offset = end
