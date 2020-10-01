@@ -167,42 +167,38 @@ class ShardedDataParallel(nn.Module):
             if self.buffer is None:
                 self.buffer = next(self.module.parameters()).new(self.buffer_size)  # type: ignore
 
-            for params in self.sharded_optimizer.per_device_params:
-                # Reduce the gradients in buckets
-                offset = 0
-                buffered_params: List[Parameter] = []
-                param_rank: Optional[int] = None
-                for param in params:
-                    last_param_rank: Optional[int] = param_rank
-                    param_rank = self.sharded_optimizer.param_to_rank[param]
-                    if not param.requires_grad:
-                        continue
+            for per_device in self.sharded_optimizer.per_device_params:
+                for rank, params in enumerate(per_device):
 
-                    if param.grad is None:
-                        param.grad = torch.zeros_like(param)
-                    if param.grad.requires_grad:
-                        raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
-                    sz = param.numel()
-                    if sz > self.buffer.numel():
-                        # reduce big params directly
-                        assert param_rank is not None
-                        reduce_grads([param], cast(int, param_rank))
-                    else:
-                        # smaller params are packed together from the same device
-                        # and same rank.
-                        if offset + sz > self.buffer.numel() or (
-                            last_param_rank is not None and last_param_rank != param_rank
-                        ):
-                            assert last_param_rank is not None
-                            reduce_grads(buffered_params, cast(int, last_param_rank))
-                            offset = 0
-                            buffered_params.clear()
-                        buffered_params.append(cast(Parameter, param))
-                        offset += sz
+                    # Reduce the gradients in buckets
+                    offset = 0
+                    buffered_params: List[Parameter] = []
+                    for param in params:
+                        if not param.requires_grad:
+                            continue
 
-                if len(buffered_params) > 0:
-                    assert param_rank is not None
-                    reduce_grads(buffered_params, cast(int, param_rank))
+                        if param.grad is None:
+                            param.grad = torch.zeros_like(param)
+                        if param.grad.requires_grad:
+                            raise RuntimeError(
+                                "DistributedDataParallel only works with gradients that don't require grad"
+                            )
+                        sz = param.numel()
+                        if sz > self.buffer.numel():
+                            # reduce big params directly
+                            reduce_grads([param], cast(int, rank))
+                        else:
+                            # smaller params are packed together from the same device
+                            # and same rank.
+                            if offset + sz > self.buffer.numel():
+                                reduce_grads(buffered_params, cast(int, rank))
+                                offset = 0
+                                buffered_params.clear()
+                            buffered_params.append(cast(Parameter, param))
+                            offset += sz
+
+                    if len(buffered_params) > 0:
+                        reduce_grads(buffered_params, rank)
 
         reduction_fn()
 
