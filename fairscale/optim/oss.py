@@ -167,6 +167,8 @@ class OSS(Optimizer):
         self._sync_param_groups()
 
         # Run the optimizer step on this shard only:
+        self._free_other_grads()
+
         if closure is not None:
             loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
         else:
@@ -380,3 +382,14 @@ class OSS(Optimizer):
                 # Discard this tensor/rank, broadcast necessary for syncing
                 logging.debug("Discarding broadcast from rank %s", global_rank)
                 broadcast_object(empty_buffer, src_rank=global_rank, group=self.group, dist_device=self._device)
+
+    def _free_other_grads(self) -> None:
+        """Free all the gradients only useful for the other ranks
+        """
+        for i, partition in enumerate(self.partition_parameters()):
+            if i == self.rank:
+                continue
+
+            for p in partition:
+                for t in p["params"]:
+                    t.grad = None
