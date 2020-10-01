@@ -165,21 +165,14 @@ class ShardedDataParallel(nn.Module):
                 continue
 
             restore_require_grad = []
+            requests = []
 
             # Copy small gradients into per-GPU buffers and then async reduce
-            i_p = 0
-            offset = 0
-            while i_p < len(rank_params) and offset + rank_params[i_p].numel() < buffer_size:
-                end = offset + rank_params[i_p].numel()
-                if rank == self_rank:
-                    buffer[offset:end].copy_(rank_params[i_p].grad.data.view(-1))  # type: ignore
-                offset = end
-                i_p += 1
+            i_p = OSS._bucket(buffer, rank_params, copy=(rank == self_rank), gradients=True)
 
             if i_p > 0:
-                # Reduce the bucket, async
                 buffer.div_(world_size)  # type: ignore
-                dist.reduce(tensor=buffer, dst=rank, group=group, async_op=True)  # type: ignore
+                requests.append(st.reduce(tensor=buffer, dst=rank, group=group, async_op=True))  # type: ignore
 
             # Directly reduce the next grads
             for param in rank_params[i_p:]:
@@ -188,22 +181,14 @@ class ShardedDataParallel(nn.Module):
                     restore_require_grad.append(param)
                     param.requires_grad = False
 
-                i_p += 1
-
-                # NOTE: The last reduce is synchronous, which makes sure that all the
-                # async calls prior have concluded (backends enforce strict ordering)
                 param.div_(world_size)  # type: ignore
-                dist.reduce(tensor=param, dst=rank, group=group, async_op=i_p != len(rank_params))  # type: ignore
+                requests.append(dist.reduce(tensor=param, dst=rank, group=group, async_op=True))  # type: ignore
+
+            # If applicable, copy back the bucketed values
+            OSS._consume_async_work(requests)
 
             if rank == self_rank:
-                # Copy bucketed grads back into their original place
-                offset = 0
-                i_p = 0
-                while i_p < len(rank_params) and offset + rank_params[i_p].numel() < buffer_size:
-                    end = offset + rank_params[i_p].numel()
-                    rank_params[i_p].grad.data.copy_(buffer[offset:end].view_as(rank_params[i_p]))  # type: ignore
-                    offset = end
-                    i_p += 1
+                OSS._scatter(buffer, rank_params, gradients=True)
             else:
                 # Free memory on this rank, these grads are not useful anymore
                 for p in rank_params:

@@ -205,6 +205,50 @@ class OSS(Optimizer):
         return loss
 
     @staticmethod
+    def _bucket(buffer: torch.Tensor, params: List[Parameter], copy: bool, gradients: bool = False) -> int:
+        """Put as many parameters as possible from the parameter list in a given buffer.
+        Populate the buffer and return the amount of params (starting from 0) which fit
+        """
+        i_p = 0
+        offset = 0
+        buffer_size = buffer.numel()
+
+        while i_p < len(params) and offset + params[i_p].numel() < buffer_size:
+            end = offset + params[i_p].numel()
+            if copy:
+                if gradients:
+                    buffer[offset:end].copy_(params[i_p].grad.data.view(-1))  # type: ignore
+                else:
+                    buffer[offset:end].copy_(params[i_p].data.view(-1))  # type: ignore
+            offset = end
+            i_p += 1
+
+        return i_p
+
+    @staticmethod
+    def _scatter(buffer: torch.Tensor, params: List[Parameter], gradients: bool = False) -> None:
+        """Put as many parameters as possible from the parameter list in a given buffer.
+        Populate the buffer and return the amount of params (starting from 0) which fit
+        """
+        i_p = 0
+        offset = 0
+        buffer_size = buffer.numel()
+
+        while i_p < len(params) and offset + params[i_p].numel() < buffer_size:
+            end = offset + params[i_p].numel()
+            if gradients:
+                params[i_p].grad.data.copy_(buffer[offset:end].view_as(params[i_p]))  # type: ignore
+            else:
+                params[i_p].data.copy_(buffer[offset:end].view_as(params[i_p]))  # type: ignore
+            offset = end
+            i_p += 1
+
+    @staticmethod
+    def _consume_async_work(queue: List[Any]) -> None:
+        _ = list(map(lambda x: x.wait(), queue))
+        return
+
+    @staticmethod
     def _broadcast_params_task(buffer: torch.Tensor, params: List[List[Parameter]], group: Any, self_rank: int) -> None:
         """Helper function to broadcast all the parameters
         """
@@ -212,6 +256,7 @@ class OSS(Optimizer):
 
         for rank, rank_params in enumerate(params):  # all the params sorted per rank
             restore_require_grad = []
+            requests = []
 
             if len(rank_params) == 0:
                 continue
@@ -219,38 +264,25 @@ class OSS(Optimizer):
             global_rank = OSS.get_global_rank(group, rank)
 
             # Copy small gradients into per-GPU buffers and then async broadcast
-            i_p = 0
-            offset = 0
-            while i_p < len(rank_params) and offset + rank_params[i_p].numel() < buffer_size:
-                end = offset + rank_params[i_p].numel()
-                if rank == self_rank:
-                    buffer[offset:end].copy_(rank_params[i_p].data.view(-1))  # type: ignore
-                offset = end
-                i_p += 1
+            i_p = OSS._bucket(buffer, rank_params, copy=(rank == self_rank))
 
             if i_p > 0:
-                dist.broadcast(tensor=buffer, src=global_rank, group=group, async_op=True)
+                requests.append(dist.broadcast(tensor=buffer, src=global_rank, group=group, async_op=True))
 
             # Directly broadcast the rest
             for param in rank_params[i_p:]:
                 if param.requires_grad:
                     restore_require_grad.append(param)
                     param.requires_grad = False
-                i_p += 1
 
-                # NOTE: The last broadcast is synchronous, which makes sure that all the
-                # async calls prior have concluded (backends enforce strict ordering)
-                dist.broadcast(tensor=param, src=global_rank, group=group, async_op=i_p != len(rank_params))
+                requests.append(dist.broadcast(tensor=param, src=global_rank, group=group, async_op=True))
 
             # Unwrap the initial packed small parameters
+            # TODO: (ben) This could be done after all devices have been processed instead
+            OSS._consume_async_work(requests)
+
             if rank != self_rank:
-                offset = 0
-                i_p = 0
-                while i_p < len(rank_params) and offset + rank_params[i_p].numel() < buffer_size:
-                    end = offset + rank_params[i_p].numel()
-                    rank_params[i_p].data.copy_(buffer[offset:end].view_as(rank_params[i_p]))  # type: ignore
-                    offset = end
-                    i_p += 1
+                OSS._scatter(buffer, rank_params, gradients=False)
 
             for p in restore_require_grad:
                 p.requires_grad = True
