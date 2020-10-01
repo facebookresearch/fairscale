@@ -95,6 +95,10 @@ class OSS(Optimizer):
         self._device = self.partition_parameters()[self.rank][0]["params"][0].device
         self._buffer_size = broadcast_buffer_size
         self._buffers: Dict[torch.device, torch.Tensor] = {}
+        for per_device in self.per_device_params:
+            device = per_device[0][0].device
+            dtype = per_device[0][0].dtype
+            self._buffers[device] = torch.empty(self._buffer_size, dtype=dtype, device=device)
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
@@ -174,6 +178,8 @@ class OSS(Optimizer):
         self._sync_param_groups()
 
         # Run the optimizer step on this shard only:
+        self._free_other_grads()
+
         if closure is not None:
             loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
         else:
@@ -181,22 +187,21 @@ class OSS(Optimizer):
 
         # Sync all the states. Broadcast requests are issued async, we check completeness before moving on
         for device_params in self.per_device_params:  # all the params on this device (inc all ranks)
-            device = device_params[0][0].device
-
-            # Try to reuse existing buffers if possible
-            if self._buffers.get(device) is None:
-                self._buffers[device] = torch.empty(self._buffer_size, dtype=device_params[0][0].dtype, device=device)
-
-            self._broadcast_params_task(self._buffers[device], device_params, self.group, self.rank)
+            self._broadcast_params_task(self._buffers[device_params[0][0].device], device_params, self.group, self.rank)
 
         return loss
 
     @staticmethod
     def _broadcast_params_task(buffer: torch.Tensor, params: List[List[Parameter]], group: Any, self_rank: int) -> None:
+        """Helper function to broadcast all the parameters
+        """
         buffer_size = buffer.numel()
 
         for rank, rank_params in enumerate(params):  # all the params sorted per rank
             restore_require_grad = []
+
+            if len(rank_params) == 0:
+                continue
 
             # Copy small gradients into per-GPU buffers and then async broadcast
             i_p = 0
@@ -213,7 +218,6 @@ class OSS(Optimizer):
 
             # Directly broadcast the rest
             for param in rank_params[i_p:]:
-                last_param = len(rank_params) - 1
                 if param.requires_grad:
                     restore_require_grad.append(param)
                     param.requires_grad = False
@@ -221,7 +225,7 @@ class OSS(Optimizer):
 
                 # NOTE: The last broadcast is synchronous, which makes sure that all the
                 # async calls prior have concluded (backends enforce strict ordering)
-                dist.broadcast(tensor=param, src=rank, group=group, async_op=i_p != last_param)
+                dist.broadcast(tensor=param, src=rank, group=group, async_op=i_p != len(rank_params))
 
             # Unwrap the initial packed small parameters
             if rank != self_rank:
@@ -424,3 +428,14 @@ class OSS(Optimizer):
                 # Discard this tensor/rank, broadcast necessary for syncing
                 logging.debug("Discarding broadcast from rank %s", rank)
                 broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
+
+    def _free_other_grads(self) -> None:
+        """Free all the gradients only useful for the other ranks
+        """
+        for i, partition in enumerate(self.partition_parameters()):
+            if i == self.rank:
+                continue
+
+            for p in partition:
+                for t in p["params"]:
+                    t.grad = None
