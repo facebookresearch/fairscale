@@ -376,7 +376,7 @@ class OSS(Optimizer):
                 logging.debug(
                     "Sending the sharded optimizer state to the reference replica from rank %s", rank,
                 )
-                broadcast_object(empty_buffer, src_rank=self.global_rank, group=self.group, dist_device=self._device)
+                broadcast_object(self.local_state_dict(), src_rank=self.global_rank, group=self.group, dist_device=self._device)
             else:
                 global_rank = self.get_global_rank(self.group, rank)
                 # Discard this tensor/rank, broadcast necessary for syncing
