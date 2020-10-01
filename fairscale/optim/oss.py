@@ -80,6 +80,8 @@ class OSS(Optimizer):
         self.group = group if group is not None else dist.group.WORLD
         self.world_size = dist.get_world_size(self.group)
         self.rank = dist.get_rank(self.group)
+        self.global_rank = self.get_global_rank(self.group, self.rank)
+
         self.optim = optim(self.partition_parameters()[self.rank], **default)
 
         # - Sync local and global param_groups keys
@@ -102,7 +104,7 @@ class OSS(Optimizer):
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
-        """Partitions parameters across distributed ranks.
+        """Partitions parameters across distributed data parallel ranks.
 
         Returns a list of param_groups (which is a list of dict) where each
         element of the list contains the param_groups for a rank. Element 0
@@ -156,12 +158,21 @@ class OSS(Optimizer):
 
     @property
     def param_to_rank(self) -> Dict[torch.Tensor, int]:
+        """param to data parallel rank"""
         if len(self._param_rank) == 0:
             for rank, param_groups in enumerate(self.partition_parameters()):
                 for param_group in param_groups:
                     for param in param_group["params"]:
                         self._param_rank[param] = rank
         return self._param_rank
+
+    @staticmethod
+    def get_global_rank(group: Any, rank: int) -> int:
+        if group is dist.group.WORLD:
+            return rank
+        else:
+            global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
+        return global_rank
 
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
     # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
@@ -187,7 +198,9 @@ class OSS(Optimizer):
 
         # Sync all the states. Broadcast requests are issued async, we check completeness before moving on
         for device_params in self.per_device_params:  # all the params on this device (inc all ranks)
-            self._broadcast_params_task(self._buffers[device_params[0][0].device], device_params, self.group, self.rank)
+            self._broadcast_params_task(
+                self._buffers[device_params[0][0].device], device_params, self.group, self.global_rank
+            )
 
         return loss
 
@@ -203,6 +216,8 @@ class OSS(Optimizer):
             if len(rank_params) == 0:
                 continue
 
+            global_rank = OSS.get_global_rank(group, rank)
+
             # Copy small gradients into per-GPU buffers and then async broadcast
             i_p = 0
             offset = 0
@@ -214,7 +229,7 @@ class OSS(Optimizer):
                 i_p += 1
 
             if i_p > 0:
-                dist.broadcast(tensor=buffer, src=rank, group=group, async_op=True)
+                dist.broadcast(tensor=buffer, src=global_rank, group=group, async_op=True)
 
             # Directly broadcast the rest
             for param in rank_params[i_p:]:
@@ -225,7 +240,7 @@ class OSS(Optimizer):
 
                 # NOTE: The last broadcast is synchronous, which makes sure that all the
                 # async calls prior have concluded (backends enforce strict ordering)
-                dist.broadcast(tensor=param, src=rank, group=group, async_op=i_p != len(rank_params))
+                dist.broadcast(tensor=param, src=global_rank, group=group, async_op=i_p != len(rank_params))
 
             # Unwrap the initial packed small parameters
             if rank != self_rank:
@@ -389,7 +404,7 @@ class OSS(Optimizer):
         empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
         all_states: List[Dict[str, Any]] = []
 
-        for rank in range(dist.get_world_size(group=self.group)):
+        for rank in range(self.world_size):
             if rank == self.rank:
                 logging.debug("Saving self state")
                 all_states.append(
@@ -397,12 +412,13 @@ class OSS(Optimizer):
                 )
 
                 # Sync with other replicas
-                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
+                broadcast_object(empty_buffer, src_rank=self.global_rank, group=self.group, dist_device=self._device)
             else:
                 # Fetch the optim state from the other replicas
-                logging.debug("Receiving state from rank %s ", rank)
+                global_rank = self.get_global_rank(self.group, rank)
+                logging.debug("Receiving state from rank %s ", global_rank)
                 replica_state = broadcast_object(
-                    empty_buffer, src_rank=rank, group=self.group, dist_device=self._device
+                    empty_buffer, src_rank=global_rank, group=self.group, dist_device=self._device
                 )
 
                 all_states.append(
@@ -417,17 +433,20 @@ class OSS(Optimizer):
         """Broadcast this rank's state shard, discard others"""
         empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
 
-        for rank in range(dist.get_world_size(group=self.group)):
+        for rank in range(self.world_size):
             if rank == self.rank:
                 # Send the state to the reference replica
                 logging.debug(
                     "Sending the sharded optimizer state to the reference replica from rank %s", rank,
                 )
-                broadcast_object(self.local_state_dict(), src_rank=rank, group=self.group, dist_device=self._device)
+                broadcast_object(
+                    self.local_state_dict(), src_rank=self.global_rank, group=self.group, dist_device=self._device
+                )
             else:
+                global_rank = self.get_global_rank(self.group, rank)
                 # Discard this tensor/rank, broadcast necessary for syncing
-                logging.debug("Discarding broadcast from rank %s", rank)
-                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
+                logging.debug("Discarding broadcast from rank %s", global_rank)
+                broadcast_object(empty_buffer, src_rank=global_rank, group=self.group, dist_device=self._device)
 
     def _free_other_grads(self) -> None:
         """Free all the gradients only useful for the other ranks
