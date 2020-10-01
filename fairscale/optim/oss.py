@@ -225,68 +225,6 @@ class OSS(Optimizer):
 
         return i_p
 
-    @staticmethod
-    def _scatter(buffer: torch.Tensor, params: List[Parameter], gradients: bool = False) -> None:
-        """Put as many parameters as possible from the parameter list in a given buffer.
-        Populate the buffer and return the amount of params (starting from 0) which fit
-        """
-        i_p = 0
-        offset = 0
-        buffer_size = buffer.numel()
-
-        while i_p < len(params) and offset + params[i_p].numel() < buffer_size:
-            end = offset + params[i_p].numel()
-            if gradients:
-                params[i_p].grad.data.copy_(buffer[offset:end].view_as(params[i_p]))  # type: ignore
-            else:
-                params[i_p].data.copy_(buffer[offset:end].view_as(params[i_p]))  # type: ignore
-            offset = end
-            i_p += 1
-
-    @staticmethod
-    def _consume_async_work(queue: List[Any]) -> None:
-        _ = list(map(lambda x: x.wait(), queue))
-        return
-
-    @staticmethod
-    def _broadcast_params_task(buffer: torch.Tensor, params: List[List[Parameter]], group: Any, self_rank: int) -> None:
-        """Helper function to broadcast all the parameters
-        """
-        buffer_size = buffer.numel()
-
-        for rank, rank_params in enumerate(params):  # all the params sorted per rank
-            restore_require_grad = []
-            requests = []
-
-            if len(rank_params) == 0:
-                continue
-
-            global_rank = OSS.get_global_rank(group, rank)
-
-            # Copy small gradients into per-GPU buffers and then async broadcast
-            i_p = OSS._bucket(buffer, rank_params, copy=(rank == self_rank))
-
-            if i_p > 0:
-                requests.append(dist.broadcast(tensor=buffer, src=global_rank, group=group, async_op=True))
-
-            # Directly broadcast the rest
-            for param in rank_params[i_p:]:
-                if param.requires_grad:
-                    restore_require_grad.append(param)
-                    param.requires_grad = False
-
-                requests.append(dist.broadcast(tensor=param, src=global_rank, group=group, async_op=True))
-
-            # Unwrap the initial packed small parameters
-            # TODO: (ben) This could be done after all devices have been processed instead
-            OSS._consume_async_work(requests)
-
-            if rank != self_rank:
-                OSS._scatter(buffer, rank_params, gradients=False)
-
-            for p in restore_require_grad:
-                p.requires_grad = True
-
     def local_state_dict(self) -> dict:
         """Gets this rank's state_dict.
 
@@ -490,3 +428,64 @@ class OSS(Optimizer):
             for p in partition:
                 for t in p["params"]:
                     t.grad = None
+
+    @staticmethod
+    def _scatter(buffer: torch.Tensor, params: List[Parameter], gradients: bool = False) -> None:
+        """Put as many parameters as possible from the parameter list in a given buffer.
+        Populate the buffer and return the amount of params (starting from 0) which fit
+        """
+        i_p = 0
+        offset = 0
+        buffer_size = buffer.numel()
+
+        while i_p < len(params) and offset + params[i_p].numel() < buffer_size:
+            end = offset + params[i_p].numel()
+            if gradients:
+                params[i_p].grad.data.copy_(buffer[offset:end].view_as(params[i_p]))  # type: ignore
+            else:
+                params[i_p].data.copy_(buffer[offset:end].view_as(params[i_p]))  # type: ignore
+            offset = end
+            i_p += 1
+
+    @staticmethod
+    def _consume_async_work(queue: List[Any]) -> None:
+        _ = list(map(lambda x: x.wait(), queue))
+
+    @staticmethod
+    def _broadcast_params_task(buffer: torch.Tensor, params: List[List[Parameter]], group: Any, self_rank: int) -> None:
+        """Helper function to broadcast all the parameters
+        """
+        buffer_size = buffer.numel()
+
+        for rank, rank_params in enumerate(params):  # all the params sorted per rank
+            if len(rank_params) == 0:
+                continue
+
+            restore_require_grad = []
+            requests = []
+
+            global_rank = OSS.get_global_rank(group, rank)
+
+            # Copy small gradients into per-GPU buffers
+            i_p = OSS._bucket(buffer, rank_params, copy=(rank == self_rank))
+
+            if i_p > 0:
+                requests.append(dist.broadcast(tensor=buffer, src=global_rank, group=group, async_op=True))
+
+            # Directly broadcast the rest
+            for param in rank_params[i_p:]:
+                if param.requires_grad:
+                    restore_require_grad.append(param)
+                    param.requires_grad = False
+
+                requests.append(dist.broadcast(tensor=param, src=global_rank, group=group, async_op=True))
+
+            # Unwrap the initial packed small parameters
+            # TODO: (ben) This could be done after all devices have been processed instead
+            OSS._consume_async_work(requests)
+
+            if rank != self_rank:
+                OSS._scatter(buffer, rank_params, gradients=False)
+
+            for p in restore_require_grad:
+                p.requires_grad = True
