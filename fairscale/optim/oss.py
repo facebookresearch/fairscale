@@ -166,14 +166,6 @@ class OSS(Optimizer):
                         self._param_rank[param] = rank
         return self._param_rank
 
-    @staticmethod
-    def get_global_rank(group: Any, rank: int) -> int:
-        if group is dist.group.WORLD:
-            return rank
-        else:
-            global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
-        return global_rank
-
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
     # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
     def step(self, closure: Optional[Callable[[], float]] = None, **kwargs: Any) -> Optional[float]:
@@ -203,6 +195,14 @@ class OSS(Optimizer):
             )
 
         return loss
+
+    @staticmethod
+    def get_global_rank(group: Any, rank: int) -> int:
+        if group is dist.group.WORLD:
+            return rank
+        else:
+            global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
+        return global_rank
 
     @staticmethod
     def _bucket(buffer: torch.Tensor, params: List[Parameter], copy: bool, gradients: bool = False) -> int:
