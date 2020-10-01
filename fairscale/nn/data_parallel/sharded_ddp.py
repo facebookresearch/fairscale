@@ -172,7 +172,7 @@ class ShardedDataParallel(nn.Module):
 
             if i_p > 0:
                 buffer.div_(world_size)  # type: ignore
-                requests.append(st.reduce(tensor=buffer, dst=rank, group=group, async_op=True))  # type: ignore
+                requests.append(dist.reduce(tensor=buffer, dst=rank, group=group, async_op=True))  # type: ignore
 
             # Directly reduce the next grads
             for param in rank_params[i_p:]:
