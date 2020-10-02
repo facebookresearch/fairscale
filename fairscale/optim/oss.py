@@ -72,7 +72,9 @@ class OSS(Optimizer):
         self.in_super_constructor = False
 
         # Partition information. lazy evaluation, computed if requested
-        self._per_device_params: List[List[List[Parameter]]] = []  # device, rank, params
+        self._per_device_params: OrderedDict[
+            torch.device, List[List[Parameter]]
+        ] = OrderedDict()  # device, rank, params
         self._param_rank: Dict[torch.Tensor, int] = {}
         self._partition_parameters: List[List[dict]] = []
 
@@ -95,12 +97,9 @@ class OSS(Optimizer):
 
         # Current default device is set by the parameters allocated to this rank
         self._device = self.partition_parameters()[self.rank][0]["params"][0].device
-        self._buffer_size = broadcast_buffer_size
         self._buffers: Dict[torch.device, torch.Tensor] = {}
-        for per_device in self.per_device_params:
-            device = per_device[0][0].device
-            dtype = per_device[0][0].dtype
-            self._buffers[device] = torch.empty(self._buffer_size, dtype=dtype, device=device)
+        for device, per_device in self.per_device_params.items():
+            self._buffers[device] = torch.empty(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device)
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
@@ -130,7 +129,7 @@ class OSS(Optimizer):
         return self._partition_parameters
 
     @property
-    def per_device_params(self) -> List[List[List[Parameter]]]:
+    def per_device_params(self) -> Dict[torch.device, List[List[Parameter]]]:
         """Sorted list of all the params, first per device then per rank.
 
         Within a list params are sorted per number of elements to allow for an easy bucketing.
@@ -140,19 +139,16 @@ class OSS(Optimizer):
             # The ordering is important here, needs to be the same on all ranks
             # So that ulterior broadcast calls are matching
             for param_group in self.param_groups:
-                param_lists: OrderedDict = OrderedDict()
                 for param in param_group["params"]:
                     device = param.device
-                    if param_lists.get(device) is None:
-                        param_lists[device] = [[] for _ in range(len(self.partition_parameters()))]
-                    param_lists[device][self.param_to_rank[param]] += [param]
+                    if self._per_device_params.get(device) is None:
+                        self._per_device_params[device] = [[] for _ in range(len(self.partition_parameters()))]
+                    self._per_device_params[device][self.param_to_rank[param]] += [param]
 
             # Sort param_lists by size
-            for k in param_lists.keys():
-                for r in param_lists[k]:
+            for k in self._per_device_params.keys():
+                for r in self._per_device_params[k]:
                     r.sort(key=lambda x: x.numel())
-
-            self._per_device_params = list(param_lists.values())
 
         return self._per_device_params
 
@@ -189,10 +185,12 @@ class OSS(Optimizer):
             loss = self.optim.step(**kwargs)
 
         # Sync all the states. Broadcast requests are issued async, we check completeness before moving on
-        for device_params in self.per_device_params:  # all the params on this device (inc all ranks)
-            self._broadcast_params_task(
-                self._buffers[device_params[0][0].device], device_params, self.group, self.global_rank
-            )
+        with torch.no_grad():
+            for (
+                device,
+                device_params,
+            ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
+                self._broadcast_params_task(self._buffers[device], device_params, self.group, self.global_rank)
 
         return loss
 
@@ -386,7 +384,6 @@ class OSS(Optimizer):
             else:
                 # Fetch the optim state from the other replicas
                 global_rank = self.get_global_rank(self.group, rank)
-                logging.debug("Receiving state from rank %s ", global_rank)
                 replica_state = broadcast_object(
                     empty_buffer, src_rank=global_rank, group=self.group, dist_device=self._device
                 )
@@ -415,7 +412,6 @@ class OSS(Optimizer):
             else:
                 global_rank = self.get_global_rank(self.group, rank)
                 # Discard this tensor/rank, broadcast necessary for syncing
-                logging.debug("Discarding broadcast from rank %s", global_rank)
                 broadcast_object(empty_buffer, src_rank=global_rank, group=self.group, dist_device=self._device)
 
     def _free_other_grads(self) -> None:

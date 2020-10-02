@@ -59,6 +59,7 @@ class ShardedDataParallel(nn.Module):
         self.world_size = world_size
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.rank = dist.get_rank(self.process_group)
+        self.global_rank = OSS.get_global_rank(self.group, self.rank)
         self.broadcast_buffers = broadcast_buffers
         self.authoritative_rank = 0
 
@@ -74,14 +75,12 @@ class ShardedDataParallel(nn.Module):
 
         # Allocate reduce buffers
         # - Never use a bigger buffer than the number of model params
-        self.buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
+        buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
         self._reduce_buffers: Dict[torch.device, torch.Tensor] = {}
 
         # - One buffer per device
-        for per_device in self.sharded_optimizer.per_device_params:
-            device = per_device[0][0].device
-            dtype = per_device[0][0].dtype
-            self._reduce_buffers[device] = torch.empty(self.buffer_size, dtype=dtype, device=device)
+        for device, per_device in self.sharded_optimizer.per_device_params.items():
+            self._reduce_buffers[device] = torch.empty(buffer_size, dtype=per_device[0][0].dtype, device=device)
 
         # Sanity checks
         assert len(self.sharded_optimizer.param_to_rank) == len(
@@ -139,8 +138,7 @@ class ShardedDataParallel(nn.Module):
         self.need_reduction = False
 
         with torch.no_grad():
-            for per_device in self.sharded_optimizer.per_device_params:
-                device = per_device[0][0].device
+            for device, per_device in self.sharded_optimizer.per_device_params.items():
                 self._reduce_grads_task(
                     self._reduce_buffers[device],
                     per_device,
@@ -166,13 +164,14 @@ class ShardedDataParallel(nn.Module):
 
             restore_require_grad = []
             requests = []
+            global_rank = OSS.get_global_rank(group, rank)
 
             # Copy small gradients into per-GPU buffers and then async reduce
-            i_p = OSS._bucket(buffer, rank_params, copy=(rank == self_rank), gradients=True)
+            i_p = OSS._bucket(buffer, rank_params, copy=(global_rank == self_rank), gradients=True)
 
             if i_p > 0:
                 buffer.div_(world_size)  # type: ignore
-                requests.append(dist.reduce(tensor=buffer, dst=rank, group=group, async_op=True))  # type: ignore
+                requests.append(dist.reduce(tensor=buffer, dst=global_rank, group=group, async_op=True))  # type: ignore
 
             # Directly reduce the next grads
             for param in rank_params[i_p:]:
@@ -182,7 +181,7 @@ class ShardedDataParallel(nn.Module):
                     param.requires_grad = False
 
                 param.div_(world_size)  # type: ignore
-                requests.append(dist.reduce(tensor=param, dst=rank, group=group, async_op=True))  # type: ignore
+                requests.append(dist.reduce(tensor=param, dst=global_rank, group=group, async_op=True))  # type: ignore
 
             # If applicable, copy back the bucketed values
             OSS._consume_async_work(requests)
