@@ -29,9 +29,11 @@ def test_forward():
     assert torch.all(combine_weights <= 1.0)
     weights_sum = torch.sum(combine_weights).item()
     assert round(weights_sum) == pytest.approx(weights_sum)
+    # For this random seed, we get 36 slots filled.
     assert weights_sum == pytest.approx(36.0)
 
 
+# Verify that top gate is allocated capacity as per Algorithm 1 in GShard paper.
 def test_top1s():
     num_tokens = 8
     num_experts = 4

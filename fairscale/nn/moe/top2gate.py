@@ -13,7 +13,7 @@ import torch
 from torch import Tensor
 import torch.nn.functional as F
 
-gumble = torch.distributions.gumbel.Gumbel(0, 1)  # type: ignore
+gumbel = torch.distributions.gumbel.Gumbel(0, 1)  # type: ignore
 
 
 def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
@@ -34,7 +34,7 @@ def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
 
     # Create a mask for 2nd's expert per token using Gumbel-max trick
     # https://timvieira.github.io/blog/post/2014/07/31/gumbel-max-trick/
-    logits_w_noise = logits + gumble.rsample(logits.shape)
+    logits_w_noise = logits + gumbel.rsample(logits.shape)
     # Replace top-expert with min value
     mins = torch.full_like(logits, min_logit)
     logits_except1 = torch.where(mask1.bool(), mins, logits_w_noise)
