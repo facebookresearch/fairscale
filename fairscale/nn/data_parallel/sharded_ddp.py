@@ -11,7 +11,7 @@ Adopted from LegacyDistributedDataParallel module from fairseq.
 
 from contextlib import contextmanager
 import copy
-from typing import Any, Dict, Generator, List, Type
+from typing import Any, Dict, Generator, List, Type, cast
 
 import torch
 from torch import Tensor, nn
@@ -166,27 +166,28 @@ class ShardedDataParallel(nn.Module):
             global_rank = OSS.get_global_rank(group, rank)
 
             # Copy small gradients into per-GPU buffers and then async reduce
-            i_p = OSS._bucket(buffer, rank_params, copy=(rank == self_rank), gradients=True)
+            grads = [cast(Parameter, p.grad) for p in rank_params]
+            i_bucketed = OSS._bucket(buffer, grads, copy=(rank == self_rank))
 
-            if i_p > 0:
+            if i_bucketed > 0:
                 buffer.div_(world_size)  # type: ignore
                 requests.append(dist.reduce(tensor=buffer, dst=global_rank, group=group, async_op=True))  # type: ignore
 
             # Directly reduce the next grads
-            for param in rank_params[i_p:]:
+            for param in rank_params[i_bucketed:]:
                 # NOTE: workaround Gloo / leaf variable requiring grad modified in place
                 if param.requires_grad:
                     restore_require_grad.append(param)
                     param.requires_grad = False
 
-                param.div_(world_size)  # type: ignore
-                requests.append(dist.reduce(tensor=param, dst=global_rank, group=group, async_op=True))  # type: ignore
+                param.grad.div_(world_size)  # type: ignore
+                requests.append(dist.reduce(tensor=param.grad, dst=global_rank, group=group, async_op=True))  # type: ignore
 
             # If applicable, copy back the bucketed values
             OSS._consume_async_work(requests)
 
             if rank == self_rank:
-                OSS._scatter(buffer, rank_params, gradients=True)
+                OSS._scatter(buffer, grads)
             else:
                 # Free memory on this rank, these grads are not useful anymore
                 for p in rank_params:

@@ -198,35 +198,6 @@ class OSS(Optimizer):
 
         return loss
 
-    @staticmethod
-    def get_global_rank(group: Any, rank: int) -> int:
-        if group is dist.group.WORLD:
-            return rank
-        else:
-            global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
-        return global_rank
-
-    @staticmethod
-    def _bucket(buffer: torch.Tensor, params: List[Parameter], copy: bool, gradients: bool = False) -> int:
-        """Put as many parameters as possible from the parameter list in a given buffer.
-        Populate the buffer and return the amount of params (starting from 0) which fit
-        """
-        i_p = 0
-        offset = 0
-        buffer_size = buffer.numel()
-
-        while i_p < len(params) and offset + params[i_p].numel() < buffer_size:
-            end = offset + params[i_p].numel()
-            if copy:
-                if gradients:
-                    buffer[offset:end].copy_(params[i_p].grad.data.view(-1))  # type: ignore
-                else:
-                    buffer[offset:end].copy_(params[i_p].data.view(-1))  # type: ignore
-            offset = end
-            i_p += 1
-
-        return i_p
-
     def local_state_dict(self) -> dict:
         """Gets this rank's state_dict.
 
@@ -430,22 +401,45 @@ class OSS(Optimizer):
                     t.grad = None
 
     @staticmethod
-    def _scatter(buffer: torch.Tensor, params: List[Parameter], gradients: bool = False) -> None:
+    def get_global_rank(group: Any, rank: int) -> int:
+        if group is dist.group.WORLD:
+            return rank
+        else:
+            global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
+        return global_rank
+
+    @staticmethod
+    def _bucket(buffer: torch.Tensor, params: List[Parameter], copy: bool) -> int:
         """Put as many parameters as possible from the parameter list in a given buffer.
-        Populate the buffer and return the amount of params (starting from 0) which fit
+        Populate the buffer and return the number of params which fit
         """
-        i_p = 0
+        i_bucketed = 0  # the number of tensors packed in the buffer
         offset = 0
         buffer_size = buffer.numel()
 
-        while i_p < len(params) and offset + params[i_p].numel() < buffer_size:
-            end = offset + params[i_p].numel()
-            if gradients:
-                params[i_p].grad.data.copy_(buffer[offset:end].view_as(params[i_p]))  # type: ignore
-            else:
-                params[i_p].data.copy_(buffer[offset:end].view_as(params[i_p]))  # type: ignore
+        while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
+            end = offset + params[i_bucketed].numel()
+            if copy:
+                buffer[offset:end].copy_(params[i_bucketed].data.view(-1))  # type: ignore
             offset = end
-            i_p += 1
+            i_bucketed += 1
+
+        return i_bucketed
+
+    @staticmethod
+    def _scatter(buffer: torch.Tensor, params: List[Parameter]) -> None:
+        """Put as many parameters as possible from the parameter list in a given buffer.
+        Populate the buffer and return the amount of params (starting from 0) which fit
+        """
+        i_bucketed = 0  # the number of tensors packed in the buffer
+        offset = 0
+        buffer_size = buffer.numel()
+
+        while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
+            end = offset + params[i_bucketed].numel()
+            params[i_bucketed].data.copy_(buffer[offset:end].view_as(params[i_bucketed]))  # type: ignore
+            offset = end
+            i_bucketed += 1
 
     @staticmethod
     def _consume_async_work(queue: List[Any]) -> None:
@@ -497,7 +491,7 @@ class OSS(Optimizer):
         # Unroll the initial packed small parameters, as soon as possible
         for gate, buffer, rank_params in bucket_requests:
             gate.wait()
-            OSS._scatter(buffer, rank_params, gradients=False)
+            OSS._scatter(buffer, rank_params)
 
         # Unroll all the async work items, just in case
         OSS._consume_async_work(requests)
