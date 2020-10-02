@@ -166,7 +166,7 @@ class ShardedDataParallel(nn.Module):
             global_rank = OSS.get_global_rank(group, rank)
 
             # Copy small gradients into per-GPU buffers and then async reduce
-            i_p = OSS._bucket(buffer, rank_params, copy=(global_rank == self_rank), gradients=True)
+            i_p = OSS._bucket(buffer, rank_params, copy=(rank == self_rank), gradients=True)
 
             if i_p > 0:
                 buffer.div_(world_size)  # type: ignore

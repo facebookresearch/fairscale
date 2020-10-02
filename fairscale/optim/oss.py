@@ -50,7 +50,7 @@ class OSS(Optimizer):
         group (group):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
-            the size of the buffer used to batch the small parameter tensors (default 1M).
+            the size of the buffer used to batch the small parameter tensors (default 256k).
     """
 
     #: The optimizer used for a given shard
@@ -63,7 +63,7 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
-        broadcast_buffer_size: int = 2 ** 20,
+        broadcast_buffer_size: int = 2 ** 18,
         **default: Any,
     ):
         # Hold all the model params in the root .param_groups
@@ -97,9 +97,13 @@ class OSS(Optimizer):
 
         # Current default device is set by the parameters allocated to this rank
         self._device = self.partition_parameters()[self.rank][0]["params"][0].device
-        self._buffers: Dict[torch.device, torch.Tensor] = {}
+        self._buffers: Dict[torch.device, List[torch.Tensor]] = {}
         for device, per_device in self.per_device_params.items():
-            self._buffers[device] = torch.empty(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device)
+            # Allocate one buffer per rank and per device to group the small parameters
+            self._buffers[device] = [
+                torch.empty(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device)
+                for _ in range(len(per_device))
+            ]
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
@@ -448,25 +452,39 @@ class OSS(Optimizer):
         _ = list(map(lambda x: x.wait(), queue))
 
     @staticmethod
-    def _broadcast_params_task(buffer: torch.Tensor, params: List[List[Parameter]], group: Any, self_rank: int) -> None:
+    def _broadcast_params_task(
+        buffers: List[torch.Tensor], params: List[List[Parameter]], group: Any, self_rank: int
+    ) -> None:
         """Helper function to broadcast all the parameters
         """
-        buffer_size = buffer.numel()
+        buffer_size = buffers[0].numel()
+        restore_require_grad = []
+        bucket_requests = []
+        requests = []
 
+        # Bucket and issue all the async calls
         for rank, rank_params in enumerate(params):  # all the params sorted per rank
             if len(rank_params) == 0:
                 continue
 
-            restore_require_grad = []
-            requests = []
-
             global_rank = OSS.get_global_rank(group, rank)
 
             # Copy small gradients into per-GPU buffers
-            i_p = OSS._bucket(buffer, rank_params, copy=(rank == self_rank))
+            i_p = OSS._bucket(buffers[rank], rank_params, copy=(rank == self_rank))
 
             if i_p > 0:
-                requests.append(dist.broadcast(tensor=buffer, src=global_rank, group=group, async_op=True))
+                if rank != self_rank:
+                    # This request will need to be unrolled
+                    bucket_requests.append(
+                        (
+                            dist.broadcast(tensor=buffers[rank], src=global_rank, group=group, async_op=True),
+                            buffers[rank],
+                            rank_params,
+                        )
+                    )
+                else:
+                    # Fire and forget, this rank is not the target
+                    dist.broadcast(tensor=buffers[rank], src=global_rank, group=group, async_op=True)
 
             # Directly broadcast the rest
             for param in rank_params[i_p:]:
@@ -476,12 +494,13 @@ class OSS(Optimizer):
 
                 requests.append(dist.broadcast(tensor=param, src=global_rank, group=group, async_op=True))
 
-            # Unwrap the initial packed small parameters
-            # TODO: (ben) This could be done after all devices have been processed instead
-            OSS._consume_async_work(requests)
+        # Unroll the initial packed small parameters, as soon as possible
+        for gate, buffer, rank_params in bucket_requests:
+            gate.wait()
+            OSS._scatter(buffer, rank_params, gradients=False)
 
-            if rank != self_rank:
-                OSS._scatter(buffer, rank_params, gradients=False)
+        # Unroll all the async work items, just in case
+        OSS._consume_async_work(requests)
 
-            for p in restore_require_grad:
-                p.requires_grad = True
+        for p in restore_require_grad:
+            p.requires_grad = True
