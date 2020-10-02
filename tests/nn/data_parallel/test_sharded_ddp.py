@@ -64,7 +64,14 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     for pg in optimizer.optim.param_groups:
         for param in pg["params"]:
             if param.requires_grad:
-                assert param.grad.abs().sum().item() > 0.0, "The reduce step should have populated all the gradients"
+                if rank == optimizer.param_to_rank[param]:
+                    assert (
+                        param.grad.abs().sum().item() > 0.0
+                    ), "The reduce step should have populated the corresponding gradients"
+                else:
+                    assert (
+                        param.grad is None
+                    ), "This rank does not need this grad after reduce, it should have been wiped"
 
     # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
     for b in model.buffers():
