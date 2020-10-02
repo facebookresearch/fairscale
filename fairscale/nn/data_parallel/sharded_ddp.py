@@ -39,7 +39,7 @@ class ShardedDataParallel(nn.Module):
             distributed gradient reduction. If None, the default WORLD process group
             will be used.
         buffer_size (int, optional): number of elements to buffer before
-            performing reduce (default: 1M). Used to reduce multiple small
+            performing reduce (default: 512k). Used to reduce multiple small
             params to avoid communication overhead.
     """
 
@@ -51,7 +51,7 @@ class ShardedDataParallel(nn.Module):
         world_size: int,
         broadcast_buffers: bool,
         process_group: Any = None,
-        buffer_size: int = 2 ** 20,
+        buffer_size: int = 2 ** 19,
     ):
         super().__init__()
 
@@ -75,11 +75,13 @@ class ShardedDataParallel(nn.Module):
         # Allocate reduce buffers
         # - Never use a bigger buffer than the number of model params
         buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
-        self._reduce_buffers: Dict[torch.device, torch.Tensor] = {}
+        self._reduce_buffers: Dict[torch.device, List[torch.Tensor]] = {}
 
-        # - One buffer per device
+        # - One buffer per rank per device
         for device, per_device in self.sharded_optimizer.per_device_params.items():
-            self._reduce_buffers[device] = torch.empty(buffer_size, dtype=per_device[0][0].dtype, device=device)
+            self._reduce_buffers[device] = [
+                torch.zeros(buffer_size, dtype=per_device[0][0].dtype, device=device) for _ in range(len(per_device))
+            ]
 
         # Sanity checks
         assert len(self.sharded_optimizer.param_to_rank) == len(
@@ -148,53 +150,73 @@ class ShardedDataParallel(nn.Module):
 
     @staticmethod
     def _reduce_grads_task(
-        buffer: torch.Tensor, params: List[List[Parameter]], group: Any, self_rank: int, world_size: int
+        buffers: List[torch.Tensor], per_rank_params: List[List[Parameter]], group: Any, self_rank: int, world_size: int
     ) -> None:
         """Helper to reduce a list of params. The params are sorted by size, smallest first, which allows for
         an opportunistic bucketing.
 
         NOTE: All param gradients are assumed to exist"""
 
-        buffer_size = buffer.numel()
+        buffer_size = buffers[0].numel()
+        bucket_requests = []
+        requests = []
 
-        for rank, rank_params in enumerate(params):
-            if len(rank_params) == 0:
+        for (rank, params), buffer in zip(enumerate(per_rank_params), buffers):
+            if len(params) == 0:
                 continue
 
-            restore_require_grad = []
-            requests = []
+            for p in params:
+                if p.grad is None:
+                    p.grad = torch.zeros_like(p)
+
             global_rank = OSS.get_global_rank(group, rank)
 
             # Copy small gradients into per-GPU buffers and then async reduce
-            grads = [cast(Parameter, p.grad) for p in rank_params]
-            i_bucketed = OSS._bucket(buffer, grads, copy=(rank == self_rank))
+            i_bucketed = 0  # the number of tensors packed in the buffer
+            offset = 0
+
+            while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
+                end = offset + params[i_bucketed].numel()
+                buffer[offset:end].copy_(params[i_bucketed].grad.data.view(-1))  # type: ignore
+                offset = end
+                i_bucketed += 1
 
             if i_bucketed > 0:
                 buffer.div_(world_size)  # type: ignore
-                requests.append(dist.reduce(tensor=buffer, dst=global_rank, group=group, async_op=True))  # type: ignore
+                bucket_requests.append(
+                    (
+                        dist.reduce(tensor=buffer, dst=global_rank, group=group, async_op=True),  # type: ignore
+                        rank,
+                    )
+                )
 
-            # Directly reduce the next grads
-            for param in rank_params[i_bucketed:]:
-                # NOTE: workaround Gloo / leaf variable requiring grad modified in place
-                if param.requires_grad:
-                    restore_require_grad.append(param)
-                    param.requires_grad = False
+            # Directly reduce the other grads
+            for p in params[i_bucketed:]:
+                p.grad = cast(Tensor, p.grad)
+                if p.grad.requires_grad:
+                    raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
 
-                param.grad.div_(world_size)  # type: ignore
-                requests.append(dist.reduce(tensor=param.grad, dst=global_rank, group=group, async_op=True))  # type: ignore
+                p.grad.div_(world_size)  # type: ignore
+                requests.append(dist.reduce(tensor=p.grad, dst=global_rank, group=group, async_op=True))  # type: ignore
 
-            # If applicable, copy back the bucketed values
-            OSS._consume_async_work(requests)
+        # Unroll the initial packed small gradients, as soon as possible
+        for gate, rank in bucket_requests:
+            gate.wait()
 
             if rank == self_rank:
-                OSS._scatter(buffer, grads)
-            else:
-                # Free memory on this rank, these grads are not useful anymore
-                for p in rank_params:
-                    p.grad = None
+                i_bucketed = 0  # the number of tensors packed in the buffer
+                offset = 0
+                params = per_rank_params[rank]
+                buffer = buffers[rank]
 
-            for p in restore_require_grad:
-                p.requires_grad = True
+                while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
+                    end = offset + params[i_bucketed].numel()
+                    params[i_bucketed].grad.data.copy_(buffer[offset:end].view_as(params[i_bucketed]))  # type: ignore
+                    offset = end
+                    i_bucketed += 1
+
+        # Make sure that we're done with this device before moving on and cleaning the unused params
+        OSS._consume_async_work(requests)
 
     def _sync_buffers(self) -> None:
         """

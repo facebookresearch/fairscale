@@ -64,18 +64,15 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     for pg in optimizer.optim.param_groups:
         for param in pg["params"]:
             if param.requires_grad:
-                if rank == optimizer.param_to_rank[param]:
-                    assert (
-                        param.grad.abs().sum().item() > 0.0
-                    ), "The reduce step should have populated the corresponding gradients"
-                else:
-                    assert (
-                        param.grad is None
-                    ), "This rank does not need this grad after reduce, it should have been wiped"
+                assert (
+                    param.grad.abs().sum().item() > 0.0
+                ), "The reduce step should have populated the corresponding gradients"
 
     # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
     for b in model.buffers():
         assert b.cpu().item() == 0.0
+
+    dist.destroy_process_group()
 
 
 def run_test(backend, device, world_size=2):
@@ -107,6 +104,8 @@ def run_eval_mode(_unused):
         pass
     else:
         assert False, "Multiple forward passes on training mode should not pass"
+
+    dist.destroy_process_group()
 
 
 def test_eval_mode():

@@ -165,6 +165,8 @@ def train(
 
         print("[Regression Test] VALID")
 
+    dist.destroy_process_group()  # type: ignore
+
 
 if __name__ == "__main__":
 
