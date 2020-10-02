@@ -59,7 +59,6 @@ class ShardedDataParallel(nn.Module):
         self.world_size = world_size
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.rank = dist.get_rank(self.process_group)
-        self.global_rank = OSS.get_global_rank(self.group, self.rank)
         self.broadcast_buffers = broadcast_buffers
         self.authoritative_rank = 0
 
