@@ -29,7 +29,6 @@ def gumbel_rsample(shape: Tuple, device: torch.device) -> Tensor:
 def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     """Implements Top2Gating on logits."""
     gates = F.softmax(logits, dim=2)
-    min_logit = torch.finfo(logits.dtype).min  # type: ignore
 
     # gates has shape of GSE
     num_tokens = gates.shape[1]
@@ -46,8 +45,7 @@ def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     # https://timvieira.github.io/blog/post/2014/07/31/gumbel-max-trick/
     logits_w_noise = logits + gumbel_rsample(logits.shape, device=logits.device)
     # Replace top-expert with min value
-    mins = torch.full_like(logits, min_logit)
-    logits_except1 = torch.where(mask1.bool(), mins, logits_w_noise)
+    logits_except1 = logits_w_noise.masked_fill(mask1.bool(), float("-inf"))
     indices2_gs = torch.argmax(logits_except1, dim=2)
     mask2 = F.one_hot(indices2_gs, num_classes=num_experts)
 
