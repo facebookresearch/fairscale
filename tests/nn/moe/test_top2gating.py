@@ -44,6 +44,7 @@ def test_forward_cpu():
     do_test_forward("cpu")
 
 
+@skip_if_no_cuda
 def test_forward_cuda():
     do_test_forward("cuda")
 
