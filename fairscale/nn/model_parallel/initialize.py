@@ -22,7 +22,7 @@
 
 """Model and data parallel groups."""
 
-from typing import List
+from typing import List, Optional
 
 import torch
 
@@ -38,7 +38,14 @@ _PIPELINE_PARALLEL_GROUP = None
 _PIPELINE_PARALLEL_RANKS = None
 
 
-def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 1) -> None:
+def initialize_model_parallel(
+    model_parallel_size_: int,
+    pipeline_length: int = 1,
+    *,
+    model_parallel_backend: Optional[str] = None,
+    pipeline_backend: Optional[str] = None,
+    ddp_backend: Optional[str] = None
+) -> None:
     """
     Initialize model data parallel groups.
 
@@ -57,8 +64,8 @@ def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 
     with a total of 16 GPUs, rank 0 to 7 belong to the first box and
     ranks 8 to 15 belong to the second box.
     """
-    if torch.distributed.get_rank() == 0:
-        print("> initializing model parallel with size {}".format(model_parallel_size_))
+    # if torch.distributed.get_rank() == 0:
+    #    print("> initializing model parallel with size {}".format(model_parallel_size_))
     # Get world size and rank. Ensure some consistencies.
     assert torch.distributed.is_initialized()
     world_size = torch.distributed.get_world_size()
@@ -68,6 +75,11 @@ def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 
     rank = torch.distributed.get_rank()
 
     data_parallel_size = int(world_size / (model_parallel_size * pipeline_length))
+
+    if torch.distributed.get_rank() == 0:
+        print("> initializing model parallel with size {}".format(model_parallel_size_))
+        print("> initializing ddp with size {}".format(data_parallel_size))
+        print("> initializing pipeline with size {}".format(pipeline_length))
 
     groups = torch.LongTensor(range(world_size)).reshape(data_parallel_size, pipeline_length, model_parallel_size)
 
@@ -80,7 +92,7 @@ def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 
     assert _DATA_PARALLEL_GROUP is None, "data parallel group is already initialized"
     for j in range(pipeline_length):
         for k in range(model_parallel_size):
-            group = torch.distributed.new_group(groups[:, j, k].tolist())
+            group = torch.distributed.new_group(groups[:, j, k].tolist(), backend=ddp_backend)
             if j == found[1] and k == found[2]:
                 _DATA_PARALLEL_GROUP = group
 
@@ -89,7 +101,7 @@ def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 
     assert _MODEL_PARALLEL_GROUP is None, "model parallel group is already initialized"
     for i in range(data_parallel_size):
         for j in range(pipeline_length):
-            group = torch.distributed.new_group(groups[i, j, :].tolist())
+            group = torch.distributed.new_group(groups[i, j, :].tolist(), backend=model_parallel_backend)
             if i == found[0] and j == found[1]:
                 _MODEL_PARALLEL_GROUP = group
 
@@ -100,7 +112,7 @@ def initialize_model_parallel(model_parallel_size_: int, pipeline_length: int = 
     for i in range(data_parallel_size):
         for k in range(model_parallel_size):
             ranks = groups[i, :, k].tolist()
-            group = torch.distributed.new_group(ranks)
+            group = torch.distributed.new_group(ranks, backend=pipeline_backend)
             if i == found[0] and k == found[2]:
                 _PIPELINE_PARALLEL_GROUP = group
                 _PIPELINE_PARALLEL_RANKS = ranks
