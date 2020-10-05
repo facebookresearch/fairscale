@@ -79,8 +79,9 @@ class ShardedDataParallel(nn.Module):
 
         # - One buffer per rank per device
         for device, per_device in self.sharded_optimizer.per_device_params.items():
+            buffer_dtype = per_device[0][0].dtype
             self._reduce_buffers[device] = [
-                torch.zeros(buffer_size, dtype=per_device[0][0].dtype, device=device) for _ in range(len(per_device))
+                torch.zeros(buffer_size, dtype=buffer_dtype, device=device) for _ in range(len(per_device))
             ]
 
         # Sanity checks
@@ -200,8 +201,8 @@ class ShardedDataParallel(nn.Module):
                 requests.append(dist.reduce(tensor=p.grad, dst=global_rank, group=group, async_op=True))  # type: ignore
 
         # Unroll the initial packed small gradients, as soon as possible
-        for gate, rank in bucket_requests:
-            gate.wait()
+        for future, rank in bucket_requests:
+            future.wait()
 
             if rank == self_rank:
                 i_bucketed = 0  # the number of tensors packed in the buffer
@@ -216,7 +217,7 @@ class ShardedDataParallel(nn.Module):
                     i_bucketed += 1
 
         # Make sure that we're done with this device before moving on and cleaning the unused params
-        OSS._consume_async_work(requests)
+        _ = list(map(lambda x: x.wait(), requests))
 
     def _sync_buffers(self) -> None:
         """

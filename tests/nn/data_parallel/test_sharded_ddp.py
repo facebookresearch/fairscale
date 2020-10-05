@@ -40,6 +40,13 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     # Any model works. Add one different buffer per rank
     model = Sequential(Linear(2, 3), Linear(3, 4)).to(device)
     model.register_buffer("test_buffer", torch.ones((1)) * rank)
+
+    def weights_init(m):
+        if isinstance(m, Linear):
+            torch.nn.init.constant_(m.weight.data, 1.0)
+            torch.nn.init.constant_(m.bias.data, 1.0)
+
+    model.apply(weights_init)
     model.to(device)
 
     ddp = ShardedDataParallel(
@@ -52,7 +59,8 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     optimizer = ddp.optimizer
     model = ddp.module
 
-    input_tensor = torch.rand((64, 2)).to(device)
+    # Different input per rank, allows for checking that the gradients have been properly reduced
+    input_tensor = (torch.ones((64, 2)) * rank).to(device)
     output = ddp(input_tensor).abs().sum() / input_tensor.numel()
     output.backward()
     ddp.reduce()

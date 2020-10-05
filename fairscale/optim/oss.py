@@ -50,7 +50,7 @@ class OSS(Optimizer):
         group (group):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
-            the size of the buffer used to batch the small parameter tensors (default 512k).
+            the size of the buffer used to batch the small parameter tensors (default 128k).
     """
 
     #: The optimizer used for a given shard
@@ -63,7 +63,7 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
-        broadcast_buffer_size: int = 2 ** 19,
+        broadcast_buffer_size: int = 2 ** 17,
         **default: Any,
     ):
         # Hold all the model params in the root .param_groups
@@ -409,10 +409,6 @@ class OSS(Optimizer):
         return global_rank
 
     @staticmethod
-    def _consume_async_work(queue: List[Any]) -> None:
-        _ = list(map(lambda x: x.wait(), queue))
-
-    @staticmethod
     def _broadcast_params(
         buffers: List[torch.Tensor], per_rank_params: List[List[Parameter]], group: Any, self_rank: int
     ) -> None:
@@ -475,7 +471,7 @@ class OSS(Optimizer):
                 i_bucketed += 1
 
         # Unroll all the async work items, just in case
-        OSS._consume_async_work(requests)
+        _ = list(map(lambda x: x.wait(), requests))
 
         for p in restore_require_grad:
             p.requires_grad = True
