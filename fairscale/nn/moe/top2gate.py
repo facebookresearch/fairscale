@@ -7,13 +7,23 @@
 # Code is inspired by Top2GatingOnLogits from lingvo:
 #   https://github.com/tensorflow/lingvo/blob/21b8106c5f1d30a196c98eedc441d4fd70833b11/lingvo/core/moe_layers.py#L477
 
-from typing import Tuple
+from typing import Callable, Dict, Tuple
 
 import torch
 from torch import Tensor
 import torch.nn.functional as F
 
-gumbel = torch.distributions.gumbel.Gumbel(0, 1)  # type: ignore
+gumbel_map: Dict[torch.device, Callable] = {}
+
+
+def gumbel_rsample(shape: Tuple, device: torch.device) -> Tensor:
+    gumbel = gumbel_map.get(device)
+    if gumbel is None:
+        one = torch.tensor(1.0, device=device)
+        zero = torch.tensor(0.0, device=device)
+        gumbel = torch.distributions.gumbel.Gumbel(zero, one).rsample  # type: ignore
+        gumbel_map[device] = gumbel
+    return gumbel(shape)
 
 
 def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
@@ -34,7 +44,7 @@ def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
 
     # Create a mask for 2nd's expert per token using Gumbel-max trick
     # https://timvieira.github.io/blog/post/2014/07/31/gumbel-max-trick/
-    logits_w_noise = logits + gumbel.rsample(logits.shape)
+    logits_w_noise = logits + gumbel_rsample(logits.shape, device=logits.device)
     # Replace top-expert with min value
     mins = torch.full_like(logits, min_logit)
     logits_except1 = torch.where(mask1.bool(), mins, logits_w_noise)
@@ -57,8 +67,8 @@ def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     mask2 *= torch.lt(locations2, capacity)
 
     # Store the capacity location for each token
-    locations1_gs = torch.einsum("gse,gse->gs", locations1, mask1)
-    locations2_gs = torch.einsum("gse,gse->gs", locations2, mask2)
+    locations1_gs = torch.sum(locations1 * mask1, dim=2)
+    locations2_gs = torch.sum(locations2 * mask2, dim=2)
 
     # Normalize gate probabilities
     mask1_float = mask1.float()

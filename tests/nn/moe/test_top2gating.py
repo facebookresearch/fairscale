@@ -9,15 +9,22 @@ import torch
 from fairscale.nn import Top2Gate
 from fairscale.nn.moe.top2gate import top2gating
 
+skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
+
 
 def test_create():
     gate = Top2Gate(4, 8)
 
 
-def test_forward():
+@skip_if_no_cuda
+def test_create_cuda():
+    gate = Top2Gate(4, 8).cuda()
+
+
+def do_test_forward(device):
     torch.manual_seed(3)
-    input = torch.randn(3, 12, 4)
-    gate = Top2Gate(4, 6)
+    input = torch.randn(3, 12, 4).to(device)
+    gate = Top2Gate(4, 6).to(device)
     capacity = 2 * 12 // 6
     l_aux, combine_weights, dispatch_mask = gate(input)
     assert pytest.approx(l_aux.item(), 0.0283)
@@ -31,6 +38,15 @@ def test_forward():
     assert round(weights_sum) == pytest.approx(weights_sum)
     # For this random seed, we get 36 slots filled.
     assert weights_sum == pytest.approx(36.0)
+
+
+def test_forward_cpu():
+    do_test_forward("cpu")
+
+
+@skip_if_no_cuda
+def test_forward_cuda():
+    do_test_forward("cuda")
 
 
 # Verify that top gate is allocated capacity as per Algorithm 1 in GShard paper.
