@@ -420,7 +420,8 @@ class OSS(Optimizer):
         requests = []
 
         # Bucket and issue all the async calls
-        for (rank, params), buffer in zip(enumerate(per_rank_params), buffers):  # all the params sorted per rank
+        for (rank, params), buffer in zip(enumerate(per_rank_params), buffers):
+            # All the params are sorted per rank and per increasing size
             if len(params) == 0:
                 continue
 
@@ -430,6 +431,7 @@ class OSS(Optimizer):
             i_bucketed = 0  # the number of tensors packed in the buffer
             offset = 0
 
+            # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
             while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
                 end = offset + params[i_bucketed].numel()
                 if rank == self_rank:

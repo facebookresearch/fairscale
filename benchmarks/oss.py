@@ -248,7 +248,10 @@ if __name__ == "__main__":
                 backend,
                 True,  # OSS
                 True,  # SDP
-                False,  # no regression check
+                args.check_regression,
+                args.reference_speed,
+                args.reference_memory,
+                args.reference_loss,
             ),
             nprocs=args.world_size,
             join=True,
