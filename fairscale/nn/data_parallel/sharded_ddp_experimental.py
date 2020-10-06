@@ -6,19 +6,16 @@
 """
 A distributed data parallel class that shards the model and the optimizer into pieces.
 
-See https://github.com/pytorch/pytorch/issues/42849 for more context
+See https://github.com/pytorch/pytorch/issues/42849 for more context. Credits to Shen Li for the original idea
 
 """
 
-# from functools import partial
-# from functools import reduce
+import sys
 from typing import Any, Dict, List, Type
 
 import torch
 from torch import nn
 import torch.distributed as dist
-
-# from torch.distributed.algorithms.ddp_comm_hooks import DDPCommHookType, register_ddp_comm_hook
 
 
 def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
@@ -37,9 +34,16 @@ def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
     return splits
 
 
+def _print(*msg: Any) -> None:
+    print(*msg)
+    sys.stdout.flush()
+
+
 class ModelShard(nn.Module):
     """
-    Wrap one shard of the model, make it possible to load parameters on the fly for the FW pass and gather gradients
+    Wrap one shard of the model, make it possible to load parameters on the fly for the FW pass and gather gradients.
+    Depending on whether this rank is or is not the `owner_rank`, this ModelShard either only handles
+    a shard of the compute and is stateless or also owns the up to date state.
     """
 
     def __init__(self, cpu_model_shard: nn.Module, owner_rank: int, pg: Any):
@@ -47,28 +51,35 @@ class ModelShard(nn.Module):
         self.owner_rank = owner_rank
         self.process_group = pg
         self.model_shard = cpu_model_shard
+        self.rank = dist.get_rank(self.process_group)
 
     def forward(self, *inputs):  # type: ignore
         return (self.model_shard(*inputs),) if isinstance(inputs, tuple) else self.model_shard(inputs)
 
-    def forward_load(self) -> None:
-        # Materialize local GPU parameters, can be enhance with bucketing
-        _ = list(
-            map(
-                lambda x: x.wait(),
-                map(
-                    lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
-                    self.model_shard.parameters(),
-                ),
-            )
-        )
+    def parameters_load(self) -> None:
+        if self.rank != self.owner_rank:
+            _print(f"Loading parameters on rank {self.rank}")
 
-    def forward_drop(self) -> None:
+            # Materialize local GPU parameters, can be enhanced with bucketing
+            _ = list(
+                map(
+                    lambda x: x.wait(),
+                    map(
+                        lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
+                        self.model_shard.parameters(),
+                    ),
+                )
+            )
+
+    def parameters_drop(self) -> None:
         # Drop all local parameters
-        for p in self.model_shard.parameters():
-            p.set_(torch.zeros([0], device=p.device))
+        if dist.get_rank(self.process_group) != self.owner_rank:
+            _print(f"Dropping parameters from rank {self.rank}")
+            for p in self.model_shard.parameters():
+                p.set_(torch.zeros([0], device=p.device))
 
     def reduce_grads(self) -> None:
+        _print(f"Reducing grads to rank {self.owner_rank}")
         _ = list(
             map(
                 lambda x: x.wait(),
@@ -83,19 +94,25 @@ class ModelShard(nn.Module):
 class ShardSyncLayer(torch.autograd.Function):
     """
      The shard sync layer is a synchronization point between model shards.
+
      In the forward pass, it drops parameters in the previous shard and
-     loads parameters for the next shard. In the backward pass, it does
+     loads parameters for the next shard.
+
+     In the backward pass, it does
      the reverse and also gathers gradients to the owner.
+
      It does not change or create any outputs at all, instead it just
-     forward the input as the output.
+     forwards the input as the output.
+
+     NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
      """
 
     @staticmethod
     def forward(ctx: Any, prev_shard: ModelShard, next_shard: ModelShard, *inputs: Any) -> Any:  # type: ignore
         if prev_shard:
-            prev_shard.forward_drop()
+            prev_shard.parameters_drop()
         if next_shard:
-            next_shard.forward_load()
+            next_shard.parameters_load()
 
         ctx.prev_shard = prev_shard
         ctx.next_shard = next_shard
@@ -104,40 +121,18 @@ class ShardSyncLayer(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
-        ctx.next_shard.reduce_grads()
-        ctx.next_shard.backward_drop()
-        ctx.prev_shard.backward_load()
-        return grad_outputs
+        if ctx.next_shard is not None:
+            ctx.next_shard.parameters_drop()
 
+        if ctx.prev_shard is not None:
+            ctx.prev_shard.parameters_load()
+            ctx.prev_shard.reduce_grads()
 
-# FIXME: A better option to handle grads, use custom hooks
+        # The returned variables need to mirror the forward inputs
+        if isinstance(grad_outputs, tuple):
+            return None, None, grad_outputs[0]
 
-# def _ddp_comm_hook_wrapper(comm_hook: Any, model: torch.nn.parallel.DistributedDataParallel, state: Any) -> None:
-#     model._register_comm_hook(state, comm_hook)  # type: ignore
-
-
-# def _reduce_hook(process_group: torch.distributed.group, bucket: dist._GradBucket) -> torch.futures.Future:  # type: ignore
-#     """
-#        Reduce all gradients onto rank 0. Destroy the gradients on every other rank
-#     """
-#     # FIXME: this is utterly broken
-
-#     world_size = process_group.size()  # type: ignore
-
-#     tensor = bucket.get_tensors()[0]
-#     fut = dist.reduce(tensor, dst=0, group=process_group, async_op=True).get_future()  # type: ignore
-
-#     def then_callback(fut: Any) -> Any:
-#         if dist.get_rank() == 0:
-#             return [fut.value()[0].div_(world_size)]
-#         else:
-#             return None
-
-#     return fut.then(then_callback)
-
-
-# class CustomHooks(DDPCommHookType):
-#     REDUCE = partial(_ddp_comm_hook_wrapper, comm_hook=_reduce_hook)
+        return None, None, grad_outputs
 
 
 class ShardedDataParallelExperimental(nn.Module):
@@ -174,11 +169,12 @@ class ShardedDataParallelExperimental(nn.Module):
         self.process_group = process_group if process_group is not None else torch.distributed.group.WORLD
         self.rank = dist.get_rank(self.process_group)
         self.backend = dist.get_backend(group=self.process_group)  # type: ignore
+        _print(f"Rank : {self.rank}")
 
         # Slice the model
         splits = _split(module, self.world_size)
 
-        # Create one data parallel process group per shard.
+        # Each shard of the model has a different role depending on which rank we're on
         self.shards: List[nn.Module] = []
 
         for i_slice, module_shard in enumerate(splits):
@@ -189,8 +185,14 @@ class ShardedDataParallelExperimental(nn.Module):
                 self.optimizer = optimizer(nn.Sequential(*module_shard).parameters(), **optimizer_params)
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
+        _print(f"== Forward - rank {self.rank}")
         for i, (prev, next) in enumerate(zip([None, *self.shards], [*self.shards, None])):
+            _print(f"{self.rank}-{i}")
+            # Shard per shard FW
             inputs = prev(*inputs) if prev else inputs
+
+            # Call the custom autograd hooks (discard/load shards FW and BW)
             inputs = ShardSyncLayer.apply(prev, next, *inputs)
 
+        _print(f"** Forward done - rank {self.rank}")
         return inputs

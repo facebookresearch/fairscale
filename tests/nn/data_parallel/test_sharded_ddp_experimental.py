@@ -51,7 +51,6 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     input_tensor = torch.rand((6, 2)).to(device)
     output = ddp(input_tensor)[0].abs().sum()
     output.backward()
-    ddp.reduce()
 
     # Check that all the grads have been populated, for the shard
     if device == torch.device("cuda"):
