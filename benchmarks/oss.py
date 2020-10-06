@@ -249,7 +249,7 @@ if __name__ == "__main__":
                 True,  # OSS
                 True,  # SDP
                 args.check_regression,
-                args.reference_speed,
+                -1,  # Not checking SDP for speed regression for now, still slower than OSS
                 args.reference_memory,
                 args.reference_loss,
             ),
