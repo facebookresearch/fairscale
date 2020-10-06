@@ -48,8 +48,8 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     )
     optimizer = ddp.optimizer
 
-    input_tensor = torch.rand((64, 2)).to(device)
-    output = ddp(input_tensor).abs().sum() / input_tensor.numel()
+    input_tensor = torch.rand((6, 2)).to(device)
+    output = ddp(input_tensor)[0].abs().sum()
     output.backward()
     ddp.reduce()
 
@@ -61,11 +61,6 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
         for param in pg["params"]:
             if param.requires_grad:
                 assert param.grad.abs().sum().item() > 0.0, "The reduce step should have populated all the gradients"
-
-    # Check that the optimization process makes sense (ie. loss goes down for the same data)
-    optimizer.step()
-    new_eval = ddp(input_tensor).abs().sum() / input_tensor.numel()
-    # assert new_eval.item() < output.item()
 
 
 def run_test(backend, device, world_size=2):

@@ -49,10 +49,10 @@ class ModelShard(nn.Module):
         self.model_shard = cpu_model_shard
 
     def forward(self, *inputs):  # type: ignore
-        return self.model_shard(inputs)
+        return (self.model_shard(*inputs),) if isinstance(inputs, tuple) else self.model_shard(inputs)
 
     def forward_load(self) -> None:
-        # materialize local GPU parameters, can be enhance with bucketing
+        # Materialize local GPU parameters, can be enhance with bucketing
         _ = list(
             map(
                 lambda x: x.wait(),
@@ -64,9 +64,9 @@ class ModelShard(nn.Module):
         )
 
     def forward_drop(self) -> None:
-        # drop all local parameters
+        # Drop all local parameters
         for p in self.model_shard.parameters():
-            p.set_(torch.zeros([0]))
+            p.set_(torch.zeros([0], device=p.device))
 
     def reduce_grads(self) -> None:
         _ = list(
@@ -143,7 +143,7 @@ class ShardSyncLayer(torch.autograd.Function):
 class ShardedDataParallelExperimental(nn.Module):
     """Implements distributed data parallel training with optimizer state sharding.
 
-    This experiments with a novel way to get to the full zero suite
+    This experiments with a different way to get to the full zero suite
     The model is sharded, and we create a process group per shard. The normal distributed data parallel
     algorithm can be used on a per-model shard basis, all the gradients being centralized on a given rank
     (which is model-shard dependent, so that the gradients redundancy can be removed). Each model shard
@@ -189,7 +189,7 @@ class ShardedDataParallelExperimental(nn.Module):
                 self.optimizer = optimizer(nn.Sequential(*module_shard).parameters(), **optimizer_params)
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
-        for prev, next in zip([None, *self.shards], [*self.shards, None]):
+        for i, (prev, next) in enumerate(zip([None, *self.shards], [*self.shards, None])):
             inputs = prev(*inputs) if prev else inputs
             inputs = ShardSyncLayer.apply(prev, next, *inputs)
 
