@@ -62,7 +62,7 @@ def train(
 ):
     assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
     # DDP
-    dist_init(rank, world_size, backend)
+    dist_init(rank=rank, world_size=world_size, backend=backend)
 
     # Setup
     torch.cuda.set_device(rank)
@@ -81,7 +81,11 @@ def train(
 
     if use_sdp:
         ddp = ShardedDataParallel(
-            module=model, optimizer=OPTIM, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size,
+            module=model,
+            optimizer=OPTIM,
+            optimizer_params={"lr": 1e-4, "momentum": 0.9},
+            world_size=world_size,
+            broadcast_buffers=False,
         )
         ddp.train()
         optimizer = ddp.optimizer
@@ -160,6 +164,8 @@ def train(
         assert abs(cast(float, final_loss) - reference_loss) < 1e-3, "Loss regression detected"
 
         print("[Regression Test] VALID")
+
+    dist.destroy_process_group()  # type: ignore
 
 
 if __name__ == "__main__":
@@ -242,7 +248,10 @@ if __name__ == "__main__":
                 backend,
                 True,  # OSS
                 True,  # SDP
-                False,  # no regression check
+                args.check_regression,
+                -1,  # Not checking SDP for speed regression for now, still slower than OSS
+                args.reference_memory,
+                args.reference_loss,
             ),
             nprocs=args.world_size,
             join=True,
