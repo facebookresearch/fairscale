@@ -165,6 +165,8 @@ def train(
 
         print("[Regression Test] VALID")
 
+    dist.destroy_process_group()  # type: ignore
+
 
 if __name__ == "__main__":
 
@@ -246,7 +248,10 @@ if __name__ == "__main__":
                 backend,
                 True,  # OSS
                 True,  # SDP
-                False,  # no regression check
+                args.check_regression,
+                -1,  # Not checking SDP for speed regression for now, still slower than OSS
+                args.reference_memory,
+                args.reference_loss,
             ),
             nprocs=args.world_size,
             join=True,
