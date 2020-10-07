@@ -1,23 +1,22 @@
 ## adapted from https://github.com/pytorch/examples/blob/master/mnist/main.py
 from __future__ import print_function
 import argparse
+from fairscale.optim.oss import OSS
+from fairscale.nn.data_parallel import ShardedDataParallel
+import time
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import StepLR
+from torchvision import datasets, transforms
 
-import time
-from fairscale.optim.oss import OSS
-import torch.multiprocessing as mp
-from fairscale.nn.data_parallel import ShardedDataParallel
 
-# how is world_size defined?
 WORLD_SIZE = 2
 OPTIM = torch.optim.RMSprop
-BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
+BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  
 
 def dist_init(rank, world_size, backend):
     print(f"Using backend: {backend}")
@@ -148,10 +147,6 @@ def main():
     test_loader = torch.utils.data.DataLoader(dataset2, **kwargs)
 
     model = Net().to(device)
-    ### Replacing 
-    ### optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
-    ### With
-    print("\n\n",model.parameters(), args.lr,"\n\n")
     
     mp.spawn(
             train,
@@ -160,9 +155,6 @@ def main():
             join=True,
         )
 
-
-    # if args.save_model:
-    #     torch.save(model.state_dict(), "mnist_cnn.pt")
 
 
 if __name__ == '__main__':
