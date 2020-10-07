@@ -10,7 +10,6 @@ See https://github.com/pytorch/pytorch/issues/42849 for more context. Credits to
 
 """
 
-import sys
 from typing import Any, Dict, List, Type
 
 import torch
@@ -35,8 +34,9 @@ def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
 
 
 def _print(*msg: Any) -> None:
-    print(*msg)
-    sys.stdout.flush()
+    pass
+    # print(*msg)
+    # sys.stdout.flush()
 
 
 class ModelShard(nn.Module):
@@ -51,37 +51,41 @@ class ModelShard(nn.Module):
         self.owner_rank = owner_rank
         self.process_group = pg
         self.model_shard = cpu_model_shard
-        self.rank = dist.get_rank(self.process_group)
+        self.is_owner = dist.get_rank(self.process_group) == self.owner_rank
 
     def forward(self, *inputs):  # type: ignore
         return (self.model_shard(*inputs),) if isinstance(inputs, tuple) else self.model_shard(inputs)
 
     def parameters_load(self) -> None:
-        if self.rank != self.owner_rank:
-            _print(f"Loading parameters on rank {self.rank}")
+        if not self.is_owner:
+            _print(f"{dist.get_rank(self.process_group)}: Loading parameters from rank {self.owner_rank}")
+        else:
+            _print(f"{dist.get_rank(self.process_group)}: Broadcasting parameters")
 
-            # Materialize local GPU parameters, could be enhanced with bucketing
-            # with torch.no_grad():
-            #     _ = list(
-            #         map(
-            #             lambda x: x.wait(),
-            #             map(
-            #                 lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
-            #                 self.model_shard.parameters(),
-            #             ),
-            #         )
-            #     )
+        # Materialize local GPU parameters, could be enhanced with bucketing
+        with torch.no_grad():
+            _ = list(
+                map(
+                    lambda x: x.wait(),
+                    map(
+                        lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
+                        self.model_shard.parameters(),
+                    ),
+                )
+            )
+        _print(f"{dist.get_rank(self.process_group)}: Parameters loaded")
 
     def parameters_drop(self) -> None:
         # Drop all local parameters
-        if dist.get_rank(self.process_group) != self.owner_rank:
-            _print(f"Dropping parameters from rank {self.rank}")
-            # with torch.no_grad():
-            #     for p in self.model_shard.parameters():
-            #         p.set_(torch.zeros([0], device=p.device))
+        if not self.is_owner:
+            _print(f"{dist.get_rank(self.process_group)}: Dropping parameters")
+            with torch.no_grad():
+                for p in self.model_shard.parameters():
+                    # p.set_(torch.zeros([0], device=p.device))
+                    p.grad = None
 
     def reduce_grads(self) -> None:
-        _print(f"Reducing grads to rank {self.owner_rank}")
+        _print(f"{dist.get_rank(self.process_group)}: Reducing grads to rank {self.owner_rank}")
         _ = list(
             map(
                 lambda x: x.wait(),
@@ -189,11 +193,13 @@ class ShardedDataParallelExperimental(nn.Module):
         _print(f"== Forward - rank {self.rank}")
         for i, (prev, next) in enumerate(zip([None, *self.shards], [*self.shards, None])):
             _print(f"{self.rank}-{i}")
-            # Shard per shard FW
+            # Per shard FW
             inputs = prev(*inputs) if prev else inputs
 
             # Call the custom autograd hooks (discard/load shards FW and BW)
+            _print(f"{self.rank}-{i} synclayer")
             inputs = ShardSyncLayer.apply(prev, next, *inputs)
+            _print(f"{self.rank}-{i} done")
 
         _print(f"** Forward done - rank {self.rank}")
-        return inputs
+        return inputs[0] if len(inputs) == 1 else inputs
