@@ -60,23 +60,25 @@ class ModelShard(nn.Module):
         if self.rank != self.owner_rank:
             _print(f"Loading parameters on rank {self.rank}")
 
-            # Materialize local GPU parameters, can be enhanced with bucketing
-            _ = list(
-                map(
-                    lambda x: x.wait(),
-                    map(
-                        lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
-                        self.model_shard.parameters(),
-                    ),
-                )
-            )
+            # Materialize local GPU parameters, could be enhanced with bucketing
+            # with torch.no_grad():
+            #     _ = list(
+            #         map(
+            #             lambda x: x.wait(),
+            #             map(
+            #                 lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
+            #                 self.model_shard.parameters(),
+            #             ),
+            #         )
+            #     )
 
     def parameters_drop(self) -> None:
         # Drop all local parameters
         if dist.get_rank(self.process_group) != self.owner_rank:
             _print(f"Dropping parameters from rank {self.rank}")
-            for p in self.model_shard.parameters():
-                p.set_(torch.zeros([0], device=p.device))
+            # with torch.no_grad():
+            #     for p in self.model_shard.parameters():
+            #         p.set_(torch.zeros([0], device=p.device))
 
     def reduce_grads(self) -> None:
         _print(f"Reducing grads to rank {self.owner_rank}")
@@ -95,11 +97,10 @@ class ShardSyncLayer(torch.autograd.Function):
     """
      The shard sync layer is a synchronization point between model shards.
 
-     In the forward pass, it drops parameters in the previous shard and
+     - In the forward pass, it drops parameters in the previous shard and
      loads parameters for the next shard.
 
-     In the backward pass, it does
-     the reverse and also gathers gradients to the owner.
+     - In the backward pass, it does the reverse and also gathers gradients to the owner.
 
      It does not change or create any outputs at all, instead it just
      forwards the input as the output.
@@ -122,11 +123,11 @@ class ShardSyncLayer(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
         if ctx.next_shard is not None:
+            ctx.next_shard.reduce_grads()
             ctx.next_shard.parameters_drop()
 
         if ctx.prev_shard is not None:
             ctx.prev_shard.parameters_load()
-            ctx.prev_shard.reduce_grads()
 
         # The returned variables need to mirror the forward inputs
         if isinstance(grad_outputs, tuple):
@@ -139,10 +140,10 @@ class ShardedDataParallelExperimental(nn.Module):
     """Implements distributed data parallel training with optimizer state sharding.
 
     This experiments with a different way to get to the full zero suite
-    The model is sharded, and we create a process group per shard. The normal distributed data parallel
-    algorithm can be used on a per-model shard basis, all the gradients being centralized on a given rank
-    (which is model-shard dependent, so that the gradients redundancy can be removed). Each model shard
-    can finally be updated by a standard pytorch optimizer, no OSS wrapper needed.
+    The model is sharded, then the normal distributed data parallel algorithm can be used on a per-model shard basis.
+    All the gradients are centralized on a given rank (which is model-shard dependent, so that the gradients
+    redundancy can be removed).
+    Each model shard can be updated by a normal pytorch optimizer.
 
     Args:
         module (~torch.nn.Sequential): module to be parallelized
@@ -174,7 +175,7 @@ class ShardedDataParallelExperimental(nn.Module):
         # Slice the model
         splits = _split(module, self.world_size)
 
-        # Each shard of the model has a different role depending on which rank we're on
+        # Each rank either owns the shard, or temporarily helps processing it in a data parallel fashion
         self.shards: List[nn.Module] = []
 
         for i_slice, module_shard in enumerate(splits):

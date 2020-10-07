@@ -56,7 +56,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     if device == torch.device("cuda"):
         torch.cuda.synchronize()  # flush any remaining cuda op, just in case
 
-    for pg in optimizer.optim.param_groups:
+    for pg in optimizer.param_groups:
         for param in pg["params"]:
             if param.requires_grad:
                 assert param.grad.abs().sum().item() > 0.0, "The reduce step should have populated all the gradients"
