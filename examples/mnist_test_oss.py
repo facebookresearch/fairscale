@@ -59,7 +59,7 @@ def train(rank, args, model, device, train_loader, num_epochs):
     # Reset the memory use counter
     torch.cuda.reset_peak_memory_stats(rank)
 
-    # Dummy training loop
+    # Training loop
     torch.cuda.synchronize(rank)
     training_start = time.monotonic()
 
