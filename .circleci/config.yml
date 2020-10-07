@@ -102,6 +102,8 @@ run_oss_benchmark: &run_oss_benchmark
       command: |
         python benchmarks/oss.py --check_regression --world_size 4 --reference_speed 21.2 --reference_memory 4220 --reference_loss 0.63
         python benchmarks/oss.py --gloo --optim_type oss
+        python benchmarks/oss_experimental.py --world_size 4
+
 
 
 # -------------------------------------------------------------------------------------

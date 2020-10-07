@@ -41,7 +41,7 @@ def train(
 
     resnet, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
 
-    # FIXME: Sequentialize the model
+    # FIXME: @lefaudeux - we require a sequential model for now
     model_seq = torch.nn.Sequential(
         resnet.conv1,
         resnet.bn1,
