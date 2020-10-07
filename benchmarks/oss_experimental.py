@@ -86,7 +86,6 @@ def train(
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                print(loss)
                 loss /= world_size
                 loss.backward()
                 dist.all_reduce(loss, op=dist.ReduceOp.SUM)
