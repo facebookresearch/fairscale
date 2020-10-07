@@ -6,8 +6,10 @@
 # Test checkpoint and PyTorch DDP interactions.
 
 
+import random
 import tempfile
 
+import numpy  # type: ignore
 import pytest
 import torch
 import torch.distributed as dist
@@ -22,6 +24,13 @@ from fairscale.nn.pipe.microbatch import Batch
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
+
+
+def set_random_seed(seed: int) -> None:
+    """Set random seed for reproducability."""
+    random.seed(seed)
+    numpy.random.seed(seed)
+    torch.manual_seed(seed)
 
 
 def pipe_checkpoint(function: Function, input: TensorOrTensors) -> TensorOrTensors:
@@ -40,6 +49,7 @@ def pipe_checkpoint(function: Function, input: TensorOrTensors) -> TensorOrTenso
 
 def basic(rank, checkpoint):
     # get the model, wrap with DDP and fwd, bwd.
+    set_random_seed(31415)
     model = Sequential(Linear(2000, 2000), Linear(2000, 2000))
     model.to("cuda")
     model = DDP(model, device_ids=[rank])
@@ -49,12 +59,16 @@ def basic(rank, checkpoint):
     for p in model.parameters():
         assert p.grad is None
     output_tensor.sum().backward()
+    norm = 0.0
     for p in model.parameters():
         assert p.grad is not None
+        norm += p.grad.norm().item()
+    assert numpy.allclose(norm, 78053.52978515625), norm
 
 
 def weight_sharing(rank, checkpoint):
     # get the model, wrap with DDP and fwd, bwd.
+    set_random_seed(31415)
     l1 = Linear(2000, 2000)
     l2 = Linear(2000, 2000)
     l1.weight = l2.weight
@@ -65,8 +79,11 @@ def weight_sharing(rank, checkpoint):
     input_tensor.requires_grad = True
     output_tensor = checkpoint(model, input_tensor)
     output_tensor.sum().backward()
+    norm = 0.0
     for p in model.parameters():
         assert p.grad is not None
+        norm += p.grad.norm().item()
+    assert numpy.allclose(norm, 57004.34228515625), norm
 
 
 def checkpoint_half(rank, checkpoint):
@@ -82,16 +99,18 @@ def checkpoint_half(rank, checkpoint):
             x = checkpoint(self.l2, x)
             return x
 
+    set_random_seed(31415)
     model = M()
     model.to("cuda")
     model = DDP(model, device_ids=[rank])
     input_tensor = torch.rand((64, 2000)).cuda()
     output_tensor = model(input_tensor)
     output_tensor.sum().backward()
+    norm = 0.0
     for p in model.parameters():
-        if rank == 0:
-            print(p.grad.shape)
         assert p.grad is not None
+        norm += p.grad.norm().item()
+    assert numpy.allclose(norm, 78053.52978515625), norm
 
 
 def unused_param(rank, checkpoint):
