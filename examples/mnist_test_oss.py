@@ -1,9 +1,9 @@
 ## adapted from https://github.com/pytorch/examples/blob/master/mnist/main.py
 from __future__ import print_function
+
 import argparse
-from fairscale.optim.oss import OSS
-from fairscale.nn.data_parallel import ShardedDataParallel
 import time
+
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -13,6 +13,8 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 from torchvision import datasets, transforms
 
+from fairscale.nn.data_parallel import ShardedDataParallel
+from fairscale.optim.oss import OSS
 
 WORLD_SIZE = 2
 OPTIM = torch.optim.RMSprop
