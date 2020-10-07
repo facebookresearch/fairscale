@@ -1,13 +1,13 @@
-import torch
-from fairscale.optim.oss import OSS
-
-import torch.distributed as dist
-from torchvision import datasets, transforms
-import torch.nn as nn
-import torch.multiprocessing as mp
-
-import torch.nn.functional as F
 import time
+
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import datasets, transforms
+
+from fairscale.optim.oss import OSS
 
 WORLD_SIZE = 2
 EPOCHS = 3
