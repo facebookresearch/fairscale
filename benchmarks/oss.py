@@ -12,6 +12,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.models import resnet101
@@ -91,6 +92,7 @@ def train(
         optimizer = ddp.optimizer
         model = ddp
     else:
+        model = DDP(model, device_ids=[rank])
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
             if use_oss
@@ -216,7 +218,7 @@ if __name__ == "__main__":
         )
 
     if args.optim_type == OptimType.oss or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS")
+        print("\nBenchmark OSS with DDP")
         mp.spawn(
             train,
             args=(
