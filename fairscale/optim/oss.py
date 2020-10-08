@@ -431,7 +431,7 @@ class OSS(Optimizer):
             # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
             while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
                 end = offset + params[i_bucketed].numel()
-                if global_rank == self.rank:
+                if global_rank == self.global_rank:
                     buffer[offset:end].copy_(params[i_bucketed].data.view(-1))  # type: ignore
                 offset = end
                 i_bucketed += 1
