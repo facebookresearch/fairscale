@@ -334,3 +334,54 @@ def test_collect_shards():
     mp.spawn(
         run_test_collect_shards, args=(world_size, reference_rank), nprocs=world_size, join=True,
     )
+
+
+def run_test_multiple_groups(rank, world_size):
+    # Odds and even ranks go to a different group
+    dist_init(rank, world_size)
+    sub_group_ranks = [0, 2]
+    pg = torch.distributed.new_group(ranks=sub_group_ranks, backend="gloo")
+    device = "cpu"
+
+    if rank in sub_group_ranks:
+        # Run a dummy step so that the optimizer state dict exists
+        epochs, batch, input_width, hidden, target_width = 5, 3, 20, 10, 5
+
+        model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
+        model.to(device)
+
+        loss_fn = torch.nn.L1Loss()
+        loss_fn.to(device)
+
+        # With SGD, Momentum is required to get a state to shard
+        optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99, group=pg)
+
+        # Just run a couple of random epochs
+        for _ in range(epochs):
+            target = torch.rand((batch, target_width), device=device)
+            inputs = torch.rand((batch, input_width), device=device)
+
+            def closure():
+                optimizer.zero_grad()
+                output = model(inputs)
+                loss = loss_fn(output, target)
+                loss.backward()
+
+                return loss
+
+            original_loss = optimizer.step(closure=closure)
+            post_update_loss = loss_fn(model(inputs), target)
+
+            assert (
+                original_loss - post_update_loss
+            ).norm() > 1e-3, f"Model update failed - difference {(original_loss - post_update_loss).norm()}"
+
+        assert False
+
+
+def test_multiple_groups():
+    world_size = 4
+
+    mp.spawn(
+        run_test_multiple_groups, args=(world_size,), nprocs=world_size, join=True,
+    )
