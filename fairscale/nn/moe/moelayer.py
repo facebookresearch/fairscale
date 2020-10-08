@@ -3,12 +3,14 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import Any
+
 import torch
 from torch import Tensor
 from torch.nn import Module
 
 
-class MOELayer(Module):
+class MOELayer(Module[Tensor]):
     """MOELayer module which implements MixtureOfExperts as described in Gshard_.
     ::
 
@@ -46,11 +48,11 @@ class MOELayer(Module):
         output = torch.einsum("gsec,gecm->gsm", combine_weights, expert_output)
         return output
 
-    def forward(self, input: Tensor) -> Tensor:  # type: ignore
+    def forward(self, *input: Any, **kwargs: Any) -> Tensor:
         # Implement Algorithm 2 from GShard paper.
-        shape = input.shape
+        shape = input[0].shape
         # Reshape into S tokens per group.
-        reshaped_input = input.reshape(shape[0], -1, shape[3])
+        reshaped_input = input[0].reshape(shape[0], -1, shape[3])
         self.l_aux, combine_weights, dispatching_mask = self.gate(reshaped_input)
         dispatched_input = self.all_to_all_dispatch(dispatching_mask, reshaped_input)
         expert_output = self.expert(dispatched_input)
