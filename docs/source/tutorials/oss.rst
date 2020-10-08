@@ -8,7 +8,7 @@ Let's suppose that your trainer looks like
 
 
     import torch
-    import torch.nn.parallel.DistributedDataParallel as DDP
+    from torch.nn.parallel import DistributedDataParallel as DDP
 
 
     def train(
@@ -53,7 +53,7 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
 
     import torch
     from fairscale.optim.oss import OSS
-    import torch.nn.parallel.DistributedDataParallel as DDP
+    from torch.nn.parallel import DistributedDataParallel as DDP
 
     def train(
         rank: int,
