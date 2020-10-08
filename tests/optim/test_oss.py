@@ -338,9 +338,12 @@ def test_collect_shards():
 
 def run_test_multiple_groups(rank, world_size):
     # Only work with the even ranks, to check that the global_rank indexing is properly used
-    dist_init(rank, world_size)
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29501"
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
     sub_group_ranks = [0, 2, 4]
-    pg = torch.distributed.new_group(ranks=sub_group_ranks, backend="gloo")
+    process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend="gloo")
+
     device = "cpu"
     epochs, batch, input_width, hidden, target_width = 5, 3, 20, 10, 5
     loss_fn = torch.nn.L1Loss().to(device)
@@ -359,31 +362,36 @@ def run_test_multiple_groups(rank, world_size):
 
                 return loss
 
-            original_loss = optimizer.step(closure=closure)
-            post_update_loss = loss_fn(model(inputs), target)
+            _ = optimizer.step(closure=closure)
 
-            assert (
-                original_loss - post_update_loss
-            ).norm() > 1e-6, f"Model update failed - difference {(original_loss - post_update_loss).norm()}"
+            # Check that all the params are the same on all ranks
+            for pg in optimizer.param_groups:
+                for p in pg["params"]:
+                    receptacle = [p.clone() for _ in sub_group_ranks] if rank == 0 else []
+                    dist.gather(p, receptacle, dst=0, group=process_group)
+                    if rank == 0:
+                        for sync_p in receptacle[1:]:
+                            assert torch.all(torch.eq(receptacle[0], sync_p)), "Models differ in between ranks"
 
-    # Model fitting in the broadcast bucket
     if rank in sub_group_ranks:
+        # Model fitting in the broadcast bucket
         model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
             device
         )
 
         # With SGD, Momentum is required to get a state to shard
-        optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99, group=pg, broadcast_buffer_size=2 ** 20)
+        optimizer = optim.OSS(
+            model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=2 ** 20
+        )
         check(optimizer)
 
-    # Model not-fitting in the broadcast bucket
-    if rank in sub_group_ranks:
+        # Model not-fitting in the broadcast bucket
         model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
             device
         )
 
         # With SGD, Momentum is required to get a state to shard
-        optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99, group=pg, broadcast_buffer_size=0)
+        optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=0)
         check(optimizer)
 
 
