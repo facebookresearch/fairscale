@@ -9,6 +9,7 @@
 
 import os
 
+import numpy as np
 import pytest
 import torch
 import torch.distributed as dist
@@ -333,4 +334,79 @@ def test_collect_shards():
 
     mp.spawn(
         run_test_collect_shards, args=(world_size, reference_rank), nprocs=world_size, join=True,
+    )
+
+
+def run_test_multiple_groups(rank, world_size):
+    # Only work with the even ranks, to check that the global_rank indexing is properly used
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29501"
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
+    sub_group_ranks = [0, 2, 4]
+    process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend="gloo")
+
+    # Make sure that all the ranks get different training data
+    # So that the sync check in between their models is meaningful
+    torch.manual_seed(rank)
+    np.random.seed(rank)
+
+    # Standard deep learning setup
+    device = "cpu"
+    epochs, batch, input_width, hidden, target_width = 5, 3, 20, 10, 5
+    loss_fn = torch.nn.L1Loss().to(device)
+
+    def check(optimizer):
+        # Just run a couple of epochs, check that the model is properly updated
+        for _ in range(epochs):
+            target = torch.rand((batch, target_width), device=device)
+            inputs = torch.rand((batch, input_width), device=device)
+
+            def closure():
+                optimizer.zero_grad()
+                output = model(inputs)
+                loss = loss_fn(output, target)
+                loss /= world_size
+                loss.backward()
+                dist.all_reduce(loss, group=process_group)  # Not strictly needed for the test below
+
+                return loss
+
+            _ = optimizer.step(closure=closure)
+
+            # Check that all the params are the same on all ranks
+            for pg in optimizer.param_groups:
+                for p in pg["params"]:
+                    receptacle = [p.clone() for _ in sub_group_ranks] if rank == 0 else []
+                    dist.gather(p, receptacle, dst=0, group=process_group)
+                    if rank == 0:
+                        for sync_p in receptacle[1:]:
+                            assert torch.all(torch.eq(receptacle[0], sync_p)), "Models differ in between ranks"
+
+    if rank in sub_group_ranks:
+        # Model fitting in the broadcast bucket
+        model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
+            device
+        )
+
+        # With SGD, Momentum is required to get a state to shard
+        optimizer = optim.OSS(
+            model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=2 ** 20
+        )
+        check(optimizer)
+
+        # Model not-fitting in the broadcast bucket
+        model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
+            device
+        )
+
+        # With SGD, Momentum is required to get a state to shard
+        optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=0)
+        check(optimizer)
+
+
+def test_multiple_groups():
+    world_size = 6
+
+    mp.spawn(
+        run_test_multiple_groups, args=(world_size,), nprocs=world_size, join=True,
     )
