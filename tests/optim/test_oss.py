@@ -376,8 +376,6 @@ def run_test_multiple_groups(rank, world_size):
                 original_loss - post_update_loss
             ).norm() > 1e-3, f"Model update failed - difference {(original_loss - post_update_loss).norm()}"
 
-        assert False
-
 
 def test_multiple_groups():
     world_size = 4
