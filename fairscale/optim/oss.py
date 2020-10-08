@@ -434,14 +434,14 @@ class OSS(Optimizer):
             # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
             while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
                 end = offset + params[i_bucketed].numel()
-                if rank == self_rank:
+                if global_rank == self_rank:
                     buffer[offset:end].copy_(params[i_bucketed].data.view(-1))  # type: ignore
                 offset = end
                 i_bucketed += 1
 
             if i_bucketed > 0:
                 future = dist.broadcast(tensor=buffer, src=global_rank, group=group, async_op=True)
-                if rank != self_rank:
+                if global_rank != self_rank:
                     # This request will need to be unrolled
                     bucket_requests.append((future, rank))
 
