@@ -42,17 +42,24 @@ class ModelShard(nn.Module):
     a shard of the compute and is stateless or also owns the up to date state.
     """
 
-    def __init__(self, cpu_model_shard: nn.Module, owner_rank: int, pg: Any):
+    def __init__(self, cpu_model_shard: nn.Module, owner_rank: int, process_group: Any):
         super().__init__()
         self.owner_rank = owner_rank
-        self.process_group = pg
+        self.process_group = process_group
         self.model_shard = cpu_model_shard
         self.is_owner = dist.get_rank(self.process_group) == self.owner_rank
         self.world_size = dist.get_world_size(self.process_group)
 
         # Save all the parameter sizes to be able to restore them
         if not self.is_owner:
+            # Record all the shapes
             self.param_shapes = [p.shape for p in self.model_shard.parameters()]
+
+            # Drop all the parameters
+            # FIXME: Would it be better to just change device ?
+            with torch.no_grad():
+                for p in self.model_shard.parameters():
+                    p.set_(torch.zeros([0], device=p.device, dtype=p.dtype))
 
     def forward(self, *inputs):  # type: ignore
         return (self.model_shard(*inputs),) if isinstance(inputs, tuple) else self.model_shard(inputs)
@@ -61,7 +68,8 @@ class ModelShard(nn.Module):
         # Resize all the parameter buffers
         if not self.is_owner:
             for p, shape in zip(self.model_shard.parameters(), self.param_shapes):
-                p.set_(torch.zeros(shape, dtype=p.dtype, device=p.device))
+                if p.numel() == 0:
+                    p.set_(torch.zeros(shape, dtype=p.dtype, device=p.device))
 
         # Fetch or broadcast the latest parameters
         self.backward_load()
@@ -79,10 +87,9 @@ class ModelShard(nn.Module):
         )
 
     def forward_drop(self) -> None:
-        # FIXME: @lefaudeux - there must be some dropping to do here.. breaks autograd
         if not self.is_owner:
             for p in self.model_shard.parameters():
-                pass
+                p.grad = None
                 # p.set_(torch.zeros([0], device=p.device, dtype=p.dtype))
 
     def backward_drop(self) -> None:
@@ -187,7 +194,9 @@ class ShardedDataParallelExperimental(nn.Module):
         self.shards: List[nn.Module] = []
 
         for i_slice, module_shard in enumerate(splits):
-            self.shards.append(ModelShard(nn.Sequential(*module_shard), owner_rank=i_slice, pg=self.process_group))
+            self.shards.append(
+                ModelShard(nn.Sequential(*module_shard), owner_rank=i_slice, process_group=self.process_group)
+            )
 
             # Use one normal optimizer per shard
             if i_slice == self.rank:
