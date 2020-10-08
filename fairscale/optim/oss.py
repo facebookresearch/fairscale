@@ -438,7 +438,7 @@ class OSS(Optimizer):
 
             if i_bucketed > 0:
                 future = dist.broadcast(tensor=buffer, src=global_rank, group=self.group, async_op=True)
-                if global_rank != self.rank:
+                if global_rank != self.global_rank:
                     # This request will need to be unrolled
                     bucket_requests.append((future, rank))
 
