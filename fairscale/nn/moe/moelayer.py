@@ -30,10 +30,6 @@ class MOELayer(Module[Tensor]):
             expert network
     """
 
-    gate: Module
-    expert: Module
-    l_aux: Tensor
-
     def __init__(self, gate: Module, expert: Module) -> None:
         super().__init__()
         self.gate = gate
