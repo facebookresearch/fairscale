@@ -104,7 +104,7 @@ run_oss_benchmark: &run_oss_benchmark
 
 run_oss_gloo: &run_oss_gloo
 - run:
-    name: Run OSS Benchmark
+    name: Run OSS with Gloo
     command: |
       python benchmarks/oss.py --gloo --optim_type oss
 
