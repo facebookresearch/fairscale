@@ -41,7 +41,9 @@ def get_problem(rank, data_size, batch_size):
         }
 
     dataloader = DataLoader(
-        dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
+        dataset=FakeData(transform=ToTensor(), size=data_size, random_offset=rank),
+        batch_size=batch_size,
+        collate_fn=collate,
     )
     loss_fn = nn.CrossEntropyLoss()
     return model, dataloader, loss_fn
@@ -239,7 +241,7 @@ if __name__ == "__main__":
         )
 
     if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS DDP")
+        print("\nBenchmark OSS with SDP")
         mp.spawn(
             train,
             args=(
