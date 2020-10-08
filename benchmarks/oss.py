@@ -88,7 +88,7 @@ def train(
             optimizer=OPTIM,
             optimizer_params={"lr": 1e-4, "momentum": 0.9},
             world_size=world_size,
-            broadcast_buffers=False,
+            broadcast_buffers=True,
         )
         ddp.train()
         optimizer = ddp.optimizer
