@@ -9,6 +9,9 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 
+# einsum dimensions: (g)roup, (s)equence, (e)xpert, (m)odel, (c)apacity
+# See https://arxiv.org/pdf/2006.16668.pdf for details.
+
 
 class MOELayer(Module[Tensor]):
     """MOELayer module which implements MixtureOfExperts as described in Gshard_.
