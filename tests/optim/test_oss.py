@@ -9,6 +9,7 @@
 
 import os
 
+import numpy as np
 import pytest
 import torch
 import torch.distributed as dist
@@ -344,12 +345,18 @@ def run_test_multiple_groups(rank, world_size):
     sub_group_ranks = [0, 2, 4]
     process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend="gloo")
 
+    # Make sure that all the ranks get different training data
+    # So that the sync check in between their models is meaningful
+    torch.manual_seed(rank)
+    np.random.seed(rank)
+
+    # Standard deep learning setup
     device = "cpu"
     epochs, batch, input_width, hidden, target_width = 5, 3, 20, 10, 5
     loss_fn = torch.nn.L1Loss().to(device)
 
     def check(optimizer):
-        # Just run a couple of random epochs, check that the model is properly updated
+        # Just run a couple of epochs, check that the model is properly updated
         for _ in range(epochs):
             target = torch.rand((batch, target_width), device=device)
             inputs = torch.rand((batch, input_width), device=device)
@@ -358,7 +365,9 @@ def run_test_multiple_groups(rank, world_size):
                 optimizer.zero_grad()
                 output = model(inputs)
                 loss = loss_fn(output, target)
+                loss /= world_size
                 loss.backward()
+                dist.all_reduce(loss, group=process_group)  # Not strictly needed for the test below
 
                 return loss
 
