@@ -101,7 +101,12 @@ run_oss_benchmark: &run_oss_benchmark
       name: Run OSS Benchmark
       command: |
         python benchmarks/oss.py --check_regression --world_size 4 --reference_speed 13.7 --reference_memory 4390 --reference_loss 0.595
-        python benchmarks/oss.py --gloo --optim_type oss
+
+run_oss_gloo: &run_oss_gloo
+- run:
+    name: Run OSS with Gloo
+    command: |
+      python benchmarks/oss.py --gloo --optim_type oss
 
 
 # -------------------------------------------------------------------------------------
@@ -253,6 +258,9 @@ jobs:
       - <<: *run_pipe_benchmark
 
       - <<: *run_oss_benchmark
+
+      - <<: *run_oss_gloo
+
 
 
 

@@ -194,7 +194,7 @@ class OSS(Optimizer):
                 device,
                 device_params,
             ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
-                self._broadcast_params(self._broadcast_buffers[device], device_params, self.group, self.global_rank)
+                self._broadcast_params(self._broadcast_buffers[device], device_params)
 
         return loss
 
@@ -408,10 +408,7 @@ class OSS(Optimizer):
             global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
         return global_rank
 
-    @staticmethod
-    def _broadcast_params(
-        buffers: List[torch.Tensor], per_rank_params: List[List[Parameter]], group: Any, self_rank: int
-    ) -> None:
+    def _broadcast_params(self, buffers: List[torch.Tensor], per_rank_params: List[List[Parameter]]) -> None:
         """Helper function to broadcast all the parameters from a given device
         """
         buffer_size = buffers[0].numel()
@@ -425,7 +422,7 @@ class OSS(Optimizer):
             if len(params) == 0:
                 continue
 
-            global_rank = OSS.get_global_rank(group, rank)
+            global_rank = OSS.get_global_rank(self.group, rank)
 
             # Copy small parameters into per-GPU buffers
             i_bucketed = 0  # the number of tensors packed in the buffer
@@ -434,14 +431,14 @@ class OSS(Optimizer):
             # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
             while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
                 end = offset + params[i_bucketed].numel()
-                if global_rank == self_rank:
+                if global_rank == self.global_rank:
                     buffer[offset:end].copy_(params[i_bucketed].data.view(-1))  # type: ignore
                 offset = end
                 i_bucketed += 1
 
             if i_bucketed > 0:
-                future = dist.broadcast(tensor=buffer, src=global_rank, group=group, async_op=True)
-                if global_rank != self_rank:
+                future = dist.broadcast(tensor=buffer, src=global_rank, group=self.group, async_op=True)
+                if global_rank != self.global_rank:
                     # This request will need to be unrolled
                     bucket_requests.append((future, rank))
 
@@ -455,7 +452,7 @@ class OSS(Optimizer):
                     restore_require_grad.append(param)
                     param.requires_grad = False
 
-                requests.append(dist.broadcast(tensor=param, src=global_rank, group=group, async_op=True))
+                requests.append(dist.broadcast(tensor=param, src=global_rank, group=self.group, async_op=True))
 
         # Unroll the initial packed small parameters
         for gate, rank in bucket_requests:
