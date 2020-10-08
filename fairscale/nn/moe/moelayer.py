@@ -3,17 +3,22 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from torch import Tensor
 from torch.nn import Module
 
+if TYPE_CHECKING:
+    Base = Module[Tensor]
+else:
+    Base = Module
+
 # einsum dimensions: (g)roup, (s)equence, (e)xpert, (m)odel, (c)apacity
 # See https://arxiv.org/pdf/2006.16668.pdf for details.
 
 
-class MOELayer(Module[Tensor]):
+class MOELayer(Base):
     """MOELayer module which implements MixtureOfExperts as described in Gshard_.
     ::
 
