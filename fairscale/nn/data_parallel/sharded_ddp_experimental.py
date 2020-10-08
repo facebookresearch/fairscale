@@ -24,6 +24,8 @@ def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
     i = 0
     n = len(modules) // number_shards
 
+    print(f"Aiming for {n} blocks per shard")
+
     for m in modules:
         if splits and len(splits[i]) == n and (i < number_shards - 1):
             i += 1
@@ -48,30 +50,47 @@ class ModelShard(nn.Module):
         self.is_owner = dist.get_rank(self.process_group) == self.owner_rank
         self.world_size = dist.get_world_size(self.process_group)
 
+        # Save all the parameter sizes to be able to restore them
+        if not self.is_owner:
+            self.param_shapes = [p.shape for p in self.model_shard.parameters()]
+
     def forward(self, *inputs):  # type: ignore
         return (self.model_shard(*inputs),) if isinstance(inputs, tuple) else self.model_shard(inputs)
 
-    def parameters_load(self) -> None:
-        # Materialize local GPU parameters, could be enhanced with bucketing
-        with torch.no_grad():
-            _ = list(
-                map(
-                    lambda x: x.wait(),
-                    map(
-                        lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
-                        self.model_shard.parameters(),
-                    ),
-                )
-            )
-
-    def parameters_drop(self) -> None:
-        # Drop all local parameters, eventually
+    def forward_load(self) -> None:
+        # Resize all the parameter buffers
         if not self.is_owner:
-            with torch.no_grad():
-                for p in self.model_shard.parameters():
-                    # TODO: @lefaudeux drop and eventually restore the parameters
-                    # p.set_(torch.zeros([0], device=p.device))
-                    p.grad = None
+            for p, shape in zip(self.model_shard.parameters(), self.param_shapes):
+                p.set_(torch.zeros(shape, dtype=p.dtype, device=p.device))
+
+        # Fetch or broadcast the latest parameters
+        self.backward_load()
+
+    def backward_load(self) -> None:
+        # Update all the parameters
+        _ = list(
+            map(
+                lambda x: x.wait(),
+                map(
+                    lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
+                    self.model_shard.parameters(),
+                ),
+            )
+        )
+
+    def forward_drop(self) -> None:
+        # FIXME: @lefaudeux - there must be some dropping to do here.. breaks autograd
+        if not self.is_owner:
+            for p in self.model_shard.parameters():
+                pass
+                # p.set_(torch.zeros([0], device=p.device, dtype=p.dtype))
+
+    def backward_drop(self) -> None:
+        if not self.is_owner:
+            # Gradients have been reduced and can be discarded
+            for p in self.model_shard.parameters():
+                p.grad = None
+                p.set_(torch.zeros([0], device=p.device, dtype=p.dtype))
 
     def reduce_grads(self) -> None:
         requests = []
@@ -101,9 +120,9 @@ class ShardSyncLayer(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, prev_shard: ModelShard, next_shard: ModelShard, *inputs: Any) -> Any:  # type: ignore
         if prev_shard:
-            prev_shard.parameters_drop()
+            prev_shard.forward_drop()
         if next_shard:
-            next_shard.parameters_load()
+            next_shard.forward_load()
 
         ctx.prev_shard = prev_shard
         ctx.next_shard = next_shard
@@ -114,10 +133,10 @@ class ShardSyncLayer(torch.autograd.Function):
     def backward(ctx, *grad_outputs):  # type: ignore
         if ctx.next_shard is not None:
             ctx.next_shard.reduce_grads()
-            ctx.next_shard.parameters_drop()
+            ctx.next_shard.backward_drop()
 
         if ctx.prev_shard is not None:
-            ctx.prev_shard.parameters_load()
+            ctx.prev_shard.backward_load()
 
         # The returned variables need to mirror the forward inputs
         if isinstance(grad_outputs, tuple):
