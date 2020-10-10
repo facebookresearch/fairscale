@@ -42,7 +42,6 @@ Let's suppose that your trainer looks like
                 loss = loss_fn(outputs, target)
                 loss /= world_size
                 loss.backward()
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 optimizer.step()
 
 
@@ -90,7 +89,6 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
                 loss = loss_fn(outputs, target)
                 loss /= world_size
                 loss.backward()
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 optimizer.step()
 
 

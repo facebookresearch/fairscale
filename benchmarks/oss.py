@@ -124,8 +124,6 @@ def train(
                 loss /= world_size
                 loss.backward()
 
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
-
                 if use_sdp:
                     ddp.reduce()  # Send the gradients to the appropriate shards
 
