@@ -13,15 +13,22 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.models import resnet101
 from torchvision.transforms import ToTensor
 
-from fairscale.nn.data_parallel import ShardedDataParallel
+from fairscale.nn.data_parallel import ShardedDataParallel, ShardedDataParallelExperimental
 from fairscale.optim.oss import OSS
 
 OPTIM = torch.optim.RMSprop
+
+
+class ReshapeModule(torch.nn.Module):
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        return x
 
 
 def dist_init(rank, world_size, backend):
@@ -49,6 +56,14 @@ def get_problem(rank, data_size, batch_size):
     return model, dataloader, loss_fn
 
 
+class OptimType(str, Enum):
+    pytorch = "pytorch"
+    oss = "oss"
+    oss_sdp = "oss_sdp"
+    oss_experimental = "oss_experimental"
+    everyone = "everyone"
+
+
 def train(
     rank: int,
     world_size: int,
@@ -56,14 +71,12 @@ def train(
     batch_size: int = 32,
     data_size: int = 200,
     backend: str = "gloo",
-    use_oss: bool = True,
-    use_sdp: bool = False,
+    optim_type: OptimType = OptimType.everyone,
     check_regression: bool = True,
     reference_speed: float = -1.0,
     reference_memory: float = -1.0,
     reference_loss: float = -1.0,
 ):
-    assert not use_sdp or (use_sdp and use_oss), "ShardedDataParallel requires OSS"
     # DDP
     dist_init(rank=rank, world_size=world_size, backend=backend)
 
@@ -79,10 +92,10 @@ def train(
 
     model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
 
-    # Shard the optimizer
+    # Shard the optimizer, test different methods
     optimizer: Optional[torch.optim.Optimizer] = None
 
-    if use_sdp:
+    if optim_type == OptimType.oss_sdp:
         ddp = ShardedDataParallel(
             module=model,
             optimizer=OPTIM,
@@ -93,13 +106,36 @@ def train(
         ddp.train()
         optimizer = ddp.optimizer
         model = ddp
-    else:
+
+    if optim_type == OptimType.oss or optim_type == OptimType.pytorch:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
-            if use_oss
+            if optim_type == OptimType.oss
             else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
         )
+
+    if optim_type == OptimType.oss_experimental:
+        model_seq = torch.nn.Sequential(
+            model.conv1,
+            model.bn1,
+            model.relu,
+            model.maxpool,
+            *model.layer1,
+            *model.layer2,
+            *model.layer3,
+            *model.layer4,
+            model.avgpool,
+            ReshapeModule(),
+            model.fc,
+        )
+
+        ddp_exp = ShardedDataParallelExperimental(
+            module=model_seq, optimizer=OPTIM, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size,
+        )
+        ddp_exp.train()
+        optimizer = ddp_exp.optimizer
+        model = ddp_exp
 
     # Reset the memory use counter
     torch.cuda.reset_peak_memory_stats(rank)
@@ -111,6 +147,7 @@ def train(
 
     measurements = []
     final_loss: Optional[float] = -1.0
+    optimizer = cast(Optimizer, optimizer)
 
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
@@ -124,7 +161,7 @@ def train(
                 loss /= world_size
                 loss.backward()
 
-                if use_sdp:
+                if optim_type == OptimType.oss_sdp:
                     ddp.reduce()  # Send the gradients to the appropriate shards
 
                 return loss
@@ -133,7 +170,7 @@ def train(
 
         epoch_end = time.monotonic()
 
-        if use_oss:
+        if optim_type == OptimType.oss:
             # Check the checkpointing in the case of the OSS optimizer
             # Memory usage could spill over from there
             optimizer = cast(OSS, optimizer)
@@ -160,7 +197,7 @@ def train(
     std = math.sqrt(sum(diff) / (len(measurements) - 1))
     print(f"[{dist.get_rank()}] : Mean speed: {mean:.2f} +/- {std:.2f}")
 
-    if use_oss and check_regression and dist.get_rank() == 0:
+    if optim_type == OptimType.oss and check_regression and dist.get_rank() == 0:
         assert (mean + 3.0 * std) > reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
         assert abs(cast(float, final_loss) - reference_loss) < 1e-3, "Loss regression detected"
@@ -171,12 +208,6 @@ def train(
 
 
 if __name__ == "__main__":
-
-    class OptimType(str, Enum):
-        vanilla = "pytorch"
-        oss = "oss"
-        oss_sdp = "oss_sdp"
-        everyone = "everyone"
 
     parser = argparse.ArgumentParser(
         description="Benchmark the optimizer state sharding, on a typical computer vision workload"
@@ -199,7 +230,7 @@ if __name__ == "__main__":
 
     backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
 
-    if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
+    if args.optim_type == OptimType.pytorch or args.optim_type == OptimType.everyone:
         print("\nBenchmark vanilla optimizer")
         mp.spawn(
             train,
@@ -209,8 +240,7 @@ if __name__ == "__main__":
                 args.batch_size,
                 args.data_size,
                 backend,
-                False,  # OSS
-                False,  # SDP
+                OptimType.pytorch,
                 False,  # no regression check
             ),
             nprocs=args.world_size,
@@ -227,8 +257,7 @@ if __name__ == "__main__":
                 args.batch_size,
                 args.data_size,
                 backend,
-                True,  # OSS
-                False,  # SDP
+                OptimType.oss,
                 args.check_regression,
                 args.reference_speed,
                 args.reference_memory,
@@ -248,8 +277,27 @@ if __name__ == "__main__":
                 args.batch_size,
                 args.data_size,
                 backend,
-                True,  # OSS
-                True,  # SDP
+                OptimType.oss_sdp,
+                False,  # FIXME: @lefaudeux - SDP should give the same results
+                -1,  # Not checking SDP for speed regression for now, still slower than OSS
+                args.reference_memory,
+                args.reference_loss,
+            ),
+            nprocs=args.world_size,
+            join=True,
+        )
+
+    if args.optim_type == OptimType.oss_experimental or args.optim_type == OptimType.everyone:
+        print("\nBenchmark OSS experimental")
+        mp.spawn(
+            train,
+            args=(
+                args.world_size,
+                args.epochs,
+                args.batch_size,
+                args.data_size,
+                backend,
+                OptimType.oss_experimental,
                 False,  # FIXME: @lefaudeux - SDP should give the same results
                 -1,  # Not checking SDP for speed regression for now, still slower than OSS
                 args.reference_memory,
