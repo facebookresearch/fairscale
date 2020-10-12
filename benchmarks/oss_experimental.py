@@ -88,7 +88,6 @@ def train(
                 loss = loss_fn(outputs, batch["label"])
                 loss /= world_size
                 loss.backward()
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
                 return loss
 
             final_loss = optimizer.step(closure)

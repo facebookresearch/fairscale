@@ -1,13 +1,15 @@
 Optimizer state sharding
 ========================
 
-Using torch.nn.parallel.DistributedDataParallel leads to some wasted communications, but it is possible and makes OSS a drop in solution in your existing torch distributed code.
+Using torch.nn.parallel.DistributedDataParallel leads to some wasted communications in the case of OSS, but it is possible and makes OSS a drop in solution in your existing torch distributed code.
 Let's suppose that your trainer looks like
 
 .. code-block:: python
 
 
     import torch
+    from torch.nn.parallel import DistributedDataParallel as DDP
+
 
     def train(
         rank: int,
@@ -19,11 +21,12 @@ Let's suppose that your trainer looks like
 
         # Problem statement
         model = myAwesomeModel().to(rank)
+        model = DDP(model, device_ids=[rank])
         dataloader = mySuperFastDataloader()
         loss_ln = myVeryRelevantLoss()
 
         # optimizer specific arguments e.g. LR, momentum, etc...
-        base_optimizer_arguments = { "lr": 1e-4} 
+        base_optimizer_arguments = { "lr": 1e-4}
         optimizer = torch.optim.SGD(
             params=model.parameters(),
             **base_optimizer_arguments)
@@ -39,7 +42,6 @@ Let's suppose that your trainer looks like
                 loss = loss_fn(outputs, target)
                 loss /= world_size
                 loss.backward()
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 optimizer.step()
 
 
@@ -50,6 +52,7 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
 
     import torch
     from fairscale.optim.oss import OSS
+    from torch.nn.parallel import DistributedDataParallel as DDP
 
     def train(
         rank: int,
@@ -61,11 +64,12 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
 
         # Problem statement
         model = myAwesomeModel().to(rank)
+        model = DDP(model, device_ids=[rank])
         dataloader = mySuperFastDataloader()
         loss_ln = myVeryRelevantLoss()
 
         # optimizer specific arguments e.g. LR, momentum, etc...
-        base_optimizer_arguments = { "lr": 1e-4} 
+        base_optimizer_arguments = { "lr": 1e-4}
 
         # ** NEW ** Wrap a base optimizer into OSS
         base_optimizer = torch.optim.SGD  # any pytorch compliant optimizer
@@ -85,7 +89,6 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
                 loss = loss_fn(outputs, target)
                 loss /= world_size
                 loss.backward()
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
                 optimizer.step()
 
 
@@ -100,5 +103,5 @@ The above `train` function will then need to be run via a `multiprocessing.spawn
             nprocs=WORLD_SIZE,
             join=True
         )
-    
+
 to see it in action, you can test it with the following script _`tutorial_oss.py <../../../examples/tutorial_oss.py>`_
