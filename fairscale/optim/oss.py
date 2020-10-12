@@ -49,6 +49,8 @@ class OSS(Optimizer):
             optimizer to shard (default: SGD)
         group (group):
             torch.distributed group (default: group.WORLD)
+        broadcast_buffer_size (int):
+            the size of the buffer used to batch the small parameter tensors (default 128k).
     """
 
     #: The optimizer used for a given shard
@@ -56,39 +58,56 @@ class OSS(Optimizer):
 
     in_super_constructor: bool
 
-    def __init__(self, params: _params_t, optim: Type[Optimizer] = SGD, group: Optional[Any] = None, **default: Any):
+    def __init__(
+        self,
+        params: _params_t,
+        optim: Type[Optimizer] = SGD,
+        group: Optional[Any] = None,
+        broadcast_buffer_size: int = 2 ** 17,
+        **default: Any,
+    ):
         # Hold all the model params in the root .param_groups
         self.in_super_constructor = True
         super().__init__(params, default)
         self.in_super_constructor = False
 
         # Partition information. lazy evaluation, computed if requested
-        self._per_device_params: List[List[Parameter]] = []
+        self._per_device_params: OrderedDict[
+            torch.device, List[List[Parameter]]
+        ] = OrderedDict()  # device, rank, params
         self._param_rank: Dict[torch.Tensor, int] = {}
         self._partition_parameters: List[List[dict]] = []
 
         # Build the wrapped optimizer, responsible for a shard of the params
         self.group = group if group is not None else dist.group.WORLD
         self.world_size = dist.get_world_size(self.group)
-
         self.rank = dist.get_rank(self.group)
+        self.global_rank = self.get_global_rank(self.group, self.rank)
+
         self.optim = optim(self.partition_parameters()[self.rank], **default)
 
-        #  Optional consolidated optimizer state
-        self._all_states: List[Dict[str, Any]] = []
-
-        # Current device is set by the parameters allocated to this rank
-        self._device = self.partition_parameters()[self.rank][0]["params"][0].device
-
-        # Sync local and global param_groups keys
+        # - Sync local and global param_groups keys
         for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
             for k, v in local_group.items():
                 if k != "params":
                     global_group[k] = v
 
+        #  Optional consolidated optimizer state
+        self._all_states: List[Dict[str, Any]] = []
+
+        # Current default device is set by the parameters allocated to this rank
+        self._device = self.partition_parameters()[self.rank][0]["params"][0].device
+        self._broadcast_buffers: Dict[torch.device, List[torch.Tensor]] = {}
+        for device, per_device in self.per_device_params.items():
+            # Allocate one buffer per rank and per device to group the small parameters
+            self._broadcast_buffers[device] = [
+                torch.zeros(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device)
+                for _ in range(len(per_device))
+            ]
+
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
-        """Partitions parameters across distributed ranks.
+        """Partitions parameters across distributed data parallel ranks.
 
         Returns a list of param_groups (which is a list of dict) where each
         element of the list contains the param_groups for a rank. Element 0
@@ -114,27 +133,32 @@ class OSS(Optimizer):
         return self._partition_parameters
 
     @property
-    def per_device_params(self) -> List[List[Parameter]]:
-        # TODO (Min): The algorithm here can be improved. We are sorting params by device
-        #     and by rank. Then in reduction_fn below, we pack smaller ones into
-        #     a buffer for reduction.
-        #     We can pre-sort them here and simplify the reduction_fn logic below
-        #     since their size shouldn't change.
+    def per_device_params(self) -> Dict[torch.device, List[List[Parameter]]]:
+        """Sorted list of all the params, first per device then per rank.
 
+        Within a list params are sorted per number of elements to allow for an easy bucketing.
+        """
         if len(self._per_device_params) == 0:
+            # Go through all params, log them per device
+            # The ordering is important here, needs to be the same on all ranks
+            # So that ulterior broadcast calls are matching
             for param_group in self.param_groups:
-                param_lists: OrderedDict = OrderedDict()
                 for param in param_group["params"]:
                     device = param.device
-                    if param_lists.get(device) is None:
-                        param_lists[device] = []
-                    param_lists[device] += [param]
-            self._per_device_params = list(param_lists.values())
+                    if self._per_device_params.get(device) is None:
+                        self._per_device_params[device] = [[] for _ in range(self.world_size)]
+                    self._per_device_params[device][self.param_to_rank[param]] += [param]
+
+            # Sort param_lists by size
+            for k in self._per_device_params.keys():
+                for r in self._per_device_params[k]:
+                    r.sort(key=lambda x: x.numel())
 
         return self._per_device_params
 
     @property
     def param_to_rank(self) -> Dict[torch.Tensor, int]:
+        """param to data parallel rank"""
         if len(self._param_rank) == 0:
             for rank, param_groups in enumerate(self.partition_parameters()):
                 for param_group in param_groups:
@@ -157,28 +181,20 @@ class OSS(Optimizer):
         self._sync_param_groups()
 
         # Run the optimizer step on this shard only:
+        self._free_other_grads()
+
         if closure is not None:
             loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
         else:
             loss = self.optim.step(**kwargs)
 
-        # Sync all the states. Broadcast requests are issued async, we check completeness before moving on
-        requests = []
-        requires_grad = []
-        for rank, param_groups in enumerate(self.partition_parameters()):
-            for param_group in param_groups:
-                for param in param_group["params"]:
-                    # NOTE: Broadcast is in-place and not differentiable
-                    # Gloo will rightly assert on this operation for any tensor that requires grad.
-                    # We save and restore the grad requirement state to work around that, in our case
-                    # the grad is only useful on the source rank.
-                    requires_grad.append((param, param.requires_grad))
-                    param.requires_grad = False
-                    requests.append(dist.broadcast(tensor=param, src=rank, group=self.group, async_op=True))
-
-        for fut, req_grad in zip(requests, requires_grad):
-            fut.wait()
-            req_grad[0].requires_grad = req_grad[1]
+        # Sync all the updated shards in between the ranks
+        with torch.no_grad():
+            for (
+                device,
+                device_params,
+            ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
+                self._broadcast_params(self._broadcast_buffers[device], device_params)
 
         return loss
 
@@ -309,7 +325,10 @@ class OSS(Optimizer):
 
         super().add_param_group(param_group)
         if not self.in_super_constructor:
-            self._partition_parameters.clear()  # Force a re-partitioning
+            # Force a re-partitioning
+            self._partition_parameters.clear()
+            self._per_device_params.clear()
+            self._param_rank.clear()
 
             param_groups = self.partition_parameters()[self.rank]
             if len(param_groups) == len(self.optim.param_groups) + 1:
@@ -328,7 +347,7 @@ class OSS(Optimizer):
         empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
         all_states: List[Dict[str, Any]] = []
 
-        for rank in range(dist.get_world_size(group=self.group)):
+        for rank in range(self.world_size):
             if rank == self.rank:
                 logging.debug("Saving self state")
                 all_states.append(
@@ -336,12 +355,12 @@ class OSS(Optimizer):
                 )
 
                 # Sync with other replicas
-                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
+                broadcast_object(empty_buffer, src_rank=self.global_rank, group=self.group, dist_device=self._device)
             else:
                 # Fetch the optim state from the other replicas
-                logging.debug("Receiving state from rank %s ", rank)
+                global_rank = self.get_global_rank(self.group, rank)
                 replica_state = broadcast_object(
-                    empty_buffer, src_rank=rank, group=self.group, dist_device=self._device
+                    empty_buffer, src_rank=global_rank, group=self.group, dist_device=self._device
                 )
 
                 all_states.append(
@@ -356,14 +375,102 @@ class OSS(Optimizer):
         """Broadcast this rank's state shard, discard others"""
         empty_buffer = torch.tensor([0], dtype=torch.uint8, device=self._device)
 
-        for rank in range(dist.get_world_size(group=self.group)):
+        for rank in range(self.world_size):
             if rank == self.rank:
                 # Send the state to the reference replica
                 logging.debug(
                     "Sending the sharded optimizer state to the reference replica from rank %s", rank,
                 )
-                broadcast_object(self.local_state_dict(), src_rank=rank, group=self.group, dist_device=self._device)
+                broadcast_object(
+                    self.local_state_dict(), src_rank=self.global_rank, group=self.group, dist_device=self._device
+                )
             else:
+                global_rank = self.get_global_rank(self.group, rank)
                 # Discard this tensor/rank, broadcast necessary for syncing
-                logging.debug("Discarding broadcast from rank %s", rank)
-                broadcast_object(empty_buffer, src_rank=rank, group=self.group, dist_device=self._device)
+                broadcast_object(empty_buffer, src_rank=global_rank, group=self.group, dist_device=self._device)
+
+    def _free_other_grads(self) -> None:
+        """Free all the gradients only useful for the other ranks
+        """
+        for rank, partition in enumerate(self.partition_parameters()):
+            if rank == self.rank:
+                continue
+
+            for p in partition:
+                for t in p["params"]:
+                    t.grad = None
+
+    @staticmethod
+    def get_global_rank(group: Any, rank: int) -> int:
+        if group is dist.group.WORLD:
+            return rank
+        else:
+            global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
+        return global_rank
+
+    def _broadcast_params(self, buffers: List[torch.Tensor], per_rank_params: List[List[Parameter]]) -> None:
+        """Helper function to broadcast all the parameters from a given device
+        """
+        buffer_size = buffers[0].numel()
+        restore_require_grad = []
+        bucket_requests = []
+        requests = []
+
+        # Bucket and issue all the async calls
+        for (rank, params), buffer in zip(enumerate(per_rank_params), buffers):
+            # All the params are sorted per rank and per increasing size
+            if len(params) == 0:
+                continue
+
+            global_rank = OSS.get_global_rank(self.group, rank)
+
+            # Copy small parameters into per-GPU buffers
+            i_bucketed = 0  # the number of tensors packed in the buffer
+            offset = 0
+
+            # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
+            while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
+                end = offset + params[i_bucketed].numel()
+                if global_rank == self.global_rank:
+                    buffer[offset:end].copy_(params[i_bucketed].data.view(-1))  # type: ignore
+                offset = end
+                i_bucketed += 1
+
+            if i_bucketed > 0:
+                future = dist.broadcast(tensor=buffer, src=global_rank, group=self.group, async_op=True)
+                if global_rank != self.global_rank:
+                    # This request will need to be unrolled
+                    bucket_requests.append((future, rank))
+
+            # Directly broadcast the rest
+            for param in params[i_bucketed:]:
+                # NOTE: Broadcast is in-place and not differentiable
+                # Gloo will assert on this operation for any tensor that requires grad.
+                # We save and restore the grad requirement state to work around that, in our case
+                # the grad is only useful on the source rank.
+                if param.requires_grad:
+                    restore_require_grad.append(param)
+                    param.requires_grad = False
+
+                requests.append(dist.broadcast(tensor=param, src=global_rank, group=self.group, async_op=True))
+
+        # Unroll the initial packed small parameters
+        for gate, rank in bucket_requests:
+            gate.wait()
+
+            params = per_rank_params[rank]
+            buffer = buffers[rank]
+            i_bucketed = 0  # the number of tensors packed in the buffer
+            offset = 0
+
+            while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
+                end = offset + params[i_bucketed].numel()
+                params[i_bucketed].data.copy_(buffer[offset:end].view_as(params[i_bucketed]))  # type: ignore
+                offset = end
+                i_bucketed += 1
+
+        # Unroll all the async work items, just in case
+        _ = list(map(lambda x: x.wait(), requests))
+
+        for p in restore_require_grad:
+            p.requires_grad = True

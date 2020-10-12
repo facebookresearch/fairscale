@@ -11,7 +11,7 @@ Adopted from LegacyDistributedDataParallel module from fairseq.
 
 from contextlib import contextmanager
 import copy
-from typing import Any, Dict, Generator, List, Optional, Type, cast
+from typing import Any, Dict, Generator, List, Type, cast
 
 import torch
 from torch import Tensor, nn
@@ -39,7 +39,7 @@ class ShardedDataParallel(nn.Module):
             distributed gradient reduction. If None, the default WORLD process group
             will be used.
         buffer_size (int, optional): number of elements to buffer before
-            performing reduce (default: 256M). Used to reduce multiple small
+            performing reduce (default: 512k). Used to reduce multiple small
             params to avoid communication overhead.
     """
 
@@ -51,7 +51,7 @@ class ShardedDataParallel(nn.Module):
         world_size: int,
         broadcast_buffers: bool,
         process_group: Any = None,
-        buffer_size: int = 2 ** 28,
+        buffer_size: int = 2 ** 19,
     ):
         super().__init__()
 
@@ -62,10 +62,6 @@ class ShardedDataParallel(nn.Module):
         self.broadcast_buffers = broadcast_buffers
         self.authoritative_rank = 0
 
-        # Never use a bigger buffer than the number of model params
-        self.buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
-        self.buffer: Optional[Tensor] = None
-
         # Flag used to make sure we only reduce gradients one time in the execution engine
         self.need_reduction = False
 
@@ -75,6 +71,18 @@ class ShardedDataParallel(nn.Module):
 
         # Build the sharded optimizer
         self.sharded_optimizer = OSS(self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params)
+
+        # Allocate reduce buffers
+        # - Never use a bigger buffer than the number of model params
+        buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
+        self._reduce_buffers: Dict[torch.device, List[torch.Tensor]] = {}
+
+        # - One buffer per rank per device
+        for device, per_device in self.sharded_optimizer.per_device_params.items():
+            buffer_dtype = per_device[0][0].dtype
+            self._reduce_buffers[device] = [
+                torch.zeros(buffer_size, dtype=buffer_dtype, device=device) for _ in range(len(per_device))
+            ]
 
         # Sanity checks
         assert len(self.sharded_optimizer.param_to_rank) == len(
@@ -126,85 +134,92 @@ class ShardedDataParallel(nn.Module):
         """
         assert self.module.training, "Cannot call reduce in eval"
 
-        def reduce_grads(params: List[Parameter], params_rank: int) -> None:
-            """ Helper to reduce a list of params that should fit in the buffer.
-            NOTE: All param gradients are assumed to exist"""
-            assert self.buffer is not None
+        if not self.need_reduction or self.accumulate_grads:
+            return
 
-            # Fill in the packed IO buffer
-            buffer: Tensor = cast(Tensor, self.buffer)
-            if len(params) > 1:
+        self.need_reduction = False
+
+        with torch.no_grad():
+            for device, per_device in self.sharded_optimizer.per_device_params.items():
+                self._reduce_grads_task(
+                    self._reduce_buffers[device],
+                    per_device,
+                    group=self.process_group,
+                    self_rank=self.rank,
+                    world_size=self.world_size,
+                )
+
+    @staticmethod
+    def _reduce_grads_task(
+        buffers: List[torch.Tensor], per_rank_params: List[List[Parameter]], group: Any, self_rank: int, world_size: int
+    ) -> None:
+        """Helper to reduce a list of params. The params are sorted by size, smallest first, which allows for
+        an opportunistic bucketing.
+
+        NOTE: All param gradients are assumed to exist"""
+
+        buffer_size = buffers[0].numel()
+        bucket_requests = []
+        requests = []
+
+        for (rank, params), buffer in zip(enumerate(per_rank_params), buffers):
+            # All the params are sorted per rank and per increasing size
+            if len(params) == 0:
+                continue
+
+            for p in params:
+                if p.grad is None:
+                    p.grad = torch.zeros_like(p)
+
+            global_rank = OSS.get_global_rank(group, rank)
+
+            # Copy small gradients into per-GPU buffers and then async reduce
+            i_bucketed = 0  # the number of tensors packed in the buffer
+            offset = 0
+
+            # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
+            while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
+                end = offset + params[i_bucketed].numel()
+                buffer[offset:end].copy_(params[i_bucketed].grad.data.view(-1))  # type: ignore
+                offset = end
+                i_bucketed += 1
+
+            if i_bucketed > 0:
+                buffer.div_(world_size)  # type: ignore
+                bucket_requests.append(
+                    (
+                        dist.reduce(tensor=buffer, dst=global_rank, group=group, async_op=True),  # type: ignore
+                        rank,
+                    )
+                )
+
+            # Directly reduce the other grads
+            for p in params[i_bucketed:]:
+                p.grad = cast(Tensor, p.grad)
+                if p.grad.requires_grad:
+                    raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
+
+                p.grad.div_(world_size)  # type: ignore
+                requests.append(dist.reduce(tensor=p.grad, dst=global_rank, group=group, async_op=True))  # type: ignore
+
+        # Unroll the initial packed small gradients, as soon as possible
+        for future, rank in bucket_requests:
+            future.wait()
+
+            if rank == self_rank:
+                i_bucketed = 0  # the number of tensors packed in the buffer
                 offset = 0
-                for p in params:
-                    sz = p.numel()
-                    buffer[offset : offset + sz].copy_(p.grad.data.view(-1))  # type: ignore
-                    offset += sz
-            else:
-                # we only have a single grad to reduce
-                buffer = params[0].grad.data  # type: ignore
+                params = per_rank_params[rank]
+                buffer = buffers[rank]
 
-            # Reduce
-            buffer.div_(self.world_size)  # type: ignore
-            dist.reduce(tensor=buffer, dst=params_rank, group=self.process_group)  # type: ignore
+                while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
+                    end = offset + params[i_bucketed].numel()
+                    params[i_bucketed].grad.data.copy_(buffer[offset:end].view_as(params[i_bucketed]))  # type: ignore
+                    offset = end
+                    i_bucketed += 1
 
-            # Copy reduced grads back into their original place, or free corresponding memory
-            if params_rank == self.rank:
-                offset = 0
-                for p in params:
-                    sz = p.numel()
-                    p.grad.data.copy_(buffer[offset : offset + sz].view_as(p))  # type: ignore
-                    offset += sz
-            else:
-                for p in params:
-                    p.grad = None
-
-        def reduction_fn() -> None:
-            # This function only needs to be called once
-            if not self.need_reduction or self.accumulate_grads:
-                return
-            self.need_reduction = False
-
-            if self.buffer is None:
-                self.buffer = next(self.module.parameters()).new(self.buffer_size)  # type: ignore
-
-            for params in self.sharded_optimizer.per_device_params:
-                # Reduce the gradients in buckets
-                offset = 0
-                buffered_params: List[Parameter] = []
-                param_rank: Optional[int] = None
-                for param in params:
-                    last_param_rank: Optional[int] = param_rank
-                    param_rank = self.sharded_optimizer.param_to_rank[param]
-                    if not param.requires_grad:
-                        continue
-
-                    if param.grad is None:
-                        param.grad = torch.zeros_like(param)
-                    if param.grad.requires_grad:
-                        raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
-                    sz = param.numel()
-                    if sz > self.buffer.numel():
-                        # reduce big params directly
-                        assert param_rank is not None
-                        reduce_grads([param], cast(int, param_rank))
-                    else:
-                        # smaller params are packed together from the same device
-                        # and same rank.
-                        if offset + sz > self.buffer.numel() or (
-                            last_param_rank is not None and last_param_rank != param_rank
-                        ):
-                            assert last_param_rank is not None
-                            reduce_grads(buffered_params, cast(int, last_param_rank))
-                            offset = 0
-                            buffered_params.clear()
-                        buffered_params.append(cast(Parameter, param))
-                        offset += sz
-
-                if len(buffered_params) > 0:
-                    assert param_rank is not None
-                    reduce_grads(buffered_params, cast(int, param_rank))
-
-        reduction_fn()
+        # Make sure that we're done with this device before moving on and cleaning the unused params
+        _ = list(map(lambda x: x.wait(), requests))
 
     def _sync_buffers(self) -> None:
         """

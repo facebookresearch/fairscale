@@ -12,6 +12,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.models import resnet101
@@ -40,7 +41,9 @@ def get_problem(rank, data_size, batch_size):
         }
 
     dataloader = DataLoader(
-        dataset=FakeData(transform=ToTensor(), size=data_size), batch_size=batch_size, collate_fn=collate
+        dataset=FakeData(transform=ToTensor(), size=data_size, random_offset=rank),
+        batch_size=batch_size,
+        collate_fn=collate,
     )
     loss_fn = nn.CrossEntropyLoss()
     return model, dataloader, loss_fn
@@ -85,12 +88,13 @@ def train(
             optimizer=OPTIM,
             optimizer_params={"lr": 1e-4, "momentum": 0.9},
             world_size=world_size,
-            broadcast_buffers=False,
+            broadcast_buffers=True,
         )
         ddp.train()
         optimizer = ddp.optimizer
         model = ddp
     else:
+        model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
             if use_oss
@@ -119,8 +123,6 @@ def train(
                 loss = loss_fn(outputs, batch["label"])
                 loss /= world_size
                 loss.backward()
-
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
 
                 if use_sdp:
                     ddp.reduce()  # Send the gradients to the appropriate shards
@@ -164,6 +166,8 @@ def train(
         assert abs(cast(float, final_loss) - reference_loss) < 1e-3, "Loss regression detected"
 
         print("[Regression Test] VALID")
+
+    dist.destroy_process_group()  # type: ignore
 
 
 if __name__ == "__main__":
@@ -214,7 +218,7 @@ if __name__ == "__main__":
         )
 
     if args.optim_type == OptimType.oss or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS")
+        print("\nBenchmark OSS with DDP")
         mp.spawn(
             train,
             args=(
@@ -235,7 +239,7 @@ if __name__ == "__main__":
         )
 
     if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS DDP")
+        print("\nBenchmark OSS with SDP")
         mp.spawn(
             train,
             args=(
@@ -246,7 +250,10 @@ if __name__ == "__main__":
                 backend,
                 True,  # OSS
                 True,  # SDP
-                False,  # no regression check
+                False,  # FIXME: @lefaudeux - SDP should give the same results
+                -1,  # Not checking SDP for speed regression for now, still slower than OSS
+                args.reference_memory,
+                args.reference_loss,
             ),
             nprocs=args.world_size,
             join=True,
