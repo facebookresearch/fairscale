@@ -116,6 +116,8 @@ def train(
         )
 
     if optim_type == OptimType.oss_experimental:
+        # This method requires a layer-wise seperable model
+        # Unroll the test RestNet101 into ~40 layers
         model_seq = torch.nn.Sequential(
             model.conv1,
             model.bn1,
