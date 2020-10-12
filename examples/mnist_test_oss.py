@@ -83,8 +83,6 @@ def train(rank, args, model, device, train_loader, num_epochs):
                 loss /= WORLD_SIZE
                 loss.backward()
 
-                dist.all_reduce(loss, op=dist.ReduceOp.SUM)
-
                 # if dist.get_rank() == 0:
                 #     print(f"Loss: {loss.item()}")
 
