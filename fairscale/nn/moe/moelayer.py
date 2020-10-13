@@ -59,6 +59,9 @@ class MOELayer(Base):
         return output
 
     def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
+        assert len(input) == 1, "only single input Tensor supported"
+        assert len(input[0].shape) == 4, "input Tensor must have dimensions: (g)roup, (s)equence, (t)oken, (m)odel"
+
         # Implement Algorithm 2 from GShard paper.
         shape = input[0].shape
         # Reshape into S tokens per group.

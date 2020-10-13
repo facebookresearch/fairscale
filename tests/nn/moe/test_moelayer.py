@@ -20,18 +20,20 @@ if torch.cuda.is_available():
 else:
     devices = ["cpu"]
 
+os.environ["MASTER_ADDR"] = "localhost"
+os.environ["MASTER_PORT"] = "29501"
+if "OMPI_COMM_WORLD_SIZE" in os.environ:
+    dist.init_process_group(backend=dist.Backend.MPI)
+
 
 def setup_module(module):
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29501"
-    if "OMPI_COMM_WORLD_SIZE" in os.environ:
-        dist.init_process_group(backend=dist.Backend.MPI)
-    else:
+    if "OMPI_COMM_WORLD_SIZE" not in os.environ:
         dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
 
 
 def teardown_module(module):
-    torch.distributed.destroy_process_group()
+    if "OMPI_COMM_WORLD_SIZE" not in os.environ:
+        torch.distributed.destroy_process_group()
 
 
 @pytest.mark.parametrize("device", devices)
