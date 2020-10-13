@@ -25,7 +25,8 @@ class MOELayer(Base):
 
         gate = Top2Gate(model_dim, num_experts)
         moe = MOELayer(gate, expert)
-        l_aux, combine_weights, dispatch_mask = moe(input)
+        output = moe(input)
+        l_aux = moe.l_aux
 
     .. Gshard_: https://arxiv.org/pdf/2006.16668.pdf
 
