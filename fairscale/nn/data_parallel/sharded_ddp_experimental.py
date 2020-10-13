@@ -69,7 +69,7 @@ class ModelShard(nn.Module):
 
     def forward(self, *inputs):  # type: ignore
         if self.broadcast_buffers and len(list(self.model_shard.buffers())) > 0:
-            self._sync_buffers()
+            self.sync_buffers(blocking=True)
 
         return (self.model_shard(*inputs),) if isinstance(inputs, tuple) else self.model_shard(inputs)
 
@@ -118,7 +118,7 @@ class ModelShard(nn.Module):
 
         return requests if not blocking else self.sync(requests)
 
-    def _sync_buffers(self, blocking: bool = True) -> Optional[List[Any]]:
+    def sync_buffers(self, blocking: bool = True) -> Optional[List[Any]]:
         """
         Sync all the param buffers in between ranks.
         TODO: Could be worth bucketing ?
@@ -163,7 +163,7 @@ class ShardSyncLayer(torch.autograd.Function):
             prev_shard.forward_drop()
 
         if next_shard:
-            next_shard.forward_load()
+            next_shard.forward_load(blocking=False)
 
         ctx.prev_shard = prev_shard
         ctx.next_shard = next_shard
@@ -178,7 +178,7 @@ class ShardSyncLayer(torch.autograd.Function):
             ctx.next_shard.backward_drop()
 
         if ctx.prev_shard is not None:
-            ctx.prev_shard.backward_load()
+            ctx.prev_shard.backward_load(blocking=False)
 
         # The returned variables need to mirror the forward inputs
         if isinstance(grad_outputs, tuple):
@@ -223,7 +223,6 @@ class ShardedDataParallelExperimental(nn.Module):
         self.rank = dist.get_rank(self.process_group)
         self.global_rank = self.get_global_rank(self.process_group, self.rank)
         self.backend = dist.get_backend(group=self.process_group)  # type: ignore
-        self.broadcast_buffers = broadcast_buffers
 
         # Slice the model
         splits = _split(module, self.world_size)
@@ -236,7 +235,12 @@ class ShardedDataParallelExperimental(nn.Module):
 
             # Add one dataparallel model handling this slice
             self.model_slices.append(
-                ModelShard(nn.Sequential(*module_shard), owner_rank=global_owner_rank, process_group=self.process_group)
+                ModelShard(
+                    nn.Sequential(*module_shard),
+                    owner_rank=global_owner_rank,
+                    process_group=self.process_group,
+                    broadcast_bufers=broadcast_buffers,
+                )
             )
 
             # Use one normal optimizer per shard
