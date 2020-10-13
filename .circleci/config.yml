@@ -90,7 +90,7 @@ run_mpi_unittests: &run_mpi_unittests
   - run:
       name: Run MPI Unit Tests
       command: |
-        mpirun -n4 python -m pytest -with-mpi --junitxml=test-results/junit.xml --verbose
+        mpirun -n4 python -m pytest -only-mpi --junitxml=test-results/junit.xml --verbose
 
 run_flake8: &run_flake8
   - run:
@@ -163,8 +163,6 @@ jobs:
       - <<: *run_flake8
 
       - <<: *run_unittests
-
-      - <<: *run_mpi_unittests
 
       - store_test_results:
           path: test-results
