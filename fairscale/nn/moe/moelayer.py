@@ -36,7 +36,7 @@ class MOELayer(Base):
             expert network
     """
 
-    def __init__(self, gate: Module, expert: Module, group: Optional[Any] = None,) -> None:
+    def __init__(self, gate: Module, expert: Module, group: Optional[Any] = None) -> None:
         super().__init__()
         self.gate = gate
         self.expert = expert
