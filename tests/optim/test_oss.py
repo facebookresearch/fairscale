@@ -29,6 +29,10 @@ def setup_module(module):
     dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
 
 
+def teardown_module(module):
+    torch.distributed.destroy_process_group()
+
+
 def dist_init(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "29501"

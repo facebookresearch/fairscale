@@ -30,6 +30,10 @@ def setup_module(module):
         dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
 
 
+def teardown_module(module):
+    torch.distributed.destroy_process_group()
+
+
 @pytest.mark.parametrize("device", devices)
 def test_create(device):
     model_dim = 8
