@@ -38,6 +38,12 @@ setup_venv: &setup_venv
         which pip
         pip install --upgrade pip
 
+install_mpi: &install_mpi
+  - run:
+      name: Install mpi
+      command: |
+        sudo apt-get install -y mpi
+
 install_dep_15: &install_dep_15
   - run:
       name: Install Dependencies
@@ -133,6 +139,8 @@ jobs:
       - restore_cache:
           keys:
             - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_mpi
 
       - <<: *install_dep_16
 
