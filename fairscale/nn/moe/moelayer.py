@@ -58,7 +58,7 @@ class MOELayer(Base):
         output = torch.einsum("gsec,egcm->gsm", combine_weights, expert_output)
         return output
 
-    def forward(self, *input: Any, **kwargs: Any) -> Tensor:
+    def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
         # Implement Algorithm 2 from GShard paper.
         shape = input[0].shape
         # Reshape into S tokens per group.
