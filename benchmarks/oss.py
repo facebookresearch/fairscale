@@ -9,6 +9,7 @@ from typing import Any, List, Optional, cast
 
 import numpy as np
 import torch
+import torch.autograd.profiler as profiler
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
@@ -71,7 +72,8 @@ def train(
     batch_size: int = 32,
     data_size: int = 200,
     backend: str = "gloo",
-    optim_type: OptimType = OptimType.everyone,
+    optim_type: OptimType = OptimType.pytorch,
+    profile: bool = False,
     check_regression: bool = True,
     reference_speed: float = -1.0,
     reference_memory: float = -1.0,
@@ -154,6 +156,7 @@ def train(
     measurements = []
     final_loss: Optional[float] = -1.0
     optimizer = cast(Optimizer, optimizer)
+    need_profiling = profile
 
     for epoch in range(num_epochs):
         epoch_start = time.monotonic()
@@ -172,7 +175,20 @@ def train(
 
                 return loss
 
-            final_loss = optimizer.step(closure)
+            if need_profiling:
+                print("Profiling the run")
+                with profiler.profile(use_cuda=True) as prof:  # type: ignore
+                    with profiler.record_function("batch"):
+                        final_loss = optimizer.step(closure)
+                        print("profiling done, final loss ", cast(float, final_loss))
+
+                if rank == 0:
+                    prof.export_chrome_trace(f"{optim_type}_trace.json")
+
+                need_profiling = False  # only profile once
+
+            else:
+                final_loss = optimizer.step(closure)
 
         epoch_end = time.monotonic()
 
@@ -203,7 +219,7 @@ def train(
     std = math.sqrt(sum(diff) / (len(measurements) - 1))
     print(f"[{dist.get_rank()}] : Mean speed: {mean:.2f} +/- {std:.2f}")
 
-    if optim_type == OptimType.oss and check_regression and dist.get_rank() == 0:
+    if check_regression and dist.get_rank() == 0:
         assert (mean + 3.0 * std) > reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
         assert abs(cast(float, final_loss) - reference_loss) < 1e-3, "Loss regression detected"
@@ -214,7 +230,6 @@ def train(
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(
         description="Benchmark the optimizer state sharding, on a typical computer vision workload"
     )
@@ -230,6 +245,7 @@ if __name__ == "__main__":
         "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
     )
     parser.add_argument("--gloo", action="store_true", default=False)
+    parser.add_argument("--profile", action="store_true", default=False)
 
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
@@ -247,6 +263,7 @@ if __name__ == "__main__":
                 args.data_size,
                 backend,
                 OptimType.pytorch,
+                args.profile,
                 False,  # no regression check
             ),
             nprocs=args.world_size,
@@ -264,6 +281,7 @@ if __name__ == "__main__":
                 args.data_size,
                 backend,
                 OptimType.oss,
+                args.profile,
                 args.check_regression,
                 args.reference_speed,
                 args.reference_memory,
@@ -284,6 +302,7 @@ if __name__ == "__main__":
                 args.data_size,
                 backend,
                 OptimType.oss_sdp,
+                args.profile,
                 False,  # FIXME: @lefaudeux - SDP should give the same results
                 -1,  # Not checking SDP for speed regression for now, still slower than OSS
                 args.reference_memory,
@@ -304,6 +323,7 @@ if __name__ == "__main__":
                 args.data_size,
                 backend,
                 OptimType.oss_experimental,
+                args.profile,
                 False,  # FIXME: @lefaudeux - SDP should give the same results
                 -1,  # Not checking SDP for speed regression for now, still slower than OSS
                 args.reference_memory,
