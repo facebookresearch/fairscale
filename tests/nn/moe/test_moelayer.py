@@ -13,12 +13,16 @@ from fairscale.nn import MOELayer, Top2Gate
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 
-os.environ["MASTER_ADDR"] = "localhost"
-os.environ["MASTER_PORT"] = "29501"
-if "OMPI_COMM_WORLD_SIZE" in os.environ:
-    dist.init_process_group(backend=dist.Backend.MPI)
-else:
-    dist.init_process_group(backend=dist.Backend.NCCL, rank=0, world_size=1)
+BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
+
+
+def setup_module(module):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29501"
+    if "OMPI_COMM_WORLD_SIZE" in os.environ:
+        dist.init_process_group(backend=dist.Backend.MPI)
+    else:
+        dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
