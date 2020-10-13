@@ -13,23 +13,26 @@ from fairscale.nn import MOELayer, Top2Gate
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 
-
 os.environ["MASTER_ADDR"] = "localhost"
 os.environ["MASTER_PORT"] = "29501"
-dist.init_process_group(backend=dist.Backend.MPI)
+if "OMPI_COMM_WORLD_SIZE" in os.environ:
+    dist.init_process_group(backend=dist.Backend.MPI)
+else:
+    dist.init_process_group(backend=dist.Backend.NCCL, rank=0, world_size=1)
 
 
-def test_create():
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_create(device):
     model_dim = 8
     num_experts = 4
     gate = Top2Gate(model_dim, num_experts)
     expert = torch.nn.Linear(model_dim, model_dim)
-    moe = MOELayer(gate, expert)
+    moe = MOELayer(gate, expert).to(device)
 
 
 @pytest.mark.mpi
 @pytest.mark.parametrize("device", ["cpu"])
-def test_forward_multi(device):
+def test_forward(device):
     model_dim = 8
     num_experts = dist.get_world_size(dist.group.WORLD)
     input = torch.randn(3, 4, 16, model_dim).to(device)
