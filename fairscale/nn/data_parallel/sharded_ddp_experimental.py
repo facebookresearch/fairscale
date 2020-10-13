@@ -60,6 +60,7 @@ class ModelShard(nn.Module):
         if not self.is_owner:
             # Record all the shapes
             self.param_shapes = [p.shape for p in self.model_shard.parameters()]
+            self.param_devices = [p.device for p in self.model_shard.parameters()]
 
             # Drop all the parameters
             # FIXME: Would it be better to just change device ?
@@ -74,17 +75,13 @@ class ModelShard(nn.Module):
         return (self.model_shard(*inputs),) if isinstance(inputs, tuple) else self.model_shard(inputs)
 
     def forward_load(self, blocking: bool = True) -> Optional[List[Any]]:
-        # Resize all the parameter buffers
+        # Restore all the parameter buffers
         if not self.is_owner:
-            for p, shape in zip(self.model_shard.parameters(), self.param_shapes):
+            for p, shape, device in zip(self.model_shard.parameters(), self.param_shapes, self.param_devices):
                 if p.numel() == 0:
-                    p.set_(torch.zeros(shape, dtype=p.dtype, device=p.device))
+                    p.set_(torch.zeros(shape, dtype=p.dtype, device=device))
 
         # Fetch or broadcast the latest parameters
-        return self.backward_load(blocking=blocking)
-
-    def backward_load(self, blocking: bool = True) -> Optional[List[Any]]:
-        # Update all the parameters
         requests = list(
             map(
                 lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
@@ -94,12 +91,21 @@ class ModelShard(nn.Module):
 
         return requests if not blocking else self.sync(requests)
 
+    def backward_load(self, blocking: bool = True) -> Optional[List[Any]]:
+        # Restore all the parameter buffers
+        requests = []
+        if not self.is_owner:
+            for p, device in zip(self.model_shard.parameters(), self.param_devices):
+                requests.append(p.to(device, non_blocking=not blocking))
+
+        return requests
+
     def forward_drop(self) -> None:
         if not self.is_owner:
             with torch.no_grad():
                 for p in self.model_shard.parameters():
                     p.grad = None
-                    # p.set_(torch.zeros([0], device=p.device, dtype=p.dtype))
+                    p.cpu()
 
     def backward_drop(self) -> None:
         if not self.is_owner:
@@ -248,8 +254,6 @@ class ShardedDataParallelExperimental(nn.Module):
                 self.optimizer = optimizer(nn.Sequential(*module_shard).parameters(), **optimizer_params)
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
-        syncRanks = ShardSyncLayer.apply
-
         # All inputs need to required_grad to properly track the first sync layer
         if isinstance(inputs, tuple):
             for i in inputs:
@@ -257,6 +261,8 @@ class ShardedDataParallelExperimental(nn.Module):
         elif isinstance(inputs, torch.Tensor):
             inputs.requires_grad = True
 
+        # Slice per slice FW, sync in between
+        syncRanks = ShardSyncLayer.apply
         for i, (prev, next) in enumerate(zip([None, *self.model_slices], [*self.model_slices, None])):
             # Per shard FW
             inputs = prev(*inputs) if prev else inputs

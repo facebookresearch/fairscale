@@ -103,7 +103,6 @@ def train(
             world_size=world_size,
             broadcast_buffers=True,
         )
-        ddp.train()
         optimizer = ddp.optimizer
         model = ddp
 
@@ -135,7 +134,6 @@ def train(
         ddp_exp = ShardedDataParallelExperimental(
             module=model_seq, optimizer=OPTIM, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size,
         )
-        ddp_exp.train()
         optimizer = ddp_exp.optimizer
         model = ddp_exp
 
