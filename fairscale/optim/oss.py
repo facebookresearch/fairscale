@@ -340,7 +340,7 @@ class OSS(Optimizer):
     def _sync_param_groups(self, local_to_global: bool = False) -> None:
         """Sync learning rate and other optimizer attributes (needed to support schedulers).
         If the global param groups have been altered, and we want to make sure that the
-        wrapped optimizer usees the up to date version.
+        wrapped optimizer uses the up to date version.
         Conversely if the wrapped optimizer has new keys, we expose them through the global param groups"""
 
         for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
