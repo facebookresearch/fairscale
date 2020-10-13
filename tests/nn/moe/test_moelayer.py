@@ -15,6 +15,11 @@ skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 
+if torch.cuda.is_available():
+    devices = ["cpu", "cuda"]
+else:
+    devices = ["cpu"]
+
 
 def setup_module(module):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -25,7 +30,7 @@ def setup_module(module):
         dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", devices)
 def test_create(device):
     model_dim = 8
     num_experts = 4
