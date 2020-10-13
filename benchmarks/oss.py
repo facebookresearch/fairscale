@@ -38,7 +38,7 @@ def dist_init(rank, world_size, backend):
 
 def get_problem(rank, data_size, batch_size):
     # Standard RN101
-    model = resnet101(pretrained=False).to(rank)
+    model = resnet101(pretrained=False)
 
     # Data setup, dummy data
     def collate(inputs: List[Any]):
@@ -85,6 +85,7 @@ def train(
     torch.cuda.manual_seed(0)
     torch.manual_seed(0)  # also sets the cuda seed
     np.random.seed(0)
+    torch.cuda.device(rank)
 
     if backend == "nccl":
         torch.backends.cudnn.deterministic = True
@@ -107,7 +108,7 @@ def train(
         model = ddp
 
     if optim_type == OptimType.oss or optim_type == OptimType.pytorch:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
+        model = DDP(model, device_ids=[rank], find_unused_parameters=True).cuda()  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
             if optim_type == OptimType.oss
@@ -132,7 +133,12 @@ def train(
         )
 
         ddp_exp = ShardedDataParallelExperimental(
-            module=model_seq, optimizer=OPTIM, optimizer_params={"lr": 1e-4, "momentum": 0.9}, world_size=world_size,
+            model_cpu=model_seq,
+            optimizer=OPTIM,
+            optimizer_params={"lr": 1e-4, "momentum": 0.9},
+            world_size=world_size,
+            device=torch.device(torch.cuda.current_device()),
+            storage_device=torch.device("cpu"),
         )
         optimizer = ddp_exp.optimizer
         model = ddp_exp
