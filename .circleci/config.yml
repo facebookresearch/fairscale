@@ -38,16 +38,11 @@ setup_venv: &setup_venv
         which pip
         pip install --upgrade pip
 
-install_mpi: &install_mpi
-  - run:
-      name: Install mpi
-      command: |
-        sudo apt-get install -y mpi
-
 install_dep_15: &install_dep_15
   - run:
       name: Install Dependencies
       command: |
+        sudo apt-get install -y mpi-default-dev
         pip install --progress-bar off torch==1.5.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -57,6 +52,7 @@ install_dep_16: &install_dep_16
   - run:
       name: Install Dependencies
       command: |
+        sudo apt-get install -y mpi-default-dev
         pip install --progress-bar off torch==1.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -139,8 +135,6 @@ jobs:
       - restore_cache:
           keys:
             - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-
-      - <<: *install_mpi
 
       - <<: *install_dep_16
 
