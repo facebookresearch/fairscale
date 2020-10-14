@@ -196,6 +196,9 @@ class OSS(Optimizer):
             ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
                 self._broadcast_params(self._broadcast_buffers[device], device_params)
 
+        # Sync hypothethical new results from the wrapped optimizer to the exposed param_groups
+        self._sync_param_groups(local_to_global=True)
+
         return loss
 
     def local_state_dict(self) -> dict:
@@ -334,12 +337,18 @@ class OSS(Optimizer):
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
 
-    def _sync_param_groups(self) -> None:
-        """Sync learning rate and other optimizer attributes (needed to support schedulers)."""
+    def _sync_param_groups(self, local_to_global: bool = False) -> None:
+        """Sync learning rate and other optimizer attributes (needed to support schedulers).
+        If the global param groups have been altered, and we want to make sure that the
+        wrapped optimizer uses the up to date version.
+        Conversely if the wrapped optimizer has new keys, we expose them through the global param groups"""
+
         for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
-            for k in local_group.keys():
-                if k != "params":
-                    # Params have been sharded and should not be synced here
+            # Sync everything but the parameters
+            for k in filter(lambda x: x != "params", local_group.keys()):
+                if local_to_global:
+                    global_group[k] = local_group[k]
+                elif k in global_group.keys():
                     local_group[k] = global_group[k]
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:

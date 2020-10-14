@@ -324,7 +324,7 @@ if __name__ == "__main__":
                 backend,
                 OptimType.oss_experimental,
                 args.profile,
-                False,  # FIXME: @lefaudeux - SDP should give the same results
+                False,  # FIXME: @lefaudeux - this should give the same results
                 -1,  # Not checking SDP for speed regression for now, still slower than OSS
                 args.reference_memory,
                 args.reference_loss,

@@ -3,10 +3,11 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 from torch import Tensor
+import torch.distributed as dist
 from torch.nn import Module
 
 if TYPE_CHECKING:
@@ -24,7 +25,8 @@ class MOELayer(Base):
 
         gate = Top2Gate(model_dim, num_experts)
         moe = MOELayer(gate, expert)
-        l_aux, combine_weights, dispatch_mask = moe(input)
+        output = moe(input)
+        l_aux = moe.l_aux
 
     .. Gshard_: https://arxiv.org/pdf/2006.16668.pdf
 
@@ -35,24 +37,31 @@ class MOELayer(Base):
             expert network
     """
 
-    def __init__(self, gate: Module, expert: Module) -> None:
+    def __init__(self, gate: Module, expert: Module, group: Optional[Any] = None) -> None:
         super().__init__()
         self.gate = gate
         self.expert = expert
+        self.group = group if group is not None else dist.group.WORLD
+        self.world_size = dist.get_world_size(self.group)
 
     def all_to_all_dispatch(self, dispatch_mask: Tensor, input: Tensor) -> Tensor:
         dispatched_input = torch.einsum("gsec,gsm->egcm", dispatch_mask.float(), input)
-        # TODO(msb) all-to-all
-        dispatched_input = torch.squeeze(dispatched_input, 0)  # drop E dimension
+        dispatched_input = dispatched_input.contiguous()
+        chunks = list(dispatched_input.chunk(self.world_size))
+        dist.all_to_all(chunks, chunks, self.group)
         return dispatched_input
 
     def all_to_all_combine(self, combine_weights: Tensor, input: Tensor) -> Tensor:
-        # TODO(msb) all-to-all
-        expert_output = torch.unsqueeze(input, 1)  # add E dimension
-        output = torch.einsum("gsec,gecm->gsm", combine_weights, expert_output)
+        expert_output = input.contiguous()
+        chunks = list(expert_output.chunk(self.world_size))
+        dist.all_to_all(chunks, chunks, self.group)
+        output = torch.einsum("gsec,egcm->gsm", combine_weights, expert_output)
         return output
 
-    def forward(self, *input: Any, **kwargs: Any) -> Tensor:
+    def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
+        assert len(input) == 1, "only single input Tensor supported"
+        assert len(input[0].shape) == 4, "input Tensor must have dimensions: (g)roup, (s)equence, (t)oken, (m)odel"
+
         # Implement Algorithm 2 from GShard paper.
         shape = input[0].shape
         # Reshape into S tokens per group.
