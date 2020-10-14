@@ -123,6 +123,21 @@ def test_step_with_kwargs():
     assert x == torch.tensor([0.9], device=DEVICE)
 
 
+def test_step_with_extra_inner_key():
+    class SGDWithNewKey(torch.optim.SGD):
+        # Dummy optimizer which adds a new key to the param groups
+        def step(self, closure=None):
+            super().step()
+            self.param_groups[0]["new_key"] = 0.1
+
+    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+    o = optim.OSS([x], SGDWithNewKey, lr=0.1)
+    x.backward()
+    o.step()
+    assert o.param_groups[0]["new_key"] == 0.1
+    assert x == torch.tensor([0.9], device=DEVICE)
+
+
 def test_step_without_closure():
     class SGDWithoutClosure(torch.optim.SGD):
         def step(self):
