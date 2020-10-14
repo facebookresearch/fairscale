@@ -99,6 +99,7 @@ def train(
     optimizer: Optional[torch.optim.Optimizer] = None
 
     if optim_type == OptimType.oss_sdp:
+        model.cuda()
         ddp = ShardedDataParallel(
             module=model,
             optimizer=OPTIM,
