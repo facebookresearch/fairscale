@@ -111,7 +111,8 @@ def train(
         model = ddp
 
     if optim_type == OptimType.oss or optim_type == OptimType.pytorch:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=True).cuda()  # type: ignore
+        model.cuda()
+        model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
             if optim_type == OptimType.oss
