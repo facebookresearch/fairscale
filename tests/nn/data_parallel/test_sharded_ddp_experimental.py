@@ -37,13 +37,14 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     if device == torch.device("cuda"):
         torch.cuda.set_device(rank)
 
-    model = Sequential(Linear(2, 3), Linear(3, 4)).to(device)
+    model = Sequential(Linear(2, 3), Linear(3, 4))
 
     ddp = ShardedDataParallelExperimental(
-        module=model,
+        model_cpu=model,
         optimizer=torch.optim.SGD,
         optimizer_params={"lr": 0.1, "momentum": 0.99},
         world_size=world_size,
+        device=device,
         process_group=pg,
     )
     optimizer = ddp.optimizer
