@@ -142,6 +142,7 @@ def train(
             optimizer_params={"lr": 1e-4, "momentum": 0.9},
             world_size=world_size,
             device=torch.device(torch.cuda.current_device()),
+            offload_device=torch.device(torch.cuda.current_device()),
         )
         optimizer = ddp_exp.optimizer
         model = ddp_exp
@@ -168,12 +169,7 @@ def train(
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                loss /= world_size
                 loss.backward()
-
-                if optim_type == OptimType.oss_sdp:
-                    ddp.reduce()  # Send the gradients to the appropriate shards
-
                 return loss
 
             if need_profiling:

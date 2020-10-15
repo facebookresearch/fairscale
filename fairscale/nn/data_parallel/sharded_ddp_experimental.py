@@ -54,6 +54,7 @@ class ModelShard(nn.Module):
         owner_rank: int,
         process_group: Any,
         device: torch.device,
+        offload_device: torch.device,
         broadcast_bufers: bool = True,
     ):
         super().__init__()
@@ -70,6 +71,8 @@ class ModelShard(nn.Module):
 
         # Save all the parameter sizes to be able to restore them
         self.device = device
+        self.offload_device = offload_device
+        self.model_shard.to(offload_device)
 
         if not self.is_owner:
             # Record all the shapes
@@ -95,18 +98,20 @@ class ModelShard(nn.Module):
 
         return requests if non_blocking else self.sync(requests)
 
-    def backward_load(self, non_blocking: bool = True) -> Optional[List[Any]]:
-        # Restore all the parameter buffers
-        requests = []
-        for p in self.model_shard.parameters():
-            requests.append(p.to(device=self.device, non_blocking=non_blocking))
+    def backward_load(self, non_blocking: bool = True) -> None:
+        # # Restore all the parameter buffers
+        # requests = []
+        # for p in self.model_shard.parameters():
+        #     requests.append(p.to(device=self.device, non_blocking=non_blocking))
 
-        return requests if non_blocking else self.sync(requests)
+        # return requests if non_blocking else self.sync(requests)
+        self.model_shard.to(self.device)
 
     def forward_drop(self) -> None:
         for p in self.model_shard.parameters():
             p.grad = None
-            # TODO: Offload parameters somehow, could be cpu space or something else
+
+            self.model_shard.to(self.offload_device)
 
     def backward_drop(self) -> None:
         if not self.is_owner:
@@ -114,7 +119,7 @@ class ModelShard(nn.Module):
             for p in self.model_shard.parameters():
                 p.grad = None
 
-            self.model_shard.cpu()
+            self.model_shard.to(self.offload_device)
 
     def reduce_grads(self, non_blocking: bool = True) -> Optional[List[Any]]:
         requests = []
@@ -122,7 +127,7 @@ class ModelShard(nn.Module):
         for p in self.parameters():
             if p.grad is not None:
                 p.grad /= self.world_size
-                requests.append(dist.reduce(p.grad, dst=self.owner_rank, group=self.process_group, async_op=True))  # type: ignore
+                requests.append(dist.reduce(p.grad.data, dst=self.owner_rank, group=self.process_group, async_op=True))  # type: ignore
 
         return requests if non_blocking else self.sync(requests)
 
@@ -146,7 +151,7 @@ class ModelShard(nn.Module):
         """
         requests = list(
             map(
-                lambda x: dist.broadcast(x, self.owner_rank, self.process_group, async_op=True),
+                lambda x: dist.broadcast(x.data, self.owner_rank, self.process_group, async_op=True),
                 self.model_shard.parameters(),
             ),
         )
@@ -184,7 +189,7 @@ class ShardSyncLayer(torch.autograd.Function):
             prev_shard.forward_drop()
 
         if next_shard:
-            next_shard.forward_load(non_blocking=True)
+            next_shard.forward_load(non_blocking=False)
 
         ctx.prev_shard = prev_shard
         ctx.next_shard = next_shard
@@ -199,7 +204,7 @@ class ShardSyncLayer(torch.autograd.Function):
             ctx.next_shard.backward_drop()
 
         if ctx.prev_shard is not None:
-            ctx.prev_shard.backward_load(non_blocking=True)
+            ctx.prev_shard.backward_load(non_blocking=False)
 
         # The returned variables need to mirror the forward inputs
         if isinstance(grad_outputs, tuple):
@@ -223,7 +228,7 @@ class ShardedDataParallelExperimental(nn.Module):
         optimizer_params(Dict): extra parameters for the optimizer
         world_size (int): number of parallel workers
         device (torch.device): device where the active model should reside
-        storage_device (torch.device): device when the inactive model should reside
+        offload_device (torch.device): device when the inactive model should reside
         process_group (optional): the c10d process group to be used for
             distributed gradient reduction. If None, the default WORLD process group
             will be used.
@@ -237,6 +242,7 @@ class ShardedDataParallelExperimental(nn.Module):
         optimizer_params: Dict[str, Any],
         world_size: int,
         device: torch.device,
+        offload_device: torch.device = torch.device("cpu"),
         process_group: Any = None,
         broadcast_buffers: bool = True,
     ):
@@ -248,6 +254,7 @@ class ShardedDataParallelExperimental(nn.Module):
         self.global_rank = self.get_global_rank(self.process_group, self.rank)
         self.backend = dist.get_backend(group=self.process_group)  # type: ignore
         self.device = device
+        self.offload_device = device
 
         # Slice the model
         splits = _split(model_cpu, self.world_size)
@@ -265,6 +272,7 @@ class ShardedDataParallelExperimental(nn.Module):
                     owner_rank=global_owner_rank,
                     process_group=self.process_group,
                     device=device,
+                    offload_device=offload_device,
                     broadcast_bufers=broadcast_buffers,
                 )
             )
