@@ -60,6 +60,8 @@ class MOELayer(Base):
         self.gate = gate
         self.expert = expert
         self.group = group if group is not None else dist.group.WORLD
+        for p in expert.parameters():
+            p.expert = True  # type: ignore
 
     def all_to_all_dispatch(self, dispatch_mask: Tensor, input: Tensor) -> Tensor:
         dispatched_input = torch.einsum("gsec,gsm->egcm", dispatch_mask.float(), input)
