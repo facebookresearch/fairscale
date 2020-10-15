@@ -292,27 +292,6 @@ if __name__ == "__main__":
             join=True,
         )
 
-    if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS with SDP")
-        mp.spawn(
-            train,
-            args=(
-                args.world_size,
-                args.epochs,
-                args.batch_size,
-                args.data_size,
-                backend,
-                OptimType.oss_sdp,
-                args.profile,
-                False,  # FIXME: @lefaudeux - SDP should give the same results
-                -1,  # Not checking SDP for speed regression for now, still slower than OSS
-                args.reference_memory,
-                args.reference_loss,
-            ),
-            nprocs=args.world_size,
-            join=True,
-        )
-
     if args.optim_type == OptimType.oss_experimental or args.optim_type == OptimType.everyone:
         print("\nBenchmark OSS experimental")
         mp.spawn(
@@ -326,6 +305,27 @@ if __name__ == "__main__":
                 OptimType.oss_experimental,
                 args.profile,
                 False,  # FIXME: @lefaudeux - this should give the same results
+                -1,  # Not checking SDP for speed regression for now, still slower than OSS
+                args.reference_memory,
+                args.reference_loss,
+            ),
+            nprocs=args.world_size,
+            join=True,
+        )
+
+    if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
+        print("\nBenchmark OSS with SDP")
+        mp.spawn(
+            train,
+            args=(
+                args.world_size,
+                args.epochs,
+                args.batch_size,
+                args.data_size,
+                backend,
+                OptimType.oss_sdp,
+                args.profile,
+                False,  # FIXME: @lefaudeux - SDP should give the same results
                 -1,  # Not checking SDP for speed regression for now, still slower than OSS
                 args.reference_memory,
                 args.reference_loss,

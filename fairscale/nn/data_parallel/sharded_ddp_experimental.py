@@ -75,10 +75,6 @@ class ModelShard(nn.Module):
             # Record all the shapes
             self.param_shapes = [p.shape for p in self.model_shard.parameters()]
 
-        # Sync the model with all the ranks
-        self.sync_parameters()
-        self.sync_buffers()
-
     def forward(self, *inputs):  # type: ignore
         if self.broadcast_buffers and len(list(self.model_shard.buffers())) > 0:
             self.sync_buffers(non_blocking=False)
@@ -251,6 +247,7 @@ class ShardedDataParallelExperimental(nn.Module):
         self.rank = dist.get_rank(self.process_group)
         self.global_rank = self.get_global_rank(self.process_group, self.rank)
         self.backend = dist.get_backend(group=self.process_group)  # type: ignore
+        self.device = device
 
         # Slice the model
         splits = _split(model_cpu, self.world_size)
@@ -278,6 +275,7 @@ class ShardedDataParallelExperimental(nn.Module):
 
         # Expose a unified view of the slices
         self.model = torch.nn.Sequential(*self.model_slices)
+        self.sync_ranks()
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         # All inputs need to required_grad to properly track the first sync layer
@@ -308,5 +306,12 @@ class ShardedDataParallelExperimental(nn.Module):
 
     def sync_ranks(self, non_blocking: bool = False) -> None:
         for model_slice in self.model_slices:
-            model_slice.sync_parameters(non_blocking=non_blocking)  # type: ignore
-            model_slice.sync_buffers(non_blocking=non_blocking)  # type: ignore
+            if self.backend != "nccl":
+                model_slice.sync_parameters(non_blocking=non_blocking)  # type: ignore
+                model_slice.sync_buffers(non_blocking=non_blocking)  # type: ignore
+            else:
+                # NCCL requires the tensors to be on GPU for broadcast
+                model_slice.to(self.device)
+                model_slice.sync_parameters(non_blocking=False)  # type: ignore
+                model_slice.sync_buffers(non_blocking=False)  # type: ignore
+                model_slice.to("cpu")
