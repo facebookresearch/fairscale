@@ -22,6 +22,10 @@ def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
     # Naive sharding for now, slice by the number of layers
     # This is probably suboptimal if the complexity or size of the layers vary by a lot
     # A better take would be to compute the flops per block, and distribute them accordingly
+
+    # TODO: Weight by flops
+    # TODO: Automate the model unroll, even if not nn.Sequential, traverse the graph and extract a sequential structure
+
     splits: List[List[nn.Module]] = [[] for _ in range(number_shards)]
     i = 0
     n = len(modules) // number_shards
@@ -56,6 +60,7 @@ class ModelShard(nn.Module):
         self.owner_rank = owner_rank
         self.process_group = process_group
         self.model_shard = cpu_model_shard
+
         self.rank = ShardedDataParallelExperimental.get_global_rank(
             self.process_group, dist.get_rank(self.process_group)
         )
@@ -69,6 +74,10 @@ class ModelShard(nn.Module):
         if not self.is_owner:
             # Record all the shapes
             self.param_shapes = [p.shape for p in self.model_shard.parameters()]
+
+        # Sync the model with all the ranks
+        self.sync_parameters()
+        self.sync_buffers()
 
     def forward(self, *inputs):  # type: ignore
         if self.broadcast_buffers and len(list(self.model_shard.buffers())) > 0:
@@ -101,7 +110,7 @@ class ModelShard(nn.Module):
     def forward_drop(self) -> None:
         for p in self.model_shard.parameters():
             p.grad = None
-            p.cpu()
+            # TODO: Offload parameters somehow, could be cpu space or something else
 
     def backward_drop(self) -> None:
         if not self.is_owner:
@@ -130,6 +139,19 @@ class ModelShard(nn.Module):
             map(
                 lambda x: dist.broadcast(x, self.owner_rank, self.process_group, async_op=True),
                 self.model_shard.buffers(),
+            ),
+        )
+        return requests if non_blocking else self.sync(requests)
+
+    def sync_parameters(self, non_blocking: bool = True) -> Optional[List[Any]]:
+        """
+        Sync all the parameters in between ranks.
+        TODO: Could be worth bucketing ?
+        """
+        requests = list(
+            map(
+                lambda x: dist.broadcast(x, self.owner_rank, self.process_group, async_op=True),
+                self.model_shard.parameters(),
             ),
         )
         return requests if non_blocking else self.sync(requests)
@@ -219,7 +241,6 @@ class ShardedDataParallelExperimental(nn.Module):
         optimizer_params: Dict[str, Any],
         world_size: int,
         device: torch.device,
-        storage_device: torch.device = torch.device("cpu"),
         process_group: Any = None,
         broadcast_buffers: bool = True,
     ):
@@ -255,6 +276,9 @@ class ShardedDataParallelExperimental(nn.Module):
             if i_slice == self.rank:
                 self.optimizer = optimizer(nn.Sequential(*module_shard).parameters(), **optimizer_params)
 
+        # Expose a unified view of the slices
+        self.model = torch.nn.Sequential(*self.model_slices)
+
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         # All inputs need to required_grad to properly track the first sync layer
         if isinstance(inputs, tuple):
@@ -281,3 +305,8 @@ class ShardedDataParallelExperimental(nn.Module):
         else:
             global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
         return global_rank
+
+    def sync_ranks(self, non_blocking: bool = False) -> None:
+        for model_slice in self.model_slices:
+            model_slice.sync_parameters(non_blocking=non_blocking)  # type: ignore
+            model_slice.sync_buffers(non_blocking=non_blocking)  # type: ignore
