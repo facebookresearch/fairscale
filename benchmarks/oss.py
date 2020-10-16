@@ -19,8 +19,8 @@ from torchvision.datasets import FakeData
 from torchvision.models import resnet101
 from torchvision.transforms import ToTensor
 
-from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim.oss import OSS
+from fairscale.optim.oss_reduce_wrap import GradReducerModelWrap
 
 OPTIM = torch.optim.RMSprop
 
@@ -53,7 +53,7 @@ def get_problem(rank, data_size, batch_size):
 class OptimType(str, Enum):
     vanilla = "pytorch"
     oss = "oss"
-    oss_sdp = "oss_sdp"
+    oss_reduce_wrap = "oss_reduce_wrap"
     everyone = "everyone"
 
 
@@ -89,17 +89,9 @@ def train(
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
 
-    if optim_type == OptimType.oss_sdp:
-        ddp = ShardedDataParallel(
-            module=model,
-            optimizer=OPTIM,
-            optimizer_params={"lr": 1e-4, "momentum": 0.9},
-            world_size=world_size,
-            broadcast_buffers=True,
-        )
-        ddp.train()
-        optimizer = ddp.optimizer
-        model = ddp
+    if optim_type == OptimType.oss_reduce_wrap:
+        optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
+        model = GradReducerModelWrap(model, optimizer, world_size)
     else:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
         optimizer = (
@@ -129,12 +121,7 @@ def train(
                 model.zero_grad()
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
-                loss /= world_size
                 loss.backward()
-
-                if optim_type == OptimType.oss_sdp:
-                    ddp.reduce()  # Send the gradients to the appropriate shards
-
                 return loss
 
             if need_profiling:
@@ -244,17 +231,14 @@ if __name__ == "__main__":
                 backend,
                 OptimType.oss,
                 args.profile,
-                args.check_regression,
-                args.reference_speed,
-                args.reference_memory,
-                args.reference_loss,
+                False,  # no regression check
             ),
             nprocs=args.world_size,
             join=True,
         )
 
-    if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS with SDP")
+    if args.optim_type == OptimType.oss_reduce_wrap or args.optim_type == OptimType.everyone:
+        print("\nBenchmark OSS with GradReduce")
         mp.spawn(
             train,
             args=(
@@ -263,12 +247,9 @@ if __name__ == "__main__":
                 args.batch_size,
                 args.data_size,
                 backend,
-                OptimType.oss_sdp,
+                OptimType.oss_reduce_wrap,
                 args.profile,
                 False,  # FIXME: @lefaudeux - SDP should give the same results
-                -1,  # Not checking SDP for speed regression for now, still slower than OSS
-                args.reference_memory,
-                args.reference_loss,
             ),
             nprocs=args.world_size,
             join=True,
