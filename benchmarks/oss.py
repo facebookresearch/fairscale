@@ -19,8 +19,8 @@ from torchvision.datasets import FakeData
 from torchvision.models import resnet101
 from torchvision.transforms import ToTensor
 
-from fairscale.optim.oss import OSS
-from fairscale.optim.oss_reduce_wrap import GradReducerModelWrap
+from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
+from fairscale.optim import OSS
 
 OPTIM = torch.optim.RMSprop
 
@@ -52,8 +52,8 @@ def get_problem(rank, data_size, batch_size):
 
 class OptimType(str, Enum):
     vanilla = "pytorch"
-    oss = "oss"
-    oss_reduce_wrap = "oss_reduce_wrap"
+    oss_ddp = "oss_ddp"
+    oss_sharded_ddp = "oss_sharded_ddp"
     everyone = "everyone"
 
 
@@ -89,14 +89,14 @@ def train(
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
 
-    if optim_type == OptimType.oss_reduce_wrap:
+    if optim_type == OptimType.oss_sharded_ddp:
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
-        model = GradReducerModelWrap(model, optimizer, world_size)
+        model = ShardedDDP(model, optimizer, world_size)
     else:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
-            if optim_type == OptimType.oss
+            if optim_type == OptimType.oss_ddp
             else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
         )
 
@@ -141,7 +141,7 @@ def train(
 
         epoch_end = time.monotonic()
 
-        if optim_type == OptimType.oss:
+        if optim_type == OptimType.oss_ddp or optim_type == OptimType.oss_sharded_ddp:
             # Check the checkpointing in the case of the OSS optimizer
             # Memory usage could spill over from there
             optimizer = cast(OSS, optimizer)
@@ -219,7 +219,7 @@ if __name__ == "__main__":
             join=True,
         )
 
-    if args.optim_type == OptimType.oss or args.optim_type == OptimType.everyone:
+    if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
         print("\nBenchmark OSS with DDP")
         mp.spawn(
             train,
@@ -229,7 +229,7 @@ if __name__ == "__main__":
                 args.batch_size,
                 args.data_size,
                 backend,
-                OptimType.oss,
+                OptimType.oss_ddp,
                 args.profile,
                 args.check_regression,
                 args.reference_speed,
@@ -240,8 +240,8 @@ if __name__ == "__main__":
             join=True,
         )
 
-    if args.optim_type == OptimType.oss_reduce_wrap or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS with AutoGradReduce")
+    if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
+        print("\nBenchmark OSS with ShardedDDP")
         mp.spawn(
             train,
             args=(
@@ -250,7 +250,7 @@ if __name__ == "__main__":
                 args.batch_size,
                 args.data_size,
                 backend,
-                OptimType.oss_reduce_wrap,
+                OptimType.oss_sharded_ddp,
                 args.profile,
                 args.check_regression,
                 args.reference_speed,
