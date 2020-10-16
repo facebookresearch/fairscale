@@ -306,7 +306,7 @@ class ShardedDataParallel(nn.Module):
             inputs.requires_grad = True
 
         # Register the model dispatch in the autograd graph
-        # inputs = DispatchLayer.apply(self.model_dispatch, *inputs)
+        inputs = DispatchLayer.apply(self.model_dispatch, *inputs)
 
         # Normal model FW
         outputs = self.model_dispatch(*inputs)
