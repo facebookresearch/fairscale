@@ -45,6 +45,17 @@ def test_create(device):
     moe = MOELayer(gate, expert).to(device)
 
 
+@pytest.mark.parametrize("device", devices)
+def test_expert_params(device):
+    model_dim = 8
+    num_experts = 4
+    gate = Top2Gate(model_dim, num_experts)
+    expert = torch.nn.Linear(model_dim, model_dim)
+    moe = MOELayer(gate, expert).to(device)
+    for p in expert.parameters():
+        assert p.expert is True
+
+
 @pytest.mark.mpi
 @pytest.mark.parametrize("device", ["cpu"])
 def test_forward(device):
