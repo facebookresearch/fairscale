@@ -49,7 +49,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
         model.to(device)
 
         optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
-        ddp_model = ShardedDataParallel(model, optimizer, world_size, broadcast_buffers=broadcast_buffers)
+        ddp_model = ShardedDataParallel(model, optimizer, broadcast_buffers=broadcast_buffers)
 
         def check_same_model_params():
             # Check that all the params are the same on all ranks
@@ -64,15 +64,15 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
                             for sync_p in receptacle[1:]:
                                 assert torch.all(torch.eq(receptacle[0], sync_p)), "Models differ in between ranks"
 
-            # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
-            if broadcast_buffers:
-                for b in ddp_model.buffers():
-                    receptacle = [b.clone() for _ in range(world_size)] if rank == 0 else []
-                    dist.gather(b, receptacle, dst=0)
-                    if rank == 0:
-                        for sync_b in receptacle[1:]:
-                            assert torch.all(torch.eq(receptacle[0], sync_b)), "Models differ in between ranks"
-                    assert b.cpu().item() == 0.0
+                # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
+                if broadcast_buffers:
+                    for b in ddp_model.buffers():
+                        receptacle = [b.clone() for _ in range(world_size)] if rank == 0 else []
+                        dist.gather(b, receptacle, dst=0)
+                        if rank == 0:
+                            for sync_b in receptacle[1:]:
+                                assert torch.all(torch.eq(receptacle[0], sync_b)), "Models differ in between ranks"
+                        assert b.cpu().item() == 0.0
 
         # The model should be synchronized in between the ranks at ShardedDataParallel construction time, check that
         check_same_model_params()

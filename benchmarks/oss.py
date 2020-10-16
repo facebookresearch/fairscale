@@ -91,7 +91,7 @@ def train(
 
     if optim_type == OptimType.oss_sharded_ddp:
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
-        model = ShardedDDP(model, optimizer, world_size)
+        model = ShardedDDP(model, optimizer)
     else:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
         optimizer = (

@@ -272,20 +272,35 @@ class DispatchLayer(torch.autograd.Function):
 
 class ShardedDataParallel(nn.Module):
     """
-    Wrap the model, and make sure that the gradients will be reduced to the right rank.
+    Wrap the model, and reduce the gradients to the right rank after the backward pass.
 
     - the partition is given by the sharded optimizer
     - wrap the base model with a model which knows where to reduce each gradient
     - add an autograd function which calls the model grad dispatch on the way back
+
+     Args:
+        base_model (nn.Module):
+            model to be wrapped
+        sharded_optimizer (OSS):
+            the sharded optimizer which will decide the gradient partitioning
+    Keyword Args:
+        process_group (torch.nn.Optimizer):
+            optimizer to shard (default: SGD)
+        process_group (group):
+            torch.distributed group (default: group.WORLD)
+        broadcast_buffers (bool):
+            whether to broadcast model buffers in between ranks at the beginning of each forward pass
+        buffer_size (int):
+            the size of the buffer in bits used to batch the small parameter tensors (default 128k).
     """
 
     def __init__(
         self,
         base_model: nn.Module,
         sharded_optimizer: OSS,
-        world_size: int,
         process_group: Any = None,
         broadcast_buffers: bool = True,
+        buffer_size: int = 2 ** 17,
     ):
         super().__init__()
 
@@ -295,6 +310,7 @@ class ShardedDataParallel(nn.Module):
             process_group=process_group,
             broadcast_buffers=broadcast_buffers,
             reference_rank=0,
+            buffer_size=buffer_size,
         )
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
