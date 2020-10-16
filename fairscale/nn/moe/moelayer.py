@@ -3,7 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -17,6 +17,24 @@ else:
 
 # einsum dimensions: (g)roup, (s)equence, (e)xpert, (m)odel, (c)apacity
 # See https://arxiv.org/pdf/2006.16668.pdf for details.
+
+
+# Based on https://github.com/pytorch/pytorch/pull/40762
+class _AllToAll(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor) -> Tensor:  # type: ignore
+        ctx.group = group
+        world_size = dist.get_world_size(group)
+        input = input.contiguous()
+        output = torch.empty_like(input)
+        input_chunks = list(input.chunk(world_size))
+        output_chunks = list(output.chunk(world_size))
+        dist.all_to_all(output_chunks, input_chunks, group=group)
+        return output
+
+    @staticmethod
+    def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor]:
+        return (None, _AllToAll.apply(ctx.group, *grad_output))
 
 
 class MOELayer(Base):
@@ -42,21 +60,14 @@ class MOELayer(Base):
         self.gate = gate
         self.expert = expert
         self.group = group if group is not None else dist.group.WORLD
-        self.world_size = dist.get_world_size(self.group)
 
     def all_to_all_dispatch(self, dispatch_mask: Tensor, input: Tensor) -> Tensor:
         dispatched_input = torch.einsum("gsec,gsm->egcm", dispatch_mask.float(), input)
-        dispatched_input = dispatched_input.contiguous()
-        chunks = list(dispatched_input.chunk(self.world_size))
-        dist.all_to_all(chunks, chunks, self.group)
-        return dispatched_input
+        return _AllToAll.apply(self.group, dispatched_input)
 
     def all_to_all_combine(self, combine_weights: Tensor, input: Tensor) -> Tensor:
-        expert_output = input.contiguous()
-        chunks = list(expert_output.chunk(self.world_size))
-        dist.all_to_all(chunks, chunks, self.group)
-        output = torch.einsum("gsec,egcm->gsm", combine_weights, expert_output)
-        return output
+        expert_output = _AllToAll.apply(self.group, input)
+        return torch.einsum("gsec,egcm->gsm", combine_weights, expert_output)
 
     def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
         assert len(input) == 1, "only single input Tensor supported"
