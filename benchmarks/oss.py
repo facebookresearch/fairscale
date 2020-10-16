@@ -231,14 +231,17 @@ if __name__ == "__main__":
                 backend,
                 OptimType.oss,
                 args.profile,
-                False,  # no regression check
+                args.check_regression,
+                args.reference_speed,
+                args.reference_memory,
+                args.reference_loss,
             ),
             nprocs=args.world_size,
             join=True,
         )
 
     if args.optim_type == OptimType.oss_reduce_wrap or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS with GradReduce")
+        print("\nBenchmark OSS with AutoGradReduce")
         mp.spawn(
             train,
             args=(
@@ -249,7 +252,10 @@ if __name__ == "__main__":
                 backend,
                 OptimType.oss_reduce_wrap,
                 args.profile,
-                False,  # FIXME: @lefaudeux - SDP should give the same results
+                args.check_regression,
+                args.reference_speed,
+                args.reference_memory,
+                args.reference_loss,
             ),
             nprocs=args.world_size,
             join=True,

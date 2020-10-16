@@ -63,9 +63,13 @@ class ModelDispatch(nn.Module):
                 torch.zeros(buffer_size, dtype=buffer_dtype, device=device) for _ in range(len(per_device))
             ]
 
+        # Sync all the ranks
+        self.sync_buffers(non_blocking=False)
+        self.sync_parameters(non_blocking=False)
+
     def forward(self, *inputs):  # type: ignore
         if self.broadcast_buffers and len(list(self.base_model.buffers())) > 0:
-            self.sync_buffers(non_blocking=False)
+            self.sync_buffers(non_blocking=True)
 
         return (self.base_model(*inputs),) if isinstance(inputs, tuple) else self.base_model(inputs)
 
@@ -215,11 +219,13 @@ class DispatchLayer(torch.autograd.Function):
     def backward(ctx, *grad_outputs):  # type: ignore
         ctx.model.dispatch_grads()
 
+        # FIXME: @lefaudeux - return proper grad_outputs, sync'ed
+
         # The returned variables need to mirror the forward inputs
         if isinstance(grad_outputs, tuple):
-            return None, None, grad_outputs[0]
+            return None, grad_outputs[0]
 
-        return None, None, grad_outputs
+        return None, grad_outputs
 
 
 class GradReducerModelWrap(nn.Module):
@@ -228,12 +234,12 @@ class GradReducerModelWrap(nn.Module):
 
     - the partition is given by the sharded optimizer
     - wrap the base model with a model which knows where to reduce each gradient
-    - add an autograd function which calls this on the way back
+    - add an autograd function which calls the model grad dispatch on the way back
     """
 
     def __init__(
         self,
-        base_model: nn.Sequential,  # hard pre-requisite for now, easier model slicing
+        base_model: nn.Module,
         sharded_optimizer: OSS,
         world_size: int,
         process_group: Any = None,
@@ -241,11 +247,6 @@ class GradReducerModelWrap(nn.Module):
     ):
         super().__init__()
 
-        self.world_size = world_size
-        self.process_group = process_group if process_group is not None else torch.distributed.group.WORLD
-        self.rank = dist.get_rank(self.process_group)
-        self.global_rank = _get_global_rank(self.process_group, self.rank)
-        self.backend = dist.get_backend(group=self.process_group)  # type: ignore
         self.model_dispatch = ModelDispatch(
             base_model=base_model,
             sharded_optimizer=sharded_optimizer,
@@ -255,7 +256,7 @@ class GradReducerModelWrap(nn.Module):
         )
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
-        # All inputs need to required_grad to properly track the first sync layer
+        # All inputs need to required_grad for autograd to properly track the first dispatch layer
         if isinstance(inputs, tuple):
             for i in inputs:
                 i.requires_grad = True
@@ -263,8 +264,9 @@ class GradReducerModelWrap(nn.Module):
             inputs.requires_grad = True
 
         # Register the model dispatch in the autograd graph
-        DispatchLayer.apply(self.model_dispatch, *inputs)
+        inputs = DispatchLayer.apply(self.model_dispatch, *inputs)
 
         # Normal model FW
         outputs = self.model_dispatch(*inputs)
+
         return outputs[0] if len(outputs) == 1 else outputs
