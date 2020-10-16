@@ -93,7 +93,6 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
 
     check(broadcast_buffers=False)
     check(broadcast_buffers=True)
-    assert False
 
     dist.destroy_process_group()
 

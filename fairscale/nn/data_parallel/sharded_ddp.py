@@ -65,13 +65,12 @@ class ModelDispatch(nn.Module):
             ]
 
         # Sync all the ranks
-        self.sync_buffers(non_blocking=False)
-        self.sync_parameters(non_blocking=False)
+        self.sync_buffers()
+        self.sync_parameters()
 
     def forward(self, *inputs):  # type: ignore
         if self.broadcast_buffers and len(list(self.base_model.buffers())) > 0:
-            # All the subsequent calls are issued on the same CUDA stream, no need to block
-            self.sync_buffers(non_blocking=True)
+            self.sync_buffers()
 
         return (self.base_model(*inputs),) if isinstance(inputs, tuple) else self.base_model(inputs)
 
@@ -178,31 +177,57 @@ class ModelDispatch(nn.Module):
                 # This gradient has been reduced and this rank is not the owner, it can be released
                 param.grad = None
 
-    def sync_buffers(self, non_blocking: bool = True) -> Optional[List[Any]]:
+    def sync_buffers(self) -> None:
         """
         Sync all the param buffers in between ranks.
         TODO: Could be worth bucketing ?
         """
-        requests = list(
-            map(
-                lambda x: dist.broadcast(x, self.reference_global_rank, self.process_group, async_op=True),
-                self.base_model.buffers(),
-            ),
-        )
-        return requests if non_blocking else self.wait(requests)
 
-    def sync_parameters(self, non_blocking: bool = True) -> Optional[List[Any]]:
+        with torch.no_grad():
+            # Workaround Gloo which complains that this transformation is not differentiable
+            # - store the original requires_grad setting, and set the current one to False
+            requires_grad = [p.requires_grad for p in self.base_model.parameters()]
+            for p in self.base_model.parameters():
+                p.requires_grad = False
+
+            self.wait(
+                list(
+                    map(
+                        lambda x: dist.broadcast(x, self.reference_global_rank, self.process_group, async_op=True),
+                        self.base_model.buffers(),
+                    ),
+                )
+            )
+
+            for p, rg in zip(self.base_model.parameters(), requires_grad):
+                p.requires_grad = rg
+
+    def sync_parameters(self) -> None:
         """
         Sync all the parameters in between ranks.
         TODO: Could be worth bucketing ?
         """
-        requests = list(
-            map(
-                lambda x: dist.broadcast(x, self.reference_global_rank, self.process_group, async_op=True),
-                self.base_model.parameters(),
-            ),
-        )
-        return requests if non_blocking else self.wait(requests)
+
+        with torch.no_grad():
+            # Workaround Gloo which complains that this transformation is not differentiable
+            # - store the original requires_grad setting, and set the current one to False
+            requires_grad = [p.requires_grad for p in self.base_model.parameters()]
+            for p in self.base_model.parameters():
+                p.requires_grad = False
+
+            #  - sync the data
+            self.wait(
+                list(
+                    map(
+                        lambda x: dist.broadcast(x, self.reference_global_rank, self.process_group, async_op=True),
+                        self.base_model.parameters(),
+                    ),
+                )
+            )
+
+            # - restore the original flag
+            for p, rg in zip(self.base_model.parameters(), requires_grad):
+                p.requires_grad = rg
 
     @staticmethod
     def wait(requests: Optional[List[Any]]) -> None:
@@ -281,7 +306,7 @@ class ShardedDataParallel(nn.Module):
             inputs.requires_grad = True
 
         # Register the model dispatch in the autograd graph
-        inputs = DispatchLayer.apply(self.model_dispatch, *inputs)
+        # inputs = DispatchLayer.apply(self.model_dispatch, *inputs)
 
         # Normal model FW
         outputs = self.model_dispatch(*inputs)
