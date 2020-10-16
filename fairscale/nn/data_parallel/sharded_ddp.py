@@ -118,7 +118,7 @@ class ModelDispatch(nn.Module):
             for p in filter(lambda x: x.grad is None, params):
                 p.grad = torch.zeros_like(p)
 
-            global_rank = OSS.get_global_rank(group, dst_rank)
+            global_dst_rank = OSS.get_global_rank(group, dst_rank)
 
             # Copy small gradients into per-GPU buffers and then async reduce
             i_bucketed = 0  # the number of tensors packed in the buffer
@@ -140,7 +140,7 @@ class ModelDispatch(nn.Module):
                 buffer.div_(world_size)  # type: ignore
                 bucket_requests.append(
                     (
-                        dist.reduce(tensor=buffer, dst=global_rank, group=group, async_op=True),  # type: ignore
+                        dist.reduce(tensor=buffer, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
                         dst_rank,
                     )
                 )
@@ -152,7 +152,7 @@ class ModelDispatch(nn.Module):
                     raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
 
                 p.grad.div_(world_size)  # type: ignore
-                direct_requests.append((dist.reduce(tensor=p.grad, dst=global_rank, group=group, async_op=True), dst_rank, p))  # type: ignore
+                direct_requests.append((dist.reduce(tensor=p.grad, dst=global_dst_rank, group=group, async_op=True), dst_rank, p))  # type: ignore
 
         # Now unroll the initial packed small gradients, as soon as possible
         for work_handle, dst_rank in bucket_requests:
@@ -237,8 +237,6 @@ class DispatchLayer(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
         ctx.model.dispatch_grads()
-
-        # FIXME: @lefaudeux - return proper grad_outputs, sync'ed
 
         # The returned variables need to mirror the forward inputs
         if isinstance(grad_outputs, tuple):
