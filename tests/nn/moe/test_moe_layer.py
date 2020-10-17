@@ -45,6 +45,17 @@ def test_create(device):
     moe = MOELayer(gate, expert).to(device)
 
 
+@pytest.mark.parametrize("device", devices)
+def test_expert_params(device):
+    model_dim = 8
+    num_experts = 4
+    gate = Top2Gate(model_dim, num_experts)
+    expert = torch.nn.Linear(model_dim, model_dim)
+    moe = MOELayer(gate, expert).to(device)
+    for p in expert.parameters():
+        assert p.expert is True
+
+
 @pytest.mark.mpi
 @pytest.mark.parametrize("device", ["cpu"])
 def test_forward(device):
@@ -60,3 +71,22 @@ def test_forward(device):
     assert output.shape == input.shape
     # Re-assembled output should match input due to identity expert.
     assert torch.allclose(input, output)
+
+
+@pytest.mark.mpi
+@pytest.mark.parametrize("device", ["cpu"])
+def test_backward(device):
+    loss = torch.nn.MSELoss()
+    model_dim = 8
+    num_experts = dist.get_world_size(dist.group.WORLD)
+    input = torch.randn(3, 4, 16, model_dim).to(device)
+    gate = Top2Gate(model_dim, num_experts)
+    expert = torch.nn.Linear(model_dim, model_dim, bias=False)
+    # Use identity matrix
+    expert.weight = torch.nn.Parameter(torch.eye(model_dim))
+    moe = MOELayer(gate, expert).to(device)
+    output = moe(input)
+    assert output.shape == input.shape
+    output = loss(output, input)
+    output.backward()
+    assert torch.allclose(expert.weight.grad, torch.zeros_like(expert.weight))

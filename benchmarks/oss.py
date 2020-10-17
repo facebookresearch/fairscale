@@ -30,15 +30,15 @@ def dist_init(rank, world_size, backend):
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 
-def get_problem(rank, data_size, batch_size):
+def get_problem(rank, data_size, batch_size, device):
     # Standard RN101
-    model = resnet101(pretrained=False, progress=True).to(rank)
+    model = resnet101(pretrained=False, progress=True).to(device)
 
     # Data setup, dummy data
     def collate(inputs: List[Any]):
         return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(torch.device(rank)),
-            "label": torch.stack([i[1] for i in inputs]).to(torch.device(rank)),
+            "inputs": torch.stack([i[0] for i in inputs]).to(device),
+            "label": torch.stack([i[1] for i in inputs]).to(device),
         }
 
     dataloader = DataLoader(
@@ -59,24 +59,18 @@ class OptimType(str, Enum):
 
 def train(
     rank: int,
-    world_size: int,
-    num_epochs: int = 10,
-    batch_size: int = 32,
-    data_size: int = 200,
+    args: argparse.Namespace,
     backend: str = "gloo",
     optim_type: OptimType = OptimType.vanilla,
-    profile: bool = False,
     check_regression: bool = True,
-    reference_speed: float = -1.0,
-    reference_memory: float = -1.0,
-    reference_loss: float = -1.0,
 ):
     # DDP
-    dist_init(rank=rank, world_size=world_size, backend=backend)
+    dist_init(rank=rank, world_size=args.world_size, backend=backend)
 
     # Setup
-    torch.cuda.set_device(rank)
-    torch.cuda.manual_seed(0)
+    if not args.cpu:
+        torch.cuda.set_device(rank)
+        torch.cuda.manual_seed(0)
     torch.manual_seed(0)  # also sets the cuda seed
     np.random.seed(0)
 
@@ -84,7 +78,8 @@ def train(
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-    model, dataloader, loss_fn = get_problem(rank, data_size, batch_size)
+    device = torch.device("cpu") if args.cpu else torch.device(rank)
+    model, dataloader, loss_fn = get_problem(rank, args.data_size, args.batch_size, device)
 
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
@@ -101,18 +96,19 @@ def train(
         )
 
     # Reset the memory use counter
-    torch.cuda.reset_peak_memory_stats(rank)
+    if not args.cpu:
+        torch.cuda.reset_peak_memory_stats(rank)
+        torch.cuda.synchronize(rank)
 
     # Dummy training loop
-    torch.cuda.synchronize(rank)
     training_start = time.monotonic()
     model.train()
 
     measurements = []
     final_loss: Optional[float] = -1.0
-    need_profiling = profile
+    need_profiling = args.profile
 
-    for epoch in range(num_epochs):
+    for epoch in range(args.epochs):
         epoch_start = time.monotonic()
 
         for batch in dataloader:
@@ -124,7 +120,7 @@ def train(
                 loss.backward()
                 return loss
 
-            if need_profiling:
+            if need_profiling and not args.cpu:
                 print("Profiling the run")
                 with profiler.profile(use_cuda=True) as prof:  # type: ignore
                     with profiler.record_function("batch"):
@@ -150,28 +146,31 @@ def train(
                 _ = optimizer.state_dict()
                 print("... State dict collected")
 
-        measurements.append(data_size / (epoch_end - epoch_start))
+        measurements.append(args.data_size / (epoch_end - epoch_start))
         if dist.get_rank() == 0:
             print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss:.3f}")
 
-    torch.cuda.synchronize(rank)
+    max_memory = -1
+    if not args.cpu:
+        torch.cuda.synchronize(rank)
+        max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
+        print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
+
     training_stop = time.monotonic()
-    img_per_sec = data_size / (training_stop - training_start) * num_epochs
-    max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
+    img_per_sec = args.data_size / (training_stop - training_start) * args.epochs
 
     print(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec overall")
-    print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
 
     # Compute the mean and average img per second
     mean = sum(measurements) / len(measurements)
     diff = map(lambda x: pow(x - mean, 2.0), measurements)
-    std = math.sqrt(sum(diff) / (len(measurements) - 1))
+    std = math.sqrt(sum(diff) / (len(measurements) - 1)) if args.epochs > 2 else -1
     print(f"[{dist.get_rank()}] : Mean speed: {mean:.2f} +/- {std:.2f}")
 
     if check_regression and dist.get_rank() == 0:
-        assert (mean + 3.0 * std) > reference_speed, "Speed regression detected"
-        assert max_memory < 1.05 * reference_memory, "Memory use regression detected"
-        assert abs(cast(float, final_loss) - reference_loss) < 1e-3, "Loss regression detected"
+        assert (mean + 3.0 * std) > args.reference_speed, "Speed regression detected"
+        assert max_memory < 1.05 * args.reference_memory, "Memory use regression detected"
+        assert abs(cast(float, final_loss) - args.reference_loss) < 1e-3, "Loss regression detected"
 
         print("[Regression Test] VALID")
 
@@ -195,26 +194,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("--gloo", action="store_true", default=False)
     parser.add_argument("--profile", action="store_true", default=False)
+    parser.add_argument("--cpu", action="store_true", default=False)
 
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
 
-    backend = "nccl" if not args.gloo or not torch.cuda.is_available() else "gloo"
+    backend = "nccl" if (not args.gloo or not torch.cuda.is_available()) and not args.cpu else "gloo"
 
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         print("\nBenchmark vanilla optimizer")
         mp.spawn(
             train,
-            args=(
-                args.world_size,
-                args.epochs,
-                args.batch_size,
-                args.data_size,
-                backend,
-                OptimType.vanilla,
-                args.profile,
-                False,  # no regression check
-            ),
+            args=(args, backend, OptimType.vanilla, False,),  # no regression check
             nprocs=args.world_size,
             join=True,
         )
@@ -222,22 +213,7 @@ if __name__ == "__main__":
     if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
         print("\nBenchmark OSS with DDP")
         mp.spawn(
-            train,
-            args=(
-                args.world_size,
-                args.epochs,
-                args.batch_size,
-                args.data_size,
-                backend,
-                OptimType.oss_ddp,
-                args.profile,
-                args.check_regression,
-                args.reference_speed,
-                args.reference_memory,
-                args.reference_loss,
-            ),
-            nprocs=args.world_size,
-            join=True,
+            train, args=(args, backend, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,
         )
 
     if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
@@ -245,18 +221,11 @@ if __name__ == "__main__":
         mp.spawn(
             train,
             args=(
-                args.world_size,
-                args.epochs,
-                args.batch_size,
-                args.data_size,
+                args,
                 backend,
                 OptimType.oss_sharded_ddp,
-                args.profile,
-                args.check_regression,
-                args.reference_speed,
-                args.reference_memory,
-                args.reference_loss,
-            ),
+                False,
+            ),  # FIXME: @lefaudeux - SDP should give the same results
             nprocs=args.world_size,
             join=True,
         )
