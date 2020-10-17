@@ -7,9 +7,9 @@
 A module wrapper to go with a Sharded Optimizer in order to handle targeted gradient reduction/gathering automatically.
 """
 
-import logging
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, cast, Union
+import logging
+from typing import Any, Dict, List, Optional, Union, cast
 
 import torch
 from torch import Tensor, nn
@@ -47,10 +47,9 @@ class ModelDispatch(nn.Module):
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.base_model = base_model
 
-        if type(sharded_optimizer) is OSS:
-            sharded_optimizer = [sharded_optimizer]
-
-        self.sharded_optimizer = sharded_optimizer
+        self.sharded_optimizers = (
+            [cast(OSS, sharded_optimizer)] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
+        )
         self.rank = dist.get_rank(self.process_group)
         self.global_rank = _get_global_rank(self.process_group, dist.get_rank(self.process_group))
         self.reference_global_rank = _get_global_rank(self.process_group, reference_rank)
@@ -63,7 +62,7 @@ class ModelDispatch(nn.Module):
         self._reduce_buffers: Dict[OSS, Dict[torch.device, List[torch.Tensor]]] = defaultdict(dict)
 
         # - One buffer per rank per device for each optimizer
-        for sharded_optimizer in self.sharded_optimizer:
+        for sharded_optimizer in self.sharded_optimizers:
             for device, per_device in sharded_optimizer.per_device_params.items():
                 buffer_dtype = per_device[0][0].dtype
                 self._reduce_buffers[sharded_optimizer][device] = [
@@ -85,7 +84,7 @@ class ModelDispatch(nn.Module):
         Reduce -NOTE: could become gather- all the gradients to the appropriate ranks
         """
         with torch.no_grad():
-            for sharded_optimizer in self.sharded_optimizer:
+            for sharded_optimizer in self.sharded_optimizers:
                 for device, per_device in sharded_optimizer.per_device_params.items():
                     self._reduce_grads_task(
                         self._reduce_buffers[sharded_optimizer][device],
