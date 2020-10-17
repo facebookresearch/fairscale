@@ -8,7 +8,8 @@ A module wrapper to go with a Sharded Optimizer in order to handle targeted grad
 """
 
 import logging
-from typing import Any, Dict, List, Optional, cast
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, cast, Union
 
 import torch
 from torch import Tensor, nn
@@ -36,7 +37,7 @@ class ModelDispatch(nn.Module):
     def __init__(
         self,
         base_model: nn.Module,
-        sharded_optimizer: OSS,
+        sharded_optimizer: Union[OSS, List[OSS]],
         process_group: Any,
         broadcast_buffers: bool = True,
         reference_rank: int = 0,
@@ -45,6 +46,10 @@ class ModelDispatch(nn.Module):
         super().__init__()
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.base_model = base_model
+
+        if type(sharded_optimizer) is OSS:
+            sharded_optimizer = [sharded_optimizer]
+
         self.sharded_optimizer = sharded_optimizer
         self.rank = dist.get_rank(self.process_group)
         self.global_rank = _get_global_rank(self.process_group, dist.get_rank(self.process_group))
@@ -55,14 +60,15 @@ class ModelDispatch(nn.Module):
         # Allocate reduce buffers
         # - Never use a bigger buffer than the number of model params
         buffer_size = min(buffer_size, sum(p.numel() for p in self.base_model.parameters()))
-        self._reduce_buffers: Dict[torch.device, List[torch.Tensor]] = {}
+        self._reduce_buffers: Dict[OSS, Dict[torch.device, List[torch.Tensor]]] = defaultdict(dict)
 
-        # - One buffer per rank per device
-        for device, per_device in self.sharded_optimizer.per_device_params.items():
-            buffer_dtype = per_device[0][0].dtype
-            self._reduce_buffers[device] = [
-                torch.zeros(buffer_size, dtype=buffer_dtype, device=device) for _ in range(len(per_device))
-            ]
+        # - One buffer per rank per device for each optimizer
+        for sharded_optimizer in self.sharded_optimizer:
+            for device, per_device in sharded_optimizer.per_device_params.items():
+                buffer_dtype = per_device[0][0].dtype
+                self._reduce_buffers[sharded_optimizer][device] = [
+                    torch.zeros(buffer_size, dtype=buffer_dtype, device=device) for _ in range(len(per_device))
+                ]
 
         # Sync all the ranks
         self.sync_buffers()
@@ -79,14 +85,15 @@ class ModelDispatch(nn.Module):
         Reduce -NOTE: could become gather- all the gradients to the appropriate ranks
         """
         with torch.no_grad():
-            for device, per_device in self.sharded_optimizer.per_device_params.items():
-                self._reduce_grads_task(
-                    self._reduce_buffers[device],
-                    per_device,
-                    group=self.process_group,
-                    self_rank=self.rank,
-                    world_size=self.world_size,
-                )
+            for sharded_optimizer in self.sharded_optimizer:
+                for device, per_device in sharded_optimizer.per_device_params.items():
+                    self._reduce_grads_task(
+                        self._reduce_buffers[sharded_optimizer][device],
+                        per_device,
+                        group=self.process_group,
+                        self_rank=self.rank,
+                        world_size=self.world_size,
+                    )
 
     @staticmethod
     def _reduce_grads_task(
@@ -281,8 +288,8 @@ class ShardedDataParallel(nn.Module):
      Args:
         base_model (nn.Module):
             model to be wrapped
-        sharded_optimizer (OSS):
-            the sharded optimizer which will decide the gradient partitioning
+        sharded_optimizer (OSS, or list of OSS):
+            the sharded optimizer(s) which will decide the gradient partitioning
     Keyword Args:
         process_group (torch.nn.Optimizer):
             optimizer to shard (default: SGD)
@@ -297,7 +304,7 @@ class ShardedDataParallel(nn.Module):
     def __init__(
         self,
         base_model: nn.Module,
-        sharded_optimizer: OSS,
+        sharded_optimizer: Union[OSS, List[OSS]],
         process_group: Any = None,
         broadcast_buffers: bool = True,
         buffer_size: int = 2 ** 17,
