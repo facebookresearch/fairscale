@@ -87,6 +87,8 @@ def train(
             loss.backward()
             optimizer.step()
 
+    dist.destroy_process_group()
+
 if __name__ == "__main__":
     # Supposing that WORLD_SIZE and EPOCHS are somehow defined somewhere
     mp.spawn(
