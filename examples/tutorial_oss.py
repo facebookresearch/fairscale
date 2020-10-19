@@ -63,7 +63,6 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
             loss = loss_fn(outputs, target)
             loss /= world_size
             loss.backward()
-            torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
             optimizer.step()
             print(f"Loss: {loss.item()}")
 
