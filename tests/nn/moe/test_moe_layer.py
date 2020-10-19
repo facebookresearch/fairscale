@@ -73,6 +73,56 @@ def test_forward(device):
     assert torch.allclose(input, output)
 
 
+# Test Gate which round-robin routes tokens to experts
+class RoundRobinGate(torch.nn.Module):
+    def __init__(self, model_dim, num_experts):
+        super().__init__()
+        self.model_dim = model_dim
+        self.num_experts = num_experts
+
+    def forward(self, input):
+        g, s, m = input.shape
+        capacity = 2 * s // self.num_experts
+        output = torch.zeros(g, s, self.num_experts, capacity, dtype=input.dtype, device=input.device)
+        expert = 0
+        c = 0
+        for i in range(s):
+            for j in range(g):
+                output[j][i][expert][c] = 1.0
+            expert += 1
+            if expert == self.num_experts:
+                c += 1
+                expert = 0
+
+        return 0.0, output, output.bool()
+
+
+@pytest.mark.mpi
+@pytest.mark.parametrize("device", ["cpu"])
+def test_forward_routing(device):
+    model_dim = 8
+    num_experts = dist.get_world_size()
+    input = torch.randn(3, 4, 16, model_dim).to(device)
+    gate = RoundRobinGate(model_dim, num_experts)
+    expert = torch.nn.Linear(model_dim, model_dim, bias=False)
+    # Use scaling matrix (each rank has a different scale)
+    scale = dist.get_rank() + 1
+    expert.weight = torch.nn.Parameter(torch.eye(model_dim) * scale)
+    moe = MOELayer(gate, expert).to(device)
+    output = moe(input)
+    assert output.shape == input.shape
+    # Verify that each token was sent to the correct expert by checking its scale.
+    g, s, t, m = input.shape
+    expert = 0
+    for i in range(s):
+        for j in range(t):
+            for k in range(g):
+                torch.allclose(input[k][i][j], output[k][i][j] * (expert + 1))
+            expert += 1
+            if expert == num_experts:
+                expert = 0
+
+
 @pytest.mark.mpi
 @pytest.mark.parametrize("device", ["cpu"])
 def test_backward(device):
