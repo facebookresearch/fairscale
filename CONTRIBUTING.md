@@ -58,7 +58,7 @@ flake8
 ### Static analysis
 
 ```
-mypy .
+mypy --ignore-missing-imports --scripts-are-modules --pretty .
 ```
 
 ### Unit tests

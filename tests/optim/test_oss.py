@@ -29,6 +29,10 @@ def setup_module(module):
     dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
 
 
+def teardown_module(module):
+    torch.distributed.destroy_process_group()
+
+
 def dist_init(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "29501"
@@ -116,6 +120,21 @@ def test_step_with_kwargs():
     x.backward()
     o.step(0, kwarg=kwarg)
     assert kwarg == [5]
+    assert x == torch.tensor([0.9], device=DEVICE)
+
+
+def test_step_with_extra_inner_key():
+    class SGDWithNewKey(torch.optim.SGD):
+        # Dummy optimizer which adds a new key to the param groups
+        def step(self, closure=None):
+            super().step()
+            self.param_groups[0]["new_key"] = 0.1
+
+    x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+    o = optim.OSS([x], SGDWithNewKey, lr=0.1)
+    x.backward()
+    o.step()
+    assert o.param_groups[0]["new_key"] == 0.1
     assert x == torch.tensor([0.9], device=DEVICE)
 
 

@@ -56,6 +56,7 @@ See a more complete example [here](https://github.com/facebookresearch/fairscale
 import torch
 import torch.multiprocessing as mp
 from fairscale.optim.oss import OSS
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 def train(
     rank: int,
@@ -66,7 +67,8 @@ def train(
     dist_init(rank, world_size)
 
     # Problem statement
-    model = myAwesomeModel()
+    model = myAwesomeModel().to(rank)
+    model = DDP(model, device_ids=[rank])
     dataloader = mySuperFastDataloader()
     loss_fn = myVeryRelevantLoss()
     base_optimizer = torch.optim.SGD # pick any pytorch compliant optimizer here
@@ -82,10 +84,10 @@ def train(
             model.zero_grad()
             outputs = model(batch["inputs"])
             loss = loss_fn(outputs, batch["label"])
-            torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
-            loss /= world_size
             loss.backward()
             optimizer.step()
+
+    dist.destroy_process_group()
 
 if __name__ == "__main__":
     # Supposing that WORLD_SIZE and EPOCHS are somehow defined somewhere
@@ -118,6 +120,8 @@ fairscale.nn.pipe is forked from [torchgpipe](https://github.com/kakaobrain/torc
 
 fairscale.nn.model_parallel is forked from [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), Copyright 2020, NVIDIA CORPORATION, licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
 
+fairscale.optim.adascale is forked from [AdaptDL](https://github.com/petuum/adaptdl), Copyright 2020, Petuum, Inc., licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
+
 ## References
 
 Here is a list of all authors on relevant research papers this work is based on:
@@ -125,3 +129,4 @@ Here is a list of all authors on relevant research papers this work is based on:
 * torchgpipe: Chiheon Kim, Heungsub Lee, Myungryong Jeong, Woonhyuk Baek, Boogeon Yoon, Ildoo Kim, Sungbin Lim, Sungwoong Kim. [[Paper](https://arxiv.org/pdf/2004.09910.pdf)] [[Code](https://github.com/kakaobrain/torchgpipe)]
 * ZeRO: Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, Yuxiong He. [[Paper](https://arxiv.org/pdf/1910.02054.pdf)] [[Code](https://github.com/microsoft/DeepSpeed)]
 * Megatron-LM: Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley, Jared Casper, Bryan Catanzaro. [[Paper](https://arxiv.org/pdf/1909.08053.pdf)][[Code](https://github.com/NVIDIA/Megatron-LM)]
+* AdaScale SGD: Tyler B. Johnson, Pulkit Agrawal, Haijie Gu, Carlos Guestrin. [[Paper](https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Paper.pdf)]

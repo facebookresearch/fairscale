@@ -1,8 +1,7 @@
-Optimizer state sharding
-========================
+AdaScale SGD
+============
 
-Using torch.nn.parallel.DistributedDataParallel leads to some wasted communications in the case of OSS, but it is possible and makes OSS a drop in solution in your existing torch distributed code.
-Let's suppose that your trainer looks like
+`AdaScale <https://arxiv.org/pdf/2007.05105.pdf>`_ adaptively scales the learning rate when using larger batch sizes for data-parallel training. Let's suppose that your trainer looks like
 
 .. code-block:: python
 
@@ -31,7 +30,7 @@ Let's suppose that your trainer looks like
             params=model.parameters(),
             **base_optimizer_arguments)
 
-        # Any relevant training loop, nothing specific to OSS. For example:
+        # Any relevant training loop. For example:
         model.train()
         for e in range(epochs):
             for (data, target) in dataloader:
@@ -44,14 +43,15 @@ Let's suppose that your trainer looks like
                 optimizer.step()
 
 
-Then sharding the optimizer state is merely a matter of wrapping your optimizer in fairscale.optim.OSS, as follows
+Applying AdaScale is as simple as wrapping your SGD optimizer with fairscale.optim.AdaScale, as follows
 
 .. code-block:: python
 
 
     import torch
-    from fairscale.optim.oss import OSS
+    from fairscale.optim.adascale import AdaScale
     from torch.nn.parallel import DistributedDataParallel as DDP
+
 
     def train(
         rank: int,
@@ -69,15 +69,14 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
 
         # optimizer specific arguments e.g. LR, momentum, etc...
         base_optimizer_arguments = { "lr": 1e-4}
-
-        # ** NEW ** Wrap a base optimizer into OSS
-        base_optimizer = torch.optim.SGD  # any pytorch compliant optimizer
-        optimizer = OSS(
+        optimizer = torch.optim.SGD(
             params=model.parameters(),
-            optim=base_optimizer,
             **base_optimizer_arguments)
 
-        # Any relevant training loop, nothing specific to OSS. For example:
+        # Wrap optimizer with AdaScale
+        optimizer = AdaScale(optimizer)
+
+        # Any relevant training loop. For example:
         model.train()
         for e in range(epochs):
             for (data, target) in dataloader:
@@ -86,23 +85,5 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
                 model.zero_grad()
                 outputs = model(data)
                 loss = loss_fn(outputs, target)
-                loss /= world_size
                 loss.backward()
                 optimizer.step()
-
-
-The above `train` function will then need to be run via a `multiprocessing.spawn` function.
-
-.. code-block:: python
-
-
-    mp.spawn(
-            train,
-            args=(WORLD_SIZE, EPOCHS),
-            nprocs=WORLD_SIZE,
-            join=True
-        )
-
-
-to see it in action, you can test it with the following script `here <../../../examples/tutorial_oss.py>`_. 
-
