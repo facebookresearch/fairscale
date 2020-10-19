@@ -5,8 +5,6 @@ import torch.optim as optim
 
 import fairscale
 
-
-
 model = nn.Sequential(
             torch.nn.Linear(10, 10),
             torch.nn.ReLU(),
