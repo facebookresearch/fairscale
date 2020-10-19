@@ -32,7 +32,7 @@ def dist_init(rank, world_size, backend):
 
 def get_problem(rank, data_size, batch_size, device):
     # Standard RN101
-    model = resnet101(pretrained=False, progress=True).to(device)
+    model = resnet101(pretrained=False).to(device)
 
     # Data setup, dummy data
     def collate(inputs: List[Any]):
