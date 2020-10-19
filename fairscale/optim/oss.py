@@ -150,9 +150,9 @@ class OSS(Optimizer):
                     self._per_device_params[device][self.param_to_rank[param]] += [param]
 
             # Sort param_lists by size
-            for k in self._per_device_params.keys():
-                for r in self._per_device_params[k]:
-                    r.sort(key=lambda x: x.numel())
+            for device in self._per_device_params.keys():
+                for rank_params in self._per_device_params[device]:
+                    rank_params.sort(key=lambda x: x.numel())
 
         return self._per_device_params
 
@@ -181,12 +181,12 @@ class OSS(Optimizer):
         self._sync_param_groups()
 
         # Run the optimizer step on this shard only:
-        self._free_other_grads()
-
         if closure is not None:
             loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
         else:
             loss = self.optim.step(**kwargs)
+
+        self._free_other_grads()  # Depending on the DDP engine used, gradients specific to other ranks may still be loaded
 
         # Sync all the updated shards in between the ranks
         with torch.no_grad():

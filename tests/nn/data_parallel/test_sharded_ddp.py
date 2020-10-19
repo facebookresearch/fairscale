@@ -44,7 +44,9 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
 
     def check(broadcast_buffers: bool) -> None:
         # Any model works. Add one different buffer per rank
-        model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3)).to(device)
+        model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3)).to(
+            device
+        )
         model.register_buffer("test_buffer", torch.ones((1)) * rank)
         model.to(device)
 
@@ -90,6 +92,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
         for i in range(5):
             _ = optimizer.step(closure=closure)
             check_same_model_params()
+            assert False
 
     check(broadcast_buffers=False)
     check(broadcast_buffers=True)
