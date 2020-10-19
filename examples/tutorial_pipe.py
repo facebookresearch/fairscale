@@ -21,7 +21,7 @@ optimizer.zero_grad()
 
 device = model.devices[0]
 
-## outputs and target need to be on the same device
+# outputs and target need to be on the same device
 # forward step
 outputs = model(data.to(device))
 # compute loss

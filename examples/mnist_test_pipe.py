@@ -1,4 +1,4 @@
-## adapted from https://github.com/pytorch/examples/blob/master/mnist/main.py
+# adapted from https://github.com/pytorch/examples/blob/master/mnist/main.py
 from __future__ import print_function
 
 import argparse
@@ -12,7 +12,6 @@ from torch.optim.lr_scheduler import StepLR
 from torchvision import datasets, transforms
 
 import fairscale
-from fairscale.optim.oss import OSS
 
 net = nn.Sequential(
     nn.Conv2d(1, 32, 3, 1),
