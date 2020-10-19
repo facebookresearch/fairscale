@@ -14,7 +14,6 @@ from torchvision import datasets, transforms
 import fairscale
 from fairscale.optim.oss import OSS
 
-
 net = nn.Sequential(
     nn.Conv2d(1, 32, 3, 1),
     nn.ReLU(),
