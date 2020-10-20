@@ -158,13 +158,10 @@ class ModelDispatch(nn.Module):
                     raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
 
                 p.grad.div_(world_size)  # type: ignore
-                direct_requests.append(
-                    (
-                        dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
-                        dst_rank,
-                        p,
-                    )
-                )
+                dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=False),  # type: ignore
+                if dst_rank != self_rank:
+                    # This gradient has been reduced and this rank is not the owner, it can be released
+                    p.grad = None
 
         # Now unroll the initial packed small gradients, as soon as possible
         for work_handle, dst_rank in bucket_requests:
@@ -182,13 +179,6 @@ class ModelDispatch(nn.Module):
                     params[i_bucketed].grad.data.copy_(buffer[offset:end].view_as(params[i_bucketed]))  # type: ignore
                     offset = end
                     i_bucketed += 1
-
-        # Finally, make sure that we're done with this device before moving on and cleaning the unused params
-        for work_handle, dst_rank, param in direct_requests:
-            work_handle.wait()
-            if dst_rank != self_rank:
-                # This gradient has been reduced and this rank is not the owner, it can be released
-                param.grad = None
 
     def sync_buffers(self, non_blocking: bool = False) -> Optional[List[Any]]:
         """

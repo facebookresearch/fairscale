@@ -58,13 +58,6 @@ class OptimType(str, Enum):
     everyone = "everyone"
 
 
-class ResnetType(str, Enum):
-    resnet18 = "resnet18"
-    resnet50 = "resnet50"
-    resnet101 = "resnet101"
-    resnet152 = "resnet152"
-
-
 def train(
     rank: int,
     args: argparse.Namespace,
