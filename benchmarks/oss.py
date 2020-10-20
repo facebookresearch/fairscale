@@ -16,7 +16,7 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
-from torchvision.models import resnet18, resnet50, resnet101, resnet152
+from torchvision.models import *  # noqa: F401
 from torchvision.transforms import ToTensor
 
 from fairscale.nn.data_parallel import ShardedDataParallel
@@ -30,12 +30,10 @@ def dist_init(rank, world_size, backend):
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 
-def get_problem(rank, data_size, batch_size, device, resnet: str):
+def get_problem(rank, data_size, batch_size, device, model_name: str):
     # Select the desired model on the fly
-    print(f"Using {resnet} for benchmarking")
-    model = {"resnet18": resnet18, "resnet50": resnet50, "resnet101": resnet101, "resnet152": resnet152}[resnet](
-        pretrained=False
-    ).to(device)
+    print(f"Using {model_name} for benchmarking")
+    model = globals()[model_name](pretrained=False).to(device)
 
     # Data setup, dummy data
     def collate(inputs: List[Any]):
@@ -88,7 +86,7 @@ def train(
         torch.backends.cudnn.benchmark = False
 
     device = torch.device("cpu") if args.cpu else torch.device(rank)
-    model, dataloader, loss_fn = get_problem(rank, args.data_size, args.batch_size, device, args.resnet_type)
+    model, dataloader, loss_fn = get_problem(rank, args.data_size, args.batch_size, device, args.torchvision_model)
 
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
@@ -214,9 +212,7 @@ if __name__ == "__main__":
     parser.add_argument("--gloo", action="store_true", default=False)
     parser.add_argument("--profile", action="store_true", default=False)
     parser.add_argument("--cpu", action="store_true", default=False)
-    parser.add_argument(
-        "--resnet_type", type=ResnetType, choices=[o.value for o in ResnetType], default=ResnetType.resnet101
-    )
+    parser.add_argument("--torchvision_model", type=str, help="Any torchvision model name (str)", default="resnet101")
 
     args = parser.parse_args()
     print(f"Benchmark arguments: {args}")
