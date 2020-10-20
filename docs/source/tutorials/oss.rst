@@ -40,7 +40,6 @@ Let's suppose that your trainer looks like
                 model.zero_grad()
                 outputs = model(data)
                 loss = loss_fn(outputs, target)
-                loss /= world_size
                 loss.backward()
                 optimizer.step()
 
