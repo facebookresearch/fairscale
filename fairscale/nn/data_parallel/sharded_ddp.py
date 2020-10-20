@@ -199,7 +199,7 @@ class ModelDispatch(nn.Module):
         with torch.no_grad():
             work_handles = list(
                 map(
-                    lambda x: dist.broadcast(x, self.reference_global_rank, self.process_group, async_op=True),
+                    lambda x: dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True),
                     self.base_model.buffers(),
                 )
             )
@@ -212,25 +212,14 @@ class ModelDispatch(nn.Module):
         """
 
         with torch.no_grad():
-            # Workaround Gloo which complains that this transformation is not differentiable
-            # - store the original requires_grad setting, and set the current one to False
-            requires_grad = [p.requires_grad for p in self.base_model.parameters()]
-            for p in self.base_model.parameters():
-                p.requires_grad = False
-
-            #  - sync the data
             self.wait(
                 list(
                     map(
-                        lambda x: dist.broadcast(x, self.reference_global_rank, self.process_group, async_op=True),
+                        lambda x: dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True),
                         self.base_model.parameters(),
                     ),
                 )
             )
-
-            # - restore the original flag
-            for p, rg in zip(self.base_model.parameters(), requires_grad):
-                p.requires_grad = rg
 
     @staticmethod
     def wait(requests: Optional[List[Any]]) -> None:
