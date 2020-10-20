@@ -452,18 +452,8 @@ class OSS(Optimizer):
 
             # Directly broadcast the rest
             for param in params[i_bucketed:]:
-                # NOTE: Broadcast is in-place and not differentiable
-                # Gloo will assert on this operation for any tensor that requires grad.
-                # We save and restore the grad requirement state to work around that, in our case
-                # the grad is only useful on the source rank.
-                needs_grad_restore, param.requires_grad = param.requires_grad, False
-
                 direct_requests.append(
-                    (
-                        dist.broadcast(tensor=param, src=global_dst_rank, group=self.group, async_op=True),
-                        param,
-                        needs_grad_restore,
-                    )
+                    dist.broadcast(tensor=param.data, src=global_dst_rank, group=self.group, async_op=True),
                 )
 
         # Unroll the initial packed small parameters
@@ -481,8 +471,5 @@ class OSS(Optimizer):
                 offset = end
                 i_bucketed += 1
 
-        # Unroll all the async work items, restore the requires_grad
-        for work_handle, param, requires_grad in direct_requests:
-            work_handle.wait()
-            if requires_grad:
-                param.requires_grad = True
+        # Unroll all the async work items, wait for completion
+        _ = list(map(lambda x: x.wait(), direct_requests))
