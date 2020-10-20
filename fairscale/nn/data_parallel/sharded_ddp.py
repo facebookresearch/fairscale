@@ -158,7 +158,13 @@ class ModelDispatch(nn.Module):
                     raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
 
                 p.grad.div_(world_size)  # type: ignore
-                direct_requests.append((dist.reduce(tensor=p.grad, dst=global_dst_rank, group=group, async_op=True), dst_rank, p))  # type: ignore
+                direct_requests.append(
+                    (
+                        dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
+                        dst_rank,
+                        p,
+                    )
+                )
 
         # Now unroll the initial packed small gradients, as soon as possible
         for work_handle, dst_rank in bucket_requests:
