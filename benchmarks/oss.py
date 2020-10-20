@@ -3,6 +3,7 @@
 
 import argparse
 from enum import Enum
+import importlib
 import math
 import time
 from typing import Any, List, Optional, cast
@@ -16,7 +17,6 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torchvision.datasets import FakeData
-from torchvision.models import *  # noqa: F401
 from torchvision.transforms import ToTensor
 
 from fairscale.nn.data_parallel import ShardedDataParallel
@@ -33,7 +33,7 @@ def dist_init(rank, world_size, backend):
 def get_problem(rank, data_size, batch_size, device, model_name: str):
     # Select the desired model on the fly
     print(f"Using {model_name} for benchmarking")
-    model = globals()[model_name](pretrained=False).to(device)
+    model = getattr(importlib.import_module("torchvision.models"), model_name)(pretrained=False).to(device)
 
     # Data setup, dummy data
     def collate(inputs: List[Any]):
