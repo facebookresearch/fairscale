@@ -42,7 +42,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     torch.manual_seed(rank)
     np.random.seed(rank)
 
-    def check(broadcast_buffers: bool) -> None:
+    def check(broadcast_buffers: bool, buffer_size: int) -> None:
         # Any model works. Add one different buffer per rank
         model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3)).to(
             device
@@ -51,7 +51,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
         model.to(device)
 
         optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
-        ddp_model = ShardedDataParallel(model, optimizer, broadcast_buffers=broadcast_buffers)
+        ddp_model = ShardedDataParallel(model, optimizer, broadcast_buffers=broadcast_buffers, buffer_size=buffer_size)
 
         def check_same_model_params():
             # Check that all the params are the same on all ranks
@@ -93,8 +93,10 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
             _ = optimizer.step(closure=closure)
             check_same_model_params()
 
-    check(broadcast_buffers=False)
-    check(broadcast_buffers=True)
+    check(broadcast_buffers=False, buffer_size=0)
+    check(broadcast_buffers=True, buffer_size=0)
+    check(broadcast_buffers=False, buffer_size=2 ** 20)
+    check(broadcast_buffers=True, buffer_size=2 ** 20)
 
     dist.destroy_process_group()
 

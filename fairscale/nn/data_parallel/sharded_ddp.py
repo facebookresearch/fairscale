@@ -120,6 +120,7 @@ class ModelDispatch(nn.Module):
             if len(params) == 0:
                 continue
 
+            # Failsafe if the grads have somehow been killed beforehand, should not happen
             for p in filter(lambda x: x.grad is None, params):
                 p.grad = torch.zeros_like(p)
 
