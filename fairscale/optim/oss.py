@@ -425,12 +425,12 @@ class OSS(Optimizer):
         direct_requests = []
 
         # Bucket and issue all the async calls
-        for (dst_rank, params), buffer in zip(enumerate(per_rank_params), buffers):
+        for (src_rank, params), buffer in zip(enumerate(per_rank_params), buffers):
             # All the params are sorted per rank and per increasing size
             if len(params) == 0:
                 continue
 
-            global_dst_rank = OSS.get_global_rank(self.group, dst_rank)
+            global_src_rank = OSS.get_global_rank(self.group, src_rank)
 
             # Copy small parameters into per-GPU buffers
             i_bucketed = 0  # the number of tensors packed in the buffer
@@ -439,29 +439,29 @@ class OSS(Optimizer):
             # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
             while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
                 end = offset + params[i_bucketed].numel()
-                if global_dst_rank == self.global_rank:
+                if global_src_rank == self.global_rank:
                     buffer[offset:end].copy_(params[i_bucketed].data.view(-1))  # type: ignore
                 offset = end
                 i_bucketed += 1
 
             if i_bucketed > 0:
-                future = dist.broadcast(tensor=buffer, src=global_dst_rank, group=self.group, async_op=True)
-                if global_dst_rank != self.global_rank:
+                future = dist.broadcast(tensor=buffer, src=global_src_rank, group=self.group, async_op=True)
+                if global_src_rank != self.global_rank:
                     # This request will need to be unrolled
-                    bucket_requests.append((future, dst_rank))
+                    bucket_requests.append((future, src_rank))
 
             # Directly broadcast the rest
             for param in params[i_bucketed:]:
                 direct_requests.append(
-                    dist.broadcast(tensor=param.data, src=global_dst_rank, group=self.group, async_op=True),
+                    dist.broadcast(tensor=param.data, src=global_src_rank, group=self.group, async_op=True),
                 )
 
         # Unroll the initial packed small parameters
-        for gate, rank in bucket_requests:
+        for gate, src_rank in bucket_requests:
             gate.wait()
 
-            params = per_rank_params[rank]
-            buffer = buffers[rank]
+            params = per_rank_params[src_rank]
+            buffer = buffers[src_rank]
             i_bucketed = 0  # the number of tensors packed in the buffer
             offset = 0
 

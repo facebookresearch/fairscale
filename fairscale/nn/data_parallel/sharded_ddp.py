@@ -83,16 +83,16 @@ class ModelDispatch(nn.Module):
         """
         Reduce -NOTE: could become gather- all the gradients to the appropriate ranks
         """
-        with torch.no_grad():
-            for sharded_optimizer in self.sharded_optimizers:
-                for device, per_device in sharded_optimizer.per_device_params.items():
-                    self._reduce_grads_task(
-                        self._reduce_buffers[sharded_optimizer][device],
-                        per_device,
-                        group=self.process_group,
-                        self_rank=self.rank,
-                        world_size=self.world_size,
-                    )
+
+        for sharded_optimizer in self.sharded_optimizers:
+            for device, per_device in sharded_optimizer.per_device_params.items():
+                self._reduce_grads_task(
+                    self._reduce_buffers[sharded_optimizer][device],
+                    per_device,
+                    group=self.process_group,
+                    self_rank=self.rank,
+                    world_size=self.world_size,
+                )
 
     @staticmethod
     def _reduce_grads_task(
@@ -157,13 +157,16 @@ class ModelDispatch(nn.Module):
                 if p.grad.requires_grad:
                     raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
 
-                p.grad.div_(world_size)  # type: ignore
-                dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=False),  # type: ignore
-                if dst_rank != self_rank:
-                    # This gradient has been reduced and this rank is not the owner, it can be released
-                    p.grad = None
+                p.grad.data.div_(world_size)  # type: ignore
+                direct_requests.append(
+                    (
+                        dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
+                        dst_rank,
+                        p,
+                    )
+                )
 
-        # Now unroll the initial packed small gradients, as soon as possible
+        # Now unroll the initial packed small gradients
         for work_handle, dst_rank in bucket_requests:
             work_handle.wait()
 
@@ -180,19 +183,26 @@ class ModelDispatch(nn.Module):
                     offset = end
                     i_bucketed += 1
 
+        # Finally, make sure that we're done with this device before moving on and cleaning the unused params
+        for work_handle, dst_rank, param in direct_requests:
+            work_handle.wait()
+
+            if dst_rank != self_rank:
+                # This gradient has been reduced and this rank is not the owner, it can be released
+                param.grad = None
+
     def sync_buffers(self, non_blocking: bool = False) -> Optional[List[Any]]:
         """
         Sync all the param buffers in between ranks.
         TODO: Could be worth bucketing ?
         """
 
-        with torch.no_grad():
-            work_handles = list(
-                map(
-                    lambda x: dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True),
-                    self.base_model.buffers(),
-                )
+        work_handles = list(
+            map(
+                lambda x: dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True),
+                self.base_model.buffers(),
             )
+        )
 
         return work_handles if non_blocking else self.wait(work_handles)
 
@@ -201,15 +211,14 @@ class ModelDispatch(nn.Module):
         Sync all the parameters in between ranks.
         """
 
-        with torch.no_grad():
-            self.wait(
-                list(
-                    map(
-                        lambda x: dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True),
-                        self.base_model.parameters(),
-                    ),
-                )
+        self.wait(
+            list(
+                map(
+                    lambda x: dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True),
+                    self.base_model.parameters(),
+                ),
             )
+        )
 
     @staticmethod
     def wait(requests: Optional[List[Any]]) -> None:
