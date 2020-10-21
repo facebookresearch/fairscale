@@ -4,13 +4,14 @@ from __future__ import print_function
 import argparse
 import time
 
-import fairscale
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 from torchvision import datasets, transforms
+
+from fairscale.nn import Pipe
 
 net = nn.Sequential(
     nn.Conv2d(1, 32, 3, 1),
@@ -108,7 +109,7 @@ def main():
     test_loader = torch.utils.data.DataLoader(dataset2, **kwargs)
 
     model = net
-    model = fairscale.nn.Pipe(model, balance=[6, 6], devices=[0, 1], chunks=2)
+    model = Pipe(model, balance=[6, 6], devices=[0, 1], chunks=2)
     device = model.devices[0]
 
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
