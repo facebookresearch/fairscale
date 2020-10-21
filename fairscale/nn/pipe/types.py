@@ -38,6 +38,7 @@ class PipelineStyle(Enum):
 class TransportConfig:
     use_rpc: bool
     worker_map: Optional[Dict[int, str]]
+    input_device: InputDevice
 
 
 @dataclass(init=False)

@@ -22,7 +22,6 @@ import os
 from queue import Empty as QueueEmpty
 from queue import Queue
 from threading import Event
-import time
 from types import TracebackType
 from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Type, Union, cast
 
@@ -242,7 +241,9 @@ class Pipeline:
         self.group = group
         self.training: bool
         self.transport_config = TransportConfig(
-            use_rpc=("OMPI_COMM_WORLD_RANK" not in os.environ) or ("FORCE_RPC" in os.environ), worker_map=worker_map
+            use_rpc=("OMPI_COMM_WORLD_RANK" not in os.environ) or ("FORCE_RPC" in os.environ),
+            worker_map=worker_map,
+            input_device=input_device,
         )
 
         self.input_device = input_device

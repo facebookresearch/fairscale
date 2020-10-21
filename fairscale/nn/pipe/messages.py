@@ -80,17 +80,31 @@ def send_message(config: TransportConfig, message: PipeMessage, sync: bool = Fal
             )
 
 
-def recv_message_tensors(input_device: InputDevice, config: TransportConfig, message: PipeMessage) -> PipeMessage:
+def recv_message_header(transport_config: TransportConfig, input_device: InputDevice, queue_name: int) -> PipeMessage:
+    if transport_config.use_rpc:
+        queue = MessageQueues[queue_name]
+        result = queue.get()
+        result.tensors = to_input_device(result.tensors, input_device)
+        return result
+    else:
+        tensor = torch.empty(MESSAGE_TENSOR_SIZE, dtype=torch.uint8, device=input_device)
+        torch.cuda.current_stream().synchronize()
+        torch.distributed.recv(tensor, src=None, tag=queue_name, group=get_pipeline_parallel_group())
+        torch.cuda.current_stream().synchronize()
+        return tensor_to_pyobject(tensor.cpu())
+
+
+def recv_message_tensors(config: TransportConfig, message: PipeMessage) -> PipeMessage:
     if config.use_rpc:
         # Tensors already contained within message
-        message.tensors = to_input_device(message.tensors, input_device)
+        message.tensors = to_input_device(message.tensors, config.input_device)
         return message
     else:
         torch.cuda.current_stream().synchronize()
 
         message_tensors = []
         for index, (shape, dtype) in enumerate(zip(message.tensor_shapes, message.tensor_dtypes)):
-            t = torch.empty(*shape, dtype=dtype, device=input_device)
+            t = torch.empty(*shape, dtype=dtype, device=config.input_device)
             torch.distributed.recv(t, message.src, tag=message.tag + index, group=get_pipeline_parallel_group())
             message_tensors.append(t)
 
@@ -109,7 +123,7 @@ def recv_message(
             result = queue.get_nowait()
         else:
             result = queue.get()
-        return recv_message_tensors(input_device, config, result)
+        return recv_message_tensors(config, result)
     else:
         # FIXME(handle nowait)
         if nowait:
@@ -121,7 +135,7 @@ def recv_message(
         torch.cuda.current_stream().synchronize()
         message = tensor_to_pyobject(tensor.cpu())
 
-        return recv_message_tensors(input_device, config, message)
+        return recv_message_tensors(config, message)
 
 
 def get_out_of_order(config: TransportConfig, queue_name: int, index: int, *, input_device: InputDevice) -> Tensors:

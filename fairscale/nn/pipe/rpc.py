@@ -1,4 +1,4 @@
-import os
+import logging
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
@@ -11,12 +11,13 @@ from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 
 from . import Pipe
 from .messages import recv_message_tensors, send_message
-from .types import EVENT_LOOP_QUEUE, PipeMessage, TensorOrTensors, TransportConfig
+from .types import EVENT_LOOP_QUEUE, PipeMessage, TensorOrTensors
 
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
 
 PipeModel: Pipe
+PipeResult: TensorOrTensors
 
 
 SizeOrSizes = Union[torch.Size, List[torch.Size]]
@@ -40,7 +41,8 @@ def register_remote_model(args: List[Any], kwargs: Dict[str, Any]) -> None:
     kwargs["input_device"] = torch.device("cuda", torch.cuda.current_device())
     model = Pipe(*args, **kwargs)
     model.cuda()
-    globals()["PipeModel"] = model
+    global PipeModel
+    PipeModel = model
 
 
 def get_shapes(tensor: TensorOrTensors) -> SizeOrSizes:
@@ -58,28 +60,22 @@ def get_dtype(tensor: TensorOrTensors) -> DtypeOrDtypes:
 
 
 def model_forward(training: bool, shape: torch.Size, dtype: torch.dtype) -> Optional[Tuple[SizeOrSizes, DtypeOrDtypes]]:
-    try:
-        dprint(f"mf: train stage {torch.distributed.get_rank()}")
-        if isinstance(shape, torch.Size):
-            tensor = torch.empty(shape, dtype=dtype)
-        else:
-            tensor = tuple([torch.empty(s, dtype=d) for s, d in zip(shape, dtype)])
+    if isinstance(shape, torch.Size):
+        tensor = torch.empty(shape, dtype=dtype)
+    else:
+        tensor = tuple([torch.empty(s, dtype=d) for s, d in zip(shape, dtype)])
 
-        model = globals()["PipeModel"]
-        set_device_based_on_group(model.group)
+    global PipeModel
+    model = PipeModel
+    assert model.group
+    set_device_based_on_group(model.group)
 
-        dprint(f"mf: train stage {model.group.rank()}, {os.getpid()}")
-        model.train(training)
-        result = model(tensor)
-        if model.final_stage:
-            globals()["PipeResult"] = result
-            return (get_shapes(result), get_dtype(result))
-    except Exception as e:
-        print(f"failboat {e} {type(e)}")
-        import traceback
-
-        print(f"format {traceback.format_exc()}")
-        raise e
+    model.train(training)
+    result = model(tensor)
+    if model.final_stage:
+        global PipeResult
+        PipeResult = result
+        return (get_shapes(result), get_dtype(result))
 
     return None
 
@@ -90,11 +86,12 @@ def send_result(training: bool, message: PipeMessage, grads_message: PipeMessage
     set_device_based_on_group(group)
     try:
         dprint(f"send result {torch.distributed.get_rank()}, {torch.cuda.current_device()}")
-        result = globals()["PipeResult"]
-        model = globals()["PipeModel"]
+        result = PipeResult
+        global PipeModel
+        model = PipeModel
 
         if isinstance(result, torch.Tensor):
-            result = [result]
+            result = tuple([result])
 
         dest = _get_global_rank(group, 0)
 
@@ -102,15 +99,14 @@ def send_result(training: bool, message: PipeMessage, grads_message: PipeMessage
             f"ho har {torch.distributed.get_rank()} " + str([_get_global_rank(group, i) for i in range(group.size())])
         )
         message.tensors = tuple(result)
-        config = TransportConfig(False, None)
+        assert model.pipeline
+        config = model.pipeline.transport_config
         send_message(config, message, sync=False, skip_header=True)
 
         if training:
             grads_message.tensor_shapes = [r.shape for r in result]
             grads_message.tensor_dtypes = [r.dtype for r in result]
-            input_device = torch.device("cuda", torch.cuda.current_device())
-            transport_config = TransportConfig(False, None)
-            grads_message = recv_message_tensors(input_device, transport_config, grads_message)
+            grads_message = recv_message_tensors(config, grads_message)
 
             with model.lock:
                 print(f" >>> autograd-backward tail")
@@ -121,28 +117,28 @@ def send_result(training: bool, message: PipeMessage, grads_message: PipeMessage
         print(f"got {e}")
 
 
-def recv_result(shapes: SizeOrSizes, dtypes: DtypeOrDtypes, message: PipeMessage) -> TensorOrTensors:
+def recv_result(model: Pipe, shapes: SizeOrSizes, dtypes: DtypeOrDtypes, message: PipeMessage) -> TensorOrTensors:
     group = get_pipeline_parallel_group()
     set_device_based_on_group(group)
     src = torch.distributed.distributed_c10d._get_global_rank(group, group.size() - 1)
     dprint(f"recv_result... {src}, {torch.cuda.current_device()}")
 
-    input_device = torch.device("cuda", torch.cuda.current_device())
-    transport_config = TransportConfig(False, None)
+    assert model.pipeline
+    transport_config = model.pipeline.transport_config
 
     if isinstance(shapes, torch.Size):
         shape = cast(torch.Size, shapes)
         dtype = cast(torch.dtype, dtypes)
         message.tensor_shapes = [shape]
         message.tensor_dtypes = [dtype]
-        message = recv_message_tensors(input_device, transport_config, message)
+        message = recv_message_tensors(transport_config, message)
         return message.tensors[0]
     else:
         shapes = cast(List[torch.Size], shapes)
         dtypes = cast(List[torch.dtype], dtypes)
         message.tensor_shapes = shapes
         message.tensor_dtypes = dtypes
-        message = recv_message_tensors(input_device, transport_config, message)
+        message = recv_message_tensors(transport_config, message)
         return message.tensors
 
 
@@ -163,22 +159,23 @@ def run_model(model: Pipe, tensor: TensorOrTensors, event: Event, lock: Lock) ->
 class PipeBackRedirect(torch.autograd.Function):
     @staticmethod
     # type: ignore
-    def forward(ctx, inputs, dest, event, message):
+    def forward(ctx, inputs, dest, event, message, transport_config):
         ctx.dest = dest
         ctx.event = event
         ctx.message = message
+        ctx.transport_config = transport_config
         return inputs
 
     @staticmethod
     # type: ignore
     def backward(ctx, *grad):
-        dprint(f">>> back hook yay")
-        config = TransportConfig(False, None)
+        logging.debug(f">>> PipeBackRedirect.backward")
+        global PipeModel
         ctx.message.tensors = tuple(grad)
-        send_message(config, ctx.message, sync=False, skip_header=True)
+        send_message(ctx.transport_config, ctx.message, sync=False, skip_header=True)
         ctx.event.set()
-        dprint(f"<<< back hook yay")
-        return (None, None, None, None)
+        logging.debug(f"<<< PipeBackRedirect.backward")
+        return (None, None, None, None, None)
 
 
 def callback_with_model(callback: Callable, ctx: Any) -> None:
@@ -186,7 +183,6 @@ def callback_with_model(callback: Callable, ctx: Any) -> None:
     set_device_based_on_group(group)
 
     global PipeModel
-
     with PipeModel.lock:
         callback(ctx, PipeModel)
 
@@ -253,7 +249,6 @@ class PipeRPCWrapper(nn.Module):
             t = Thread(target=run_model, args=(self.model, tensor, event, self.lock))
             t.start()
 
-            dprint("forward before wait recv")
             shape, dtype = futures[-1].wait()
             dprint("forward after wait recv")
             dest_rank = self.group.size() - 1
@@ -266,22 +261,18 @@ class PipeRPCWrapper(nn.Module):
             grads_message = PipeMessage(src_global_rank, dest_global_rank, queue_name=queue, tensor_count=num_tensors)
             rpc.rpc_async(dest, send_result, args=(self.model.training, message, grads_message))
             dprint(">>> recv_result")
-            result = recv_result(shape, dtype, message)
+            result = recv_result(self.model, shape, dtype, message)
             dprint("<<< recv_result")
-            # event.set()
-            dprint("not set event")
-            try:
-                if isinstance(result, torch.Tensor):
-                    result.requires_grad_()
-                else:
-                    for r in result:
-                        r.requires_grad_()
+            if isinstance(result, torch.Tensor):
+                result.requires_grad_()
+            else:
+                for r in result:
+                    r.requires_grad_()
 
-                applied = PipeBackRedirect.apply(result, _get_global_rank(self.group, dest_rank), event, grads_message)
-            except Exception as e:
-                dprint(f"failed got {e}")
-            dprint("return applied")
-            return applied
+            assert self.model.pipeline
+            return PipeBackRedirect.apply(
+                result, dest_global_rank, event, grads_message, self.model.pipeline.transport_config
+            )
 
     @property
     def final_stage(self) -> bool:

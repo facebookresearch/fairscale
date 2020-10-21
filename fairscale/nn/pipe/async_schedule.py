@@ -9,7 +9,14 @@ from torch.distributed import ProcessGroup
 
 from fairscale.nn.model_parallel import get_pipeline_parallel_group, get_pipeline_parallel_ranks
 
-from .messages import MESSAGE_TENSOR_SIZE, MessageQueues, send_message, tensor_to_pyobject, to_input_device
+from .messages import (
+    MESSAGE_TENSOR_SIZE,
+    MessageQueues,
+    recv_message_tensors,
+    send_message,
+    tensor_to_pyobject,
+    to_input_device,
+)
 from .microbatch import Batch
 from .skip.tracker import SkipTrackerThroughPotals
 from .types import EVENT_LOOP_QUEUE, InputDevice, PipelineStyle, PipeMessage, Tensors, TransportConfig
@@ -81,29 +88,6 @@ class Hackity(torch.autograd.Function):
         return ctx.grad_from_pipeline
 
 
-def recv_async_tensors(
-    rank: int, input_device: InputDevice, config: TransportConfig, message: PipeMessage
-) -> PipeMessage:
-    if config.use_rpc:
-        # Tensors already contained within message
-        message.tensors = to_input_device(message.tensors, input_device)
-        dprint(f"recv_async_tensors {torch.distributed.get_rank()}, {len(message.tensors)}")
-        return message
-    else:
-        torch.cuda.current_stream().synchronize()
-
-        message_tensors = []
-        for index, (shape, dtype) in enumerate(zip(message.tensor_shapes, message.tensor_dtypes)):
-            t = torch.empty(*shape, dtype=dtype, device=input_device)
-            torch.distributed.recv(t, message.src, tag=message.tag + index, group=get_pipeline_parallel_group())
-            message_tensors.append(t)
-
-        message.tensors = tuple(message_tensors)
-
-        torch.cuda.current_stream().synchronize()
-        return message
-
-
 class AsyncRecvOperator(torch.autograd.Function):
     """Receive activations to the previous pipeline stage"""
 
@@ -116,7 +100,7 @@ class AsyncRecvOperator(torch.autograd.Function):
         ctx.config = config
         ctx.index = message.args.microbatch_index
 
-        result = recv_async_tensors(dst_rank, input_device, config, message)
+        result = recv_message_tensors(config, message)
 
         ctx.args = result.args
 
@@ -239,25 +223,12 @@ class AsyncEventLoop:
         return result
 
     def async_grad_inner(self, message: PipeMessage, activations: Activations, invocation: Invocation) -> None:
-        args: AsyncMessageBody = message.args
-        if self.transport_config.use_rpc:
-            recvd_grads = message
-        else:
-            recvd_grads = recv_async_tensors(
-                torch.distributed.get_rank(), self.input_device, self.transport_config, message
-            )
+        recvd_grads = recv_message_tensors(self.transport_config, message)
 
-        # FIXME tom
+        batch: Batch = activations[invocation.this.index][invocation.order][message.args.microbatch_index]
 
-        batch: Batch = activations[invocation.this.index][invocation.order][args.microbatch_index]
-
-        try:
-            batch.tensor.grad_fn.grad_from_pipeline = tuple(recvd_grads.tensors)  # type: ignore
-            batch.tensor.backward(retain_graph=True)
-            return
-        except Exception as e:
-            print(f"hackity fail {e}")
-            raise e
+        batch.tensor.grad_fn.grad_from_pipeline = tuple(recvd_grads.tensors)  # type: ignore
+        batch.tensor.backward(retain_graph=True)
 
     def process_batch_forward(
         self,
