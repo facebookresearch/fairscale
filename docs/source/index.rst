@@ -8,11 +8,9 @@ Welcome to fairscale's documentation!
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents
 
    api/index
    tutorials/index
-
 
 
 *fairscale* is a PyTorch extension library for high performance and large scale training for optimizing training on one or across multiple machines/nodes. This library extend basic pytorch capabilities while adding new experimental ones.
