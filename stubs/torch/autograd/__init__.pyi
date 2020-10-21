@@ -6,9 +6,13 @@ from .grad_mode import no_grad as no_grad, enable_grad as enable_grad, \
     set_grad_enabled as set_grad_enabled
 from .profiler import record_function
 
+# This is defined in CPP in PyTorch source
+class ImperativeEngine:
+    def queue_callback(self, callback: Callable[..., None]): ...
+
 # TODO make Variable and Function more precise
 class Variable:
-    ...
+    _execution_engine: ImperativeEngine
 
 class Function:
     @staticmethod
