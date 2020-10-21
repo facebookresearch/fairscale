@@ -53,7 +53,7 @@ def rpc_push_queue(message: PipeMessage) -> None:
     globals()["MessageQueues"][message.queue_name].put(message)
 
 
-def send_message(config: TransportConfig, message: PipeMessage, sync: bool = False) -> None:
+def send_message(config: TransportConfig, message: PipeMessage, sync: bool = False, skip_header: bool = False) -> None:
     if config.use_rpc:
         message.tensors = tuple(t.cpu() for t in message.tensors)
         assert config.worker_map
@@ -65,18 +65,39 @@ def send_message(config: TransportConfig, message: PipeMessage, sync: bool = Fal
     else:
         tensors = message.tensors
         message.tensors = tuple()
-        message.tensor_shapes = [t.size() for t in tensors]
-        message.tensor_dtypes = [t.dtype for t in tensors]
         torch.cuda.current_stream().synchronize()
-        torch.distributed.send(
-            pyobject_to_tensor(message), message.dest, tag=message.queue_name, group=get_pipeline_parallel_group()
-        )
+        if not skip_header:
+            message.tensor_shapes = [t.size() for t in tensors]
+            message.tensor_dtypes = [t.dtype for t in tensors]
+            torch.distributed.send(
+                pyobject_to_tensor(message), message.dest, tag=message.queue_name, group=get_pipeline_parallel_group()
+            )
         for index, t in enumerate(tensors):
             if t.device.type == "cpu":
                 t = t.cuda()
             torch.distributed.send(
                 t.contiguous(), message.dest, tag=message.tag + index, group=get_pipeline_parallel_group()
             )
+
+
+def recv_message_tensors(input_device: InputDevice, config: TransportConfig, message: PipeMessage) -> PipeMessage:
+    if config.use_rpc:
+        # Tensors already contained within message
+        message.tensors = to_input_device(message.tensors, input_device)
+        return message
+    else:
+        torch.cuda.current_stream().synchronize()
+
+        message_tensors = []
+        for index, (shape, dtype) in enumerate(zip(message.tensor_shapes, message.tensor_dtypes)):
+            t = torch.empty(*shape, dtype=dtype, device=input_device)
+            torch.distributed.recv(t, message.src, tag=message.tag + index, group=get_pipeline_parallel_group())
+            message_tensors.append(t)
+
+        message.tensors = tuple(message_tensors)
+
+        torch.cuda.current_stream().synchronize()
+        return message
 
 
 def recv_message(
@@ -88,8 +109,7 @@ def recv_message(
             result = queue.get_nowait()
         else:
             result = queue.get()
-        result.tensors = to_input_device(result.tensors, input_device)
-        return result
+        return recv_message_tensors(input_device, config, result)
     else:
         # FIXME(handle nowait)
         if nowait:
@@ -101,17 +121,7 @@ def recv_message(
         torch.cuda.current_stream().synchronize()
         message = tensor_to_pyobject(tensor.cpu())
 
-        message_tensors = []
-        for index, (shape, dtype) in enumerate(zip(message.tensor_shapes, message.tensor_dtypes)):
-            t = torch.empty(*shape, dtype=dtype, device=input_device)
-            torch.distributed.recv(t, message.src, tag=message.tag + index, group=get_pipeline_parallel_group())
-            message_tensors.append(t)
-
-        message.tensors = tuple(message_tensors)
-        # print(f"<<< recv:{torch.distributed.get_rank()}")
-
-        torch.cuda.current_stream().synchronize()
-        return message
+        return recv_message_tensors(input_device, config, message)
 
 
 def get_out_of_order(config: TransportConfig, queue_name: int, index: int, *, input_device: InputDevice) -> Tensors:

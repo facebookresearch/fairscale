@@ -155,7 +155,11 @@ def torch_spawn(world_sizes=None):
                 initialize_model_parallel(1, world_size)
                 torch.cuda.set_device(torch.distributed.get_rank() % torch.cuda.device_count())
                 if world_size in world_sizes:
-                    func(*args)
+                    try:
+                        func(*args)
+                    except BaseException as e:
+                        print(f"got exception {e} from test")
+                        raise e
                 else:
                     pytest.skip(f"requested world size doesn't match current world size")
             else:

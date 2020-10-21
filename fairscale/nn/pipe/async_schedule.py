@@ -133,7 +133,7 @@ class AsyncRecvOperator(torch.autograd.Function):
         ranks = get_pipeline_parallel_ranks()
         this_rank = torch.distributed.get_rank()
         dprint(f"AsyncRecvOperator back {this_rank} {len(grad)}, {ctx.args}")
-        # Note that dst/source are swaped coz in backward pass, maybe abstract
+        # Note that dst/source are swaped due to backward pass, maybe abstract
         # this out?
         body = AsyncMessageBody(
             AsyncMessageType.Gradients, ctx.index, source=ctx.args.dest, dest=ctx.args.source, order=ctx.args.order - 1

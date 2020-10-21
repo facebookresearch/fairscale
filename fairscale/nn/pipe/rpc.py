@@ -10,7 +10,8 @@ from torch.distributed.distributed_c10d import _get_global_rank
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 
 from . import Pipe
-from .types import TensorOrTensors
+from .messages import recv_message_tensors, send_message
+from .types import EVENT_LOOP_QUEUE, PipeMessage, TensorOrTensors, TransportConfig
 
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
@@ -70,7 +71,6 @@ def model_forward(training: bool, shape: torch.Size, dtype: torch.dtype) -> Opti
         dprint(f"mf: train stage {model.group.rank()}, {os.getpid()}")
         model.train(training)
         result = model(tensor)
-        torch.cuda.current_stream().synchronize()
         if model.final_stage:
             globals()["PipeResult"] = result
             return (get_shapes(result), get_dtype(result))
@@ -84,7 +84,7 @@ def model_forward(training: bool, shape: torch.Size, dtype: torch.dtype) -> Opti
     return None
 
 
-def send_result(training: bool) -> None:
+def send_result(training: bool, message: PipeMessage, grads_message: PipeMessage) -> None:
     dprint(f"send result {training}")
     group = get_pipeline_parallel_group()
     set_device_based_on_group(group)
@@ -97,76 +97,53 @@ def send_result(training: bool) -> None:
             result = [result]
 
         dest = _get_global_rank(group, 0)
+
         print(
             f"ho har {torch.distributed.get_rank()} " + str([_get_global_rank(group, i) for i in range(group.size())])
         )
-        torch.cuda.current_stream().synchronize()
-        for r in result:
-            dprint(f">>> send {torch.distributed.get_rank()}, {dest} {r.shape}, {r.dtype}, {r.device}")
-            if "Gloo" in group.__class__.__name__:
-                r = r.cpu()
-            torch.distributed.send(r.contiguous(), dest, group=group)
-            dprint(f"<<< send {torch.distributed.get_rank()}, {dest}")
-        torch.cuda.current_stream().synchronize()
+        message.tensors = tuple(result)
+        config = TransportConfig(False, None)
+        send_message(config, message, sync=False, skip_header=True)
 
         if training:
-            grads = []
-            for r in result:
-                g = torch.empty(r.shape).cuda()
-                dprint(f">>> recv grads {g.shape}")
-                torch.cuda.current_stream().synchronize()
-                torch.distributed.recv(g, dest, group=group)
-                torch.cuda.current_stream().synchronize()
-                if "Gloo" in group.__class__.__name__:
-                    g = g.cuda()
-                dprint(f"<<< recv grads {g.shape}")
-                grads.append(g)
+            grads_message.tensor_shapes = [r.shape for r in result]
+            grads_message.tensor_dtypes = [r.dtype for r in result]
+            input_device = torch.device("cuda", torch.cuda.current_device())
+            transport_config = TransportConfig(False, None)
+            grads_message = recv_message_tensors(input_device, transport_config, grads_message)
 
             with model.lock:
                 print(f" >>> autograd-backward tail")
-                torch.autograd.backward(result, tuple(grads), retain_graph=True)
+                torch.autograd.backward(result, grads_message.tensors, retain_graph=True)
                 print(f" <<< autograd-backward tail")
-                torch.cuda.synchronize()
 
     except Exception as e:
         print(f"got {e}")
 
 
-def recv_result(shapes: SizeOrSizes, dtypes: DtypeOrDtypes) -> TensorOrTensors:
+def recv_result(shapes: SizeOrSizes, dtypes: DtypeOrDtypes, message: PipeMessage) -> TensorOrTensors:
     group = get_pipeline_parallel_group()
     set_device_based_on_group(group)
     src = torch.distributed.distributed_c10d._get_global_rank(group, group.size() - 1)
     dprint(f"recv_result... {src}, {torch.cuda.current_device()}")
 
+    input_device = torch.device("cuda", torch.cuda.current_device())
+    transport_config = TransportConfig(False, None)
+
     if isinstance(shapes, torch.Size):
         shape = cast(torch.Size, shapes)
         dtype = cast(torch.dtype, dtypes)
-        t = torch.empty(shape, dtype=dtype).cuda()
-        dprint(f">>> recv {torch.distributed.get_rank()}, {src} {t.shape}, {t.dtype}")
-        torch.cuda.current_stream().synchronize()
-        torch.distributed.recv(t, src, group=group)
-        torch.cuda.current_stream().synchronize()
-        if "Gloo" in group.__class__.__name__:
-            t = t.cuda()
-        dprint(f"<<< recv {torch.distributed.get_rank()}, {src}")
-        dprint(f"recvd solo")
-        return t
+        message.tensor_shapes = [shape]
+        message.tensor_dtypes = [dtype]
+        message = recv_message_tensors(input_device, transport_config, message)
+        return message.tensors[0]
     else:
-        result = []
-        torch.cuda.current_stream().synchronize()
         shapes = cast(List[torch.Size], shapes)
         dtypes = cast(List[torch.dtype], dtypes)
-        for s, d in zip(shapes, dtypes):
-            t = torch.empty(s, dtype=d).cuda()
-            dprint(f">>> recv {torch.distributed.get_rank()}, {src} {t.shape}, {t.dtype}")
-            torch.distributed.recv(t, src, group=group)
-            if "Gloo" in group.__class__.__name__:
-                t = t.cuda()
-            dprint(f"<<< recv {torch.distributed.get_rank()}, {src}")
-            dprint(f"recvd multi / {len(shapes)}")
-            result.append(t)
-        torch.cuda.current_stream().synchronize()
-        return tuple(result)
+        message.tensor_shapes = shapes
+        message.tensor_dtypes = dtypes
+        message = recv_message_tensors(input_device, transport_config, message)
+        return message.tensors
 
 
 def get_global_ranks_from_group(group: ProcessGroup) -> List[int]:
@@ -179,35 +156,26 @@ def run_model(model: Pipe, tensor: TensorOrTensors, event: Event, lock: Lock) ->
         print(f">> run_model thread {t}")
         assert model.group
         set_device_based_on_group(model.group)
-        torch.cuda.current_stream().synchronize()
-        torch.cuda.synchronize()
         model(tensor, event=event)
-        torch.cuda.synchronize()
-        torch.cuda.current_stream().synchronize()
         print(f"<< run_model thread {t}")
 
 
 class PipeBackRedirect(torch.autograd.Function):
     @staticmethod
     # type: ignore
-    def forward(ctx, inputs, dest, event):
+    def forward(ctx, inputs, dest, event, message):
         ctx.dest = dest
         ctx.event = event
+        ctx.message = message
         return inputs
 
     @staticmethod
     # type: ignore
     def backward(ctx, *grad):
         dprint(f">>> back hook yay")
-        group = get_pipeline_parallel_group()
-        torch.cuda.current_stream().synchronize()
-        for g in grad:
-            dprint(f">>> back send {g.shape}")
-            if "Gloo" in group.__class__.__name__:
-                g = g.cpu()
-            torch.distributed.send(g, ctx.dest, group=group)
-            dprint(f"<<< back send")
-        torch.cuda.current_stream().synchronize()
+        config = TransportConfig(False, None)
+        ctx.message.tensors = tuple(grad)
+        send_message(config, ctx.message, sync=False, skip_header=True)
         ctx.event.set()
         dprint(f"<<< back hook yay")
         return (None, None, None, None)
@@ -219,10 +187,8 @@ def callback_with_model(callback: Callable, ctx: Any) -> None:
 
     global PipeModel
 
-    torch.cuda.current_stream().synchronize()
     with PipeModel.lock:
         callback(ctx, PipeModel)
-    torch.cuda.current_stream().synchronize()
 
 
 class PipeRPCWrapper(nn.Module):
@@ -245,7 +211,6 @@ class PipeRPCWrapper(nn.Module):
 
         self.model = Pipe(*args, **kwargs)
         self.worker_map = kwargs["worker_map"]
-        print(f"calling rpc {args}, {kwargs}")
         futures = [
             # FIXME get global rank
             rpc.rpc_async(self.get_rpc_name(rank), register_remote_model, args=(args, kwargs))
@@ -271,6 +236,11 @@ class PipeRPCWrapper(nn.Module):
         shape = get_shapes(tensor)
         dtype = get_dtype(tensor)
 
+        if isinstance(tensor, torch.Tensor):
+            num_tensors = 1
+        else:
+            num_tensors = len(tensor)
+
         futures = [
             rpc.rpc_async(self.get_rpc_name(rank), model_forward, args=(self.model.training, shape, dtype))
             for rank in range(1, self.group.size())
@@ -288,10 +258,15 @@ class PipeRPCWrapper(nn.Module):
             dprint("forward after wait recv")
             dest_rank = self.group.size() - 1
             dest = self.get_rpc_name(dest_rank)
+            dest_global_rank = _get_global_rank(self.group, dest_rank)
+            src_global_rank = torch.distributed.get_rank()
             dprint(f"async to {dest}")
-            rpc.rpc_async(dest, send_result, args=(self.model.training,))
+            queue = EVENT_LOOP_QUEUE
+            message = PipeMessage(dest_global_rank, src_global_rank, queue_name=queue, tensor_count=num_tensors)
+            grads_message = PipeMessage(src_global_rank, dest_global_rank, queue_name=queue, tensor_count=num_tensors)
+            rpc.rpc_async(dest, send_result, args=(self.model.training, message, grads_message))
             dprint(">>> recv_result")
-            result = recv_result(shape, dtype)
+            result = recv_result(shape, dtype, message)
             dprint("<<< recv_result")
             # event.set()
             dprint("not set event")
@@ -302,7 +277,7 @@ class PipeRPCWrapper(nn.Module):
                     for r in result:
                         r.requires_grad_()
 
-                applied = PipeBackRedirect.apply(result, _get_global_rank(self.group, dest_rank), event)
+                applied = PipeBackRedirect.apply(result, _get_global_rank(self.group, dest_rank), event, grads_message)
             except Exception as e:
                 dprint(f"failed got {e}")
             dprint("return applied")

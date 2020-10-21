@@ -17,6 +17,7 @@
 # limitations under the License.
 
 """The pipeline parallelism of Pipe."""
+import logging
 import os
 from queue import Empty as QueueEmpty
 from queue import Queue
@@ -56,17 +57,7 @@ from .worker import Task, create_workers, join_workers
 
 __all__: List[str] = []
 
-
 ExcInfo = Tuple[Type[BaseException], BaseException, TracebackType]
-
-
-debug_fd = None
-
-
-def dprint(s: str) -> None:
-    print(f"{time.monotonic()}: {s}")
-    # debug_fd.write(f"{time.monotonic()}: {s}\n")
-    # debug_fd.flush()
 
 
 class SendOperator(torch.autograd.Function):
@@ -309,8 +300,6 @@ class Pipeline:
         elif self.style is PipelineStyle.AsyncSchedule:
             assert self.group
             rank = self.group.rank()
-            dprint(f">>> start barrier")
-            # torch.distributed.barrier(group=self.group)
             event_loop = AsyncEventLoop(
                 self.mp_partitions,
                 self.group,
@@ -319,19 +308,18 @@ class Pipeline:
                 self.input_device,
                 self.checkpoint_stop,
             )
-            dprint(f"<<< start barrier")
             if rank == 0 and not self.final_stage:
-                dprint(f"{torch.distributed.get_rank()}: entered event head")
+                logging.debug(f"{torch.distributed.get_rank()}: entered event head")
                 event_loop.event_loop_head(batches, skip_trackers, event)
-                dprint(f"{torch.distributed.get_rank()}: exited event head")
+                logging.debug(f"{torch.distributed.get_rank()}: exited event head")
             elif self.final_stage:
-                dprint(f"{torch.distributed.get_rank()}: entered event tail")
+                logging.debug(f"{torch.distributed.get_rank()}: entered event tail")
                 event_loop.event_loop_tail(batches, skip_trackers)
-                dprint(f"{torch.distributed.get_rank()}: exited event tail")
+                logging.debug(f"{torch.distributed.get_rank()}: exited event tail")
             else:
-                dprint(f"{torch.distributed.get_rank()}: entered event loop")
+                logging.debug(f"{torch.distributed.get_rank()}: entered event loop")
                 event_loop.event_loop(len(batches), skip_trackers)
-                dprint(f"{torch.distributed.get_rank()}: exited event loop")
+                logging.debug(f"{torch.distributed.get_rank()}: exited event loop")
 
         self.callcount += 1
 
