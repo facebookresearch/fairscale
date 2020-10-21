@@ -46,7 +46,7 @@ def get_problem(rank, world_size, batch_size, device, model_name: str):
         }
 
     print("Saving dataset to temporary: ", TEMPDIR)
-    dataset = MNIST(transform=ToTensor(), download=False, root=TEMPDIR)
+    dataset = MNIST(transform=ToTensor(), download=True, root=TEMPDIR)
     sampler: Sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=True)
     dataloader = DataLoader(dataset=dataset, batch_sampler=batch_sampler, collate_fn=collate)
@@ -83,10 +83,19 @@ def train(
         torch.backends.cudnn.benchmark = False
 
     device = torch.device("cpu") if args.cpu else torch.device(rank)
-    model, dataloader, loss_fn = get_problem(rank, args.world_size, args.batch_size, device, args.torchvision_model)
+    model, tentatives = None, 0
+    while model is None and tentatives < 5:
+        try:
+            model, dataloader, loss_fn = get_problem(
+                rank, args.world_size, args.batch_size, device, args.torchvision_model
+            )
+        except (RuntimeError, EOFError) as e:
+            print("Failed loading dataset: ", e)
+            tentatives += 1
 
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
+    model = cast(nn.Module, model)
 
     if optim_type == OptimType.oss_sdp:
         ddp = ShardedDataParallel(
