@@ -6,6 +6,7 @@ from enum import Enum
 import importlib
 import logging
 import math
+import shutil
 import tempfile
 import time
 from typing import Any, List, Optional, cast
@@ -46,8 +47,7 @@ def get_problem(rank, world_size, batch_size, device, model_name: str):
             "label": torch.tensor([i[1] for i in inputs]).to(device),
         }
 
-    logging.info("Saving dataset to temporary: ", TEMPDIR)
-    dataset = MNIST(transform=ToTensor(), download=True, root=TEMPDIR)
+    dataset = MNIST(transform=ToTensor(), download=False, root=TEMPDIR)
     sampler: Sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=True)
     dataloader = DataLoader(dataset=dataset, batch_sampler=batch_sampler, collate_fn=collate)
@@ -70,6 +70,8 @@ def train(
     optim_type: OptimType = OptimType.vanilla,
     check_regression: bool = True,
 ):
+    logging.basicConfig(level=logging.INFO)
+
     # DDP
     dist_init(rank=rank, world_size=args.world_size, backend=backend)
 
@@ -85,19 +87,7 @@ def train(
         torch.backends.cudnn.benchmark = False
 
     device = torch.device("cpu") if args.cpu else torch.device(rank)
-    model, tentatives = None, 0
-    while model is None and tentatives < 5:
-        try:
-            model, dataloader, loss_fn = get_problem(
-                rank, args.world_size, args.batch_size, device, args.torchvision_model
-            )
-        except (RuntimeError, EOFError) as e:
-            logging.warning("Failed loading dataset: ", e)
-            tentatives += 1
-
-    if model is None:
-        logging.error("Could not download MNIST dataset")
-        exit(-1)
+    model, dataloader, loss_fn = get_problem(rank, args.world_size, args.batch_size, device, args.torchvision_model)
 
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
@@ -223,12 +213,34 @@ if __name__ == "__main__":
     parser.add_argument("--torchvision_model", type=str, help="Any torchvision model name (str)", default="resnet101")
 
     args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO)
     logging.info(f"Benchmark arguments: {args}")
 
     backend = "nccl" if (not args.gloo or not torch.cuda.is_available()) and not args.cpu else "gloo"
 
+    # Download dataset once for all processes
+    dataset, tentatives = None, 0
+    while dataset is None and tentatives < 5:
+        try:
+            dataset = MNIST(transform=None, download=True, root=TEMPDIR)
+        except (RuntimeError, EOFError) as e:
+            if isinstance(e, RuntimeError):
+                # Corrupted data, erase and restart
+                shutil.rmtree(TEMPDIR + "/MNIST")
+
+            logging.warning("Failed loading dataset: ", e)
+            tentatives += 1
+
+    if dataset is None:
+        logging.error("Could not download MNIST dataset")
+        exit(-1)
+    else:
+        logging.info("Dataset downloaded")
+
+    # Benchmark the different configurations, via multiple processes
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
-        logging.info("\nBenchmark vanilla optimizer")
+        logging.info("*** Benchmark vanilla optimizer")
         mp.spawn(
             train,
             args=(args, backend, OptimType.vanilla, False,),  # no regression check
@@ -237,13 +249,13 @@ if __name__ == "__main__":
         )
 
     if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
-        logging.info("\nBenchmark OSS with DDP")
+        logging.info("*** Benchmark OSS with DDP")
         mp.spawn(
             train, args=(args, backend, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,
         )
 
     if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
-        logging.info("\nBenchmark OSS with ShardedDDP")
+        logging.info("*** Benchmark OSS with ShardedDDP")
         mp.spawn(
             train,
             args=(
