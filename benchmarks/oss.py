@@ -5,6 +5,7 @@ import argparse
 from enum import Enum
 import importlib
 import math
+import tempfile
 import time
 from typing import Any, List, Optional, cast
 
@@ -15,14 +16,16 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
-from torchvision.datasets import FakeData
+from torch.utils.data import BatchSampler, DataLoader, Sampler
+from torch.utils.data.distributed import DistributedSampler
+from torchvision.datasets import FashionMNIST
 from torchvision.transforms import ToTensor
 
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim.oss import OSS
 
 OPTIM = torch.optim.RMSprop
+TEMPDIR = tempfile.gettempdir()
 
 
 def dist_init(rank, world_size, backend):
@@ -30,23 +33,24 @@ def dist_init(rank, world_size, backend):
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 
-def get_problem(rank, data_size, batch_size, device, model_name: str):
+def get_problem(rank, world_size, batch_size, device, model_name: str):
     # Select the desired model on the fly
     print(f"Using {model_name} for benchmarking")
     model = getattr(importlib.import_module("torchvision.models"), model_name)(pretrained=False).to(device)
 
-    # Data setup, dummy data
+    # Data setup, duplicate the grey channels to get pseudo color
     def collate(inputs: List[Any]):
         return {
-            "inputs": torch.stack([i[0] for i in inputs]).to(device),
-            "label": torch.stack([i[1] for i in inputs]).to(device),
+            "inputs": torch.stack([i[0] for i in inputs]).repeat(1, 3, 1, 1).to(device),
+            "label": torch.tensor([i[1] for i in inputs]).to(device),
         }
 
-    dataloader = DataLoader(
-        dataset=FakeData(transform=ToTensor(), size=data_size, random_offset=rank),
-        batch_size=batch_size,
-        collate_fn=collate,
-    )
+    # Use the test set on purpose, a little smaller
+    dataset = FashionMNIST(transform=ToTensor(), train=False, download=True, root=TEMPDIR)
+    sampler: Sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
+    batch_sampler = BatchSampler(sampler, batch_size, drop_last=True)
+    dataloader = DataLoader(dataset=dataset, batch_sampler=batch_sampler, collate_fn=collate)
+
     loss_fn = nn.CrossEntropyLoss()
     return model, dataloader, loss_fn
 
@@ -79,7 +83,7 @@ def train(
         torch.backends.cudnn.benchmark = False
 
     device = torch.device("cpu") if args.cpu else torch.device(rank)
-    model, dataloader, loss_fn = get_problem(rank, args.data_size, args.batch_size, device, args.torchvision_model)
+    model, dataloader, loss_fn = get_problem(rank, args.world_size, args.batch_size, device, args.torchvision_model)
 
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
@@ -108,7 +112,7 @@ def train(
         torch.cuda.reset_peak_memory_stats(rank)
         torch.cuda.synchronize(rank)
 
-    # Dummy training loop
+    # Standard training loop
     training_start = time.monotonic()
     model.train()
 
@@ -118,7 +122,7 @@ def train(
 
     for epoch in range(args.epochs):
         epoch_start = time.monotonic()
-
+        n_items = 0
         for batch in dataloader:
 
             def closure():
@@ -147,6 +151,8 @@ def train(
             else:
                 final_loss = optimizer.step(closure)
 
+            n_items += args.batch_size
+
         epoch_end = time.monotonic()
 
         if optim_type == OptimType.oss:
@@ -158,14 +164,14 @@ def train(
                 _ = optimizer.state_dict()
                 print("... State dict collected")
 
-        measurements.append(args.data_size / (epoch_end - epoch_start))
+        measurements.append(n_items / (epoch_end - epoch_start))
         if dist.get_rank() == 0:
             print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss:.3f}")
 
     if not args.cpu:
         torch.cuda.synchronize(rank)
     training_stop = time.monotonic()
-    img_per_sec = args.data_size / (training_stop - training_start) * args.epochs
+    img_per_sec = n_items / (training_stop - training_start) * args.epochs
     max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
 
     print(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec overall")
@@ -194,7 +200,6 @@ if __name__ == "__main__":
     parser.add_argument("--world_size", action="store", default=2, type=int)
     parser.add_argument("--epochs", action="store", default=10, type=int)
     parser.add_argument("--batch_size", action="store", default=32, type=int)
-    parser.add_argument("--data_size", action="store", default=512, type=int)
     parser.add_argument("--check_regression", action="store_true", default=False)
     parser.add_argument("--reference_speed", action="store", default=29.7, type=float)
     parser.add_argument("--reference_memory", action="store", default=4475, type=float)
