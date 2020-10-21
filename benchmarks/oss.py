@@ -18,7 +18,7 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import BatchSampler, DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
-from torchvision.datasets import FashionMNIST
+from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 
 from fairscale.nn.data_parallel import ShardedDataParallel
@@ -45,8 +45,8 @@ def get_problem(rank, world_size, batch_size, device, model_name: str):
             "label": torch.tensor([i[1] for i in inputs]).to(device),
         }
 
-    # Use the test set on purpose, a little smaller
-    dataset = FashionMNIST(transform=ToTensor(), train=False, download=True, root=TEMPDIR)
+    print("Saving dataset to temporary: ", TEMPDIR)
+    dataset = MNIST(transform=ToTensor(), download=True, root=TEMPDIR)
     sampler: Sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=True)
     dataloader = DataLoader(dataset=dataset, batch_sampler=batch_sampler, collate_fn=collate)
