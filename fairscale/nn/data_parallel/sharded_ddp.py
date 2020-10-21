@@ -4,145 +4,89 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-A distributed data parallel class that works with OSS optimizer.
-
-Adopted from LegacyDistributedDataParallel module from fairseq.
+A module wrapper to go with a Sharded Optimizer in order to handle targeted gradient reduction/gathering automatically.
 """
 
-from contextlib import contextmanager
-import copy
-from typing import Any, Dict, Generator, List, Type, cast
+from collections import defaultdict
+import logging
+from typing import Any, Dict, List, Optional, Union, cast
 
 import torch
-from torch import Tensor, nn
+from torch import nn
 import torch.distributed as dist
 from torch.nn import Parameter
 
-from fairscale.optim import OSS
+from fairscale.optim.oss import OSS
 
 
-class ShardedDataParallel(nn.Module):
-    """Implements distributed data parallel training with optimizer state sharding.
+def _get_global_rank(group: Any, rank: int) -> int:
+    if group is dist.group.WORLD:
+        return rank
+    else:
+        global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
+    return global_rank
 
-    A simplified version of :class:`torch.nn.parallel.DistributedDataParallel`.
-    This version uses a c10d process group for communication and optionally
-    broadcast buffers.
 
-    Args:
-        module (~torch.nn.Module): module to be parallelized
-        optimizer (~torch.optim.Optimizer): optimizer to be used for training
-        optimizer_params(Dict): extra parameters for the optimizer
-        world_size (int): number of parallel workers
-        broadcast_buffers (bool): flag that enables syncing (broadcasting) buffers of
-        the module at beginning of the forward function. (default: ``True``)
-        process_group (optional): the c10d process group to be used for
-            distributed gradient reduction. If None, the default WORLD process group
-            will be used.
-        buffer_size (int, optional): number of elements to buffer before
-            performing reduce (default: 512k). Used to reduce multiple small
-            params to avoid communication overhead.
+class ModelDispatch(nn.Module):
+    """
+    Wrap a model, make it possible to load parameters on the fly for the FW pass and gather gradients.
+    Depending on whether this rank is or is not the `owner_rank`, this ModelShard either only handles
+    a shard of the compute and is stateless or also owns the up to date state.
     """
 
     def __init__(
         self,
-        module: nn.Module,
-        optimizer: Type[torch.optim.Optimizer],
-        optimizer_params: Dict[str, Any],
-        world_size: int,
-        broadcast_buffers: bool,
-        process_group: Any = None,
+        base_model: nn.Module,
+        sharded_optimizer: Union[OSS, List[OSS]],
+        process_group: Any,
+        broadcast_buffers: bool = True,
+        reference_rank: int = 0,
         buffer_size: int = 2 ** 19,
     ):
         super().__init__()
-
-        self.module = module
-        self.world_size = world_size
         self.process_group = process_group if process_group is not None else dist.group.WORLD
+        self.base_model = base_model
+
+        self.sharded_optimizers = (
+            [cast(OSS, sharded_optimizer)] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
+        )
         self.rank = dist.get_rank(self.process_group)
-        self.broadcast_buffers = broadcast_buffers
-        self.authoritative_rank = 0
-
-        # Flag used to make sure we only reduce gradients one time in the execution engine
-        self.need_reduction = False
-
-        # We can also forcibly accumulate grads locally and only do the
-        # gradients-reduce at some later time
-        self.accumulate_grads = False
-
-        # Build the sharded optimizer
-        self.sharded_optimizer = OSS(self.module.parameters(), optim=optimizer, group=process_group, **optimizer_params)
+        self.global_rank = _get_global_rank(self.process_group, dist.get_rank(self.process_group))
+        self.reference_global_rank = _get_global_rank(self.process_group, reference_rank)
+        self.world_size = dist.get_world_size(self.process_group)
+        self.broadcast_model_buffers = broadcast_buffers and len(list(self.base_model.buffers(recurse=True))) > 0
 
         # Allocate reduce buffers
         # - Never use a bigger buffer than the number of model params
-        buffer_size = min(buffer_size, sum(p.numel() for p in self.module.parameters()))
-        self._reduce_buffers: Dict[torch.device, List[torch.Tensor]] = {}
+        buffer_size = min(buffer_size, sum(p.numel() for p in self.base_model.parameters()))
+        self._reduce_buffers: Dict[OSS, Dict[torch.device, List[torch.Tensor]]] = defaultdict(dict)
 
-        # - One buffer per rank per device
-        for device, per_device in self.sharded_optimizer.per_device_params.items():
-            buffer_dtype = per_device[0][0].dtype
-            self._reduce_buffers[device] = [
-                torch.zeros(buffer_size, dtype=buffer_dtype, device=device) for _ in range(len(per_device))
-            ]
+        # - One buffer per rank per device for each optimizer
+        for sharded_optimizer in self.sharded_optimizers:
+            for device, per_device in sharded_optimizer.per_device_params.items():
+                buffer_dtype = per_device[0][0].dtype
+                self._reduce_buffers[sharded_optimizer][device] = [
+                    torch.zeros(buffer_size, dtype=buffer_dtype, device=device) for _ in range(len(per_device))
+                ]
 
-        # Sanity checks
-        assert len(self.sharded_optimizer.param_to_rank) == len(
-            list(self.module.parameters())
-        ), "number of params do not match"
-        for param in self.module.parameters():
-            assert param in self.sharded_optimizer.param_to_rank, f"{param} not in the optimizer"
+        # Sync all the ranks
+        self.sync_all_params()
 
-    def __getstate__(self) -> Dict:
-        attrs = copy.copy(self.__dict__)
-        return attrs
+    def forward(self, *inputs):  # type: ignore
+        if self.broadcast_model_buffers:
+            self.sync_buffers(non_blocking=False)
 
-    @property
-    def optimizer(self) -> torch.optim.Optimizer:
-        return self.sharded_optimizer
+        return (self.base_model(*inputs),) if isinstance(inputs, tuple) else self.base_model(inputs)
 
-    def train(self, mode: bool = True) -> "ShardedDataParallel":
-        pre_mode = self.module.training
-        self.module.train(mode)
-        if self.module.training:
-            assert not self.need_reduction or pre_mode, "incorrect state transition"
-        else:
-            assert not self.need_reduction, "try to enter eval with grads unreduced"
-        return self
-
-    @contextmanager
-    def no_sync(self) -> Generator:
-        """A context manager to disable gradient synchronization."""
-        old_accumulate_grads = self.accumulate_grads
-        self.accumulate_grads = True
-        yield
-        self.accumulate_grads = old_accumulate_grads
-
-    def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
-        if self.module.training:
-            if self.need_reduction:
-                raise RuntimeError("OssDdp requires explicit reduction, must call OssDdp.reduce")
-            if not self.accumulate_grads:
-                self.need_reduction = True
-            if self.broadcast_buffers and len(list(self.module.buffers())) > 0:
-                self._sync_buffers()
-
-        return self.module(*inputs, **kwargs)
-
-    def reduce(self) -> None:
+    def dispatch_grads(self) -> None:
         """
-        This function must be called explicitly after backward to reduce
-        gradients. There is no automatic hook like c10d.
+        Reduce -NOTE: could become gather- all the gradients to the appropriate ranks
         """
-        assert self.module.training, "Cannot call reduce in eval"
 
-        if not self.need_reduction or self.accumulate_grads:
-            return
-
-        self.need_reduction = False
-
-        with torch.no_grad():
-            for device, per_device in self.sharded_optimizer.per_device_params.items():
+        for sharded_optimizer in self.sharded_optimizers:
+            for device, per_device in sharded_optimizer.per_device_params.items():
                 self._reduce_grads_task(
-                    self._reduce_buffers[device],
+                    self._reduce_buffers[sharded_optimizer][device],
                     per_device,
                     group=self.process_group,
                     self_rank=self.rank,
@@ -151,27 +95,31 @@ class ShardedDataParallel(nn.Module):
 
     @staticmethod
     def _reduce_grads_task(
-        buffers: List[torch.Tensor], per_rank_params: List[List[Parameter]], group: Any, self_rank: int, world_size: int
+        buffers: List[torch.Tensor],
+        per_rank_params: List[List[Parameter]],
+        group: Any,
+        self_rank: int,
+        world_size: int,
     ) -> None:
         """Helper to reduce a list of params. The params are sorted by size, smallest first, which allows for
         an opportunistic bucketing.
 
-        NOTE: All param gradients are assumed to exist"""
+        .. warning: All param gradients are assumed to exist
+        .. warning: Reduced grads are removed from the ranks which don't own them, to save memory"""
 
         buffer_size = buffers[0].numel()
         bucket_requests = []
-        requests = []
+        direct_requests = []
 
-        for (rank, params), buffer in zip(enumerate(per_rank_params), buffers):
+        # First issue all the reduce requests, for all devices, and collect the pseudo-futures. Two parts:
+        #  - the smallest gradients are bucketed
+        #  - the biggest are reduced directly
+        for (dst_rank, params), buffer in zip(enumerate(per_rank_params), buffers):
             # All the params are sorted per rank and per increasing size
             if len(params) == 0:
                 continue
 
-            for p in params:
-                if p.grad is None:
-                    p.grad = torch.zeros_like(p)
-
-            global_rank = OSS.get_global_rank(group, rank)
+            global_dst_rank = OSS.get_global_rank(group, dst_rank)
 
             # Copy small gradients into per-GPU buffers and then async reduce
             i_bucketed = 0  # the number of tensors packed in the buffer
@@ -182,35 +130,47 @@ class ShardedDataParallel(nn.Module):
                 end = offset + params[i_bucketed].numel()
                 buffer[offset:end].copy_(params[i_bucketed].grad.data.view(-1))  # type: ignore
                 offset = end
+
+                if dst_rank != self_rank:
+                    # This rank is not the owner, these gradients have been copied and can be released
+                    params[i_bucketed].grad = None
+
                 i_bucketed += 1
 
             if i_bucketed > 0:
                 buffer.div_(world_size)  # type: ignore
                 bucket_requests.append(
                     (
-                        dist.reduce(tensor=buffer, dst=global_rank, group=group, async_op=True),  # type: ignore
-                        rank,
+                        dist.reduce(tensor=buffer, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
+                        dst_rank,
                     )
                 )
 
             # Directly reduce the other grads
             for p in params[i_bucketed:]:
-                p.grad = cast(Tensor, p.grad)
+                p.grad = cast(Parameter, p.grad)
                 if p.grad.requires_grad:
                     raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
 
-                p.grad.div_(world_size)  # type: ignore
-                requests.append(dist.reduce(tensor=p.grad, dst=global_rank, group=group, async_op=True))  # type: ignore
+                p.grad.data.div_(world_size)  # type: ignore
+                direct_requests.append(
+                    (
+                        dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
+                        dst_rank,
+                        p,
+                    )
+                )
 
-        # Unroll the initial packed small gradients, as soon as possible
-        for future, rank in bucket_requests:
-            future.wait()
+        # Now unroll the initial packed small gradients
+        for work_handle, dst_rank in bucket_requests:
+            work_handle.wait()
 
-            if rank == self_rank:
+            if dst_rank == self_rank:
+                # This rank is the owner, unpack the results in the appropriate parameters
                 i_bucketed = 0  # the number of tensors packed in the buffer
                 offset = 0
-                params = per_rank_params[rank]
-                buffer = buffers[rank]
+                params = per_rank_params[dst_rank]
+                buffer = buffers[dst_rank]
 
                 while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
                     end = offset + params[i_bucketed].numel()
@@ -218,20 +178,133 @@ class ShardedDataParallel(nn.Module):
                     offset = end
                     i_bucketed += 1
 
-        # Make sure that we're done with this device before moving on and cleaning the unused params
-        _ = list(map(lambda x: x.wait(), requests))
+        # Finally, make sure that we're done with this device before moving on and cleaning the unused params
+        for work_handle, dst_rank, param in direct_requests:
+            work_handle.wait()
 
-    def _sync_buffers(self) -> None:
+            if dst_rank != self_rank:
+                # This gradient has been reduced and this rank is not the owner, it can be released
+                param.grad = None
+
+    def sync_buffers(self, non_blocking: bool = False) -> Optional[List[Any]]:
         """
         Sync all the param buffers in between ranks.
         TODO: Could be worth bucketing ?
         """
-        _ = list(
-            map(
-                lambda x: x.wait(),
-                map(
-                    lambda x: dist.broadcast(x, self.authoritative_rank, self.process_group, async_op=True),
-                    self.module.buffers(),
-                ),
-            )
+
+        work_handles = [
+            dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True)
+            for x in self.base_model.buffers(recurse=True)
+        ]
+        return work_handles if non_blocking else self.wait(work_handles)
+
+    def sync_all_params(self) -> None:
+        """
+        Sync the complete model states in between the ranks
+        """
+        work_handles = [
+            dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
+            for t in self.base_model.state_dict().values()
+        ]
+        self.wait(work_handles)
+
+    @staticmethod
+    def wait(requests: Optional[List[Any]]) -> None:
+        """
+        Make an async function synchronous.
+        Use this to wrap the function call directly
+        """
+        if requests:
+            _ = list(map(lambda x: x.wait(), requests))
+        return
+
+
+class DispatchLayer(torch.autograd.Function):
+    """
+     The dispatch layer is a synchronization point between model shards.
+
+     - In the forward pass it does nothing
+     - In the backward pass, it gathers gradients to the owner.
+
+     NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
+     """
+
+    @staticmethod
+    def forward(ctx: Any, model: ModelDispatch, *inputs: Any) -> Any:  # type: ignore
+        # Store a handle to the model for the BW dispatch
+        ctx.model = model
+
+        return inputs
+
+    @staticmethod
+    def backward(ctx, *grad_outputs):  # type: ignore
+        ctx.model.dispatch_grads()
+
+        # The returned variables need to mirror the forward inputs
+        if isinstance(grad_outputs, tuple):
+            return None, grad_outputs[0]
+
+        return None, grad_outputs
+
+
+class ShardedDataParallel(nn.Module):
+    """
+    Wrap the model, and reduce the gradients to the right rank after the backward pass.
+
+    - the partition is given by the sharded optimizer
+    - wrap the base model with a model which knows where to reduce each gradient
+    - add an autograd function which calls the model grad dispatch on the way back
+
+     Args:
+        base_model (nn.Module):
+            model to be wrapped
+        sharded_optimizer (OSS, or list of OSS):
+            the sharded optimizer(s) which will decide the gradient partitioning
+    Keyword Args:
+        process_group (torch.nn.Optimizer):
+            optimizer to shard (default: SGD)
+        process_group (group):
+            torch.distributed group (default: group.WORLD)
+        broadcast_buffers (bool):
+            whether to broadcast model buffers in between ranks at the beginning of each forward pass
+        buffer_size (int):
+            the size of the buffer in bits used to batch the small parameter tensors (default 128k).
+    """
+
+    def __init__(
+        self,
+        base_model: nn.Module,
+        sharded_optimizer: Union[OSS, List[OSS]],
+        process_group: Any = None,
+        broadcast_buffers: bool = True,
+        buffer_size: int = 2 ** 17,
+    ):
+        super().__init__()
+
+        self.model_dispatch = ModelDispatch(
+            base_model=base_model,
+            sharded_optimizer=sharded_optimizer,
+            process_group=process_group,
+            broadcast_buffers=broadcast_buffers,
+            reference_rank=0,
+            buffer_size=buffer_size,
         )
+
+    def forward(self, *inputs: Any, **kwargs: Any) -> Any:
+        # All inputs need to required_grad for autograd to properly track the first dispatch layer
+        if isinstance(inputs, tuple):
+            for i in inputs:
+                i.requires_grad = True
+        elif isinstance(inputs, torch.Tensor):
+            inputs.requires_grad = True
+
+        # Register the model dispatch in the autograd graph
+        inputs = DispatchLayer.apply(self.model_dispatch, *inputs)
+
+        # Normal model FW
+        outputs = self.model_dispatch(*inputs)
+
+        return outputs[0] if len(outputs) == 1 else outputs
+
+    def reduce(self) -> None:
+        logging.warning("This is not useful anymore, gradients have been reduced automatically with the backward pass")

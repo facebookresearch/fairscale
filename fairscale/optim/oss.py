@@ -150,9 +150,9 @@ class OSS(Optimizer):
                     self._per_device_params[device][self.param_to_rank[param]] += [param]
 
             # Sort param_lists by size
-            for k in self._per_device_params.keys():
-                for r in self._per_device_params[k]:
-                    r.sort(key=lambda x: x.numel())
+            for device in self._per_device_params.keys():
+                for rank_params in self._per_device_params[device]:
+                    rank_params.sort(key=lambda x: x.numel())
 
         return self._per_device_params
 
@@ -181,12 +181,12 @@ class OSS(Optimizer):
         self._sync_param_groups()
 
         # Run the optimizer step on this shard only:
-        self._free_other_grads()
-
         if closure is not None:
             loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
         else:
             loss = self.optim.step(**kwargs)
+
+        self._free_other_grads()  # Depending on the DDP engine used, gradients specific to other ranks may still be loaded
 
         # Sync all the updated shards in between the ranks
         with torch.no_grad():
@@ -421,17 +421,16 @@ class OSS(Optimizer):
         """Helper function to broadcast all the parameters from a given device
         """
         buffer_size = buffers[0].numel()
-        restore_require_grad = []
         bucket_requests = []
-        requests = []
+        direct_requests = []
 
         # Bucket and issue all the async calls
-        for (rank, params), buffer in zip(enumerate(per_rank_params), buffers):
+        for (src_rank, params), buffer in zip(enumerate(per_rank_params), buffers):
             # All the params are sorted per rank and per increasing size
             if len(params) == 0:
                 continue
 
-            global_rank = OSS.get_global_rank(self.group, rank)
+            global_src_rank = OSS.get_global_rank(self.group, src_rank)
 
             # Copy small parameters into per-GPU buffers
             i_bucketed = 0  # the number of tensors packed in the buffer
@@ -440,35 +439,29 @@ class OSS(Optimizer):
             # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
             while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
                 end = offset + params[i_bucketed].numel()
-                if global_rank == self.global_rank:
+                if global_src_rank == self.global_rank:
                     buffer[offset:end].copy_(params[i_bucketed].data.view(-1))  # type: ignore
                 offset = end
                 i_bucketed += 1
 
             if i_bucketed > 0:
-                future = dist.broadcast(tensor=buffer, src=global_rank, group=self.group, async_op=True)
-                if global_rank != self.global_rank:
+                future = dist.broadcast(tensor=buffer, src=global_src_rank, group=self.group, async_op=True)
+                if global_src_rank != self.global_rank:
                     # This request will need to be unrolled
-                    bucket_requests.append((future, rank))
+                    bucket_requests.append((future, src_rank))
 
             # Directly broadcast the rest
             for param in params[i_bucketed:]:
-                # NOTE: Broadcast is in-place and not differentiable
-                # Gloo will assert on this operation for any tensor that requires grad.
-                # We save and restore the grad requirement state to work around that, in our case
-                # the grad is only useful on the source rank.
-                if param.requires_grad:
-                    restore_require_grad.append(param)
-                    param.requires_grad = False
-
-                requests.append(dist.broadcast(tensor=param, src=global_rank, group=self.group, async_op=True))
+                direct_requests.append(
+                    dist.broadcast(tensor=param.data, src=global_src_rank, group=self.group, async_op=True),
+                )
 
         # Unroll the initial packed small parameters
-        for gate, rank in bucket_requests:
+        for gate, src_rank in bucket_requests:
             gate.wait()
 
-            params = per_rank_params[rank]
-            buffer = buffers[rank]
+            params = per_rank_params[src_rank]
+            buffer = buffers[src_rank]
             i_bucketed = 0  # the number of tensors packed in the buffer
             offset = 0
 
@@ -478,8 +471,5 @@ class OSS(Optimizer):
                 offset = end
                 i_bucketed += 1
 
-        # Unroll all the async work items, just in case
-        _ = list(map(lambda x: x.wait(), requests))
-
-        for p in restore_require_grad:
-            p.requires_grad = True
+        # Unroll all the async work items, wait for completion
+        _ = list(map(lambda x: x.wait(), direct_requests))

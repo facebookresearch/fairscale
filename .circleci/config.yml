@@ -42,7 +42,7 @@ install_dep_15: &install_dep_15
   - run:
       name: Install Dependencies
       command: |
-        sudo apt-get install -y mpi-default-dev
+        sudo apt-get install -y libopenmpi-dev
         pip install --progress-bar off torch==1.5.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -52,7 +52,7 @@ install_dep_16: &install_dep_16
   - run:
       name: Install Dependencies
       command: |
-        sudo apt-get install -y mpi-default-dev
+        sudo apt-get install -y libopenmpi-dev
         pip install --progress-bar off torch==1.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -108,14 +108,16 @@ run_oss_benchmark: &run_oss_benchmark
   - run:
       name: Run OSS Benchmark
       command: |
-        python benchmarks/oss.py --check_regression --world_size 4 --reference_speed 13.7 --reference_memory 4390 --reference_loss 0.152
+        python benchmarks/oss.py --check_regression --world_size 4 --reference_speed 13.7 --reference_memory 4390 --reference_loss 0.302
 
 
 run_oss_gloo: &run_oss_gloo
-- run:
-    name: Run OSS with Gloo
-    command: |
-      python benchmarks/oss.py --gloo --optim_type oss
+  - run:
+      name: Run OSS with Gloo
+      command: |
+        python benchmarks/oss.py --gloo --optim_type oss_ddp --epochs 3
+        python benchmarks/oss.py --gloo --optim_type oss_sharded_ddp --epochs 3
+
 
 
 # -------------------------------------------------------------------------------------
