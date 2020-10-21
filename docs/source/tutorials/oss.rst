@@ -103,4 +103,6 @@ The above `train` function will then need to be run via a `multiprocessing.spawn
             join=True
         )
 
-to see it in action, you can test it with the following script _`tutorial_oss.py <../../../examples/tutorial_oss.py>`_
+
+to see it in action, you can test it with the following script `here <../../../examples/tutorial_oss.py>`_. 
+
