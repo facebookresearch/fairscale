@@ -85,15 +85,8 @@ class RoundRobinGate(torch.nn.Module):
         assert s % self.num_experts == 0
         capacity = 2 * s // self.num_experts
         output = torch.zeros(g, s, self.num_experts, capacity, dtype=input.dtype, device=input.device)
-        expert = 0
-        c = 0
         for i in range(s):
-            output[:, i, expert, c] = 1.0
-            expert += 1
-            if expert == self.num_experts:
-                c += 1
-                expert = 0
-
+            output[:, i, i % self.num_experts, i // self.num_experts] = 1.0
         return 0.0, output, output.bool()
 
 
@@ -112,15 +105,10 @@ def test_forward_routing(device):
     output = moe(input)
     assert output.shape == input.shape
     # Verify that each token was sent to the correct expert by checking its scale.
-    g, s, t, m = input.shape
-    expert = 0
-    for i in range(s):
-        for j in range(t):
-            for k in range(g):
-                torch.allclose(input[k][i][j], output[k][i][j] * (expert + 1))
-            expert += 1
-            if expert == num_experts:
-                expert = 0
+    t = input.shape[2]
+    for i in range(t):
+        expert = i % num_experts
+        assert torch.allclose(input[:, :, i] * (expert + 1), output[:, :, i])
 
 
 @pytest.mark.mpi
