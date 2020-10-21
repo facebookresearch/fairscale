@@ -44,9 +44,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
 
     def check(broadcast_buffers: bool, buffer_size: int) -> None:
         # Any model works. Add one different buffer per rank
-        model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3)).to(
-            device
-        )
+        model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
         model.register_buffer("test_buffer", torch.ones((1)) * rank)
         model.to(device)
 
@@ -104,3 +102,51 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
 def run_test(backend, device, world_size=2):
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(run_one_step, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
+
+
+def run_test_two_inputs(rank, world_size, backend, device, temp_file_name):
+    url = "file://" + temp_file_name
+    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+    if device == torch.device("cuda"):
+        torch.cuda.set_device(rank)
+
+    torch.manual_seed(rank)
+    np.random.seed(rank)
+
+    class _DoubleInput(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.mlp = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
+
+        def forward(self, x, y):
+            x1 = self.mlp(x)
+            x2 = self.mlp(y)
+            return torch.cat((x1, x2), dim=1)
+
+    model = _DoubleInput().to(device)
+
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    ddp_model = ShardedDataParallel(model, optimizer)
+
+    # Optim loop
+    def closure():
+        optimizer.zero_grad()
+        input_tensor = torch.rand((64, 2)).to(device)
+        loss = ddp_model(input_tensor, input_tensor).abs().sum()
+        loss.backward()
+        return loss
+
+    # The models should stay the same in between the ranks
+    for i in range(5):
+        _ = optimizer.step(closure=closure)
+
+    dist.destroy_process_group()
+
+
+def test_inputs():
+    # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
+    world_size = 2
+    backend = "gloo"
+    temp_file_name = tempfile.mkstemp()[1]
+    device = "cpu"
+    mp.spawn(run_test_two_inputs, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)

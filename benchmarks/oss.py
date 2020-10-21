@@ -240,7 +240,7 @@ if __name__ == "__main__":
 
     # Benchmark the different configurations, via multiple processes
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
-        logging.info("*** Benchmark vanilla optimizer")
+        logging.info("\n*** Benchmark vanilla optimizer")
         mp.spawn(
             train,
             args=(args, backend, OptimType.vanilla, False,),  # no regression check
@@ -249,13 +249,13 @@ if __name__ == "__main__":
         )
 
     if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
-        logging.info("*** Benchmark OSS with DDP")
+        logging.info("\n*** Benchmark OSS with DDP")
         mp.spawn(
             train, args=(args, backend, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,
         )
 
     if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
-        logging.info("*** Benchmark OSS with ShardedDDP")
+        logging.info("\n*** Benchmark OSS with ShardedDDP")
         mp.spawn(
             train,
             args=(

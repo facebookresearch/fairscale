@@ -233,18 +233,12 @@ class DispatchLayer(torch.autograd.Function):
     def forward(ctx: Any, model: ModelDispatch, *inputs: Any) -> Any:  # type: ignore
         # Store a handle to the model for the BW dispatch
         ctx.model = model
-
         return inputs
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
         ctx.model.dispatch_grads()
-
-        # The returned variables need to mirror the forward inputs
-        if isinstance(grad_outputs, tuple):
-            return None, grad_outputs[0]
-
-        return None, grad_outputs
+        return tuple([None, *grad_outputs])
 
 
 class ShardedDataParallel(nn.Module):
