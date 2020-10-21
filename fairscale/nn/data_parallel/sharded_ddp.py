@@ -70,9 +70,7 @@ class ModelDispatch(nn.Module):
                 ]
 
         # Sync all the ranks
-        dist._broadcast_coalesced(  # type: ignore
-            self.process_group, list(self.base_model.state_dict().values()), int(250 * 1024 * 1024)
-        )
+        self.sync_all_params()
 
     def forward(self, *inputs):  # type: ignore
         if self.broadcast_buffers and len(list(self.base_model.buffers())) > 0:
@@ -206,6 +204,13 @@ class ModelDispatch(nn.Module):
         )
 
         return work_handles if non_blocking else self.wait(work_handles)
+
+    def sync_all_params(self) -> None:
+        work_handles = [
+            dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
+            for t in self.base_model.state_dict().values()
+        ]
+        self.wait(work_handles)
 
     @staticmethod
     def wait(requests: Optional[List[Any]]) -> None:
