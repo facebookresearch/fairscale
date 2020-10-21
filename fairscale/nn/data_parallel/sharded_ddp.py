@@ -54,7 +54,7 @@ class ModelDispatch(nn.Module):
         self.global_rank = _get_global_rank(self.process_group, dist.get_rank(self.process_group))
         self.reference_global_rank = _get_global_rank(self.process_group, reference_rank)
         self.world_size = dist.get_world_size(self.process_group)
-        self.broadcast_buffers = broadcast_buffers
+        self.broadcast_model_buffers = broadcast_buffers and len(list(self.base_model.buffers(recurse=True))) > 0
 
         # Allocate reduce buffers
         # - Never use a bigger buffer than the number of model params
@@ -73,7 +73,7 @@ class ModelDispatch(nn.Module):
         self.sync_all_params()
 
     def forward(self, *inputs):  # type: ignore
-        if self.broadcast_buffers and len(list(self.base_model.buffers())) > 0:
+        if self.broadcast_model_buffers:
             self.sync_buffers(non_blocking=False)
 
         return (self.base_model(*inputs),) if isinstance(inputs, tuple) else self.base_model(inputs)
@@ -109,7 +109,7 @@ class ModelDispatch(nn.Module):
 
         buffer_size = buffers[0].numel()
         bucket_requests = []
-        direct_requests: List[Any] = []
+        direct_requests = []
 
         # First issue all the reduce requests, for all devices, and collect the pseudo-futures. Two parts:
         #  - the smallest gradients are bucketed
@@ -118,10 +118,6 @@ class ModelDispatch(nn.Module):
             # All the params are sorted per rank and per increasing size
             if len(params) == 0:
                 continue
-
-            # Failsafe if the grads have somehow been killed beforehand, should not happen
-            for p in filter(lambda x: x.grad is None, params):
-                p.grad = torch.zeros_like(p)
 
             global_dst_rank = OSS.get_global_rank(group, dst_rank)
 
@@ -196,16 +192,16 @@ class ModelDispatch(nn.Module):
         TODO: Could be worth bucketing ?
         """
 
-        work_handles = list(
-            map(
-                lambda x: dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True),
-                self.base_model.buffers(),
-            )
-        )
-
+        work_handles = [
+            dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True)
+            for x in self.base_model.buffers(recurse=True)
+        ]
         return work_handles if non_blocking else self.wait(work_handles)
 
     def sync_all_params(self) -> None:
+        """
+        Sync the complete model states in between the ranks
+        """
         work_handles = [
             dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
             for t in self.base_model.state_dict().values()
@@ -238,9 +234,7 @@ class DispatchLayer(torch.autograd.Function):
         # Store a handle to the model for the BW dispatch
         ctx.model = model
 
-        # Return inputs as-is
-        outputs = inputs
-        return outputs
+        return inputs
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
