@@ -46,7 +46,7 @@ def get_problem(rank, world_size, batch_size, device, model_name: str):
         }
 
     print("Saving dataset to temporary: ", TEMPDIR)
-    dataset = MNIST(transform=ToTensor(), download=True, root=TEMPDIR)
+    dataset = MNIST(transform=ToTensor(), download=False, root=TEMPDIR)
     sampler: Sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=True)
     dataloader = DataLoader(dataset=dataset, batch_sampler=batch_sampler, collate_fn=collate)
@@ -121,9 +121,11 @@ def train(
     need_profiling = args.profile
 
     for epoch in range(args.epochs):
-        epoch_start = time.monotonic()
         n_items = 0
+        epoch_runtime = 0.0
+
         for batch in dataloader:
+            batch__start = time.monotonic()
 
             def closure():
                 model.zero_grad()
@@ -153,7 +155,8 @@ def train(
 
             n_items += args.batch_size
 
-        epoch_end = time.monotonic()
+            batch_end = time.monotonic()
+            epoch_runtime += batch_end - batch__start
 
         if optim_type == OptimType.oss:
             # Check the checkpointing in the case of the OSS optimizer
@@ -164,7 +167,7 @@ def train(
                 _ = optimizer.state_dict()
                 print("... State dict collected")
 
-        measurements.append(n_items / (epoch_end - epoch_start))
+        measurements.append(n_items / epoch_runtime)
         if dist.get_rank() == 0:
             print(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss:.3f}")
 
