@@ -81,14 +81,14 @@ class RoundRobinGate(torch.nn.Module):
         self.num_experts = num_experts
 
     def forward(self, input):
-        g, s, m = input.shape
+        g, s, _ = input.shape
+        assert s % self.num_experts == 0
         capacity = 2 * s // self.num_experts
         output = torch.zeros(g, s, self.num_experts, capacity, dtype=input.dtype, device=input.device)
         expert = 0
         c = 0
         for i in range(s):
-            for j in range(g):
-                output[j][i][expert][c] = 1.0
+            output[:, i, expert, c] = 1.0
             expert += 1
             if expert == self.num_experts:
                 c += 1
