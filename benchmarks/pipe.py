@@ -1,6 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 import argparse
+import logging
 import math
 import os
 import time
@@ -16,7 +17,6 @@ from torch.utils.data import DataLoader
 import torchtext
 from torchtext.data.utils import get_tokenizer
 
-# from deepspeed.pipe import PipelineModule
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
@@ -24,12 +24,6 @@ from fairscale.nn.pipe import LazyModule, pipe
 from fairscale.optim import GradScaler
 from fairscale.optim.oss import OSS
 from tests.nn.model_parallel.commons import dist_init, get_worker_map
-
-try:
-    import torch_ucc  # noqa: F401
-except ImportError as e:
-    print(f"can't import torch_ucc: {e}")
-    pass
 
 try:
     from fairscale.optim import Adam  # type: ignore
@@ -291,15 +285,15 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
     if model.group:
         total = torch.Tensor([num_params]).cuda()
         torch.distributed.all_reduce(total, group=model.group)
-        print(
+        logging.info(
             f"training model, #prams = {num_params}, group: {model.group.rank()}, grank:"
             f" {torch.distributed.get_rank()}, sizes {model.group.size()}"
         )
         torch.distributed.barrier()
         if model.group.rank() == 0:
-            print(f"total #prams = {total.item()}")
+            logging.info(f"total #prams = {total.item()}")
     else:
-        print(f"training model, #prams = {num_params}")
+        logging.info(f"training model, #prams = {num_params}")
     vocab_size = 10000  # FIXME
     total_loss = 0.0
     start_time = time.time()
@@ -326,9 +320,6 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
 
     pipe_group = model.group
 
-    if pipe_group is None or pipe_group.rank() == 0:
-        print(f">> Init DDP")
-
     if args.ddp_zero:
         model = DDP(
             model,
@@ -336,9 +327,6 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
             process_group=get_data_parallel_group(),
             find_unused_parameters=False,
         )
-
-    if pipe_group is None or pipe_group.rank() == 0:
-        print(f"<< Init DDP")
 
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
         thing = {"input": torch.zeros(args.batch_size)}
@@ -354,7 +342,6 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
 
     for i, batch in enumerate(lm_dataloader):
         bi = batch["input"]
-        # print(f"batch size: {torch.numel(bi)}, {bi.size()}, {bi.device}")
         if args.max_batch and i > args.max_batch:
             break
         optimizer.zero_grad()
@@ -365,18 +352,12 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
             else:
                 output = model(batch["input"])
         except Exception as e:
-            print(f"exception while training on rank {torch.distributed.get_rank()}")
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
-            if True:
-                target = batch["target"].to(get_last_device(model))
-                output = output.to(target.device)
-            else:
-                target = batch["target"].cpu()
-                output = output.cpu()
+            target = batch["target"].to(get_last_device(model))
+            output = output.to(target.device)
 
-            print(f"output size is {output.size()}")
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
             if args.ddp_zero:
                 ddp_group = get_data_parallel_group()

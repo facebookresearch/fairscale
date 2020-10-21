@@ -34,8 +34,7 @@ def setup_module(module):
 
 
 def teardown_module(module):
-    if "OMPI_COMM_WORLD_SIZE" not in os.environ:
-        torch.distributed.destroy_process_group()
+    torch.distributed.destroy_process_group()
 
 
 @pytest.mark.parametrize("device", devices)
