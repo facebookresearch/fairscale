@@ -11,3 +11,27 @@ Welcome to fairscale's documentation!
 
    api/index
    tutorials/index
+
+
+*fairscale* is a PyTorch extension library for high performance and large scale training for optimizing training on one or across multiple machines/nodes. This library extend basic pytorch capabilities while adding new experimental ones.
+
+
+Components
+----------
+
+* Parallelism:
+   * `pipeline parallelism <../api/nn/pipe.html>`_
+   * `tensor parallelism <../api/nn/model_parallel.html>`_
+* Optimization:
+   * `optimizer state sharding <../api/optim/oss.html>`_
+
+
+.. warning::
+    This library is under active development. 
+    Please be mindful and create an `issue <https://github.com/facebookresearch/fairscale/issues>`_ if you have any trouble and/or suggestion.
+
+
+Reference
+=========
+
+:ref:`genindex` | :ref:`modindex` | :ref:`search`

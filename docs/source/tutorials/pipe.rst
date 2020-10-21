@@ -42,3 +42,39 @@ to ``torch.nn.Sequential`` and then wrap it with ``fairscale.nn.Pipe``.
 
 This will run the first two layers on ``cuda:0`` and the last
 layer on ``cuda:1``. To learn more, visit the `Pipe <../api/nn/pipe.html>`_ documentation.
+
+You can then define any optimizer and loss function
+
+.. code-block:: default
+
+
+    import torch.optim as optim
+    import torch.nn.functional as F
+
+    optimizer = optim.SGD(model.parameters(), lr=0.001)
+    loss_fn = F.nll_loss
+
+    optimizer.zero_grad()
+    target = torch.randint(0,2,size=(20,1)).squeeze()
+    data = torch.randn(20, 10)
+    
+
+
+Finally, to run the model and compute the loss function, make sure that outputs and target are on the same device
+
+.. code-block:: default   
+
+    device = model.devices[0]
+    ## outputs and target need to be on the same device
+    # forward step
+    outputs = model(data.to(device))
+    # compute loss
+    loss = loss_fn(outputs.to(device), target.to(device))
+
+    # backward + optimize
+    loss.backward()
+    optimizer.step()
+
+
+
+run the example `here <../../../examples/tutorial_pipe.py>`_. 
