@@ -199,7 +199,11 @@ class AdaScale(object):
         # gradients have been synchronized between each worker.
         self._final_callback_queued = False
         assert isinstance(self._local_grad_sqr, torch.Tensor)
-        torch.distributed.all_reduce(self._local_grad_sqr / self._world_size)
+
+        # self._local_grad_sqr is FP32, sum then div shouldn't overflow.
+        torch.distributed.all_reduce(self._local_grad_sqr)  # SUM
+        self._local_grad_sqr.div_(self._world_size)
+
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
         total_grad_sqr = np.array(
             [sum(param.grad.pow(2).sum().item() for param in group["params"]) for group in self._optimizer.param_groups]
@@ -243,3 +247,7 @@ class AdaScale(object):
             return self.step(*args, **kwargs)
 
         setattr(self._optimizer, "step", wrapper)
+
+    def zero_grad(self) -> None:
+        """Proxy function to optimizer"""
+        self._optimizer.zero_grad()
