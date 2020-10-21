@@ -7,9 +7,8 @@ Welcome to fairscale's documentation!
 =====================================
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
-   :hidden:
+   :maxdepth:
+   :caption: Contents
 
    api/index
    tutorials/index
