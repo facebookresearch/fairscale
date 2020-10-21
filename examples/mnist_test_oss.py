@@ -54,7 +54,12 @@ def train(rank, args, model, device, train_loader, num_epochs):
     # SETUP
     dist_init(rank, WORLD_SIZE, BACKEND)
     ddp = ShardedDataParallel(
-        module=model, optimizer=torch.optim.Adadelta, optimizer_params={"lr": 1e-4}, world_size=WORLD_SIZE, broadcast_buffers=True)
+        module=model,
+        optimizer=torch.optim.Adadelta,
+        optimizer_params={"lr": 1e-4},
+        world_size=WORLD_SIZE,
+        broadcast_buffers=True,
+    )
 
     ddp.train()
     optimizer = ddp.optimizer
