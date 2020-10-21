@@ -47,26 +47,7 @@ def get_problem(rank, world_size, batch_size, device, model_name: str):
             "label": torch.tensor([i[1] for i in inputs]).to(device),
         }
 
-    logging.info("Saving dataset to: %s " % TEMPDIR)
-    dataset, tentatives = None, 0
-
-    while dataset is None and tentatives < 5:
-        try:
-            dataset = MNIST(transform=ToTensor(), download=True, root=TEMPDIR)
-        except (RuntimeError, EOFError) as e:
-            if isinstance(e, RuntimeError):
-                # Corrupted data, erase and restart
-                shutil.rmtree(TEMPDIR + "/MNIST")
-
-            logging.warning("Failed loading dataset: ", e)
-            tentatives += 1
-
-    if dataset is None:
-        logging.error("Could not download MNIST dataset")
-        exit(-1)
-    else:
-        logging.info("Dataset downloaded")
-
+    dataset = MNIST(transform=ToTensor(), download=False, root=TEMPDIR)
     sampler: Sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=True)
     dataloader = DataLoader(dataset=dataset, batch_sampler=batch_sampler, collate_fn=collate)
@@ -245,8 +226,27 @@ if __name__ == "__main__":
 
     backend = "nccl" if (not args.gloo or not torch.cuda.is_available()) and not args.cpu else "gloo"
 
+    # Download dataset once for all processes
+    dataset, tentatives = None, 0
+    while dataset is None and tentatives < 5:
+        try:
+            dataset = MNIST(transform=None, download=True, root=TEMPDIR)
+        except (RuntimeError, EOFError) as e:
+            if isinstance(e, RuntimeError):
+                # Corrupted data, erase and restart
+                shutil.rmtree(TEMPDIR + "/MNIST")
+
+            logging.warning("Failed loading dataset: ", e)
+            tentatives += 1
+
+    if dataset is None:
+        logging.error("Could not download MNIST dataset")
+        exit(-1)
+    else:
+        logging.info("Dataset downloaded")
+
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
-        logging.info("\nBenchmark vanilla optimizer")
+        logging.info("*** Benchmark vanilla optimizer")
         mp.spawn(
             train,
             args=(args, backend, OptimType.vanilla, False,),  # no regression check
@@ -255,13 +255,13 @@ if __name__ == "__main__":
         )
 
     if args.optim_type == OptimType.oss or args.optim_type == OptimType.everyone:
-        logging.info("\nBenchmark OSS with DDP")
+        logging.info("*** Benchmark OSS with DDP")
         mp.spawn(
             train, args=(args, backend, OptimType.oss, args.check_regression), nprocs=args.world_size, join=True,
         )
 
     if args.optim_type == OptimType.oss_sdp or args.optim_type == OptimType.everyone:
-        logging.info("\nBenchmark OSS with SDP")
+        logging.info("*** Benchmark OSS with SDP")
         mp.spawn(
             train,
             args=(args, backend, OptimType.oss_sdp, False,),  # FIXME: @lefaudeux - SDP should give the same results
