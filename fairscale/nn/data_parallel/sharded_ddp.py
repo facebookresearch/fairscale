@@ -55,6 +55,7 @@ class ModelDispatch(nn.Module):
         self.reference_global_rank = _get_global_rank(self.process_group, reference_rank)
         self.world_size = dist.get_world_size(self.process_group)
         self.broadcast_model_buffers = broadcast_buffers and len(list(self.base_model.buffers(recurse=True))) > 0
+        self.backend = dist.get_backend()
 
         # Allocate reduce buffers
         # - Never use a bigger buffer than the number of model params
@@ -86,7 +87,8 @@ class ModelDispatch(nn.Module):
         for sharded_optimizer in self.sharded_optimizers:
             for device, per_device in sharded_optimizer.per_device_params.items():
                 # Make sure that all concurrent streams are finished on this device
-                torch.cuda.synchronize(device)
+                if self.backend == "nccl":
+                    torch.cuda.synchronize(device)
 
                 # Reduce all params to appropriate ranks
                 self._reduce_grads_task(
