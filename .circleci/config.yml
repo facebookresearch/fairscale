@@ -108,7 +108,7 @@ run_oss_benchmark: &run_oss_benchmark
   - run:
       name: Run OSS Benchmark
       command: |
-        python benchmarks/oss.py --check_regression --world_size 4 --reference_speed 800 --reference_memory 1120 --reference_loss 0.049
+        python benchmarks/oss.py --check_regression --world_size 4 --reference_speed 780 --reference_memory 1120 --reference_loss 0.049
 
 run_oss_gloo: &run_oss_gloo
   - run:

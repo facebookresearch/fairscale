@@ -140,13 +140,15 @@ class ModelDispatch(nn.Module):
                 i_bucketed += 1
 
             if i_bucketed > 0:
-                buffer.div_(world_size)  # type: ignore
-                bucket_requests.append(
-                    (
-                        dist.reduce(tensor=buffer, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
-                        dst_rank,
-                    )
-                )
+                buffer.div_(world_size)
+                # DEBUG
+                bucket_requests.append((dist.all_reduce(tensor=buffer, group=group, async_op=True), dst_rank,))
+                # bucket_requests.append(
+                #     (
+                #         dist.reduce(tensor=buffer, dst=global_dst_rank, group=group, async_op=True),
+                #         dst_rank,
+                #     )
+                # )
 
             # Directly reduce the other grads
             for p in params[i_bucketed:]:
@@ -154,14 +156,16 @@ class ModelDispatch(nn.Module):
                 if p.grad.requires_grad:
                     raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
 
-                p.grad.data.div_(world_size)  # type: ignore
-                direct_requests.append(
-                    (
-                        dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
-                        dst_rank,
-                        p,
-                    )
-                )
+                p.grad.data.div_(world_size)
+                # DEBUG
+                direct_requests.append((dist.all_reduce(tensor=p.grad.data, group=group, async_op=True), dst_rank, p,))
+                # direct_requests.append(
+                #     (
+                #         dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=True),
+                #         dst_rank,
+                #         p,
+                #     )
+                # )
 
         # Now unroll the initial packed small gradients
         for work_handle, dst_rank in bucket_requests:
@@ -184,9 +188,9 @@ class ModelDispatch(nn.Module):
         for work_handle, dst_rank, param in direct_requests:
             work_handle.wait()
 
-            if dst_rank != self_rank:
-                # This gradient has been reduced and this rank is not the owner, it can be released
-                param.grad = None
+            # if dst_rank != self_rank:
+            #     # This gradient has been reduced and this rank is not the owner, it can be released
+            #     param.grad = None
 
     def sync_buffers(self, non_blocking: bool = False) -> Optional[List[Any]]:
         """

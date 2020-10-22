@@ -97,7 +97,7 @@ def train(
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
         model = ShardedDDP(model, optimizer)
     else:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=True)  # type: ignore
+        model = DDP(model, device_ids=[rank], find_unused_parameters=False)  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
             if optim_type == OptimType.oss_ddp
@@ -126,9 +126,14 @@ def train(
 
             def closure():
                 model.zero_grad()
+                if rank == 0 and next(model.parameters()).grad is not None and args.debug:
+                    print("\nbefore: ", next(model.parameters()).norm().item(), " -- ", next(model.parameters()).grad.norm().item(), flush=True)  # type: ignore
+
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
                 loss.backward()
+                if rank == 0 and next(model.parameters()).grad is not None and args.debug:
+                    print("after BW: ", next(model.parameters()).norm().item(), " -- ", next(model.parameters()).grad.norm().item(), flush=True)  # type: ignore
                 return loss
 
             if need_profiling and not args.cpu:
@@ -145,6 +150,10 @@ def train(
 
             else:
                 final_loss = optimizer.step(closure)
+
+            if rank == 0 and args.debug:
+                print("buffer: ", next(model.buffers()).norm().item(), flush=True)
+                print("after update: ", next(model.parameters()).norm().item(), " -- ", next(model.parameters()).grad.norm().item(), flush=True)  # type: ignore
 
             n_items += args.batch_size
 
@@ -211,6 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--profile", action="store_true", default=False)
     parser.add_argument("--cpu", action="store_true", default=False)
     parser.add_argument("--torchvision_model", type=str, help="Any torchvision model name (str)", default="resnet101")
+    parser.add_argument("--debug", action="store_true", default=False)
 
     args = parser.parse_args()
 
