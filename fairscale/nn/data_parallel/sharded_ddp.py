@@ -84,16 +84,17 @@ class ModelDispatch(nn.Module):
         Reduce -NOTE: could become gather- all the gradients to the appropriate ranks
         """
 
-        for sharded_optimizer in self.sharded_optimizers:
-            for device, per_device in sharded_optimizer.per_device_params.items():
-                # Reduce all params to appropriate ranks
-                self._reduce_grads_task(
-                    self._reduce_buffers[sharded_optimizer][device],
-                    per_device,
-                    group=self.process_group,
-                    self_rank=self.rank,
-                    world_size=self.world_size,
-                )
+        with torch.no_grad():
+            for sharded_optimizer in self.sharded_optimizers:
+                for device, per_device in sharded_optimizer.per_device_params.items():
+                    # Reduce all params to appropriate ranks
+                    self._reduce_grads_task(
+                        self._reduce_buffers[sharded_optimizer][device],
+                        per_device,
+                        group=self.process_group,
+                        self_rank=self.rank,
+                        world_size=self.world_size,
+                    )
 
     @staticmethod
     def _reduce_grads_task(
@@ -110,87 +111,73 @@ class ModelDispatch(nn.Module):
         .. warning: Reduced grads are removed from the ranks which don't own them, to save memory"""
 
         buffer_size = buffers[0].numel()
-        bucket_requests = []
         direct_requests = []
+        bucket_requests = []
+
+        _world_size = float(world_size)
 
         # First issue all the reduce requests, for all devices, and collect the pseudo-futures. Two parts:
         #  - the smallest gradients are bucketed
         #  - the biggest are reduced directly
         for (dst_rank, params), buffer in zip(enumerate(per_rank_params), buffers):
-            # All the params are sorted per rank and per increasing size
-            if len(params) == 0:
-                continue
-
             global_dst_rank = OSS.get_global_rank(group, dst_rank)
 
             # Copy small gradients into per-GPU buffers and then async reduce
-            i_bucketed = 0  # the number of tensors packed in the buffer
             offset = 0
+            bucket_sent = False
+            bucket_params = []
 
-            # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
-            while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
-                end = offset + params[i_bucketed].numel()
-                buffer[offset:end].copy_(params[i_bucketed].grad.data.view(-1))  # type: ignore
-                offset = end
+            # All the params are sorted per rank and per increasing size
+            for p in params:
+                # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
+                if not bucket_sent and offset + p.numel() < buffer_size:
+                    end = offset + p.numel()
+                    buffer[offset:end].copy_(p.grad.data.view(-1))  # type: ignore
+                    bucket_params.append((p, offset, end))
 
-                if dst_rank != self_rank:
-                    # This rank is not the owner, these gradients have been copied and can be released
-                    params[i_bucketed].grad = None
+                    offset = end
+                    if dst_rank != self_rank:
+                        # This rank is not the owner, these gradients have been copied and can be released
+                        p.grad = None
+                else:
+                    if offset > 0 and not bucket_sent:
+                        # Bucket is full, send asap
+                        buffer.div_(_world_size)
+                        bucket_requests.append(
+                            (
+                                dist.reduce(tensor=buffer, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
+                                dst_rank,
+                                bucket_params,
+                            )
+                        )
 
-                i_bucketed += 1
+                        bucket_sent = True
 
-            if i_bucketed > 0:
-                buffer.div_(world_size)
-                # DEBUG
-                bucket_requests.append((dist.all_reduce(tensor=buffer, group=group, async_op=True), dst_rank,))
-                # bucket_requests.append(
-                #     (
-                #         dist.reduce(tensor=buffer, dst=global_dst_rank, group=group, async_op=True),
-                #         dst_rank,
-                #     )
-                # )
+                    # Directly reduce the other grads
+                    p.grad = cast(Parameter, p.grad)
+                    if p.grad.requires_grad:
+                        raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
 
-            # Directly reduce the other grads
-            for p in params[i_bucketed:]:
-                p.grad = cast(Parameter, p.grad)
-                if p.grad.requires_grad:
-                    raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
+                    p.grad.data.div_(_world_size)
+                    direct_requests.append(
+                        (dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=True), dst_rank, p,)  # type: ignore
+                    )
 
-                p.grad.data.div_(world_size)
-                # DEBUG
-                direct_requests.append((dist.all_reduce(tensor=p.grad.data, group=group, async_op=True), dst_rank, p,))
-                # direct_requests.append(
-                #     (
-                #         dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=True),
-                #         dst_rank,
-                #         p,
-                #     )
-                # )
-
-        # Now unroll the initial packed small gradients
-        for work_handle, dst_rank in bucket_requests:
+        # Now unroll the bucketed small gradients
+        for work_handle, dst_rank, bucket_params in bucket_requests:
             work_handle.wait()
 
             if dst_rank == self_rank:
-                # This rank is the owner, unpack the results in the appropriate parameters
-                i_bucketed = 0  # the number of tensors packed in the buffer
-                offset = 0
-                params = per_rank_params[dst_rank]
-                buffer = buffers[dst_rank]
-
-                while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
-                    end = offset + params[i_bucketed].numel()
-                    params[i_bucketed].grad.data.copy_(buffer[offset:end].view_as(params[i_bucketed]))  # type: ignore
-                    offset = end
-                    i_bucketed += 1
+                for p, offset, end in bucket_params:
+                    p.grad.data.copy_(buffers[dst_rank][offset:end].view_as(p.data))  # type: ignore
 
         # Finally, make sure that we're done with this device before moving on and cleaning the unused params
         for work_handle, dst_rank, param in direct_requests:
             work_handle.wait()
 
-            # if dst_rank != self_rank:
-            #     # This gradient has been reduced and this rank is not the owner, it can be released
-            #     param.grad = None
+            if dst_rank != self_rank:
+                # This gradient has been reduced and this rank is not the owner, it can be released
+                param.grad = None
 
     def sync_buffers(self, non_blocking: bool = False) -> Optional[List[Any]]:
         """

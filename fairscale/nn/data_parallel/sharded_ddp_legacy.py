@@ -185,7 +185,7 @@ class ShardedDataParallelLegacy(nn.Module):
                 i_bucketed += 1
 
             if i_bucketed > 0:
-                buffer.div_(world_size)  # type: ignore
+                buffer.div_(world_size)
                 bucket_requests.append(
                     (
                         dist.reduce(tensor=buffer, dst=global_rank, group=group, async_op=True),  # type: ignore
@@ -199,7 +199,7 @@ class ShardedDataParallelLegacy(nn.Module):
                 if p.grad.requires_grad:
                     raise RuntimeError("DistributedDataParallel only works with gradients that don't require grad")
 
-                p.grad.div_(world_size)  # type: ignore
+                p.grad.div_(world_size)
                 requests.append(dist.reduce(tensor=p.grad, dst=global_rank, group=group, async_op=True))  # type: ignore
 
         # Unroll the initial packed small gradients, as soon as possible
