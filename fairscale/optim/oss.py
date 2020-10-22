@@ -150,9 +150,9 @@ class OSS(Optimizer):
                     self._per_device_params[device][self.param_to_rank[param]] += [param]
 
             # Sort param_lists by size
-            for k in self._per_device_params.keys():
-                for r in self._per_device_params[k]:
-                    r.sort(key=lambda x: x.numel())
+            for device in self._per_device_params.keys():
+                for rank_params in self._per_device_params[device]:
+                    rank_params.sort(key=lambda x: x.numel())
 
         return self._per_device_params
 
@@ -180,21 +180,22 @@ class OSS(Optimizer):
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         self._sync_param_groups()
 
-        # Run the optimizer step on this shard only:
-        self._free_other_grads()
+        for (device, device_params,) in self.per_device_params.items():
+            for (src_rank, params), buffer in zip(enumerate(device_params), self._broadcast_buffers[device]):
+                if src_rank == 0 and self.rank == 0 and params[0].grad is not None:
+                    print("\nbefore ", params[0].norm().item(), " -- ", params[0].grad.norm().item())  # type: ignore
 
+        # Run the optimizer step on this shard only:
         if closure is not None:
             loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
         else:
             loss = self.optim.step(**kwargs)
 
+        self._free_other_grads()  # Depending on the DDP engine used, gradients specific to other ranks may still be loaded
+
         # Sync all the updated shards in between the ranks
-        with torch.no_grad():
-            for (
-                device,
-                device_params,
-            ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
-                self._broadcast_params(self._broadcast_buffers[device], device_params)
+        for (device, device_params,) in self.per_device_params.items():  # all the params on this device (inc all ranks)
+            self._broadcast_params(self._broadcast_buffers[device], device_params)
 
         # Sync hypothethical new results from the wrapped optimizer to the exposed param_groups
         self._sync_param_groups(local_to_global=True)
@@ -425,12 +426,15 @@ class OSS(Optimizer):
         direct_requests = []
 
         # Bucket and issue all the async calls
-        for (dst_rank, params), buffer in zip(enumerate(per_rank_params), buffers):
+        for (src_rank, params), buffer in zip(enumerate(per_rank_params), buffers):
             # All the params are sorted per rank and per increasing size
             if len(params) == 0:
                 continue
 
-            global_dst_rank = OSS.get_global_rank(self.group, dst_rank)
+            if src_rank == 0 and self.rank == 0 and params[0].grad is not None:
+                print("after ", params[0].norm().item(), " -- ", params[0].grad.norm().item())  # type: ignore
+
+            global_src_rank = OSS.get_global_rank(self.group, src_rank)
 
             # Copy small parameters into per-GPU buffers
             i_bucketed = 0  # the number of tensors packed in the buffer
@@ -439,29 +443,29 @@ class OSS(Optimizer):
             # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
             while i_bucketed < len(params) and offset + params[i_bucketed].numel() < buffer_size:
                 end = offset + params[i_bucketed].numel()
-                if global_dst_rank == self.global_rank:
+                if global_src_rank == self.global_rank:
                     buffer[offset:end].copy_(params[i_bucketed].data.view(-1))  # type: ignore
                 offset = end
                 i_bucketed += 1
 
             if i_bucketed > 0:
-                future = dist.broadcast(tensor=buffer, src=global_dst_rank, group=self.group, async_op=True)
-                if global_dst_rank != self.global_rank:
+                future = dist.broadcast(tensor=buffer, src=global_src_rank, group=self.group, async_op=True)
+                if global_src_rank != self.global_rank:
                     # This request will need to be unrolled
-                    bucket_requests.append((future, dst_rank))
+                    bucket_requests.append((future, src_rank))
 
             # Directly broadcast the rest
             for param in params[i_bucketed:]:
                 direct_requests.append(
-                    dist.broadcast(tensor=param.data, src=global_dst_rank, group=self.group, async_op=True),
+                    dist.broadcast(tensor=param.data, src=global_src_rank, group=self.group, async_op=True),
                 )
 
         # Unroll the initial packed small parameters
-        for gate, rank in bucket_requests:
+        for gate, src_rank in bucket_requests:
             gate.wait()
 
-            params = per_rank_params[rank]
-            buffer = buffers[rank]
+            params = per_rank_params[src_rank]
+            buffer = buffers[src_rank]
             i_bucketed = 0  # the number of tensors packed in the buffer
             offset = 0
 
