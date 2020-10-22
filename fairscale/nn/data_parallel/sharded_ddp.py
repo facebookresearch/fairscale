@@ -85,6 +85,10 @@ class ModelDispatch(nn.Module):
 
         for sharded_optimizer in self.sharded_optimizers:
             for device, per_device in sharded_optimizer.per_device_params.items():
+                # Make sure that all concurrent streams are finished on this device
+                torch.cuda.synchronize(device)
+
+                # Reduce all params to appropriate ranks
                 self._reduce_grads_task(
                     self._reduce_buffers[sharded_optimizer][device],
                     per_device,
