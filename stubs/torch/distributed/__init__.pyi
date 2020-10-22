@@ -50,6 +50,8 @@ def broadcast(tensor: Tensor, src: Any, group: Any, async_op: Any = False):
 def is_initialized() -> bool:
     ...
 
+def barrier() -> None:
+    ...
 
 def init_process_group(
     backend: Union[str, Backend],

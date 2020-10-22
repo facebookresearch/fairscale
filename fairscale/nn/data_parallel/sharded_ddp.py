@@ -85,6 +85,9 @@ class ModelDispatch(nn.Module):
         """
 
         with torch.no_grad():
+            # Make sure that all ranks are done
+            torch.distributed.barrier()
+
             for sharded_optimizer in self.sharded_optimizers:
                 for device, per_device in sharded_optimizer.per_device_params.items():
                     # Reduce all params to appropriate ranks

@@ -138,10 +138,10 @@ def train(
 
             if need_profiling and not args.cpu:
                 logging.info("Profiling the run")
-                with profiler.profile(use_cuda=True) as prof:  # type: ignore
+                with profiler.profile(use_cuda=True, record_shapes=True, profile_memory=True) as prof:  # type: ignore
                     with profiler.record_function("batch"):
                         final_loss = optimizer.step(closure)
-                        logging.info("profiling done, final loss ", cast(float, final_loss))
+                        logging.info("profiling done")
 
                 if rank == 0:
                     prof.export_chrome_trace(f"{optim_type}_trace.json")
