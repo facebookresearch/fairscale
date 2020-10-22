@@ -35,7 +35,7 @@ from .async_schedule import AsyncEventLoop, ModuleWrapper
 from .checkpoint import Checkpointing
 from .copy import Copy, Wait
 from .dependency import fork, join
-from .messages import get_out_of_order, recv_message, send_message
+from .messages import MakeTransport, Transport
 from .microbatch import Batch
 from .skip import Namespace
 from .skip.layout import SkipLayout
@@ -50,7 +50,6 @@ from .types import (
     Schedule,
     TensorOrTensors,
     Tensors,
-    TransportConfig,
 )
 from .worker import Task, create_workers, join_workers
 
@@ -64,11 +63,10 @@ class SendOperator(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def forward(ctx, src_rank, dst_rank, config: TransportConfig, input: List[Tensor], index: int) -> Tensors:
+    def forward(ctx, src_rank, dst_rank, transport: Transport, input: List[Tensor], index: int) -> Tensors:
         assert src_rank == torch.distributed.get_rank()
 
-        send_message(
-            config,
+        transport.send_message(
             PipeMessage(src_rank, dst_rank, queue_name=ACTIVATIONS_GRADS_QUEUE, args=index, tensors=tuple(input)),
         )
         return ()
@@ -84,12 +82,12 @@ class RecvOperator(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def forward(ctx, dst_rank: int, tensor: Tensor, input_device, config: TransportConfig, index: int) -> Tensors:
+    def forward(ctx, dst_rank: int, tensor: Tensor, input_device, transport: Transport, index: int) -> Tensors:
         assert dst_rank == torch.distributed.get_rank()
-        ctx.config = config
+        ctx.transport = transport
         ctx.index = index
 
-        result = get_out_of_order(config, ACTIVATIONS_GRADS_QUEUE, index, input_device=input_device)
+        result = transport.get_out_of_order(ACTIVATIONS_GRADS_QUEUE, index)
 
         def maybe_requires_grad(t: Tensor) -> Tensor:
             if t.dtype.is_floating_point:
@@ -103,8 +101,7 @@ class RecvOperator(torch.autograd.Function):
     def backward(ctx, *grad: Tensor,) -> Tuple[Optional[Tensor], ...]:
         ranks = get_pipeline_parallel_ranks()
         this_rank = torch.distributed.get_rank()
-        send_message(
-            ctx.config,
+        ctx.transport.send_message(
             PipeMessage(
                 this_rank,
                 ranks[ranks.index(this_rank) - 1],
@@ -240,12 +237,12 @@ class Pipeline:
         self.style = style
         self.group = group
         self.training: bool
-        self.transport_config = TransportConfig(
-            use_rpc=("OMPI_COMM_WORLD_RANK" not in os.environ) or ("FORCE_RPC" in os.environ),
-            worker_map=worker_map,
-            input_device=input_device,
-        )
-
+        if style in [PipelineStyle.MultiProcess, PipelineStyle.AsyncSchedule]:
+            self.transport = MakeTransport(
+                use_rpc=("OMPI_COMM_WORLD_RANK" not in os.environ) or ("FORCE_RPC" in os.environ),
+                worker_map=worker_map,
+                input_device=input_device,
+            )
         self.input_device = input_device
         self.all_at_once = False
         self.callcount = 0
@@ -253,13 +250,6 @@ class Pipeline:
         if self.style is PipelineStyle.SingleProcess:
             assert self.devices is not None
             (self.in_queues, self.out_queues) = create_workers(self.devices)
-
-        if (
-            self.style in [PipelineStyle.MultiProcess, PipelineStyle.AsyncSchedule]
-            and self.transport_config.worker_map is None
-            and self.transport_config.use_rpc is True
-        ):
-            raise ValueError("'PipelineStyle.MultiProcess' requires 'worker_map' to be set")
 
     @property
     def checkpoint_stop(self) -> int:
@@ -302,12 +292,7 @@ class Pipeline:
             assert self.group
             rank = self.group.rank()
             event_loop = AsyncEventLoop(
-                self.mp_partitions,
-                self.group,
-                self.transport_config,
-                self.training,
-                self.input_device,
-                self.checkpoint_stop,
+                self.mp_partitions, self.group, self.transport, self.training, self.checkpoint_stop,
             )
             if rank == 0 and not self.final_stage:
                 logging.debug(f"{torch.distributed.get_rank()}: entered event head")
@@ -357,7 +342,7 @@ class Pipeline:
     ) -> Batch:
 
         phony = torch.empty(0, device=self.input_device, requires_grad=True)
-        result = RecvOperator.apply(torch.distributed.get_rank(), phony, self.input_device, self.transport_config, i)
+        result = RecvOperator.apply(torch.distributed.get_rank(), phony, self.input_device, self.transport, i)
         if len(result) == 1:
             batch = Batch(result[0], i)
         else:
@@ -379,8 +364,7 @@ class Pipeline:
             else:
                 tensors = tuple()
 
-            send_message(
-                self.transport_config,
+            self.transport.send_message(
                 PipeMessage(
                     this_rank, ranks[next_j], queue_name=SKIP_TENSOR_QUEUE, args=(i, ns, name, life), tensors=tensors,
                 ),
@@ -390,9 +374,7 @@ class Pipeline:
     def recv_skip_tensors(self, skip_trackers: List[SkipTrackerThroughPotals], batches: List[Batch]) -> None:
         while True:
             try:
-                message = recv_message(
-                    self.transport_config, SKIP_TENSOR_QUEUE, nowait=True, input_device=self.input_device
-                )
+                message = self.transport.recv_message(SKIP_TENSOR_QUEUE, nowait=True)
                 (si, ns, name, life) = message.args
                 value: Optional[TensorOrTensors] = message.tensors
 
@@ -422,7 +404,7 @@ class Pipeline:
             this_rank = torch.distributed.get_rank()
 
             self.send_skip_tensors(this_rank, ranks, batch, i, skip_trackers)
-            SendOperator.apply(this_rank, ranks[ranks.index(this_rank) + 1], self.transport_config, [*batch], i)
+            SendOperator.apply(this_rank, ranks[ranks.index(this_rank) + 1], self.transport, [*batch], i)
 
         for portal in skip_trackers[i].portals.values():
             portal.pipeline = self
@@ -554,14 +536,12 @@ class Pipeline:
 
         if isinstance(grad, Tensor):
             grad = tuple([grad])
-        send_message(
-            self.transport_config,
-            PipeMessage(ranks[src], dst_rank, queue_name=PORTAL_QUEUE, args=(ns_name, index), tensors=grad),
-            sync=True,
+        self.transport.send_message(
+            PipeMessage(ranks[src], dst_rank, queue_name=PORTAL_QUEUE, args=(ns_name, index), tensors=grad), sync=True,
         )
 
     def recv_portal_grad(self, expected_ns_name: Tuple[Namespace, str], expected_index: int) -> Tensor:
-        message = recv_message(self.transport_config, PORTAL_QUEUE, input_device=self.input_device)
+        message = self.transport.recv_message(PORTAL_QUEUE)
 
         (ns_name, index) = message.args
         grad = message.tensors
@@ -584,9 +564,7 @@ class Pipeline:
             grads = []
             for i, batch in enumerate(o):
                 rank = torch.distributed.get_rank()
-                found = get_out_of_order(
-                    self.transport_config, ACTIVATIONS_GRADS_QUEUE, i, input_device=self.input_device
-                )
+                found = self.transport.get_out_of_order(ACTIVATIONS_GRADS_QUEUE, i)
                 assert len(found) == 1
                 grads.append(found[0])
                 tensors = tuple(x.tensor_or_tensors for x in o)  # type: ignore
@@ -597,9 +575,7 @@ class Pipeline:
         else:
             rank = torch.distributed.get_rank()
             for batch in o:
-                found = get_out_of_order(
-                    self.transport_config, ACTIVATIONS_GRADS_QUEUE, batch.index, input_device=self.input_device
-                )
+                found = self.transport.get_out_of_order(ACTIVATIONS_GRADS_QUEUE, batch.index)
                 if batch.atomic:
                     tensors = tuple([batch.tensor])
                 else:

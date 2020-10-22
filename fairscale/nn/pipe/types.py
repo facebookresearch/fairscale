@@ -1,5 +1,10 @@
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
+
 from enum import Enum, auto
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 from dataclasses import dataclass
 import torch
@@ -32,13 +37,6 @@ class PipelineStyle(Enum):
     SingleProcess = auto()
     MultiProcess = auto()
     AsyncSchedule = auto()
-
-
-@dataclass(frozen=True)
-class TransportConfig:
-    use_rpc: bool
-    worker_map: Optional[Dict[int, str]]
-    input_device: InputDevice
 
 
 @dataclass(init=False)

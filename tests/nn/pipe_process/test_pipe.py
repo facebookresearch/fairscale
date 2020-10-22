@@ -817,7 +817,7 @@ def lazy_construction(pipeline_style):
 def missing_worker_map(pipeline_style):
     model = nn.Sequential(nn.ReLU(), nn.ReLU())
 
-    with pytest.raises(ValueError, match="'PipelineStyle.MultiProcess' requires 'worker_map' to be set"):
+    with pytest.raises(ValueError, match="'RpcTransport' requires 'worker_map' to be set"):
         Pipe(model, [1, 1], style=pipeline_style)
 
 
@@ -937,8 +937,8 @@ def reuse_lazy():
 
 
 def test_instantiate_partition():
-    from fairscale.nn.pipe.pipe import instantiate_partition
     from fairscale.nn.pipe.async_schedule import Location
+    from fairscale.nn.pipe.pipe import instantiate_partition
 
     class FakeGroup:
         def __init__(self, rank, size):

@@ -530,13 +530,10 @@ def bench_single_process(args):
     blob = make_model_and_data(args, None, new_data=new_data)
     model = blob["model"]
 
-    if args.deepspeed:
-        p = PipelineModule(layers=model, num_stages=min(num_devices, 4))
-    else:
-        balance = generate_balance(min(num_devices, 4), len(model))
-        p = pipe.Pipe(
-            model, balance, chunks=args.chunks, pipelined_backward=args.pipelined_backward, checkpoint=args.checkpoint
-        )
+    balance = generate_balance(min(num_devices, 4), len(model))
+    p = pipe.Pipe(
+        model, balance, chunks=args.chunks, pipelined_backward=args.pipelined_backward, checkpoint=args.checkpoint
+    )
     del model
     del blob["model"]
 
@@ -665,7 +662,6 @@ parser.add_argument("--max-batch", type=int, default=4, help="Max number of batc
 parser.add_argument("--socket-name", type=str, default=None, help="socket ifname for gloo/tp")
 parser.add_argument("--num-decoder-layers", type=int, default=10, help="Number of decoder layers in the model")
 parser.add_argument("--ddp-zero", action="store_true", default=False, help="enable ddp")
-parser.add_argument("--deepspeed", action="store_true", default=False, help="use eepspeed instead of fairscale pipe")
 parser.add_argument(
     "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
 )

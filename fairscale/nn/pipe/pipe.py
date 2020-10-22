@@ -133,10 +133,8 @@ def check_balance(module: Any, balance: Iterable[int], filter_unique: bool = Fal
 
     if filter_unique:
         module_len = len(set(map(id, module)))
-        print(f"unique layer {module_len}, {balance}")
     else:
         module_len = len(module)
-        print(f"non-unique layer {module_len}, {balance}")
 
     if module_len != sum(balance):
         raise BalanceError(
@@ -256,27 +254,16 @@ def instantiate_partition(
 
             result.append(wrapper)
 
-        # print(f"partitions = {partitions}")
-
         return result
 
     j = 0
 
-    # print(f"{torch.distributed.get_rank()}: assigned = {assigned}")
-
-    #    print(f"yay {list(map(id, module))}")
-    #    print(f"first_index = {first_index}")
-    #    print(f"duplicates = {duplicates}")
-    #    print(f"duplicates2 = {duplicates2}")
-    #    print(f"locations = {locations}")
-    #
     for name, layer in iterate_module(module):
         layers[name] = layer
 
         if len(layers) == balance[j]:
             if j == group.rank():
                 for key in layers:
-                    print(f"key = {type(key)}-{key}")
                     layers[key] = maybe_realize(layers[key])
                 if not isinstance(module, nn.Sequential):
                     for layer in layers.values():

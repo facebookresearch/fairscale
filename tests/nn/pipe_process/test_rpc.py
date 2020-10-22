@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torch.distributed import rpc
 
-from fairscale.nn.model_parallel.initialize import get_model_parallel_group, get_pipeline_parallel_group
+from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import PipeRPCWrapper
 from tests.nn.model_parallel.commons import get_worker_map, torch_spawn
 
@@ -81,46 +81,23 @@ def check_pipe_against_reference(balance, model_constructor, checkpoint="except_
     target = torch.rand(10).cuda()
     cloned = inputs.clone()
     output = pipe(inputs)
-    print(f"out pipe  on {torch.distributed.get_rank()}")
-    mp_group = get_model_parallel_group()
-    if mp_group.size() > 1:
-        pass  # torch.distributed.barrier(mp_group)
     ref_out = reference_model(inputs)
 
-    print(f"out on {torch.distributed.get_rank()}")
-    print(f"{ref_out},  {output}, {inputs}, {cloned}")
     assert torch.equal(ref_out.cpu(), output.cpu())
 
     for out in output, ref_out:
-        if mp_group.size() > 1:
-            pass  # torch.distributed.barrier(mp_group)
-        try:
-            target = target.to(out.device)
-            loss = nn.MSELoss()(out, target)
-            loss.backward()
-        except Exception as e:
-            print(f"loss failed {e}")
-            raise e
+        target = target.to(out.device)
+        loss = nn.MSELoss()(out, target)
+        loss.backward()
 
-    print(f"{torch.distributed.get_rank()}: optimizer")
     pipe.foreach_worker(step_optimizer, include_self=True)
-    print(f"{torch.distributed.get_rank()}: optimizer2")
     step_optimizer(None, reference_model.cuda())
-    print(f"{torch.distributed.get_rank()}: eval")
 
     pipe.eval()
     reference_model.eval()
-    print(f"{torch.distributed.get_rank()}: pipe2")
 
     final_output = pipe(inputs)
-    print(f"{torch.distributed.get_rank()}: ref2")
-    if mp_group.size() > 1:
-        pass  # torch.distributed.barrier(mp_group)
-    try:
-        final_ref = reference_model(inputs.cuda())
-    except Exception as e:
-        print(f"ref got {e}")
-        raise e
+    final_ref = reference_model(inputs.cuda())
 
     assert torch.equal(final_output.cpu(), final_ref.cpu())
 
@@ -139,11 +116,9 @@ def rpc_optimizer():
         reused_1 = nn.Linear(10, 10)
         return [reused_1, nn.ReLU(), reused_1, nn.ReLU(), reused_1, nn.ReLU()]
 
-    print(f"easy")
     check_pipe_against_reference(
         [2, 2, 2], lambda: [nn.Linear(10, 10), nn.ReLU(), nn.Linear(10, 10), nn.ReLU(), nn.Linear(10, 10), nn.ReLU()],
     )
-    print(f"hard")
     check_pipe_against_reference([2, 1, 1], model_with_reuse)
 
     rpc.shutdown()
@@ -199,9 +174,7 @@ def rpc_megatron_reuse():
         return
 
     check_pipe_against_reference([4, 4, 2], make_model_simple, "always")
-    print(f"{torch.distributed.get_rank()} simple returned!")
     check_pipe_against_reference([4, 2, 2], make_model_with_reuse)
-    print(f"{torch.distributed.get_rank()} returned!")
 
     rpc.shutdown()
     torch.distributed.barrier()
