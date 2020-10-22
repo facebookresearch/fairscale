@@ -168,7 +168,7 @@ def train(
     if not args.cpu:
         torch.cuda.synchronize(rank)
         max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
-        print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
+        logging.info(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
 
     training_stop = time.monotonic()
     img_per_sec = n_items / (training_stop - training_start) * args.epochs
