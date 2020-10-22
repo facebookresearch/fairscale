@@ -24,7 +24,7 @@ skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="m
 
 
 def test_step_on_cpu():
-    run_test(backend=dist.Backend.GLOO, device=torch.device("cpu"), world_size=10)
+    run_test(backend=dist.Backend.GLOO, device=torch.device("cpu"), world_size=4)
 
 
 @skip_if_no_cuda
