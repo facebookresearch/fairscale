@@ -12,7 +12,7 @@ Welcome to fairscale's documentation!
    :hidden:
 
    tutorials/index
-   api_reference
+   api/index
 
 *fairscale* is a PyTorch extension library for high performance and large scale training for optimizing training on one or across multiple machines/nodes. This library extend basic pytorch capabilities while adding new experimental ones.
 

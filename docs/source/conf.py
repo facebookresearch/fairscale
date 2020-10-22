@@ -60,7 +60,7 @@ templates_path = ["_templates"]
 # documentation.
 #
 html_theme_options = {
-    "includehidden": False,
+    "includehidden": True,
     "canonical_url": "https://fairscale.readthedocs.io",
     "pytorch_project": "docs",
 }
