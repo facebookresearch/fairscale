@@ -127,7 +127,7 @@ def train(
 
             def closure():
                 model.zero_grad()
-                if rank == 0 and next(model.parameters()).grad is not None:
+                if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
                         "\nbefore:  param {} -- grad {}".format(
                             next(model.parameters()).norm().item(), next(model.parameters()).grad.norm().item()
@@ -138,10 +138,7 @@ def train(
                 loss = loss_fn(outputs, batch["label"])
                 loss.backward()
 
-                if optim_type == OptimType.oss_sharded_ddp:
-                    model.reduce()
-
-                if rank == 0 and next(model.parameters()).grad is not None:
+                if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
                         "after BW: param {} -- grad {}".format(
                             next(model.parameters()).norm().item(), next(model.parameters()).grad.norm().item()
@@ -164,7 +161,7 @@ def train(
             else:
                 final_loss = optimizer.step(closure)
 
-            if rank == 0:
+            if args.debug and rank == 0:
                 logging.debug("buffer: {}".format(next(model.buffers()).norm().item()))
                 logging.debug(
                     "after update: param {} -- grad {}".format(
