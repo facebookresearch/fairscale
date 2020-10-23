@@ -166,6 +166,17 @@ class ModelDispatch(nn.Module):
                         (dist.reduce(tensor=p.grad.data, dst=global_dst_rank, group=group, async_op=True), dst_rank, p,)  # type: ignore
                     )
 
+            # Catch a trailing bucket
+            if not bucket_sent:
+                buffer.div_(_world_size)
+                bucket_requests.append(
+                    (
+                        dist.reduce(tensor=buffer, dst=global_dst_rank, group=group, async_op=True),  # type: ignore
+                        dst_rank,
+                        bucket_params,
+                    )
+                )
+
         # Now unroll the bucketed small gradients
         for work_handle, dst_rank, bucket_params in bucket_requests:
             work_handle.wait()
