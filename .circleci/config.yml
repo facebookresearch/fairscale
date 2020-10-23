@@ -114,7 +114,7 @@ run_oss_gloo: &run_oss_gloo
 - run:
     name: Run OSS with Gloo
     command: |
-      python benchmarks/oss.py --gloo --optim_type oss
+      python benchmarks/oss.py --gloo --optim_type oss_ddp --epochs 3
 
 
 # -------------------------------------------------------------------------------------
