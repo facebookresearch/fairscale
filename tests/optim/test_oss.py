@@ -429,3 +429,49 @@ def test_multiple_groups():
     mp.spawn(
         run_test_multiple_groups, args=(world_size,), nprocs=world_size, join=True,
     )
+
+
+def run_gradient_clipping(rank, world_size):
+    dist_init(rank, world_size)
+    device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
+
+    # Run a dummy step so that the optimizer state dict exists
+    batch, input_width, hidden, target_width = 3, 20, 10, 5
+    target = torch.rand((batch, target_width), device=device)
+    inputs = torch.rand((batch, input_width), device=device)
+
+    model = torch.nn.Sequential(
+        torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden), torch.nn.Linear(hidden, target_width)
+    )
+    model.to(device)
+
+    loss_fn = torch.nn.L1Loss()
+    loss_fn.to(device)
+
+    # With SGD, Momentum is required to get a state to shard
+    optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99)
+
+    def closure():
+        optimizer.zero_grad()
+        output = model(inputs)
+        loss = loss_fn(output, target)
+        loss.backward()
+
+        optimizer.clip_grad_norm(0.3, norm_type=1.0)
+        for params in optimizer.per_device_params.values():
+            for param in filter(lambda x: x.grad is not None, params[rank]):
+                assert torch.norm(param.grad, p=1.0) < 0.3, f"param grad norm above clip : {param.grad}"
+        return loss
+
+    _ = optimizer.step(closure=closure)
+
+
+def test_gradient_clipping():
+    world_size = 3
+    if torch.cuda.is_available():
+        world_size = min(world_size, torch.cuda.device_count())
+    reference_rank = 0
+
+    mp.spawn(
+        run_gradient_clipping, args=(world_size,), nprocs=world_size, join=True,
+    )

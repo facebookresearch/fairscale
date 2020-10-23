@@ -10,6 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
 import torch
+from torch._six import inf
 import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
@@ -201,6 +202,72 @@ class OSS(Optimizer):
 
         return loss
 
+    def clip_grad_norm(self, max_norm: float, norm_type: float = 2.0) -> torch.Tensor:
+        """
+        Clip all gradients at this point in time. The norm is computed over all gradients together, as if they were
+        concatenated into a single vector. Gradients are modified in-place.
+
+        Arguments:
+            max_norm (float or int): max norm of the gradients
+            norm_type (float or int): type of the used p-norm. Can be ``'inf'`` for
+                infinity norm.
+
+        Returns:
+            Total norm of the parameters (viewed as a single vector).
+
+        .. note: This is analogous to `torch.nn.utils.clip_grad_norm_` but handles the partitioning and multiple devices per rank
+        under the hood.
+
+        .. warning: This needs to be called on all ranks, since synchronization primitives will be used
+        """
+
+        # Compute the max norm for this shards's worth of gradients
+        max_norm = float(max_norm)
+        norm_type = float(norm_type)
+
+        # Filter out the grad-less params, concatenate params from all devices
+        local_params = [
+            filter(lambda x: x.grad is not None, device_params[self.rank])
+            for device_params in self.per_device_params.values()
+        ]
+
+        # Compute the norm on this grad set
+        if norm_type == inf:
+            local_norm = max(
+                p.grad.detach().abs().max().to(self._device)  # type: ignore   # mypy seems wrong here, None grads have been filtered out
+                for local_params_device in local_params
+                for p in local_params_device
+            )
+
+        else:
+            local_norm = torch.norm(  # type: ignore
+                torch.stack(
+                    [
+                        torch.norm(p.grad.detach(), norm_type).to(self._device)  # type: ignore
+                        for local_params_device in local_params
+                        for p in local_params_device
+                    ]
+                ),
+                norm_type,
+            )
+
+        # Sync all the norms from all ranks
+        norms = [torch.zeros_like(local_norm) for k in range(self.world_size)]
+        dist.all_gather(norms, local_norm, group=self.group, async_op=False)
+        total_norm = torch.max(torch.stack(norms))
+
+        clip_coef = torch.tensor(max_norm, dtype=total_norm.dtype, device=total_norm.device) / (total_norm + 1e-6)
+
+        if clip_coef < 1:
+            for device, device_params in self.per_device_params.items():
+                clip_coef = clip_coef.to(device)
+
+                for p in filter(lambda x: x.grad is not None, device_params[self.rank]):
+                    p.grad.detach().mul_(clip_coef)  # type: ignore
+
+        return total_norm
+
+    # State dict interfaces
     def local_state_dict(self) -> dict:
         """Gets this rank's state_dict.
 
