@@ -61,7 +61,7 @@ def test_expert_params(device):
 def test_forward(device):
     model_dim = 8
     num_experts = dist.get_world_size(dist.group.WORLD)
-    input = torch.randn(3, 4, 16, model_dim).to(device)
+    input = torch.randn(1, 4, 16, model_dim).to(device)
     gate = Top2Gate(model_dim, num_experts)
     expert = torch.nn.Linear(model_dim, model_dim, bias=False)
     # Use identity matrix
@@ -71,6 +71,30 @@ def test_forward(device):
     assert output.shape == input.shape
     # Re-assembled output should match input due to identity expert.
     assert torch.allclose(input, output)
+
+
+@pytest.mark.mpi
+@pytest.mark.parametrize("device", ["cpu"])
+def test_forward_multi(device):
+    torch.set_printoptions(threshold=5000)
+    num_local_experts = 4
+    model_dim = 4
+    num_experts = dist.get_world_size(dist.group.WORLD) * num_local_experts
+    input = torch.randn(num_local_experts, 4, 16, model_dim).to(device)
+    gate = Top2Gate(model_dim, num_experts)
+    experts = []
+    for i in range(num_local_experts):
+        expert = torch.nn.Linear(model_dim, model_dim, bias=False)
+        # Use identity matrix
+        expert.weight = torch.nn.Parameter(torch.eye(model_dim))
+        experts += [expert]
+    moe = MOELayer(gate, torch.nn.ModuleList(experts)).to(device)
+    output = moe(input)
+    assert output.shape == input.shape
+    # 90% of the input should have gone to an expert
+    assert len(output.nonzero(as_tuple=False)) / output.numel() > 0.90
+    # Except for zeros, re-assembled output should match input due to identity expert.
+    assert torch.allclose(input, torch.where(output > 0, output, input))
 
 
 # Test Gate which round-robin routes tokens to experts
@@ -95,7 +119,7 @@ class RoundRobinGate(torch.nn.Module):
 def test_forward_routing(device):
     model_dim = 8
     num_experts = dist.get_world_size()
-    input = torch.randn(3, 4, 16, model_dim).to(device)
+    input = torch.randn(1, 4, 16, model_dim).to(device)
     gate = RoundRobinGate(model_dim, num_experts)
     expert = torch.nn.Linear(model_dim, model_dim, bias=False)
     # Use scaling matrix (each rank has a different scale)
@@ -117,7 +141,7 @@ def test_backward(device):
     loss = torch.nn.MSELoss()
     model_dim = 8
     num_experts = dist.get_world_size(dist.group.WORLD)
-    input = torch.randn(3, 4, 16, model_dim).to(device)
+    input = torch.randn(1, 4, 16, model_dim).to(device)
     gate = Top2Gate(model_dim, num_experts)
     expert = torch.nn.Linear(model_dim, model_dim, bias=False)
     # Use identity matrix
