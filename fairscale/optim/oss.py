@@ -427,7 +427,7 @@ class OSS(Optimizer):
         for (src_rank, params), buffer in zip(enumerate(per_rank_params), buffers):
             global_src_rank = self.get_global_rank(self.group, src_rank)
 
-            # Copy small gradients into per-GPU buffers and then async broadcast
+            # Copy small parameters into per-GPU buffers and then async broadcast
             offset = 0
             bucket_sent = False
             bucket_params = []
@@ -455,6 +455,16 @@ class OSS(Optimizer):
                     direct_requests.append(
                         dist.broadcast(tensor=p.data, src=global_src_rank, group=self.group, async_op=True)
                     )
+
+            # Catch a trailing bucket
+            if not bucket_sent:
+                bucket_requests.append(
+                    (
+                        dist.broadcast(tensor=buffer, src=global_src_rank, group=self.group, async_op=True),
+                        src_rank,
+                        bucket_params,
+                    )
+                )
 
         # Unroll the initial packed small parameters
         for work_handle, src_rank, bucket_params in bucket_requests:
