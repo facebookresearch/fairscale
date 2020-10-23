@@ -70,7 +70,7 @@ def train(
     optim_type: OptimType = OptimType.vanilla,
     check_regression: bool = True,
 ):
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
 
     # DDP
     dist_init(rank=rank, world_size=args.world_size, backend=backend)
@@ -103,6 +103,7 @@ def train(
             if optim_type == OptimType.oss_ddp
             else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
         )
+    optimizer = cast(torch.optim.Optimizer, optimizer)
 
     # Reset the memory use counter
     if not args.cpu:
@@ -126,14 +127,26 @@ def train(
 
             def closure():
                 model.zero_grad()
-                if rank == 0 and next(model.parameters()).grad is not None and args.debug:
-                    print("\nbefore: ", next(model.parameters()).norm().item(), " -- ", next(model.parameters()).grad.norm().item(), flush=True)  # type: ignore
+                if rank == 0 and next(model.parameters()).grad is not None:
+                    logging.debug(
+                        "\nbefore:  param {} -- grad {}".format(
+                            next(model.parameters()).norm().item(), next(model.parameters()).grad.norm().item()
+                        )
+                    )
 
                 outputs = model(batch["inputs"])
                 loss = loss_fn(outputs, batch["label"])
                 loss.backward()
-                if rank == 0 and next(model.parameters()).grad is not None and args.debug:
-                    print("after BW: ", next(model.parameters()).norm().item(), " -- ", next(model.parameters()).grad.norm().item(), flush=True)  # type: ignore
+
+                if optim_type == OptimType.oss_sharded_ddp:
+                    model.reduce()
+
+                if rank == 0 and next(model.parameters()).grad is not None:
+                    logging.debug(
+                        "after BW: param {} -- grad {}".format(
+                            next(model.parameters()).norm().item(), next(model.parameters()).grad.norm().item()
+                        )
+                    )
                 return loss
 
             if need_profiling and not args.cpu:
@@ -151,9 +164,13 @@ def train(
             else:
                 final_loss = optimizer.step(closure)
 
-            if rank == 0 and args.debug:
-                print("buffer: ", next(model.buffers()).norm().item(), flush=True)
-                print("after update: ", next(model.parameters()).norm().item(), " -- ", next(model.parameters()).grad.norm().item(), flush=True)  # type: ignore
+            if rank == 0:
+                logging.debug("buffer: {}".format(next(model.buffers()).norm().item()))
+                logging.debug(
+                    "after update: param {} -- grad {}".format(
+                        next(model.parameters()).norm().item(), next(model.parameters()).grad.norm().item()
+                    )
+                )
 
             n_items += args.batch_size
 
@@ -224,7 +241,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
     logging.info(f"Benchmark arguments: {args}")
 
     backend = "nccl" if (not args.gloo or not torch.cuda.is_available()) and not args.cpu else "gloo"
