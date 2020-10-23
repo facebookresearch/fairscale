@@ -504,7 +504,7 @@ class OSS(Optimizer):
                 # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
                 if not bucket_sent and offset + p.numel() < buffer_size:
                     end = offset + p.numel()
-                    buffer[offset:end].copy_(p.data.view(-1))  # type: ignore
+                    buffer[offset:end].copy_(p.data.view(-1))
                     bucket_params.append((p, offset, end))
                     offset = end
                 else:
@@ -538,7 +538,7 @@ class OSS(Optimizer):
             work_handle.wait()
             if src_rank != self.rank:
                 for p, offset, end in bucket_params:
-                    p.data.copy_(buffers[src_rank][offset:end].view_as(p.data))  # type: ignore
+                    p.data.copy_(buffers[src_rank][offset:end].view_as(p.data))
 
         # Unroll all the async work items, just in case
         _ = list(map(lambda x: x.wait(), direct_requests))
