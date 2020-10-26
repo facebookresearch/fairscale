@@ -62,7 +62,7 @@ def step_optimizer(ctx, model):
         model.optimizer.step()
 
 
-def check_pipe_against_reference(balance, model_constructor, checkpoint="except_last"):
+def check_pipe_against_reference(balance, model_constructor, checkpoint="except_last", custom_inputs=None):
     model = model_constructor()
     reference_model = model_constructor()
     for src, dst in zip(model, reference_model):
@@ -71,7 +71,7 @@ def check_pipe_against_reference(balance, model_constructor, checkpoint="except_
     reference_model = nn.Sequential(*reference_model).cuda()
 
     pipe = PipeRPCWrapper(
-        model, balance, input_device=torch.cuda.current_device(), worker_map=get_worker_map(), checkpoint=checkpoint
+        model, balance, input_device=torch.cuda.current_device(), worker_map=get_worker_map(), checkpoint=checkpoint,
     )
 
     pipe.foreach_worker(register_optimizer, include_self=True)
@@ -182,39 +182,30 @@ def rpc_megatron_reuse():
 
 @torch_spawn([3])
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" not in os.environ, reason="mpi required")
-def rpc_deadlock():
+def rpc_reuse_in_final_stage():
+
+    # 'reused' and 'reused2' are located on stage 2, so the backward pass for
+    # the final stage will need to first send gradients to stage 2, then receive
+    # gradients from stage 2. This tests custom logic to handle reuse of layers
+    # in the final stage of the pipeline.
+
     reused = nn.Linear(10, 10)
-    if False:
-        reused2 = nn.Linear(10, 10)
-        model = [
-            nn.Linear(10, 10),
-            nn.ReLU(),
-            nn.Linear(10, 10),
-            reused2,
-            nn.ReLU(),
-            reused,
-            nn.ReLU(),
-            reused,
-            reused2,
-            nn.ReLU(),
-            reused,
-            nn.ReLU(),
-        ]
-        balance = [2, 3, 4]
-    else:
-        model = [
-            nn.Linear(10, 10),
-            nn.ReLU(),
-            nn.Linear(10, 10),
-            nn.ReLU(),
-            reused,
-            nn.ReLU(),
-            reused,
-            nn.ReLU(),
-            reused,
-            nn.ReLU(),
-        ]
-        balance = [2, 2, 4]
+    reused2 = nn.Linear(10, 10)
+    model = [
+        nn.Linear(10, 10),
+        nn.ReLU(),
+        nn.Linear(10, 10),
+        reused2,
+        nn.ReLU(),
+        reused,
+        nn.ReLU(),
+        reused,
+        reused2,
+        nn.ReLU(),
+        reused,
+        nn.ReLU(),
+    ]
+    balance = [2, 3, 4]
 
     init_rpc()
 
@@ -233,6 +224,18 @@ def rpc_deadlock():
     nn.MSELoss()(output, target).backward()
     rpc.shutdown()
     torch.distributed.barrier()
+
+
+@torch_spawn([3])
+@pytest.mark.skipif("OMPI_COMM_WORLD_RANK" not in os.environ, reason="mpi required")
+def rpc_multiple_tensors():
+    class FuseTwo(nn.Module):
+        def forward(self, left, right):
+            return left + right
+
+    class SplitTwo(nn.Module):
+        def forward(self, inputs):
+            return (inputs, 2 * inputs)
 
 
 @torch_spawn([2])

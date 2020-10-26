@@ -42,6 +42,14 @@ Activations = Dict[int, Dict[int, Dict[int, Batch]]]
 Invocations = Dict[int, Invocation]
 
 
+@dataclass(frozen=True)
+class TailBackwardContext:
+    activations: Activations
+    invocations: Invocations
+    count_per_order: Dict[int, int]
+    expected_gradients: int
+
+
 class ModuleWrapper:
     def __init__(self, module: nn.Sequential, location: Location, invocations: Optional[List[Invocation]] = None):
         self.module: nn.Sequential = module
@@ -123,6 +131,20 @@ class AsyncRecvOperator(torch.autograd.Function):
             ),
             sync=True,
         )
+
+        tail_ctx = getattr(ctx, "tail_ctx", None)
+        if tail_ctx:
+            expected_gradients = tail_ctx.expected_gradients
+            while expected_gradients > 0:
+                message = ctx.transport.recv_message_header(EVENT_LOOP_QUEUE)
+
+                args: AsyncMessageBody = message.args
+                assert args.message_type is AsyncMessageType.Gradients
+
+                invocation = tail_ctx.invocations[args.order]
+                expected_gradients -= tail_ctx.count_per_order[invocation.order]
+                AsyncEventLoop.perform_backward_for_invocation(ctx.transport, message, tail_ctx.activations, invocation)
+
         return (None, None, None, None, None)
 
 
@@ -190,8 +212,14 @@ class AsyncEventLoop:
             result = self.send_async_message(dst_rank, result, invocation)
         return result
 
-    def async_grad_inner(self, message: PipeMessage, activations: Activations, invocation: Invocation) -> None:
-        recvd_grads = self.transport.recv_message_tensors(message)
+    @staticmethod
+    def perform_backward_for_invocation(
+        transport: Transport, message: PipeMessage, activations: Activations, invocation: Invocation
+    ) -> None:
+        """Perform the backward pass by looking up the appropriate `Batch` and
+        then calling `backward` on the tensor"""
+
+        recvd_grads = transport.recv_message_tensors(message)
 
         batch: Batch = activations[invocation.this.index][invocation.order][message.args.microbatch_index]
 
@@ -271,6 +299,9 @@ class AsyncEventLoop:
             )
 
     def get_batch_from_message(self, message: PipeMessage) -> Batch:
+        """Get the tensor(s) wrapped in a `Batch` from a `PipeMessage`, applying
+        AsyncRecvOperator so we can intercept the backward pass"""
+
         microbatch_index = message.args.microbatch_index
         phony = torch.empty(0, device=self.transport.input_device, requires_grad=True)
         result = AsyncRecvOperator.apply(phony, self.transport, message)
@@ -309,6 +340,11 @@ class AsyncEventLoop:
             actual_invocations += inv_count
             count_per_order[last_order] = inv_count
 
+            if invocations[last_order].dest is None:
+                self.prepare_tail_backward(
+                    batch, activations, invocations, count_per_order, len(invocations) - inv_count
+                )
+
         if actual_invocations < expected_invocations:
             expected_gradients = 0  # (len(invocations) - 1) * len(batches)
 
@@ -320,6 +356,7 @@ class AsyncEventLoop:
                 count_per_order,
                 already_received=actual_invocations,
                 ignore_gradients=True,
+                tail=True,
             )
 
         _, last_invocation = invocations.popitem()
@@ -362,10 +399,11 @@ class AsyncEventLoop:
         already_received: int = 0,
         ignore_gradients: bool = False,
         event: Optional[Event] = None,
+        tail: bool = False,
     ) -> None:
         """The common event loop shared by all stages. This processses
         activations for the forward pass, and if `self.training` is true,
-        handles gradients as well for the backward pass."""
+        processes gradients for the backward pass."""
 
         num_activations = already_received
         if self.training and not ignore_gradients:
@@ -375,6 +413,9 @@ class AsyncEventLoop:
 
         while num_activations < expected_invocations or num_gradients < expected_invocations:
             if num_activations == expected_invocations and num_gradients == 0 and event is not None:
+                # We are ready to do the backward pass, but must wait for
+                # PipeRPCWrapper to signal that it is safe to proceed, otherwise
+                # deadlock
                 event.wait()
 
             message = self.transport.recv_message_header(EVENT_LOOP_QUEUE)
@@ -395,8 +436,26 @@ class AsyncEventLoop:
                 )
                 count_per_order[last_order] = inv_count
                 num_activations += inv_count
+                if tail and invocations[last_order].dest is None:
+                    self.prepare_tail_backward(
+                        batch, activations, invocations, count_per_order, len(invocations) - inv_count
+                    )
+
                 assert num_activations <= expected_invocations
 
             elif args.message_type is AsyncMessageType.Gradients:
                 num_gradients += count_per_order[invocation.order]
-                self.async_grad_inner(message, activations, invocation)
+                self.perform_backward_for_invocation(self.transport, message, activations, invocation)
+
+    @staticmethod
+    def prepare_tail_backward(
+        batch: Batch,
+        activations: Activations,
+        invocations: Invocations,
+        count_per_order: Dict[int, int],
+        expected_gradients: int,
+    ) -> None:
+        if expected_gradients > 0:
+            grad_fn = next(b.grad_fn for b in batch if b.requires_grad)
+            assert grad_fn
+            grad_fn.tail_ctx = TailBackwardContext(activations, invocations, count_per_order, expected_gradients)
