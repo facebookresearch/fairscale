@@ -288,6 +288,9 @@ class ShardedDataParallel(nn.Module):
             buffer_size=buffer_size,
         )
 
+        # process_group is exposed by pytorch's DDP, so some framework might depend on it
+        self.process_group = process_group if process_group is not None else dist.group.WORLD
+
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         # All inputs need to required_grad for autograd to properly track the first dispatch layer
         if isinstance(inputs, tuple):
