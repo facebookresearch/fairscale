@@ -32,6 +32,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import functools
+import logging
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -79,6 +80,8 @@ class AdaScale(object):
         smoothing: float = 0.999,
         patch_optimizer: bool = False,
     ):
+        logging.warn("AdaScale is experimental. APIs may change. Use at your own risk.")
+
         self._optimizer = optimizer
         self._optimizer_step = optimizer.step
         self._local_grad_sqr: Optional[torch.Tensor] = None
