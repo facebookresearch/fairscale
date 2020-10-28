@@ -245,6 +245,10 @@ jobs:
 
       - run: nvidia-smi
 
+      - run: pyenv uninstall -f 3.7.0
+
+      - run: pyenv install 3.7.0
+
       - run: pyenv global 3.7.0
 
       - <<: *setup_venv
