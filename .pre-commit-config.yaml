@@ -33,8 +33,8 @@ repos:
     -   id: seed-isort-config
         language_version: python3.6
 
--   repo: https://github.com/timothycrosley/isort
-    rev: 4.3.20
+-   repo: https://github.com/pycqa/isort
+    rev: 5.6.4
     hooks:
     -   id: isort
         exclude: README.md
