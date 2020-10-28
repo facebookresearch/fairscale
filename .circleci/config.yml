@@ -252,14 +252,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-gpu16-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_16
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-gpu16-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_gpu
 
