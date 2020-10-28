@@ -78,6 +78,17 @@ def all_to_all(
     ...
 
 
+def all_to_all_single(
+    output: Tensor,
+    input: Tensor,
+    output_split_size: Optional[List[int]] = None,
+    input_split_size: Optional[List[int]] = None,
+    group: Optional[ProcessGroup] = None,
+    async_op: bool = False,
+):
+    ...
+
+
 def all_reduce(
     tensor: Tensor, op: ReduceOp = ReduceOp.SUM, group: Optional[ProcessGroup] = None, async_op: bool = False
 ):

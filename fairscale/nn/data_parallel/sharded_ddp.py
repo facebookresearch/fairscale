@@ -29,9 +29,7 @@ def _get_global_rank(group: Any, rank: int) -> int:
 
 class ModelDispatch(nn.Module):
     """
-    Wrap a model, make it possible to load parameters on the fly for the FW pass and gather gradients.
-    Depending on whether this rank is or is not the `owner_rank`, this ModelShard either only handles
-    a shard of the compute and is stateless or also owns the up to date state.
+    Wrap a model, make it possible to automatically reduce the gradients to the proper shards after the BW pass
     """
 
     def __init__(
@@ -75,7 +73,7 @@ class ModelDispatch(nn.Module):
 
     def forward(self, *inputs):  # type: ignore
         if self.broadcast_model_buffers:
-            self.sync_buffers(non_blocking=False)
+            self.sync_buffers(non_blocking=True)
 
         return (self.base_model(*inputs),) if isinstance(inputs, tuple) else self.base_model(inputs)
 
