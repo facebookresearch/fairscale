@@ -27,9 +27,7 @@ class _AllToAll(torch.autograd.Function):
         world_size = dist.get_world_size(group)
         input = input.contiguous()
         output = torch.empty_like(input)
-        input_chunks = list(input.chunk(world_size))
-        output_chunks = list(output.chunk(world_size))
-        dist.all_to_all(output_chunks, input_chunks, group=group)
+        dist.all_to_all_single(output, input, group=group)
         return output
 
     @staticmethod
