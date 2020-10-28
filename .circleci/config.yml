@@ -148,7 +148,7 @@ jobs:
       - run:
           name: Run Linter (isort)
           command: |
-            isort --check-only
+            isort . --check
 
       - run:
           name: Run Linter (black)

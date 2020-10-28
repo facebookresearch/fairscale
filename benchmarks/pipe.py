@@ -188,8 +188,8 @@ def make_model(args, device, ntokens):
 
 
 def get_tensors_by_size_bucket():
-    import gc
     from collections import defaultdict
+    import gc
 
     size_buckets = defaultdict(int)
     for obj in gc.get_objects():
@@ -202,8 +202,8 @@ def get_tensors_by_size_bucket():
 
 
 def dump_size_buckets(size_buckets, prefix=""):
-    import operator
     from functools import reduce
+    import operator
 
     total = 0
     for key, value in size_buckets.items():
@@ -247,8 +247,8 @@ def check_size_buckets():
 def dump_cuda_tensors():
     print(f"dumping cuda tensors...")
     from functools import reduce
-    import operator
     import gc
+    import operator
 
     for obj in gc.get_objects():
         if not isinstance(obj, torch.Tensor):

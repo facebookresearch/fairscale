@@ -10,7 +10,7 @@ import pytest
 import torch
 
 try:
-    from fairscale.optim import Adam, Precision, GradScaler
+    from fairscale.optim import Adam, GradScaler, Precision
 
     imported_adam = True
 except ImportError:
