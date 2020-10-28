@@ -635,7 +635,7 @@ def deferred_batch_norm_params(checkpoint, lazy):
     assert torch.allclose(pipe[0].bias.grad, bn.bias.grad, atol=1e-4)
 
 
-@torch_spawn([5])
+@torch_spawn([4])
 def devices():
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
