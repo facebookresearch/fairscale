@@ -8,7 +8,7 @@ A module wrapper to go with a Sharded Optimizer in order to handle targeted grad
 """
 
 import logging
-from typing import Any, List, Union
+from typing import Any, Callable, List, Union
 
 import torch
 from torch import nn
@@ -19,11 +19,7 @@ from fairscale.optim.oss import OSS
 
 
 def _get_global_rank(group: Any, rank: int) -> int:
-    if group is dist.group.WORLD:
-        return rank
-    else:
-        global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
-    return global_rank
+    return rank if group is dist.group.WORLD else dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
 
 
 class ShardedDataParallel(nn.Module):
@@ -64,6 +60,8 @@ class ShardedDataParallel(nn.Module):
 
         self.broadcast_buffers = broadcast_buffers
         self.reference_global_rank = _get_global_rank(self.process_group, 0)  # picking rank 0 as the reference
+        self.rank = dist.get_rank(self.process_group)
+        self.global_rank = _get_global_rank(self.process_group, self.rank)
 
         # Look up where this parameter should be reduced to
         def find_rank(param: Parameter) -> int:
@@ -81,21 +79,25 @@ class ShardedDataParallel(nn.Module):
             for p in filter(lambda x: x.requires_grad, self.base_model.parameters())
         ]
 
-        # FIXME: @lefaudeux Make sure that we don't reduce twice
+        self.grad_to_be_reduced = [True for p in filter(lambda x: x.requires_grad, self.base_model.parameters())]
+        self.reduce_work_handles: List[Any] = []
 
         # Go through all the parameters in the base model
         # If they require_grad, attach a hook which will reduce them to the correct rank
         for i, p in enumerate(filter(lambda x: x.requires_grad, self.base_model.parameters())):
-            # Define a callback per tensor, reduce to the proper rank
-            def reduce(grad: torch.Tensor) -> torch.Tensor:
-                if grad is not None:
-                    grad.data /= self.world_size
-                    dist.reduce(grad.data, self.grad_to_rank[i], group=self.process_group, async_op=True)  # type: ignore
-                    print(f"grad {id(grad)} reduce to {self.grad_to_rank[i]}", flush=True)
-                return grad
 
-            print(f"register function {id(reduce)} - reduce to {self.grad_to_rank[i]}", flush=True)
-            p.register_hook(reduce)
+            # Define a callback per tensor, reduce to the proper rank
+            def get_reduce_fn(index: int) -> Callable[[torch.Tensor], torch.Tensor]:
+                def reduce(grad: torch.Tensor) -> torch.Tensor:
+                    if grad is not None and self.grad_to_be_reduced[index]:
+                        self.grad_to_be_reduced[index] = False
+                        grad /= self.world_size
+                        dist.reduce(grad, self.grad_to_rank[index], group=self.process_group, async_op=True)
+                    return grad
+
+                return reduce
+
+            p.register_hook(get_reduce_fn(i))
 
         logging.info(f"Rank {dist.get_rank(self.process_group)}: All BW hooks are registered")
 
@@ -105,6 +107,11 @@ class ShardedDataParallel(nn.Module):
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         if self.broadcast_buffers:
             self.sync_buffers()
+
+        # FIXME: Automatically relase the grads at the end of the BW
+
+        # Reset all the grad reduce flags
+        self.grad_to_be_reduced = [True for _ in self.grad_to_be_reduced]
 
         return self.base_model(*inputs)
 

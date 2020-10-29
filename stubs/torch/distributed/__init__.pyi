@@ -95,6 +95,12 @@ def all_reduce(
     ...
 
 
+def reduce(
+    tensor: Tensor, dst: int, op: ReduceOp = ReduceOp.SUM, group: Optional[ProcessGroup] = None, async_op: bool = False
+):
+    ...
+
+
 def all_gather(tensor_list: List[Tensor], tensor: Tensor, group: Optional[ProcessGroup] = None, async_op: bool = False):
     ...
 
