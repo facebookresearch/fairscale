@@ -79,20 +79,36 @@ class ShardedDataParallel(nn.Module):
             for p in filter(lambda x: x.requires_grad, self.base_model.parameters())
         ]
 
-        self.grad_to_be_reduced = [True for p in filter(lambda x: x.requires_grad, self.base_model.parameters())]
-        self.reduce_work_handles: List[Any] = []
+        self._grad_to_be_reduced = {p: True for p in filter(lambda x: x.requires_grad, self.base_model.parameters())}
+        self._parameters_with_grad = list(filter(lambda x: x.requires_grad, self.base_model.parameters()))
 
         # Go through all the parameters in the base model
         # If they require_grad, attach a hook which will reduce them to the correct rank
         for i, p in enumerate(filter(lambda x: x.requires_grad, self.base_model.parameters())):
-
             # Define a callback per tensor, reduce to the proper rank
             def get_reduce_fn(index: int) -> Callable[[torch.Tensor], torch.Tensor]:
                 def reduce(grad: torch.Tensor) -> torch.Tensor:
-                    if grad is not None and self.grad_to_be_reduced[index]:
-                        self.grad_to_be_reduced[index] = False
-                        grad /= self.world_size
-                        dist.reduce(grad, self.grad_to_rank[index], group=self.process_group, async_op=True)
+                    param = self._parameters_with_grad[index]
+
+                    if param.grad is not None and self._grad_to_be_reduced[param]:
+                        self._grad_to_be_reduced[param] = False
+                        param.grad /= self.world_size
+
+                        print(
+                            f"{self.rank} - {index} - reducing {id(param.grad)} to {self.grad_to_rank[index]}",
+                            flush=True,
+                        )
+
+                        dist.reduce(
+                            param.grad, self.grad_to_rank[index], group=self.process_group, async_op=False,
+                        )
+
+                        # Grad not useful anymore, can be released
+                        if self.grad_to_rank[index] != self.global_rank:
+                            param.grad = None
+                    else:
+                        print(f"skipping index {index}", flush=True)
+
                     return grad
 
                 return reduce
@@ -108,10 +124,8 @@ class ShardedDataParallel(nn.Module):
         if self.broadcast_buffers:
             self.sync_buffers()
 
-        # FIXME: Automatically relase the grads at the end of the BW
-
         # Reset all the grad reduce flags
-        self.grad_to_be_reduced = [True for _ in self.grad_to_be_reduced]
+        self._grad_to_be_reduced = {k: True for k, v in self._grad_to_be_reduced.items()}
 
         return self.base_model(*inputs)
 
