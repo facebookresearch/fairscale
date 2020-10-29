@@ -10,7 +10,6 @@ A module wrapper to go with a Sharded Optimizer in order to handle targeted grad
 import logging
 from typing import Any, Callable, List, Union
 
-import torch
 from torch import nn
 import torch.distributed as dist
 from torch.nn import Parameter
@@ -79,41 +78,40 @@ class ShardedDataParallel(nn.Module):
             for p in filter(lambda x: x.requires_grad, self.base_model.parameters())
         ]
 
-        self._grad_to_be_reduced = {p: True for p in filter(lambda x: x.requires_grad, self.base_model.parameters())}
+        self._grad_to_be_reduced = [True for _ in filter(lambda x: x.requires_grad, self.base_model.parameters())]
         self._parameters_with_grad = list(filter(lambda x: x.requires_grad, self.base_model.parameters()))
+        self._grad_accs: List[Callable] = []
 
         # Go through all the parameters in the base model
         # If they require_grad, attach a hook which will reduce them to the correct rank
+
+        def get_reduce_fn(index: int) -> Callable:
+            def reduce(*unused: Any) -> None:
+                param = self._parameters_with_grad[index]
+
+                if param.grad is not None and self._grad_to_be_reduced[index]:
+                    # Make sure that this is not fired twice
+                    self._grad_to_be_reduced[index] = False
+
+                    # Reduce/normalize a copy, this grad could be shared
+                    grad_reduced = param.grad.detach().clone() / self.world_size
+
+                    dist.reduce(
+                        grad_reduced, self.grad_to_rank[index], group=self.process_group, async_op=False,
+                    )
+
+            return reduce
+
         for i, p in enumerate(filter(lambda x: x.requires_grad, self.base_model.parameters())):
-            # Define a callback per tensor, reduce to the proper rank
-            def get_reduce_fn(index: int) -> Callable[[torch.Tensor], torch.Tensor]:
-                def reduce(grad: torch.Tensor) -> torch.Tensor:
-                    param = self._parameters_with_grad[index]
+            if p.grad is not None and p.grad.requires_grad:
+                raise RuntimeError("ShardedDataParallel only works " "with gradients that don't require grad")
 
-                    if param.grad is not None and self._grad_to_be_reduced[param]:
-                        self._grad_to_be_reduced[param] = False
-                        param.grad /= self.world_size
-
-                        print(
-                            f"{self.rank} - {index} - reducing {id(param.grad)} to {self.grad_to_rank[index]}",
-                            flush=True,
-                        )
-
-                        dist.reduce(
-                            param.grad, self.grad_to_rank[index], group=self.process_group, async_op=False,
-                        )
-
-                        # Grad not useful anymore, can be released
-                        if self.grad_to_rank[index] != self.global_rank:
-                            param.grad = None
-                    else:
-                        print(f"skipping index {index}", flush=True)
-
-                    return grad
-
-                return reduce
-
-            p.register_hook(get_reduce_fn(i))
+            # Register the hook to the next function in line
+            p_tmp = p.expand_as(p)
+            if p_tmp.grad_fn is not None:
+                grad_acc = p_tmp.grad_fn.next_functions[0][0]
+                grad_acc.register_hook(get_reduce_fn(i))
+                self._grad_accs.append(grad_acc)
 
         logging.info(f"Rank {dist.get_rank(self.process_group)}: All BW hooks are registered")
 
@@ -124,8 +122,10 @@ class ShardedDataParallel(nn.Module):
         if self.broadcast_buffers:
             self.sync_buffers()
 
+        # FIXME: Add a module BW hook to release the grads
+
         # Reset all the grad reduce flags
-        self._grad_to_be_reduced = {k: True for k, v in self._grad_to_be_reduced.items()}
+        self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
 
         return self.base_model(*inputs)
 
