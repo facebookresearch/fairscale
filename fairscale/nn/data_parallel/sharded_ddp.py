@@ -10,6 +10,7 @@ A module wrapper to go with a Sharded Optimizer in order to handle targeted grad
 import logging
 from typing import Any, Callable, List, Union
 
+import torch
 from torch import nn
 import torch.distributed as dist
 from torch.nn import Parameter
@@ -90,15 +91,19 @@ class ShardedDataParallel(nn.Module):
                 param = self._parameters_with_grad[index]
 
                 if param.grad is not None and self._grad_to_be_reduced[index]:
-                    # Make sure that this is not fired twice
-                    self._grad_to_be_reduced[index] = False
+                    with torch.autograd.profiler.record_function(f"reduce {index}"):
+                        # Make sure that this is not fired twice
+                        self._grad_to_be_reduced[index] = False
 
-                    # Reduce/normalize a copy, this grad could be shared
-                    grad_reduced = param.grad.detach().clone() / self.world_size
+                        # Reduce/normalize a copy, this grad could be shared
+                        param.grad /= self.world_size
 
-                    dist.reduce(
-                        grad_reduced, self.grad_to_rank[index], group=self.process_group, async_op=False,
-                    )
+                        dist.reduce(
+                            param.grad.data, self.grad_to_rank[index], group=self.process_group, async_op=True,
+                        )
+
+                        if self.grad_to_rank[index] != self.global_rank:
+                            param.grad = None
 
             return reduce
 
