@@ -646,7 +646,7 @@ def devices():
     model = Pipe(model, [1, 1, 1], style=Pipe.MultiProcess, worker_map=get_worker_map())
 
     # Extra devices must be discarded.
-    if model.group.rank() in [3, 4]:
+    if model.group.rank() == 3:
         assert model.pipeline is None
 
 
