@@ -164,6 +164,9 @@ class OSS(Optimizer):
                 for param_group in param_groups:
                     for param in param_group["params"]:
                         self._param_rank[param] = rank
+
+            logging.debug(f"ZeRO: Parameters dispatched to ranks {list(self._param_rank.values())}")
+
         return self._param_rank
 
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.

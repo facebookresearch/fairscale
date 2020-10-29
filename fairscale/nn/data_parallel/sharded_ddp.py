@@ -8,7 +8,7 @@ A module wrapper to go with a Sharded Optimizer in order to handle targeted grad
 """
 
 import logging
-from typing import Any, List, Union, cast
+from typing import Any, List, Union
 
 import torch
 from torch import nn
@@ -58,40 +58,46 @@ class ShardedDataParallel(nn.Module):
         super().__init__()
 
         self.base_model = base_model
-        self.sharded_optimizer = sharded_optimizer
+        self.sharded_optimizers = [sharded_optimizer] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.world_size = dist.get_world_size(self.process_group)
 
         self.broadcast_buffers = broadcast_buffers
         self.reference_global_rank = _get_global_rank(self.process_group, 0)  # picking rank 0 as the reference
 
+        # Look up where this parameter should be reduced to
+        def find_rank(param: Parameter) -> int:
+            for optim in self.sharded_optimizers:
+                if param in optim.param_to_rank.keys():
+                    return optim.param_to_rank[param]
+
+            assert False, "This parameter is not present in an optimizer, this should not happen"
+
+        logging.info(f"Rank {dist.get_rank(self.process_group)}: Registering hooks")
+
+        # Fill in a look-up table per grad
+        self.grad_to_rank = [
+            _get_global_rank(self.process_group, find_rank(p))
+            for p in filter(lambda x: x.requires_grad, self.base_model.parameters())
+        ]
+
+        # FIXME: @lefaudeux Make sure that we don't reduce twice
+
         # Go through all the parameters in the base model
         # If they require_grad, attach a hook which will reduce them to the correct rank
-        # Now register the reduction hook on the parameters
-        def find_rank(param: Parameter) -> int:
-            if isinstance(self.sharded_optimizer, list):
-                for optim in self.sharded_optimizer:
-                    if param in optim.param_to_rank.keys():
-                        return optim.param_to_rank[param]
+        for i, p in enumerate(filter(lambda x: x.requires_grad, self.base_model.parameters())):
+            # Define a callback per tensor, reduce to the proper rank
+            def reduce(grad: torch.Tensor) -> torch.Tensor:
+                if grad is not None:
+                    grad.data /= self.world_size
+                    dist.reduce(grad.data, self.grad_to_rank[i], group=self.process_group, async_op=True)  # type: ignore
+                    print(f"grad {id(grad)} reduce to {self.grad_to_rank[i]}", flush=True)
+                return grad
 
-            sharded_optimizer = cast(OSS, self.sharded_optimizer)
-            return sharded_optimizer.param_to_rank[param]
+            print(f"register function {id(reduce)} - reduce to {self.grad_to_rank[i]}", flush=True)
+            p.register_hook(reduce)
 
-        logging.info("Registering hooks")
-        for p in self.base_model.parameters():
-            if p.requires_grad:
-
-                def reduce(grad: torch.Tensor) -> torch.Tensor:
-                    if grad is not None:
-                        rank = _get_global_rank(self.process_group, find_rank(p))
-                        grad.data /= self.world_size
-                        dist.reduce(grad.data, rank, group=self.process_group)  # type: ignore
-
-                    return grad
-
-                p.register_hook(reduce)
-
-        logging.info("All BW hooks are registered")
+        logging.info(f"Rank {dist.get_rank(self.process_group)}: All BW hooks are registered")
 
         # Make sure that all ranks start with the same model
         self.sync_all_params()
