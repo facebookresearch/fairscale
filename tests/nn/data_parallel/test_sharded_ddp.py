@@ -148,3 +148,19 @@ def test_inputs():
     temp_file_name = tempfile.mkstemp()[1]
     device = "cpu"
     mp.spawn(run_test_two_inputs, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
+
+
+def test_ddp_attributes():
+    # Check that ShardedDDP exposes the same attributes as Pytorch's DDP
+    # - is multi_device_module
+    # - device_type
+
+    url = "file://" + tempfile.mkstemp()[1]
+    dist.init_process_group(init_method=url, backend="gloo", rank=0, world_size=1)
+
+    model = Sequential(Linear(2, 3), Linear(3, 3))
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    ddp_model = ShardedDataParallel(model, optimizer)
+
+    assert hasattr(ddp_model, "is_multi_device_module")
+    assert hasattr(ddp_model, "device_type")
