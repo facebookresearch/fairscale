@@ -107,6 +107,7 @@ def train(
 
     # Reset the memory use counter
     if not args.cpu:
+        torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(rank)
         torch.cuda.synchronize(rank)
 

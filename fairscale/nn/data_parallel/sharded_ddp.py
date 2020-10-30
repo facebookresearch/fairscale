@@ -38,7 +38,9 @@ class Gatekeeper(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
-        for wh in ctx.work_queue:
+        # Consume the handles, make sure that all the reduces are done before the optimizer can step
+        while len(ctx.work_queue) > 0:
+            wh = ctx.work_queue.pop()
             if wh is not None:
                 wh.wait()
 
