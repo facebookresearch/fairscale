@@ -324,6 +324,7 @@ workflows:
   build:
     jobs:
       - cpu_tests
-      - gpu_tests_17
+      - gpu_tests_15
       - gpu_tests_16
+      - gpu_tests_17
       - benchmarks
