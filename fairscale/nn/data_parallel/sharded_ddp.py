@@ -10,6 +10,7 @@ A module wrapper to go with a Sharded Optimizer in order to handle targeted grad
 import logging
 from typing import Any, Callable, List, Union
 
+import torch
 from torch import nn
 import torch.distributed as dist
 from torch.nn import Parameter
@@ -19,6 +20,29 @@ from fairscale.optim.oss import OSS
 
 def _get_global_rank(group: Any, rank: int) -> int:
     return rank if group is dist.group.WORLD else dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
+
+
+class Gatekeeper(torch.autograd.Function):
+    """
+     The gatekeeper layer makes sure that the reduce is done before the optimizer steps in
+     - In the forward pass it does nothing
+     - In the backward pass, it gathers gradients to the owner.
+     NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
+     """
+
+    @staticmethod
+    def forward(ctx: Any, work_queue: List[Any], *inputs: Any) -> Any:  # type: ignore
+        # Store a handle to the work queue for the BW reduce
+        ctx.work_queue = work_queue
+        return inputs
+
+    @staticmethod
+    def backward(ctx, *grad_outputs):  # type: ignore
+        for wh in ctx.work_queue:
+            if wh is not None:
+                wh.wait()
+
+        return tuple([None, *grad_outputs])
 
 
 class ShardedDataParallel(nn.Module):
@@ -89,9 +113,11 @@ class ShardedDataParallel(nn.Module):
             for p in filter(lambda x: x.requires_grad, self.base_model.parameters())
         ]
 
+        # Scafolding to be able to reduce the grads during the BW pass
         self._grad_to_be_reduced = [True for _ in filter(lambda x: x.requires_grad, self.base_model.parameters())]
         self._grad_accs: List[Callable] = []
-        self._setup_bw_hooks()
+        self._reduce_work_handles: List[Any] = []
+        self._setup_backward_hooks()
 
         # Make sure that all ranks start with the same model
         self.sync_all_params()
@@ -103,6 +129,17 @@ class ShardedDataParallel(nn.Module):
         # Reset all the grad reduce flags
         self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
 
+        if isinstance(inputs, torch.Tensor):
+            inputs.requires_grad = True
+
+        if isinstance(inputs, list) or isinstance(inputs, tuple):
+            for i in filter(lambda x: isinstance(x, torch.Tensor), inputs):
+                i.requires_grad = True
+
+        # Register the gatekeeper, reduce wise
+        inputs = Gatekeeper.apply(self._reduce_work_handles, *inputs)
+
+        # Normal FW on the base model
         return self.base_model(*inputs)
 
     def reduce(self) -> None:
@@ -126,7 +163,7 @@ class ShardedDataParallel(nn.Module):
         for x in self.base_model.buffers(recurse=True):
             dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True)
 
-    def _setup_bw_hooks(self) -> None:
+    def _setup_backward_hooks(self) -> None:
         """
         Attach a reduce function to each grad-requiring parameter. This makes the gradient reduction automatic whenever there's a BW pass
         """
@@ -143,8 +180,10 @@ class ShardedDataParallel(nn.Module):
                     self._grad_to_be_reduced[index] = False
 
                     param.grad /= self.world_size
-                    dist.reduce(
-                        param.grad.data, self._grad_to_rank[index], group=self.process_group, async_op=True,
+                    self._reduce_work_handles.append(
+                        dist.reduce(
+                            param.grad.data, self._grad_to_rank[index], group=self.process_group, async_op=True,
+                        )
                     )
 
                     logging.debug(
