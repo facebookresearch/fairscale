@@ -164,3 +164,4 @@ def test_ddp_attributes():
 
     assert hasattr(ddp_model, "is_multi_device_module")
     assert hasattr(ddp_model, "device_type")
+    dist.destroy_process_group()

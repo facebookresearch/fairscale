@@ -8,7 +8,7 @@ A module wrapper to go with a Sharded Optimizer in order to handle targeted grad
 """
 
 import logging
-from typing import Any, Callable, List, Union
+from typing import Any, Callable, Dict, List, Union
 
 import torch
 from torch import nn
@@ -67,6 +67,8 @@ class ShardedDataParallel(nn.Module):
             torch.distributed group (default: group.WORLD)
         broadcast_buffers (bool):
             whether to broadcast model buffers in between ranks at the beginning of each forward pass
+        reduce_buffer_size (int):
+            the size of the per-device-per-rank buffers used for the reduce operation
     """
 
     def __init__(
@@ -75,6 +77,7 @@ class ShardedDataParallel(nn.Module):
         sharded_optimizer: Union[OSS, List[OSS]],
         process_group: Any = None,
         broadcast_buffers: bool = True,
+        reduce_buffer_size: int = 2 ** 19,
     ):
         super().__init__()
 
@@ -120,6 +123,21 @@ class ShardedDataParallel(nn.Module):
         self._grad_accs: List[Callable] = []
         self._reduce_work_handles: List[Any] = []
         self._setup_backward_hooks()
+
+        # Allocate reduce buffers
+        # - Never use a bigger buffer than the number of model params
+        buffer_size = min(reduce_buffer_size, sum(p.numel() for p in self.base_model.parameters()))
+
+        # reduce_buffer dimensions: [optimizer, device, rank]
+        self._reduce_buffers: Dict[OSS, Dict[torch.device, List[torch.Tensor]]] = {}
+
+        # - One buffer per rank per device for each optimizer
+        for sharded_optimizer in self.sharded_optimizers:
+            for device, per_device in sharded_optimizer.per_device_params.items():
+                buffer_dtype = per_device[0][0].dtype
+                self._reduce_buffers[sharded_optimizer][device] = [
+                    torch.zeros(buffer_size, dtype=buffer_dtype, device=device) for _ in range(len(per_device))
+                ]
 
         # Make sure that all ranks start with the same model
         self.sync_all_params()
@@ -172,6 +190,11 @@ class ShardedDataParallel(nn.Module):
 
         parameters_with_grad = list(filter(lambda x: x.requires_grad, self.base_model.parameters()))
 
+        # TODO: design two hooks,
+        # - one which will fill in the reduce buffer and fire it if need be (needs to be orderding agnostic)
+        # - another one which will reduce directly, like current version
+        # compute everything ahead of time, from the sorted parameter sizes
+
         # Build one hook per parameter
         def get_reduce_fn(index: int) -> Callable:
             def reduce(*unused: Any) -> None:
@@ -188,9 +211,6 @@ class ShardedDataParallel(nn.Module):
                         )
                     )
 
-                    logging.debug(
-                        f"{self.rank}-{index} reducing {id(param)} to {self._grad_to_rank[index]}", flush=True
-                    )
                     if self._grad_to_rank[index] != self.global_rank:
                         param.grad = None
 
