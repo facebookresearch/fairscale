@@ -133,6 +133,7 @@ class ShardedDataParallel(nn.Module):
 
         # - One buffer per rank per device for each optimizer
         for sharded_optimizer in self.sharded_optimizers:
+            self._reduce_buffers[sharded_optimizer] = {}
             for device, per_device in sharded_optimizer.per_device_params.items():
                 buffer_dtype = per_device[0][0].dtype
                 self._reduce_buffers[sharded_optimizer][device] = [
