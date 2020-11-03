@@ -8,7 +8,7 @@ A module wrapper to go with a Sharded Optimizer in order to handle targeted grad
 """
 
 import logging
-from typing import Any, Callable, Dict, List, Tuple, Union
+from typing import Any, Callable, Dict, List, Tuple, Union, cast
 
 import torch
 from torch import nn
@@ -118,6 +118,7 @@ class ShardedDataParallel(nn.Module):
         self._reduce_buffers: Dict[OSS, Dict[torch.device, List[Dict[str, Any]]]] = {}
         self._bucket_strategy: List[Tuple[bool, int, int]] = []
         self._bucket_state: Dict[OSS, Dict[torch.device, List[Tuple[int, int]]]] = {}
+        self._buffer_size = min(reduce_buffer_size, sum(p.numel() for p in self.base_model.parameters()))
         self._setup_buckets(reduce_buffer_size)
 
         # Scafolding to be able to reduce the grads during the BW pass
@@ -180,7 +181,7 @@ class ShardedDataParallel(nn.Module):
             dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True)
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
-        """ Look up where this parameter should be reduced to """
+        """ Look up where this parameter belongs to """
         for optim in self.sharded_optimizers:
             if param in optim.param_to_rank.keys():
                 return optim, optim.param_to_rank[param]
@@ -237,7 +238,11 @@ class ShardedDataParallel(nn.Module):
                 # Bucket, update status, and possibly unroll the results
                 def reduce(*unused: Any) -> None:
                     reduce_buffer_struct = self._reduce_buffers[optimizer][param.device][rank]
-                    buffer = reduce_buffer_struct["buffer"]
+                    if reduce_buffer_struct["buffer"] is None:
+                        reduce_buffer_struct["buffer"] = torch.zeros(
+                            self._buffer_size, dtype=param.dtype, device=param.device
+                        )
+                    buffer = cast(torch.Tensor, reduce_buffer_struct["buffer"])
                     current_fill, max_fill = self._bucket_state[optimizer][param.device][rank]
 
                     if param.grad is not None and self._grad_to_be_reduced[index]:
@@ -258,6 +263,8 @@ class ShardedDataParallel(nn.Module):
                                         p.grad = None
                                     else:
                                         p.grad.data.copy_(buffer[offset:end].view_as(p.data))
+
+                                reduce_buffer_struct["buffer"] = None
 
                             buffer /= self.world_size
                             self._reduce_work_handles.append(
@@ -288,18 +295,11 @@ class ShardedDataParallel(nn.Module):
 
     def _setup_buckets(self, reduce_buffer_size: int) -> None:
         # Allocate reduce buffers
-        # - Never use a bigger buffer than the number of model params
-        buffer_size = min(reduce_buffer_size, sum(p.numel() for p in self.base_model.parameters()))
-
         # - One buffer per rank per device for each optimizer
         for sharded_optimizer in self.sharded_optimizers:
             self._reduce_buffers[sharded_optimizer] = {}
             for device, per_device in sharded_optimizer.per_device_params.items():
-                buffer_dtype = per_device[0][0].dtype
-                self._reduce_buffers[sharded_optimizer][device] = [
-                    {"buffer": torch.zeros(buffer_size, dtype=buffer_dtype, device=device)}
-                    for _ in range(len(per_device))
-                ]
+                self._reduce_buffers[sharded_optimizer][device] = [{"buffer": None} for _ in range(len(per_device))]
 
         # Tag parameters to either bucket them or reduce them directly
         # -> For all params, save a 3-tuple: (bucket ?, bucket_start, bucket_end)
@@ -326,7 +326,7 @@ class ShardedDataParallel(nn.Module):
 
                     for p in params:
                         index = find_param_index(p)
-                        if offset + p.numel() < buffer_size:
+                        if offset + p.numel() < self._buffer_size:
                             end = offset + p.numel()
                             self._bucket_strategy[index] = (True, offset, end)
                             self._reduce_buffers[sharded_optimizer][device][dst_rank]["params"].append((p, offset, end))
