@@ -115,8 +115,8 @@ class ShardedDataParallel(nn.Module):
         # reduce_buffer dimensions: [optimizer, device, rank params]
         # bucket_strategy dimensions: [optimizer, device, rank tuple -should bucket, offset_start, offset_end-]
         # bucket_state dimensions: [optimizer, device, rank - current offset, max offset-]
-        self._reduce_buffers: Dict[OSS, Dict[torch.device, List[torch.Tensor]]] = {}
-        self._bucket_strategy: Dict[OSS, Dict[torch.device, List[Tuple[bool, int, int]]]] = {}
+        self._reduce_buffers: Dict[OSS, Dict[torch.device, List[Dict[str, Any]]]] = {}
+        self._bucket_strategy: List[Tuple[bool, int, int]] = []
         self._bucket_state: Dict[OSS, Dict[torch.device, List[Tuple[int, int]]]] = {}
         self._setup_buckets(reduce_buffer_size)
 
@@ -133,8 +133,15 @@ class ShardedDataParallel(nn.Module):
         if self.broadcast_buffers:
             self.sync_buffers()
 
-        # Reset all the grad reduce flags
+        # Reset all the grad reduce and bucket state flags
         self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
+        for sharded_optimizer in self.sharded_optimizers:
+            for device, per_rank_params in sharded_optimizer.per_device_params.items():
+                for r in range(self.world_size):
+                    self._bucket_state[sharded_optimizer][device][r] = (
+                        0,
+                        self._bucket_state[sharded_optimizer][device][r][1],
+                    )
 
         # FIXME: could we get rid of that ?
         # mark tensors as "requires_grad" to register the Gatekeeper in the autograd graph
@@ -188,7 +195,7 @@ class ShardedDataParallel(nn.Module):
         parameters_with_grad = list(filter(lambda x: x.requires_grad, self.base_model.parameters()))
 
         # TODO: design two hooks,
-        # - one which will fill in the reduce buffer and fire it if need be (needs to be orderding agnostic)
+        # - one which will fill in the reduce buffer and fire it if needs be (orderding agnostic)
         # - another one which will reduce directly, like current version
         # compute everything ahead of time, from the sorted parameter sizes
 
@@ -197,12 +204,10 @@ class ShardedDataParallel(nn.Module):
             # Find the corresponding bucket strategy
             param = parameters_with_grad[index]
             optimizer, rank = self._find_rank(param)
-            should_bucket, offset_start, offset_end = self._bucket_strategy[optimizer][param.device][rank]
+            should_bucket, offset_start, offset_end = self._bucket_strategy[index]
 
             # Return the appropriate hook
             if not should_bucket:
-                print("should not bucket", flush=True)
-
                 # Direct reduce
                 def reduce(*unused: Any) -> None:
                     if param.grad is not None and self._grad_to_be_reduced[index]:
@@ -231,15 +236,16 @@ class ShardedDataParallel(nn.Module):
             else:
                 # Bucket, update status, and possibly unroll the results
                 def reduce(*unused: Any) -> None:
-                    reduce_buffer = self._reduce_buffers[optimizer][param.device][rank]
+                    reduce_buffer_struct = self._reduce_buffers[optimizer][param.device][rank]
+                    buffer = reduce_buffer_struct["buffer"]
                     current_fill, max_fill = self._bucket_state[optimizer][param.device][rank]
 
                     if param.grad is not None and self._grad_to_be_reduced[index]:
                         # Make sure that this is not fired twice
                         self._grad_to_be_reduced[index] = False
 
-                        # Copy to the flat buffer
-                        # reduce_buffer[offset_start:offset_end].copy_(param.grad.data.view(-1))
+                        # Copy to the flat buffer, update the buffer state
+                        buffer[offset_start:offset_end].copy_(param.grad.data.view(-1))
                         current_fill += offset_end - offset_start
                         self._bucket_state[optimizer][param.device][rank] = (current_fill, max_fill)
 
@@ -247,19 +253,17 @@ class ShardedDataParallel(nn.Module):
                         if current_fill == max_fill:
 
                             def unwrap() -> None:
-                                if self._grad_to_rank[index] != self.global_rank:
-                                    param.grad = None
+                                for p, offset, end in reduce_buffer_struct["params"]:
+                                    if self._grad_to_rank[index] != self.global_rank:
+                                        p.grad = None
+                                    else:
+                                        p.grad.data.copy_(buffer[offset:end].view_as(p.data))
 
-                                # TODO: @lefaudeux - distribute the contents of the buffer to the right tensors
-
-                            reduce_buffer /= self.world_size
+                            buffer /= self.world_size
                             self._reduce_work_handles.append(
                                 (
                                     dist.reduce(
-                                        reduce_buffer,
-                                        self._grad_to_rank[index],
-                                        group=self.process_group,
-                                        async_op=True,
+                                        buffer, self._grad_to_rank[index], group=self.process_group, async_op=True,
                                     ),
                                     unwrap,
                                 )
@@ -293,32 +297,44 @@ class ShardedDataParallel(nn.Module):
             for device, per_device in sharded_optimizer.per_device_params.items():
                 buffer_dtype = per_device[0][0].dtype
                 self._reduce_buffers[sharded_optimizer][device] = [
-                    torch.zeros(buffer_size, dtype=buffer_dtype, device=device) for _ in range(len(per_device))
+                    {"buffer": torch.zeros(buffer_size, dtype=buffer_dtype, device=device)}
+                    for _ in range(len(per_device))
                 ]
 
         # Tag parameters to either bucket them or reduce them directly
         # -> For all params, save a 3-tuple: (bucket ?, bucket_start, bucket_end)
         # use the fact that the parameters are sorted to begin with, when the partition is queried
         # from the sharded optimizer
+        parameters_with_grad = list(filter(lambda x: x.requires_grad, self.base_model.parameters()))
+        self._bucket_strategy = [(False, -1, -1) for _ in parameters_with_grad]
+
+        def find_param_index(p: Parameter) -> int:
+            for i, pg in enumerate(parameters_with_grad):
+                if pg is p:
+                    return i
+
+            assert False
+
         for sharded_optimizer in self.sharded_optimizers:
-            self._bucket_strategy[sharded_optimizer] = {}
             self._bucket_state[sharded_optimizer] = {}
 
             for device, per_rank_params in sharded_optimizer.per_device_params.items():
-                self._bucket_strategy[sharded_optimizer][device] = []
                 self._bucket_state[sharded_optimizer][device] = []
-
                 for dst_rank, params in enumerate(per_rank_params):
                     offset = 0
+                    self._reduce_buffers[sharded_optimizer][device][dst_rank]["params"] = []
 
-                    # All the params are sorted per rank and per increasing size already
                     for p in params:
+                        index = find_param_index(p)
                         if offset + p.numel() < buffer_size:
                             end = offset + p.numel()
-                            self._bucket_strategy[sharded_optimizer][device].append((True, offset, end))
+                            self._bucket_strategy[index] = (True, offset, end)
+                            self._reduce_buffers[sharded_optimizer][device][dst_rank]["params"].append((p, offset, end))
                             offset = end
                         else:
-                            self._bucket_strategy[sharded_optimizer][device].append((False, -1, -1))
+                            # The parameters are sorted by size, so all the following parameters
+                            # will be too big and can be skipped
+                            break
 
                     # Register the max offset for this buffer
                     self._bucket_state[sharded_optimizer][device].append((0, offset))
