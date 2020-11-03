@@ -635,7 +635,7 @@ def deferred_batch_norm_params(checkpoint, lazy):
     assert torch.allclose(pipe[0].bias.grad, bn.bias.grad, atol=1e-4)
 
 
-@torch_spawn([5])
+@torch_spawn([4])
 def devices():
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
@@ -646,7 +646,7 @@ def devices():
     model = Pipe(model, [1, 1, 1], style=Pipe.MultiProcess, worker_map=get_worker_map())
 
     # Extra devices must be discarded.
-    if model.group.rank() in [3, 4]:
+    if model.group.rank() == 3:
         assert model.pipeline is None
 
 

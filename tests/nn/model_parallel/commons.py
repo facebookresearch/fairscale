@@ -64,7 +64,8 @@ def dist_init(rank, world_size, hostname=None):
 
     if version.parse(torch.__version__).release >= (1, 6, 0):
         init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
-        torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size, init_method=init_method)
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=init_method)
         os.environ["MASTER_ADDR"] = hostname
         os.environ["MASTER_PORT"] = "10639"
         init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
