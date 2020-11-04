@@ -210,17 +210,17 @@ class OSS(Optimizer):
 
         Arguments:
             max_norm (float or int): max norm of the gradients
-            norm_type (float or int): type of the used p-norm. Can be ``'inf'`` for
-                infinity norm.
+            norm_type (float or int): type of the used p-norm. Can be ``'inf'`` for infinity norm.
 
         Returns:
             Total norm of the parameters (viewed as a single vector).
 
         .. note: This is analogous to `torch.nn.utils.clip_grad_norm_` but handles the partitioning and multiple devices per rank
-        under the hood. The default torch util is not applicaple here, because each rank only has a partial view of all the grads
-        in the model, so calling it in the OSS context would lead to different scaling being applied per subset of model parameters
+            under the hood. The default torch util is not applicaple here, because each rank only has a partial view of all the grads
+            in the model, so calling it in the OSS context would lead to different scaling being applied per subset of model parameters
 
         .. warning: This needs to be called on all ranks, since synchronization primitives will be used
+
         .. warning: Model paralelism -groups other than world- are not yet supported
         """
 

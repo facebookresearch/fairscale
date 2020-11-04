@@ -1,4 +1,5 @@
 import time
+from typing import Optional, Union, cast
 
 import torch
 import torch.distributed as dist
@@ -44,12 +45,14 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
     dataloader = getData()
     loss_fn = getLossFun()
 
-    base_optimizer_arguments = {"lr": 1e-4}  # any optimizer specific arguments, LR, momentum, etc...
+    optimizer: Optional[Union[OSS, torch.optim.SGD]] = None
+
     if ~use_oss:
-        optimizer = torch.optim.SGD(params=model.parameters(), **base_optimizer_arguments)
+        optimizer = torch.optim.SGD(params=model.parameters(), lr=1e-4)
     else:
         base_optimizer = torch.optim.SGD
-        optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)
+        base_optimizer_arguments = {"lr": 1e-4}  # any optimizer specific arguments, LR, momentum, etc...
+        optimizer = OSS(params=model.parameters(), optim=base_optimizer, default=base_optimizer_arguments)
 
     training_start = time.monotonic()
     # Any relevant training loop, nothing specific to OSS. For example:
@@ -57,13 +60,24 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
     for e in range(epochs):
         for (data, target) in dataloader:
             data, target = data.to(rank), target.to(rank)
+
             # Train
             model.zero_grad()
             outputs = model(data)
             loss = loss_fn(outputs, target)
-            loss /= world_size
             loss.backward()
+
+            # if you want to clip the gradients / get the current max:
+            max_norm = 1000.0
+            norm_type = 1
+            if ~use_oss:
+                _total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm, norm_type=norm_type)  # type: ignore
+            else:
+                optimizer = cast(OSS, optimizer)
+                _total_norm = optimizer.clip_grad_norm(max_norm, norm_type=norm_type)
+
             optimizer.step()
+
             print(f"Loss: {loss.item()}")
 
     training_end = time.monotonic()
