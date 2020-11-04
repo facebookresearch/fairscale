@@ -240,8 +240,9 @@ class OSS(Optimizer):
         )
 
         # Compute the norm on this grad set
-        local_norm = torch.norm(  # type: ignore
-            torch.stack([torch.norm(p.grad.detach().to(self._device), p=norm_type) for p in local_params]), p=norm_type,  # type: ignore
+        local_norm = torch.norm(
+            input=torch.stack([torch.norm(input=p.grad.detach().to(self._device), p=norm_type) for p in local_params]),  # type: ignore
+            p=norm_type,
         )
 
         # Sync all the norms from all ranks
