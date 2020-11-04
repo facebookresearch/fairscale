@@ -7,6 +7,8 @@
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
 
+import copy
+from math import inf
 import os
 
 import numpy as np
@@ -14,6 +16,7 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
 
@@ -434,36 +437,60 @@ def test_multiple_groups():
 def run_gradient_clipping(rank, world_size):
     dist_init(rank, world_size)
     device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
+    torch.manual_seed(rank)  # make sure that the different rank get different data
 
     # Run a dummy step so that the optimizer state dict exists
     batch, input_width, hidden, target_width = 3, 20, 10, 5
     target = torch.rand((batch, target_width), device=device)
     inputs = torch.rand((batch, input_width), device=device)
+    NORMS = [1.0, 2.0, 1, 2, inf]
+    CLIP_NORM = 0.3
 
-    model = torch.nn.Sequential(
-        torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden), torch.nn.Linear(hidden, target_width)
-    )
-    model.to(device)
+    def check(norm):
+        model_oss = torch.nn.Sequential(
+            torch.nn.Linear(input_width, hidden),
+            torch.nn.Linear(hidden, hidden),
+            torch.nn.Linear(hidden, target_width),
+        ).to(device)
+        model = copy.deepcopy(model_oss)
 
-    loss_fn = torch.nn.L1Loss()
-    loss_fn.to(device)
+        # For this test the gradients are (all) reduced in the same way in between the torch reference and fairscale.
+        # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
+        # gradient norm computation from OSS and adds a dependency.
+        # to keep the comparison apples-to-apples DDP is used in both cases
+        model_oss = DDP(module=model_oss, device_ids=[rank],)
+        sharded_optimizer = optim.OSS(model_oss.parameters(), lr=0.1, momentum=0.99)
 
-    # With SGD, Momentum is required to get a state to shard
-    optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99)
+        model = DDP(model, device_ids=[rank],)
 
-    def closure():
-        optimizer.zero_grad()
-        output = model(inputs)
-        loss = loss_fn(output, target)
+        loss_fn = torch.nn.L1Loss()
+        loss_fn.to(device)
+
+        model.zero_grad()
+        model_oss.zero_grad()
+
+        outputs = model(inputs)
+        outputs_oss = model_oss(inputs)
+
+        loss = loss_fn(outputs, target)
         loss.backward()
 
-        optimizer.clip_grad_norm(0.3, norm_type=1.0)
-        for params in optimizer.per_device_params.values():
-            for param in filter(lambda x: x.grad is not None, params[rank]):
-                assert torch.norm(param.grad, p=1.0) < 0.3, f"param grad norm above clip : {param.grad}"
-        return loss
+        loss_oss = loss_fn(outputs_oss, target)
+        loss_oss.backward()
 
-    _ = optimizer.step(closure=closure)
+        # Check the equivalence with the non-sharded optim
+        oss_total_norm = sharded_optimizer.clip_grad_norm(CLIP_NORM, norm_type=norm)
+        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), CLIP_NORM, norm_type=norm)
+        assert torch.allclose(oss_total_norm, total_norm), "torch and fairscale should return the same grad norm"
+
+        # Check that the params have indeed been clipped
+        for params in sharded_optimizer.per_device_params.values():
+            for param in filter(lambda x: x.grad is not None, params[rank]):
+                assert torch.norm(param.grad, p=norm) < CLIP_NORM, f"param grad norm above clip : {param.grad}"
+
+    for norm in NORMS:
+        print(f"Checking norm {norm}")
+        check(norm)
 
 
 def test_gradient_clipping():
