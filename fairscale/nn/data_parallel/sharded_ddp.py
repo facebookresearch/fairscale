@@ -103,8 +103,6 @@ class ShardedDataParallel(nn.Module):
         ).format(distinct_device_types)
         self.device_type = list(distinct_device_types)[0]
 
-        logging.info(f"Rank {dist.get_rank(self.process_group)}: Registering hooks")
-
         # Fill in a look-up table per grad
         self._grad_to_rank = [
             _get_global_rank(self.process_group, self._find_rank(p)[1])
@@ -115,7 +113,7 @@ class ShardedDataParallel(nn.Module):
         # reduce_buffer dimensions: [optimizer, device, rank params]
         # bucket_strategy dimensions: [optimizer, device, rank tuple -should bucket, offset_start, offset_end-]
         # bucket_state dimensions: [optimizer, device, rank - current offset, max offset-]
-        self._reduce_buffers: Dict[OSS, Dict[torch.device, List[Dict[str, Any]]]] = {}
+        self._reduce_buckets: Dict[OSS, Dict[torch.device, List[Dict[str, Any]]]] = {}
         self._bucket_strategy: List[Tuple[bool, int, int]] = []
         self._bucket_state: Dict[OSS, Dict[torch.device, List[Tuple[int, int]]]] = {}
         self._buffer_size = min(reduce_buffer_size, sum(p.numel() for p in self.base_model.parameters()))
@@ -160,6 +158,9 @@ class ShardedDataParallel(nn.Module):
         return self.base_model(*inputs)
 
     def reduce(self) -> None:
+        """ .. deprecated:: 0.0.4
+            This does not need to be called, the gradient reduction is done automatically during the BW pass
+        """
         logging.warning("This is not useful anymore, gradients have been reduced automatically with the backward pass")
 
     def sync_all_params(self) -> None:
@@ -194,11 +195,6 @@ class ShardedDataParallel(nn.Module):
         """
 
         parameters_with_grad = list(filter(lambda x: x.requires_grad, self.base_model.parameters()))
-
-        # TODO: design two hooks,
-        # - one which will fill in the reduce buffer and fire it if needs be (orderding agnostic)
-        # - another one which will reduce directly, like current version
-        # compute everything ahead of time, from the sorted parameter sizes
 
         # Build one hook per parameter
         def get_reduce_fn(index: int) -> Callable:
@@ -237,7 +233,7 @@ class ShardedDataParallel(nn.Module):
             else:
                 # Bucket, update status, and possibly unroll the results
                 def reduce(*unused: Any) -> None:
-                    reduce_buffer_struct = self._reduce_buffers[optimizer][param.device][rank]
+                    reduce_buffer_struct = self._reduce_buckets[optimizer][param.device][rank]
                     if reduce_buffer_struct["buffer"] is None:
                         reduce_buffer_struct["buffer"] = torch.zeros(
                             self._buffer_size, dtype=param.dtype, device=param.device
@@ -291,15 +287,13 @@ class ShardedDataParallel(nn.Module):
                 grad_acc.register_hook(get_reduce_fn(i))
                 self._grad_accs.append(grad_acc)  # keep this function in scope
 
-        logging.info(f"Rank {dist.get_rank(self.process_group)}: All BW hooks are registered")
-
     def _setup_buckets(self, reduce_buffer_size: int) -> None:
         # Allocate reduce buffers
         # - One buffer per rank per device for each optimizer
         for sharded_optimizer in self.sharded_optimizers:
-            self._reduce_buffers[sharded_optimizer] = {}
+            self._reduce_buckets[sharded_optimizer] = {}
             for device, per_device in sharded_optimizer.per_device_params.items():
-                self._reduce_buffers[sharded_optimizer][device] = [{"buffer": None} for _ in range(len(per_device))]
+                self._reduce_buckets[sharded_optimizer][device] = [{"buffer": None} for _ in range(len(per_device))]
 
         # Tag parameters to either bucket them or reduce them directly
         # -> For all params, save a 3-tuple: (bucket ?, bucket_start, bucket_end)
@@ -309,6 +303,7 @@ class ShardedDataParallel(nn.Module):
         self._bucket_strategy = [(False, -1, -1) for _ in parameters_with_grad]
 
         def find_param_index(p: Parameter) -> int:
+            # small helper, needed because directly using .index() on a tensor list does not check for identity
             for i, pg in enumerate(parameters_with_grad):
                 if pg is p:
                     return i
@@ -322,14 +317,15 @@ class ShardedDataParallel(nn.Module):
                 self._bucket_state[sharded_optimizer][device] = []
                 for dst_rank, params in enumerate(per_rank_params):
                     offset = 0
-                    self._reduce_buffers[sharded_optimizer][device][dst_rank]["params"] = []
+                    self._reduce_buckets[sharded_optimizer][device][dst_rank]["params"] = []
 
                     for p in params:
                         index = find_param_index(p)
                         if offset + p.numel() < self._buffer_size:
+                            # This parameter is small enough to fit in the remaining size of the bucket
                             end = offset + p.numel()
                             self._bucket_strategy[index] = (True, offset, end)
-                            self._reduce_buffers[sharded_optimizer][device][dst_rank]["params"].append((p, offset, end))
+                            self._reduce_buckets[sharded_optimizer][device][dst_rank]["params"].append((p, offset, end))
                             offset = end
                         else:
                             # The parameters are sorted by size, so all the following parameters
