@@ -493,8 +493,9 @@ def run_gradient_clipping(rank, world_size):
         check(norm)
 
 
+@skip_if_no_cuda
 def test_gradient_clipping():
-    world_size = 3
+    world_size = 2
     if torch.cuda.is_available():
         world_size = min(world_size, torch.cuda.device_count())
     reference_rank = 0
