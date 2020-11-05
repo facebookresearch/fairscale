@@ -10,6 +10,7 @@
 import copy
 from math import inf
 import os
+import tempfile
 
 import numpy as np
 import pytest
@@ -36,10 +37,9 @@ def teardown_module(module):
     torch.distributed.destroy_process_group()
 
 
-def dist_init(rank, world_size):
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29501"
-    dist.init_process_group(backend=BACKEND, rank=rank, world_size=world_size)
+def dist_init(rank, world_size, tempfile_name, backend=BACKEND):
+    url = "file://" + tempfile_name
+    dist.init_process_group(init_method=url, backend=BACKEND, rank=rank, world_size=world_size)
 
 
 def test_create():
@@ -181,8 +181,8 @@ def test_implicit_local_state_dict():
     assert x == torch.tensor([0.9], device=DEVICE)
 
 
-def run_test_add_param_group(rank, world_size):
-    dist_init(rank, world_size)
+def run_test_add_param_group(rank, world_size, tempfile_name):
+    dist_init(rank, world_size, tempfile_name)
     params = []
     for size in [4, 5, 2, 6, 4]:
         params.append(torch.rand(size, 1))
@@ -199,11 +199,12 @@ def run_test_add_param_group(rank, world_size):
 
 def test_add_param_group():
     world_size = 3
-    mp.spawn(run_test_add_param_group, args=(world_size,), nprocs=world_size, join=True)
+    temp_file_name = tempfile.mkstemp()[1]
+    mp.spawn(run_test_add_param_group, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
 
-def run_test_zero_grad(rank, world_size):
-    dist_init(rank, world_size)
+def run_test_zero_grad(rank, world_size, tempfile_name):
+    dist_init(rank, world_size, tempfile_name)
     x = torch.rand(1)
     m = torch.nn.Linear(1, 1)
     o = optim.OSS(m.parameters(), lr=0.1)
@@ -220,11 +221,12 @@ def run_test_zero_grad(rank, world_size):
 
 def test_zero_grad():
     world_size = 2
-    mp.spawn(run_test_zero_grad, args=(world_size,), nprocs=world_size, join=True)
+    temp_file_name = tempfile.mkstemp()[1]
+    mp.spawn(run_test_zero_grad, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
 
-def run_test_step(rank, world_size):
-    dist_init(rank, world_size)
+def run_test_step(rank, world_size, tempfile_name):
+    dist_init(rank, world_size, tempfile_name)
     x = torch.tensor([float(rank + 1)], device=rank)
     m = torch.nn.Linear(1, 1)
     m.weight.data = torch.tensor([[1.0]])
@@ -246,11 +248,13 @@ def run_test_step(rank, world_size):
 @skip_if_no_cuda
 def test_step():
     world_size = min(2, torch.cuda.device_count())
-    mp.spawn(run_test_step, args=(world_size,), nprocs=world_size, join=True)
+    temp_file_name = tempfile.mkstemp()[1]
+
+    mp.spawn(run_test_step, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
 
-def run_test_step_with_closure(rank, world_size, optimizer=None):
-    dist_init(rank, world_size)
+def run_test_step_with_closure(rank, world_size, tempfile_name, optimizer=None):
+    dist_init(rank, world_size, tempfile_name)
 
     x_val = rank + 1
     weight = 1.0
@@ -292,11 +296,13 @@ def run_test_step_with_closure(rank, world_size, optimizer=None):
 @skip_if_no_cuda
 def test_step_with_closure():
     world_size = min(2, torch.cuda.device_count())
-    mp.spawn(run_test_step_with_closure, args=(world_size,), nprocs=world_size, join=True)
+    temp_file_name = tempfile.mkstemp()[1]
+
+    mp.spawn(run_test_step_with_closure, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
 
-def run_test_sharding(rank, world_size):
-    dist_init(rank, world_size)
+def run_test_sharding(rank, world_size, tempfile_name):
+    dist_init(rank, world_size, tempfile_name)
     params = []
     for size in [5, 4, 2, 6, 4, 3]:
         params.append(torch.rand(size, 1))
@@ -308,11 +314,13 @@ def run_test_sharding(rank, world_size):
 
 def test_sharding():
     world_size = 3
-    mp.spawn(run_test_sharding, args=(world_size,), nprocs=world_size, join=True)
+    temp_file_name = tempfile.mkstemp()[1]
+
+    mp.spawn(run_test_sharding, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
 
-def run_test_collect_shards(rank, world_size, reference_rank):
-    dist_init(rank, world_size)
+def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
+    dist_init(rank, world_size, tempfile_name)
     device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
 
     # Run a dummy step so that the optimizer state dict exists
@@ -361,20 +369,20 @@ def run_test_collect_shards(rank, world_size, reference_rank):
 
 def test_collect_shards():
     world_size = 3
+    temp_file_name = tempfile.mkstemp()[1]
+
     if torch.cuda.is_available():
         world_size = min(world_size, torch.cuda.device_count())
     reference_rank = 0
 
     mp.spawn(
-        run_test_collect_shards, args=(world_size, reference_rank), nprocs=world_size, join=True,
+        run_test_collect_shards, args=(world_size, reference_rank, temp_file_name), nprocs=world_size, join=True,
     )
 
 
-def run_test_multiple_groups(rank, world_size):
+def run_test_multiple_groups(rank, world_size, tempfile_name):
     # Only work with the even ranks, to check that the global_rank indexing is properly used
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29501"
-    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
+    dist_init(rank=rank, world_size=world_size, tempfile_name=tempfile_name, backend="gloo")
     sub_group_ranks = [0, 2, 4]
     process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend="gloo")
 
@@ -442,14 +450,15 @@ def run_test_multiple_groups(rank, world_size):
 
 def test_multiple_groups():
     world_size = 6
+    temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(
-        run_test_multiple_groups, args=(world_size,), nprocs=world_size, join=True,
+        run_test_multiple_groups, args=(world_size, temp_file_name), nprocs=world_size, join=True,
     )
 
 
-def run_gradient_clipping(rank, world_size):
-    dist_init(rank, world_size)
+def run_gradient_clipping(rank, world_size, tempfile_name):
+    dist_init(rank, world_size, tempfile_name)
     device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
     torch.manual_seed(rank)  # make sure that the different rank get different data
 
@@ -511,11 +520,13 @@ def run_gradient_clipping(rank, world_size):
 
 @skip_if_no_cuda
 def test_gradient_clipping():
-    world_size = 2
+    world_size = 3
+    temp_file_name = tempfile.mkstemp()[1]
+
     if torch.cuda.is_available():
         world_size = min(world_size, torch.cuda.device_count())
     reference_rank = 0
 
     mp.spawn(
-        run_gradient_clipping, args=(world_size,), nprocs=world_size, join=True,
+        run_gradient_clipping, args=(world_size, temp_file_name), nprocs=world_size, join=True,
     )
