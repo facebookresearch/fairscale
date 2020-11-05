@@ -28,17 +28,15 @@ def gumbel_rsample(shape: Tuple, device: torch.device) -> Tensor:
 
 def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     """Implements Top2Gating on logits."""
-    gates = F.softmax(logits, dim=2)
-
-    # gates has shape of GSE
-    num_tokens = gates.shape[1]
-    num_experts = gates.shape[2]
+    # logits has shape of GSE
+    num_tokens = logits.shape[1]
+    num_experts = logits.shape[2]
     # capacity = 2S/E
     capacity = 2 * num_tokens // num_experts
     assert num_tokens % num_experts == 0
 
     # Create a mask for 1st's expert per token
-    indices1_gs = torch.argmax(gates, dim=2)
+    indices1_gs = torch.argmax(logits, dim=2)
     mask1 = F.one_hot(indices1_gs, num_classes=num_experts)
 
     # Create a mask for 2nd's expert per token using Gumbel-max trick
@@ -55,11 +53,6 @@ def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     # Update 2nd's location by accounting for locations of 1st
     locations2 += torch.sum(mask1, dim=1, keepdim=True)
 
-    # Compute l_aux
-    me = torch.mean(gates, dim=1)
-    ce = torch.mean(mask1.float(), dim=1)
-    l_aux = torch.mean(me * ce)
-
     # Remove locations outside capacity from mask
     mask1 *= torch.lt(locations1, capacity)
     mask2 *= torch.lt(locations2, capacity)
@@ -71,8 +64,8 @@ def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     # Normalize gate probabilities
     mask1_float = mask1.float()
     mask2_float = mask2.float()
-    gates1_gs = torch.einsum("gse,gse->gs", gates, mask1_float)
-    gates2_gs = torch.einsum("gse,gse->gs", gates, mask2_float)
+    gates1_gs = torch.einsum("gse,gse->gs", torch.exp(logits), mask1_float)
+    gates2_gs = torch.einsum("gse,gse->gs", torch.exp(logits), mask2_float)
     denom_gs = gates1_gs + gates2_gs
     # Avoid divide-by-zero
     denom_gs = torch.where(denom_gs > 0, denom_gs, torch.ones_like(denom_gs))
@@ -88,6 +81,11 @@ def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     combine2_gsec = torch.einsum("gse,gsc->gsec", gates2, locations2_gsc)
     combine_weights = combine1_gsec + combine2_gsec
     dispatch_mask = combine_weights.bool()
+
+    # Compute l_aux
+    me = torch.mean(gates1 + gates2, dim=1)
+    ce = torch.mean(mask1.float(), dim=1)
+    l_aux = torch.mean(me * ce)
 
     return l_aux, combine_weights, dispatch_mask
 
