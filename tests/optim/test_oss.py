@@ -194,6 +194,8 @@ def run_test_add_param_group(rank, world_size):
     assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == 8
     assert len(o.optim.param_groups) == 2
 
+    dist.destroy_process_group()
+
 
 def test_add_param_group():
     world_size = 3
@@ -212,6 +214,8 @@ def run_test_zero_grad(rank, world_size):
     o.zero_grad()
     assert not m.weight.grad
     assert not m.bias.grad
+
+    dist.destroy_process_group()
 
 
 def test_zero_grad():
@@ -235,6 +239,8 @@ def run_test_step(rank, world_size):
     o.step()
     assert m.weight == torch.tensor([[0.75]], device=rank)
     assert m.bias == torch.tensor([1.85], device=rank)
+
+    dist.destroy_process_group()
 
 
 @skip_if_no_cuda
@@ -280,6 +286,8 @@ def run_test_step_with_closure(rank, world_size, optimizer=None):
     assert m.weight == torch.tensor([[1.1]], device=rank)
     assert m.bias == torch.tensor([2.1], device=rank)
 
+    dist.destroy_process_group()
+
 
 @skip_if_no_cuda
 def test_step_with_closure():
@@ -294,6 +302,8 @@ def run_test_sharding(rank, world_size):
         params.append(torch.rand(size, 1))
     o = optim.OSS(params, lr=0.1)
     assert sum([x.numel() for x in o.optim.param_groups[0]["params"]]) == 8
+
+    dist.destroy_process_group()
 
 
 def test_sharding():
@@ -346,6 +356,7 @@ def run_test_collect_shards(rank, world_size, reference_rank):
 
     # Load the optimizer state dict
     optimizer.load_state_dict(optimizer_state_dict)
+    dist.destroy_process_group()
 
 
 def test_collect_shards():
@@ -425,6 +436,9 @@ def run_test_multiple_groups(rank, world_size):
         optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=0)
         check(optimizer)
 
+    dist.destroy_process_group(process_group)
+    dist.destroy_process_group()
+
 
 def test_multiple_groups():
     world_size = 6
@@ -491,6 +505,8 @@ def run_gradient_clipping(rank, world_size):
     for norm in NORMS:
         print(f"Checking norm {norm}")
         check(norm)
+
+    dist.destroy_process_group()
 
 
 @skip_if_no_cuda
