@@ -134,9 +134,15 @@ def train(
                             next(model.parameters()).norm().item(), next(model.parameters()).grad.norm().item()
                         )
                     )
+                if not args.cpu and args.amp:
+                    # Automatically computes the FW pass in half precision
+                    with torch.cuda.amp.autocast():
+                        outputs = model(batch["inputs"])
+                        loss = loss_fn(outputs, batch["label"])
+                else:
+                    outputs = model(batch["inputs"])
+                    loss = loss_fn(outputs, batch["label"])
 
-                outputs = model(batch["inputs"])
-                loss = loss_fn(outputs, batch["label"])
                 loss.backward()
 
                 if args.debug and rank == 0 and next(model.parameters()).grad is not None:
@@ -235,7 +241,8 @@ if __name__ == "__main__":
     parser.add_argument("--profile", action="store_true", default=False)
     parser.add_argument("--cpu", action="store_true", default=False)
     parser.add_argument("--torchvision_model", type=str, help="Any torchvision model name (str)", default="resnet101")
-    parser.add_argument("--debug", action="store_true", default=False)
+    parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
+    parser.add_argument("--amp", action="store_true", default=False, help="Activate torch AMP")
 
     args = parser.parse_args()
 
