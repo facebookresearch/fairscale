@@ -126,6 +126,11 @@ run_oss_gloo: &run_oss_gloo
     command: |
       python benchmarks/oss.py --gloo --optim_type oss_ddp --epochs 3
 
+run_oss_amp: &run_oss_amp
+- run:
+    name: Run OSS with Torch AMP
+    command: |
+      python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
@@ -315,6 +320,8 @@ jobs:
       - <<: *run_oss_benchmark
 
       - <<: *run_oss_gloo
+
+      - <<: *run_oss_amp
 
 
 

@@ -459,7 +459,7 @@ def test_multiple_groups():
 
 def run_gradient_clipping(rank, world_size, tempfile_name):
     dist_init(rank, world_size, tempfile_name)
-    device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
+    device = torch.device(rank)
     torch.manual_seed(rank)  # make sure that the different rank get different data
 
     # Run a dummy step so that the optimizer state dict exists
