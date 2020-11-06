@@ -458,7 +458,7 @@ def test_multiple_groups():
 
 
 def run_gradient_clipping(rank, world_size, tempfile_name):
-    dist_init(rank, world_size, tempfile_name)
+    dist_init(rank, world_size, tempfile_name, backend="gloo")
     device = torch.device(rank)
     torch.manual_seed(rank)  # make sure that the different rank get different data
 
