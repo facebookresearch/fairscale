@@ -221,7 +221,7 @@ def test_zero_grad():
 
 
 def run_test_step(rank, world_size, tempfile_name):
-    dist_init(rank, world_size, tempfile_name)
+    dist_init(rank, world_size, tempfile_name, backend="gloo")
     x = torch.tensor([float(rank + 1)], device=rank)
     m = torch.nn.Linear(1, 1)
     m.weight.data = torch.tensor([[1.0]])
