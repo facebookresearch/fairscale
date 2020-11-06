@@ -8,7 +8,7 @@ A module wrapper to go with a Sharded Optimizer in order to handle targeted grad
 """
 
 import logging
-from typing import Any, Callable, Dict, List, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Tuple, Union
 
 import torch
 from torch import nn
@@ -142,14 +142,8 @@ class ShardedDataParallel(nn.Module):
                         self._bucket_state[sharded_optimizer][device][r][1],
                     )
 
-        # FIXME: could we get rid of that ?
         # mark tensors as "requires_grad" to register the Gatekeeper in the autograd graph
-        if isinstance(inputs, torch.Tensor):
-            inputs.requires_grad = True
-
-        if isinstance(inputs, list) or isinstance(inputs, tuple):
-            for i in filter(lambda x: isinstance(x, torch.Tensor), inputs):
-                i.requires_grad = True
+        inputs = ShardedDataParallel._mark_inputs_requires_grad(*inputs)
 
         # Register the gatekeeper, reduce wise
         inputs = Gatekeeper.apply(self._reduce_work_handles, *inputs)
@@ -180,6 +174,17 @@ class ShardedDataParallel(nn.Module):
         """
         for x in self.base_model.buffers(recurse=True):
             dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True)
+
+    @staticmethod
+    def _mark_inputs_requires_grad(*inputs: Any) -> Any:
+        if isinstance(inputs, torch.Tensor):
+            inputs.requires_grad = True
+
+        if isinstance(inputs, list) or isinstance(inputs, tuple):
+            for i in filter(lambda x: isinstance(x, torch.Tensor), inputs):
+                i.requires_grad = True
+
+        return inputs
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
@@ -233,12 +238,7 @@ class ShardedDataParallel(nn.Module):
             else:
                 # Bucket, update status, and possibly unroll the results
                 def reduce(*unused: Any) -> None:
-                    reduce_buffer_struct = self._reduce_buckets[optimizer][param.device][rank]
-                    if reduce_buffer_struct["buffer"] is None:
-                        reduce_buffer_struct["buffer"] = torch.zeros(
-                            self._buffer_size, dtype=param.dtype, device=param.device
-                        )
-                    buffer = cast(torch.Tensor, reduce_buffer_struct["buffer"])
+                    bucket = self._reduce_buckets[optimizer][param.device][rank]
                     current_fill, max_fill = self._bucket_state[optimizer][param.device][rank]
 
                     if param.grad is not None and self._grad_to_be_reduced[index]:
@@ -246,7 +246,7 @@ class ShardedDataParallel(nn.Module):
                         self._grad_to_be_reduced[index] = False
 
                         # Copy to the flat buffer, update the buffer state
-                        buffer[offset_start:offset_end].copy_(param.grad.data.view(-1))
+                        bucket["buffer"][offset_start:offset_end].copy_(param.grad.data.view(-1))
                         current_fill += offset_end - offset_start
                         self._bucket_state[optimizer][param.device][rank] = (current_fill, max_fill)
 
@@ -254,19 +254,23 @@ class ShardedDataParallel(nn.Module):
                         if current_fill == max_fill:
 
                             def unwrap() -> None:
-                                for p, offset, end in reduce_buffer_struct["params"]:
+                                for p, offset, end in bucket["params"]:
                                     if self._grad_to_rank[index] != self.global_rank:
+                                        # this rank is not the owner, release the grad
                                         p.grad = None
                                     else:
-                                        p.grad.data.copy_(buffer[offset:end].view_as(p.data))
+                                        # this rank is the owner, unroll the results
+                                        p.grad.data.copy_(bucket["buffer"][offset:end].view_as(p.data))
 
-                                reduce_buffer_struct["buffer"] = None
+                            bucket["buffer"] /= self.world_size
 
-                            buffer /= self.world_size
                             self._reduce_work_handles.append(
                                 (
                                     dist.reduce(
-                                        buffer, self._grad_to_rank[index], group=self.process_group, async_op=True,
+                                        bucket["buffer"],
+                                        self._grad_to_rank[index],
+                                        group=self.process_group,
+                                        async_op=True,
                                     ),
                                     unwrap,
                                 )
@@ -293,7 +297,10 @@ class ShardedDataParallel(nn.Module):
         for sharded_optimizer in self.sharded_optimizers:
             self._reduce_buckets[sharded_optimizer] = {}
             for device, per_device in sharded_optimizer.per_device_params.items():
-                self._reduce_buckets[sharded_optimizer][device] = [{"buffer": None} for _ in range(len(per_device))]
+                self._reduce_buckets[sharded_optimizer][device] = [
+                    {"buffer": torch.zeros(self._buffer_size, dtype=params[0].dtype, device=device)}
+                    for params in per_device
+                ]
 
         # Tag parameters to either bucket them or reduce them directly
         # -> For all params, save a 3-tuple: (bucket ?, bucket_start, bucket_end)
