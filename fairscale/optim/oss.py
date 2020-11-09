@@ -216,7 +216,7 @@ class OSS(Optimizer):
             Total norm of the parameters (viewed as a single vector).
 
         .. note: This is analogous to `torch.nn.utils.clip_grad_norm_` but handles the partitioning and multiple devices per rank
-            under the hood. The default torch util is not applicaple here, because each rank only has a partial view of all the grads
+            under the hood. The default torch util is not applicable here, because each rank only has a partial view of all the grads
             in the model, so calling it in the OSS context would lead to different scaling being applied per subset of model parameters
 
         .. warning: This needs to be called on all ranks, since synchronization primitives will be used
@@ -239,18 +239,17 @@ class OSS(Optimizer):
             ]
         )
 
-        # Compute the norm on this grad set
-        local_norm = torch.norm(
-            input=torch.stack([torch.norm(input=p.grad.detach().to(self._device), p=norm_type) for p in local_params]),  # type: ignore
-            p=norm_type,
-        )
-
-        # Sync all the norms from all ranks
+        # Compute the norm on this grad set,
+        # then sync all the norms from all ranks
         if norm_type == inf:
-            norms = [torch.zeros_like(local_norm) for k in range(self.world_size)]
-            dist.all_gather(norms, local_norm, group=self.group, async_op=False)
-            total_norm = torch.max(torch.stack(norms))
+            total_norm = max(p.grad.detach().abs().max().to(self._device) for p in local_params)  # type: ignore
+            dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=self.group)
         else:
+            local_norm = torch.norm(
+                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type).to(self._device) for p in local_params]),  # type: ignore
+                p=norm_type,
+            )
+
             total_norm = local_norm ** norm_type
             dist.all_reduce(total_norm, group=self.group)
             total_norm = total_norm ** (1.0 / norm_type)
@@ -259,10 +258,8 @@ class OSS(Optimizer):
 
         if clip_coef < 1:
             for device, device_params in self.per_device_params.items():
-                clip_coef = clip_coef.to(device)
-
                 for p in filter(lambda x: x.grad is not None, device_params[self.rank]):
-                    p.grad.detach().mul_(clip_coef)  # type: ignore
+                    p.grad.detach().mul_(clip_coef.to(device))  # type: ignore
 
         return total_norm
 
