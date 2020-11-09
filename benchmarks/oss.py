@@ -17,6 +17,7 @@ import torch.autograd.profiler as profiler
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
+from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import BatchSampler, DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
@@ -64,11 +65,11 @@ class OptimType(str, Enum):
 
 
 def train(
-    rank: int,
-    args: argparse.Namespace,
-    backend: str = "gloo",
-    optim_type: OptimType = OptimType.vanilla,
-    check_regression: bool = True,
+        rank: int,
+        args: argparse.Namespace,
+        backend: str = "gloo",
+        optim_type: OptimType = OptimType.vanilla,
+        check_regression: bool = True,
 ):
     logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
 
@@ -111,6 +112,9 @@ def train(
         torch.cuda.reset_peak_memory_stats(rank)
         torch.cuda.synchronize(rank)
 
+    # AMP Scaler
+    scaler = GradScaler()
+
     # Standard training loop
     training_start = time.monotonic()
     model.train()
@@ -143,7 +147,11 @@ def train(
                     outputs = model(batch["inputs"])
                     loss = loss_fn(outputs, batch["label"])
 
-                loss.backward()
+                if not args.cpu and args.amp:
+                    # Accumulates scaled gradients.
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
                 if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
@@ -157,8 +165,13 @@ def train(
                 logging.info("Profiling the run")
                 with profiler.profile(use_cuda=True, record_shapes=True, profile_memory=True) as prof:  # type: ignore
                     with profiler.record_function("batch"):
-                        final_loss = optimizer.step(closure)
-                        logging.info("profiling done")
+                        if not args.cpu and args.amp:
+                            closure()  # AMP scaler.step does not support closures
+                            final_loss = scaler.step(optimizer)
+                            scaler.update()
+                        else:
+                            final_loss = optimizer.step(closure)
+                            logging.info("profiling done")
 
                 if rank == 0:
                     prof.export_chrome_trace(f"{optim_type}_trace.json")
@@ -166,7 +179,12 @@ def train(
                 need_profiling = False  # only profile once
 
             else:
-                final_loss = optimizer.step(closure)
+                if not args.cpu and args.amp:
+                    closure()  # AMP scaler.step does not support closures
+                    final_loss = scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    final_loss = optimizer.step(closure)
 
             if args.debug and rank == 0:
                 logging.debug("buffer: {}".format(next(model.buffers()).norm().item()))
