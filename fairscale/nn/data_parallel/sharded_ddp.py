@@ -7,8 +7,9 @@
 A module wrapper to go with a Sharded Optimizer in order to handle targeted gradient reduction/gathering automatically.
 """
 
+from contextlib import contextmanager
 import logging
-from typing import Any, Callable, Dict, List, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Tuple, Union
 
 import torch
 from torch import nn
@@ -85,6 +86,7 @@ class ShardedDataParallel(nn.Module):
         self.base_model = base_model
         self.sharded_optimizers = [sharded_optimizer] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
         self.broadcast_buffers = broadcast_buffers
+        self.accumulate_grads = False
 
         # Communication related attributes
         self.process_group = process_group if process_group is not None else dist.group.WORLD
@@ -175,6 +177,14 @@ class ShardedDataParallel(nn.Module):
         for x in self.base_model.buffers(recurse=True):
             dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True)
 
+    @contextmanager
+    def no_sync(self) -> Generator:
+        """A context manager to disable gradient synchronization."""
+        old_accumulate_grads = self.accumulate_grads
+        self.accumulate_grads = True
+        yield
+        self.accumulate_grads = old_accumulate_grads
+
     @staticmethod
     def _mark_inputs_requires_grad(*inputs: Any) -> Any:
         if isinstance(inputs, torch.Tensor):
@@ -212,6 +222,10 @@ class ShardedDataParallel(nn.Module):
             if not should_bucket:
                 # Direct reduce
                 def reduce(*unused: Any) -> None:
+                    # Skip gradient reduction, do not alter status flags
+                    if self.accumulate_grads:
+                        return
+
                     if param.grad is not None and self._grad_to_be_reduced[index]:
                         # Make sure that this is not fired twice
                         self._grad_to_be_reduced[index] = False
@@ -227,7 +241,10 @@ class ShardedDataParallel(nn.Module):
                         self._reduce_work_handles.append(
                             (
                                 dist.reduce(
-                                    param.grad.data, self._grad_to_rank[index], group=self.process_group, async_op=True,
+                                    tensor=param.grad.data,
+                                    dst=self._grad_to_rank[index],
+                                    group=self.process_group,
+                                    async_op=True,
                                 ),
                                 cleanup,
                             )
@@ -238,6 +255,10 @@ class ShardedDataParallel(nn.Module):
             else:
                 # Bucket, update status, and possibly unroll the results
                 def reduce(*unused: Any) -> None:
+                    # Skip gradient reduction, do not alter status flags
+                    if self.accumulate_grads:
+                        return
+
                     bucket = self._reduce_buckets[optimizer][param.device][rank]
                     current_fill, max_fill = self._bucket_state[optimizer][param.device][rank]
 
@@ -267,8 +288,8 @@ class ShardedDataParallel(nn.Module):
                             self._reduce_work_handles.append(
                                 (
                                     dist.reduce(
-                                        bucket["buffer"],
-                                        self._grad_to_rank[index],
+                                        tensor=bucket["buffer"],
+                                        dst=self._grad_to_rank[index],
                                         group=self.process_group,
                                         async_op=True,
                                     ),

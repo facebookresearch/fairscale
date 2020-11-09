@@ -8,6 +8,7 @@ Testing OssDdp class.
 """
 
 import tempfile
+from typing import List
 
 import numpy as np
 import pytest
@@ -21,6 +22,7 @@ from fairscale.optim import OSS
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
+from contextlib import suppress
 
 
 def test_step_on_cpu():
@@ -42,7 +44,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     torch.manual_seed(rank)
     np.random.seed(rank)
 
-    def check(broadcast_buffers: bool) -> None:
+    def check(broadcast_buffers: bool, grad_acccumulation: bool = False) -> None:
         # Any model works. Add one different buffer per rank
         model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
         model.register_buffer("test_buffer", torch.ones((1)) * rank)
@@ -51,9 +53,11 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
         optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
         ddp_model = ShardedDataParallel(model, optimizer, broadcast_buffers=broadcast_buffers)
 
-        def check_same_model_params():
+        def check_same_model_params(same_params: bool):
             # Check that all the params are the same on all ranks
             # This should be true with and without broadcast_buffers, we don't have any real buffer here
+            receptacle: List[torch.Tensor] = []
+
             if dist.get_backend() != "nccl":
                 for pg in optimizer.param_groups:
                     for p in pg["params"]:
@@ -62,7 +66,12 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
                         dist.gather(p, receptacle, dst=0)
                         if rank == 0:
                             for sync_p in receptacle[1:]:
-                                assert torch.all(torch.eq(receptacle[0], sync_p)), "Models differ in between ranks"
+                                if same_params:
+                                    assert torch.all(torch.eq(receptacle[0], sync_p)), "Models differ in between ranks"
+                                else:
+                                    assert not torch.all(
+                                        torch.eq(receptacle[0], sync_p)
+                                    ), "Gradients should not have been synced"
 
                 # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
                 if broadcast_buffers:
@@ -71,29 +80,39 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
                         dist.gather(b, receptacle, dst=0)
                         if rank == 0:
                             for sync_b in receptacle[1:]:
-                                assert torch.all(torch.eq(receptacle[0], sync_b)), "Models differ in between ranks"
+                                if same_params:
+                                    assert torch.all(torch.eq(receptacle[0], sync_b)), "Models differ in between ranks"
+                                else:
+                                    assert not torch.all(
+                                        torch.eq(receptacle[0], sync_b)
+                                    ), "Gradients should not have been synced"
+
                         assert b.cpu().item() == 0.0
 
         # The model should be synchronized in between the ranks at ShardedDataParallel construction time, check that
-        check_same_model_params()
+        check_same_model_params(same_params=True)
 
         # Optim loop
         def closure():
             optimizer.zero_grad()
 
-            input_tensor = torch.rand((64, 2)).to(device)
-            loss = ddp_model(input_tensor).abs().sum()
-            loss.backward()
+            with ddp_model.no_sync() if grad_acccumulation else suppress():
+                input_tensor = torch.rand((64, 2)).to(device)
+                loss = ddp_model(input_tensor).abs().sum()
+                loss.backward()
             return loss
 
         # The models should stay the same in between the ranks
         for i in range(5):
             _ = optimizer.step(closure=closure)
-            check_same_model_params()
+            # when running on cpu/gloo the "nodes" are not really different
+            same_params = device == torch.device("cpu") or grad_acccumulation
+            check_same_model_params(same_params=same_params)
 
     check(broadcast_buffers=False)
     check(broadcast_buffers=True)
-
+    check(broadcast_buffers=False, grad_acccumulation=True)
+    check(broadcast_buffers=True, grad_acccumulation=True)
     dist.destroy_process_group()
 
 
