@@ -44,7 +44,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     torch.manual_seed(rank)
     np.random.seed(rank)
 
-    def check(broadcast_buffers: bool, grad_acccumulation: bool = False) -> None:
+    def check(broadcast_buffers: bool, grad_accumulation: bool = False) -> None:
         # Any model works. Add one different buffer per rank
         model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
         model.register_buffer("test_buffer", torch.ones((1)) * rank)
@@ -96,7 +96,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
         def closure():
             optimizer.zero_grad()
 
-            with ddp_model.no_sync() if grad_acccumulation else suppress():
+            with ddp_model.no_sync() if grad_accumulation else suppress():
                 input_tensor = torch.rand((64, 2)).to(device)
                 loss = ddp_model(input_tensor).abs().sum()
                 loss.backward()
@@ -106,13 +106,13 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
         for i in range(5):
             _ = optimizer.step(closure=closure)
             # when running on cpu/gloo the "nodes" are not really different
-            same_params = device == torch.device("cpu") or grad_acccumulation
+            same_params = device == torch.device("cpu") or grad_accumulation
             check_same_model_params(same_params=same_params)
 
     check(broadcast_buffers=False)
     check(broadcast_buffers=True)
-    check(broadcast_buffers=False, grad_acccumulation=True)
-    check(broadcast_buffers=True, grad_acccumulation=True)
+    check(broadcast_buffers=False, grad_accumulation=True)
+    check(broadcast_buffers=True, grad_accumulation=True)
     dist.destroy_process_group()
 
 
