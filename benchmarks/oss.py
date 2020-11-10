@@ -94,7 +94,7 @@ def train(
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
     model = cast(nn.Module, model)
-    scaler = TorchGradScaler() if args.optim_type == OptimType.vanilla else ShardedGradScaler()
+    scaler = (TorchGradScaler() if args.optim_type == OptimType.vanilla else ShardedGradScaler()) if args.amp else None
 
     if optim_type == OptimType.oss_sharded_ddp:
         model = ShardedDDP(
@@ -105,8 +105,6 @@ def train(
             broadcast_buffers=True,
         )
         optimizer = model.sharded_optimizer
-        scaler = ShardedGradScaler()
-
     else:
         model = DDP(model, device_ids=[rank], find_unused_parameters=False)  # type: ignore
         optimizer = (
@@ -178,7 +176,7 @@ def train(
                 else:
                     loss = optimizer.step(closure)
 
-                return loss
+                return loss.item()
 
             if need_profiling and not args.cpu:
                 logging.info("Profiling the run")
