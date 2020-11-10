@@ -136,7 +136,7 @@ def train(
         for batch in dataloader:
             batch__start = time.monotonic()
 
-            def closure(grad_scaler):
+            def closure(grad_scaler=scaler):
                 model.zero_grad()
                 if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
