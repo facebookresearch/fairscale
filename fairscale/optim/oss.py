@@ -174,6 +174,33 @@ class OSS(Optimizer):
                         self._param_rank[param] = rank
         return self._param_rank
 
+    @property
+    def distributed_grad_check(self) -> bool:
+        """
+        Check that the current gradients are finite (ie. not NaN or Inf) on all ranks.
+        """
+
+        # Filter out the grad-less params, concatenate params from all devices
+        local_params = itertools.chain(
+            *[
+                list(filter(lambda x: x.grad is not None, device_params[self.rank]))
+                for device_params in self.per_device_params.values()
+            ]
+        )
+
+        # Check the status for this rank
+        valid_grads = True
+        for p in local_params:
+            if not torch.isfinite(p.grad).all():  # type: ignore  # mypy is filter blind
+                valid_grads = False
+                break
+
+        # Sync the status across all the ranks
+        all_valid = torch.tensor([1 if not valid_grads else 0], device=self._device)
+        dist.all_reduce(all_valid, op=torch.distributed.ReduceOp.MAX, group=self.group)
+
+        return all_valid.item() == 0
+
     # NOTE(msb) We add a kwargs in order to support Optimizer sub-classes that support extra kwargs.
     # For example, the apex library contains fused optimizers with a step that supports extra kwargs.
     def step(self, closure: Optional[Callable[[], float]] = None, **kwargs: Any) -> Optional[float]:

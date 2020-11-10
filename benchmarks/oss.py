@@ -14,6 +14,7 @@ from typing import Any, List, Optional, cast
 import numpy as np
 import torch
 import torch.autograd.profiler as profiler
+from torch.cuda.amp import GradScaler as TorchGradScaler
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
@@ -25,6 +26,7 @@ from torchvision.transforms import ToTensor
 
 from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 from fairscale.optim import OSS
+from fairscale.optim.grad_scaler import ShardedGradScaler
 
 OPTIM = torch.optim.RMSprop
 TEMPDIR = tempfile.gettempdir()
@@ -92,6 +94,7 @@ def train(
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
     model = cast(nn.Module, model)
+    scaler = TorchGradScaler() if args.optim_type == OptimType.vanilla else ShardedGradScaler()
 
     if optim_type == OptimType.oss_sharded_ddp:
         model = ShardedDDP(
@@ -102,6 +105,7 @@ def train(
             broadcast_buffers=True,
         )
         optimizer = model.sharded_optimizer
+        scaler = ShardedGradScaler()
 
     else:
         model = DDP(model, device_ids=[rank], find_unused_parameters=False)  # type: ignore
@@ -132,7 +136,7 @@ def train(
         for batch in dataloader:
             batch__start = time.monotonic()
 
-            def closure():
+            def closure(grad_scaler):
                 model.zero_grad()
                 if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
@@ -149,7 +153,11 @@ def train(
                     outputs = model(batch["inputs"])
                     loss = loss_fn(outputs, batch["label"])
 
-                loss.backward()
+                if not args.cpu and args.amp:
+                    # Accumulates scaled gradients.
+                    grad_scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
                 if optim_type == OptimType.oss_sharded_ddp:
                     model.reduce()
@@ -162,12 +170,21 @@ def train(
                     )
                 return loss
 
+            def batch_step():
+                if not args.cpu and args.amp:
+                    loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss = optimizer.step(closure)
+
+                return loss
+
             if need_profiling and not args.cpu:
                 logging.info("Profiling the run")
                 with profiler.profile(use_cuda=True, record_shapes=True, profile_memory=True) as prof:  # type: ignore
                     with profiler.record_function("batch"):
-                        final_loss = optimizer.step(closure)
-                        logging.info("profiling done")
+                        final_loss = batch_step()
 
                 if rank == 0:
                     prof.export_chrome_trace(f"{optim_type}_trace.json")
@@ -175,7 +192,7 @@ def train(
                 need_profiling = False  # only profile once
 
             else:
-                final_loss = optimizer.step(closure)
+                final_loss = batch_step()
 
             if args.debug and rank == 0:
                 logging.debug("buffer: {}".format(next(model.buffers()).norm().item()))
