@@ -27,7 +27,8 @@ from tests.nn.model_parallel.commons import get_worker_map, set_random_seed, tor
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-def simple_linears():
+@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
+def simple_linears(pipeline_style):
     def sum_grad(parameters):
         return sum([p.grad.sum() for p in parameters if p.grad is not None])
 
@@ -54,19 +55,19 @@ def simple_linears():
     zero_grad(model.parameters())
 
     # With Pipe
-    model = Pipe(model, [2, 2], style=Pipe.MultiProcess, worker_map=get_worker_map(), chunks=4)
+    model = Pipe(model, [2, 2], style=pipeline_style, worker_map=get_worker_map(), chunks=4)
 
     outputs = model(inputs)
     if model.group.rank() == 1:
         loss = outputs.mean()
         loss.backward()
-        grad_with_pipe = sum_grad(model.pipeline.partitions[0].parameters())
+        grad_with_pipe = sum_grad(model.pipeline.mp_partitions[0].module.parameters())
 
         # Both grads should be identical.
         assert torch.allclose(grad_with_pipe, grad_without_pipe[1])
     else:
         model.back_helper(outputs)
-        grad_with_pipe = sum_grad(model.pipeline.partitions[0].parameters())
+        grad_with_pipe = sum_grad(model.pipeline.mp_partitions[0].module.parameters())
 
         # Both grads should be identical.
         assert torch.allclose(grad_with_pipe, grad_without_pipe[0])
