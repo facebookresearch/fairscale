@@ -37,6 +37,10 @@ from . import version
 class dtype:
     is_floating_point: builtins.bool
 
+class finfo:
+    def __init__(self, dtype: dtype): ...
+    eps: float
+
 class layout: ...
 
 strided : layout = ...

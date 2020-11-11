@@ -23,18 +23,17 @@ else:
 os.environ["MASTER_ADDR"] = "localhost"
 os.environ["MASTER_PORT"] = "29501"
 if "OMPI_COMM_WORLD_SIZE" in os.environ:
-    pass  # dist.init_process_group(backend=dist.Backend.MPI)
+    dist.init_process_group(backend=dist.Backend.MPI)
 
 
 def setup_module(module):
     if "OMPI_COMM_WORLD_SIZE" not in os.environ:
         dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
-    else:
-        dist.init_process_group(backend=dist.Backend.MPI)
 
 
 def teardown_module(module):
-    torch.distributed.destroy_process_group()
+    if "OMPI_COMM_WORLD_SIZE" not in os.environ:
+        torch.distributed.destroy_process_group()
 
 
 @pytest.mark.parametrize("device", devices)
@@ -62,7 +61,7 @@ def test_expert_params(device):
 def test_forward(device):
     model_dim = 8
     num_experts = dist.get_world_size(dist.group.WORLD)
-    input = torch.randn(1, 4, 16, model_dim).to(device)
+    input = torch.randn(4, 16, model_dim).to(device)
     gate = Top2Gate(model_dim, num_experts)
     expert = torch.nn.Linear(model_dim, model_dim, bias=False)
     # Use identity matrix
@@ -81,7 +80,7 @@ def test_forward_multi(device):
     num_local_experts = 4
     model_dim = 4
     num_experts = dist.get_world_size(dist.group.WORLD) * num_local_experts
-    input = torch.randn(num_local_experts, 4, 16, model_dim).to(device)
+    input = torch.randn(4 * num_local_experts, 16, model_dim).to(device)
     gate = Top2Gate(model_dim, num_experts)
     experts = []
     for i in range(num_local_experts):
@@ -106,12 +105,12 @@ class RoundRobinGate(torch.nn.Module):
         self.num_experts = num_experts
 
     def forward(self, input):
-        g, s, _ = input.shape
+        s = input.shape[0]
         assert s % self.num_experts == 0
         capacity = 2 * s // self.num_experts
-        output = torch.zeros(g, s, self.num_experts, capacity, dtype=input.dtype, device=input.device)
+        output = torch.zeros(s, self.num_experts, capacity, dtype=input.dtype, device=input.device)
         for i in range(s):
-            output[:, i, i % self.num_experts, i // self.num_experts] = 1.0
+            output[i, i % self.num_experts, i // self.num_experts] = 1.0
         return 0.0, output, output.bool()
 
 
@@ -120,7 +119,7 @@ class RoundRobinGate(torch.nn.Module):
 def test_forward_routing(device):
     model_dim = 8
     num_experts = dist.get_world_size()
-    input = torch.randn(1, 4, 16, model_dim).to(device)
+    input = torch.randn(4, 16, model_dim).to(device)
     gate = RoundRobinGate(model_dim, num_experts)
     expert = torch.nn.Linear(model_dim, model_dim, bias=False)
     # Use scaling matrix (each rank has a different scale)
@@ -130,10 +129,10 @@ def test_forward_routing(device):
     output = moe(input)
     assert output.shape == input.shape
     # Verify that each token was sent to the correct expert by checking its scale.
-    t = input.shape[2]
+    t = input.shape[1]
     for i in range(t):
         expert = i % num_experts
-        assert torch.allclose(input[:, :, i] * (expert + 1), output[:, :, i])
+        assert torch.allclose(input[:, i] * (expert + 1), output[:, i])
 
 
 @pytest.mark.mpi
@@ -142,7 +141,7 @@ def test_backward(device):
     loss = torch.nn.MSELoss()
     model_dim = 8
     num_experts = dist.get_world_size(dist.group.WORLD)
-    input = torch.randn(1, 4, 16, model_dim).to(device)
+    input = torch.randn(4, 16, model_dim).to(device)
     gate = Top2Gate(model_dim, num_experts)
     expert = torch.nn.Linear(model_dim, model_dim, bias=False)
     # Use identity matrix
