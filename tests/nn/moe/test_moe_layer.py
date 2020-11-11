@@ -129,7 +129,7 @@ def test_forward_routing(device):
     output = moe(input)
     assert output.shape == input.shape
     # Verify that each token was sent to the correct expert by checking its scale.
-    t = input.shape[2]
+    t = input.shape[1]
     for i in range(t):
         expert = i % num_experts
         assert torch.allclose(input[:, i] * (expert + 1), output[:, i])
