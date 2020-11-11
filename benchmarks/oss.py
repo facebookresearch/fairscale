@@ -168,29 +168,29 @@ def train(
                     )
                 return loss
 
-            def batch_step():
-                if not args.cpu and args.amp:
-                    loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    loss = optimizer.step(closure)
-
-                return loss.item()
-
             if need_profiling and not args.cpu:
                 logging.info("Profiling the run")
                 with profiler.profile(use_cuda=True, record_shapes=True, profile_memory=True) as prof:  # type: ignore
                     with profiler.record_function("batch"):
-                        final_loss = batch_step()
+                        if not args.cpu and args.amp:
+                            final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
+                            scaler.step(optimizer)  # type: ignore
+                            scaler.update()  # type: ignore
+                        else:
+                            final_loss = optimizer.step(closure)
 
-                if rank == 0:
-                    prof.export_chrome_trace(f"{optim_type}_trace.json")
+                    if rank == 0:
+                        prof.export_chrome_trace(f"{optim_type}_trace.json")
 
                 need_profiling = False  # only profile once
 
             else:
-                final_loss = batch_step()
+                if not args.cpu and args.amp:
+                    final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
+                    scaler.step(optimizer)  # type: ignore
+                    scaler.update()  # type: ignore
+                else:
+                    final_loss = optimizer.step(closure)
 
             if args.debug and rank == 0:
                 logging.debug("buffer: {}".format(next(model.buffers()).norm().item()))
@@ -299,7 +299,12 @@ if __name__ == "__main__":
         logging.info("\n*** Benchmark vanilla optimizer")
         mp.spawn(
             train,
-            args=(args, backend, OptimType.vanilla, False,),  # no regression check
+            args=(
+                args,
+                backend,
+                OptimType.vanilla,
+                False,
+            ),  # no regression check
             nprocs=args.world_size,
             join=True,
         )
@@ -307,7 +312,10 @@ if __name__ == "__main__":
     if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark OSS with DDP")
         mp.spawn(
-            train, args=(args, backend, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,
+            train,
+            args=(args, backend, OptimType.oss_ddp, args.check_regression),
+            nprocs=args.world_size,
+            join=True,
         )
 
     if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
