@@ -23,21 +23,21 @@ def test_create_cuda():
 
 def do_test_forward(device):
     torch.manual_seed(3)
-    input = torch.randn(3, 12, 4).to(device)
+    input = torch.randn(12, 4).to(device)
     gate = Top2Gate(4, 6).to(device)
     capacity = 2 * 12 // 6
     l_aux, combine_weights, dispatch_mask = gate(input)
     assert pytest.approx(l_aux.item(), 0.0283)
-    assert combine_weights.shape == (3, 12, 6, 4)
-    assert dispatch_mask.shape == (3, 12, 6, 4)
+    assert combine_weights.shape == (12, 6, 4)
+    assert dispatch_mask.shape == (12, 6, 4)
     assert torch.equal(combine_weights.bool(), dispatch_mask)
-    assert torch.all(torch.sum(dispatch_mask, axis=(1, 3)) <= capacity)
+    assert torch.all(torch.sum(dispatch_mask, axis=(0, 2)) <= capacity)
     assert torch.all(combine_weights >= 0.0)
     assert torch.all(combine_weights <= 1.0)
     weights_sum = torch.sum(combine_weights).item()
     assert round(weights_sum) == pytest.approx(weights_sum)
-    # For this random seed, we get 36 slots filled.
-    assert weights_sum == pytest.approx(36.0)
+    # For this random seed, we get 12 slots filled.
+    assert weights_sum == pytest.approx(12.0)
 
 
 def test_forward_cpu():
@@ -53,15 +53,15 @@ def test_forward_cuda():
 def test_top1s():
     num_tokens = 8
     num_experts = 4
-    logits = torch.randn(1, num_tokens, num_experts)
+    logits = torch.randn(num_tokens, num_experts)
     l_aux, _, dispatch_mask = top2gating(logits)
-    top1s = torch.argmax(logits, dim=2)
+    top1s = torch.argmax(logits, dim=1)
     capacity = 2 * num_tokens // num_experts
     ce = [0] * num_experts
     locations = [0] * num_tokens
-    for i, s in enumerate(top1s[0]):
+    for i, s in enumerate(top1s):
         e = s.item()
         loc = ce[e]
         ce[e] = loc + 1
         if ce[e] < capacity:
-            assert dispatch_mask[0][i][e][loc]
+            assert dispatch_mask[i][e][loc]
