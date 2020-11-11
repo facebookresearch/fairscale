@@ -80,7 +80,7 @@ class MOELayer(Base):
 
         # Implement Algorithm 2 from GShard paper.
         shape = input[0].shape
-        # Reshape into S tokens per group.
+        # Reshape into S tokens by dropping sequence dimension.
         reshaped_input = input[0].reshape(-1, shape[2])
         self.l_aux, combine_weights, dispatching_mask = self.gate(reshaped_input)
         dispatched_input = self.all_to_all_dispatch(dispatching_mask, reshaped_input)
