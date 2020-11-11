@@ -137,6 +137,31 @@ def test_forward_routing(device):
 
 @pytest.mark.mpi
 @pytest.mark.parametrize("device", ["cpu"])
+def test_forward_routing_multi(device):
+    model_dim = 8
+    num_local_experts = 4
+    num_experts = dist.get_world_size(dist.group.WORLD) * num_local_experts
+    input = torch.randn(4 * num_local_experts, 16, model_dim).to(device)
+    gate = RoundRobinGate(model_dim, num_experts)
+    experts = []
+    for i in range(num_local_experts):
+        expert = torch.nn.Linear(model_dim, model_dim, bias=False)
+        # Use scaling matrix (each rank has a different scale)
+        scale = dist.get_rank() * num_local_experts + i + 1
+        expert.weight = torch.nn.Parameter(torch.eye(model_dim) * scale)
+        experts += [expert]
+    moe = MOELayer(gate, torch.nn.ModuleList(experts)).to(device)
+    output = moe(input)
+    assert output.shape == input.shape
+    # Verify that each token was sent to the correct expert by checking its scale.
+    t = input.shape[1]
+    for i in range(t):
+        expert = i % num_experts
+        assert torch.allclose(input[:, i] * (expert + 1), output[:, i])
+
+
+@pytest.mark.mpi
+@pytest.mark.parametrize("device", ["cpu"])
 def test_backward(device):
     loss = torch.nn.MSELoss()
     model_dim = 8
