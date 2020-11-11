@@ -104,7 +104,10 @@ def train(
         optimizer = model.sharded_optimizer
 
     else:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=False)  # type: ignore
+        if args.cpu:
+            model = DDP(model, device_ids=None, find_unused_parameters=False)  # type: ignore
+        else:
+            model = DDP(model, device_ids=[rank], find_unused_parameters=False)  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
             if optim_type == OptimType.oss_ddp
@@ -211,10 +214,7 @@ def train(
 
     training_stop = time.monotonic()
     img_per_sec = n_items / (training_stop - training_start) * args.epochs
-    max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
-
     logging.info(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec inc. checkpoint")
-    logging.info(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
 
     # Compute the mean and average img per second
     mean = sum(measurements) / len(measurements)
