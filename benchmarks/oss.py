@@ -134,7 +134,7 @@ def train(
         for batch in dataloader:
             batch__start = time.monotonic()
 
-            def closure(grad_scaler=scaler):
+            def closure(grad_scaler=None):
                 model.zero_grad()
                 if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
@@ -142,19 +142,17 @@ def train(
                             next(model.parameters()).norm().item(), next(model.parameters()).grad.norm().item()
                         )
                     )
-                if not args.cpu and args.amp:
+                if grad_scaler is not None:
                     # Automatically computes the FW pass in half precision
                     with torch.cuda.amp.autocast():
                         outputs = model(batch["inputs"])
                         loss = loss_fn(outputs, batch["label"])
+
+                        # Accumulates scaled gradients.
+                        grad_scaler.scale(loss).backward()
                 else:
                     outputs = model(batch["inputs"])
                     loss = loss_fn(outputs, batch["label"])
-
-                if not args.cpu and args.amp:
-                    # Accumulates scaled gradients.
-                    grad_scaler.scale(loss).backward()
-                else:
                     loss.backward()
 
                 if optim_type == OptimType.oss_sharded_ddp:
@@ -172,7 +170,7 @@ def train(
                 logging.info("Profiling the run")
                 with profiler.profile(use_cuda=True, record_shapes=True, profile_memory=True) as prof:  # type: ignore
                     with profiler.record_function("batch"):
-                        if not args.cpu and args.amp:
+                        if scaler is not None:
                             final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
                             scaler.step(optimizer)  # type: ignore
                             scaler.update()  # type: ignore
@@ -185,7 +183,7 @@ def train(
                 need_profiling = False  # only profile once
 
             else:
-                if not args.cpu and args.amp:
+                if scaler is not None:
                     final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
                     scaler.step(optimizer)  # type: ignore
                     scaler.update()  # type: ignore
@@ -299,12 +297,7 @@ if __name__ == "__main__":
         logging.info("\n*** Benchmark vanilla optimizer")
         mp.spawn(
             train,
-            args=(
-                args,
-                backend,
-                OptimType.vanilla,
-                False,
-            ),  # no regression check
+            args=(args, backend, OptimType.vanilla, False,),  # no regression check
             nprocs=args.world_size,
             join=True,
         )
@@ -312,10 +305,7 @@ if __name__ == "__main__":
     if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark OSS with DDP")
         mp.spawn(
-            train,
-            args=(args, backend, OptimType.oss_ddp, args.check_regression),
-            nprocs=args.world_size,
-            join=True,
+            train, args=(args, backend, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,
         )
 
     if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
