@@ -105,9 +105,10 @@ def train(
 
     else:
         if args.cpu:
-            model = DDP(model, device_ids=None, find_unused_parameters=False)  # type: ignore
+            device_ids = None
         else:
-            model = DDP(model, device_ids=[rank], find_unused_parameters=False)  # type: ignore
+            device_ids = [rank]
+        model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
             if optim_type == OptimType.oss_ddp
