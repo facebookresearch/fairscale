@@ -112,8 +112,8 @@ class Top2Gate(torch.nn.Module):
 
     def __init__(self, model_dim: int, num_experts: int,) -> None:
         super().__init__()
-        self.wg = torch.nn.Linear(num_experts, model_dim, bias=False)
+        self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
 
     def forward(self, input: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:  # type: ignore
-        logits = torch.einsum("sm,me -> se", input, self.wg.weight)
+        logits = self.wg(input)
         return top2gating(logits)
