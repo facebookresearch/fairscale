@@ -260,6 +260,9 @@ class OSS(Optimizer):
                 p=norm_type,
             )
 
+            # local norm result can be accumulated with the remote ones if put to the right power
+            # n_i = sum_rank(a^p)^1/p
+            # -> n_total = all_reduce(n_i^p)^(1/p) = sum_i(n_i^p)^1/p = sum_i(sum_rank(a^p))^1/p
             total_norm = local_norm ** norm_type
             dist.all_reduce(total_norm, group=self.group)
             total_norm = total_norm ** (1.0 / norm_type)

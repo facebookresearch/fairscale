@@ -47,7 +47,7 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
 
     optimizer: Optional[Union[OSS, torch.optim.SGD]] = None
 
-    if ~use_oss:
+    if not use_oss:
         optimizer = torch.optim.SGD(params=model.parameters(), lr=1e-4)
     else:
         base_optimizer = torch.optim.SGD
@@ -70,7 +70,7 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
             # if you want to clip the gradients / get the current max:
             max_norm = 1000.0
             norm_type = 1
-            if ~use_oss:
+            if not use_oss:
                 _total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm, norm_type=norm_type)  # type: ignore
             else:
                 optimizer = cast(OSS, optimizer)
