@@ -283,7 +283,7 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
     if model.group:
-        total = torch.Tensor([num_params]).cuda()
+        total = torch.Tensor([num_params]).cuda() if torch.cuda.is_available() else torch.Tensor([num_params])
         torch.distributed.all_reduce(total, group=model.group)
         logging.info(
             f"training model, #prams = {num_params}, group: {model.group.rank()}, grank:"
@@ -347,7 +347,9 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
         optimizer.zero_grad()
         try:
             if (pipe_group is None or pipe_group.rank() == 0) and not args.ddp_zero:
-                tmp = batch["input"].to(get_first_device(model))
+                tmp = batch["input"]
+                if torch.cuda.is_available():
+                    tmp = tmp.to(get_first_device(model))
                 output = model(tmp)
             else:
                 output = model(batch["input"])
@@ -355,7 +357,9 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
-            target = batch["target"].to(get_last_device(model))
+            target = batch["target"]
+            if torch.cuda.is_available():
+                target = target.to(get_last_device(model))
             output = output.to(target.device)
 
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
@@ -491,8 +495,8 @@ def generate_balance(num_devices, num_layers):
 
 
 def make_model_and_data(args, device, new_data: bool = True):
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if new_data:
-        device = torch.device("cuda")
         vocab_size = 10000
         model, criterion, optimizer, scaler = make_model(args, device, vocab_size)
         lm_dataset = BenchmarkLMDataset()
@@ -507,7 +511,6 @@ def make_model_and_data(args, device, new_data: bool = True):
             "vocab_size": vocab_size,
         }
     else:
-        device = torch.device("cuda")
         data = get_data(device)
         ntokens, train_data, val_data, test_data = data
         model, criterion, optimizer, scaler = make_model(args, device, ntokens)
@@ -520,10 +523,10 @@ def make_model_and_data(args, device, new_data: bool = True):
 
 
 def bench_single_process(args):
-    num_devices = torch.cuda.device_count()
+    num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
     init_random_seed(0)
-    device = torch.device("cuda")
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     new_data = True
 
@@ -557,12 +560,13 @@ def run_mp_worker(args, available_workers):
         style=Pipe.AsyncSchedule,
         chunks=args.chunks,
         worker_map=get_worker_map(),
-        input_device=torch.cuda.current_device(),
+        input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
         pipelined_backward=args.pipelined_backward,
         checkpoint=args.checkpoint,
         # loss_fn=blob["criterion"],
-    ).cuda()
-
+    )
+    if torch.cuda.is_available():
+        p = p.cuda()
     if args.all_at_once and p.pipeline:
         print(f"running all at once")
         p.pipeline.all_at_once = True
@@ -678,7 +682,8 @@ parser.set_defaults(pipelined_backward=True)
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    # bench_multi_process(args, all_at_once=True)
+    bench_multi_process(args, all_at_once=True)
+
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
         print(f"Running benchmark with args: {args}")
         bench_single_process(args)
