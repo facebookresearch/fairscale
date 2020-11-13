@@ -24,6 +24,45 @@ else:
     _params_t = Any
 
 
+class Bucket:
+    """
+    Helper class to simplify the handling of broadcast or reduce buckets
+    """
+
+    def __init__(self, buffer: torch.Tensor) -> None:
+        # The actual flat tensor
+        self.buffer = buffer
+        self.max_size = buffer.numel()
+
+        # Handles to the params and their position in this tensor, can be useful for a callback
+        self.params: List[Tuple[torch.Tensor, int, int]] = []
+
+        # Current status for this buffer
+        self.current_offset = 0
+        self.max_offset = 0
+
+    def reset(self) -> None:
+        """ empty the bucket """
+        self.current_offset = 0
+        self.params.clear()
+
+    def append(self, tensor: torch.Tensor) -> bool:
+        """ add a tensor to the bucket """
+        end = self.current_offset + tensor.numel()
+
+        if end > self.max_size:
+            return False
+
+        self.buffer[self.current_offset : end].copy_(tensor.data.view(-1))
+        self.params.append((tensor, self.current_offset, end))
+        self.current_offset = end
+        return True
+
+    def full(self) -> bool:
+        """ is the bucket full ? """
+        return self.current_offset == self.max_offset
+
+
 class OSS(Optimizer):
     """Wraps an arbitrary :class:`optim.Optimizer <torch.optim.Optimizer>`
     optimizer and shards its state as described by ZeRO_.
@@ -71,10 +110,8 @@ class OSS(Optimizer):
         super().__init__(params, default)
         self.in_super_constructor = False
 
-        # Partition information. lazy evaluation, computed if requested
-        self._per_device_params: OrderedDict[
-            torch.device, List[List[Parameter]]
-        ] = OrderedDict()  # device, rank, params
+        # Partition information. lazy evaluation, computed when requested
+        self._per_device_params: Dict[torch.device, List[List[Parameter]]] = OrderedDict()  # device, rank, params
         self._param_rank: Dict[torch.Tensor, int] = {}
         self._partition_parameters: List[List[dict]] = []
 
@@ -88,22 +125,26 @@ class OSS(Optimizer):
 
         # - Sync local and global param_groups keys
         for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
-            for k, v in local_group.items():
-                if k != "params":
-                    global_group[k] = v
+            for key, value in local_group.items():
+                if key != "params":
+                    global_group[key] = value
 
         #  Optional consolidated optimizer state
         self._all_states: List[Dict[str, Any]] = []
 
         # Current default device is set by the parameters allocated to this rank
         self._device = self.partition_parameters()[self.rank][0]["params"][0].device
-        self._broadcast_buffers: Dict[torch.device, List[torch.Tensor]] = {}
+        self.buckets: Dict[torch.device, List[Bucket]] = {}
         for device, per_device in self.per_device_params.items():
             # Allocate one buffer per rank and per device to group the small parameters
-            self._broadcast_buffers[device] = [
-                torch.zeros(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device)
+            self.buckets[device] = [
+                Bucket(buffer=torch.zeros(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device))
                 for _ in range(len(per_device))
             ]
+        self.param_bucket_strategy: Dict[torch.Tensor, bool] = {}
+        self.work_handles: List[Tuple[Callable, Optional[Callable]]] = []
+        self._max_work_handles = -1
+        self._setup_bucket_strategy()
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
@@ -165,7 +206,7 @@ class OSS(Optimizer):
                     for param in param_group["params"]:
                         self._param_rank[param] = rank
 
-            logging.debug(f"ZeRO: Parameters dispatched to ranks {list(self._param_rank.values())}")
+            logging.debug("ZeRO: Parameters dispatched to ranks %s " % list(self._param_rank.values()))
 
         return self._param_rank
 
@@ -189,7 +230,8 @@ class OSS(Optimizer):
         else:
             loss = self.optim.step(**kwargs)
 
-        self._free_other_grads()  # Depending on the DDP engine used, gradients specific to other ranks may still be loaded
+        # Depending on the DDP engine used, gradients specific to other ranks may still be loaded
+        self._free_other_grads()
 
         # Sync all the updated shards in between the ranks
         with torch.no_grad():
@@ -197,7 +239,9 @@ class OSS(Optimizer):
                 device,
                 device_params,
             ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
-                self._broadcast_params(self._broadcast_buffers[device], device_params)
+                self._broadcast_params(self.buckets[device], device_params)
+
+        self._consume_work_handles()
 
         # Sync hypothethical new results from the wrapped optimizer to the exposed param_groups
         self._sync_param_groups(local_to_global=True)
@@ -422,67 +466,79 @@ class OSS(Optimizer):
 
     @staticmethod
     def get_global_rank(group: Any, rank: int) -> int:
+        """Get this machine's rank in the world, given its rank in a sub-group."""
         if group is dist.group.WORLD:
             return rank
         else:
             global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
         return global_rank
 
-    def _broadcast_params(self, buffers: List[torch.Tensor], per_rank_params: List[List[Parameter]]) -> None:
+    def _broadcast_params(self, buckets: List[Bucket], per_rank_params: List[List[Parameter]]) -> None:
         """Helper function to broadcast all the parameters from a given device"""
-        buffer_size = buffers[0].numel()
-        bucket_requests = []
-        direct_requests = []
+
+        def get_unroll_callback(src_rank: int, bucket: Bucket) -> Callable:
+            def unroll() -> None:
+                if src_rank != self.rank:
+                    for param, offset, end in bucket.params:
+                        param.data.copy_(bucket.buffer[offset:end].view_as(param.data))
+
+                bucket.reset()
+
+            return unroll
 
         # Bucket and issue all the async calls
-        for (src_rank, params), buffer in zip(enumerate(per_rank_params), buffers):
+        for (src_rank, params), bucket in zip(enumerate(per_rank_params), buckets):
             global_src_rank = self.get_global_rank(self.group, src_rank)
 
-            # Copy small parameters into per-GPU buffers and then async broadcast
-            offset = 0
-            bucket_sent = False
-            bucket_params = []
+            for param in params:
+                # Bucket broadcast
+                if self.param_bucket_strategy[param]:
+                    assert bucket.append(param), f"{bucket.max_size} - {bucket.current_offset} - {[param.numel()]}"
 
-            # All the params are sorted per rank and per increasing size
-            for p in params:
-                # Since all the parameters are already sorted per increasing size, we only need to consider the first ones.
-                if not bucket_sent and offset + p.numel() < buffer_size:
-                    end = offset + p.numel()
-                    buffer[offset:end].copy_(p.data.view(-1))
-                    bucket_params.append((p, offset, end))
-                    offset = end
-                else:
-                    if offset > 0 and not bucket_sent:
-                        bucket_requests.append(
+                    if bucket.full():
+                        self.work_handles.append(
                             (
-                                dist.broadcast(tensor=buffer, src=global_src_rank, group=self.group, async_op=True),
-                                src_rank,
-                                bucket_params,
+                                dist.broadcast(
+                                    tensor=bucket.buffer, src=global_src_rank, group=self.group, async_op=True
+                                ),
+                                get_unroll_callback(src_rank, bucket),
                             )
                         )
 
-                        bucket_sent = True
-
-                    direct_requests.append(
-                        dist.broadcast(tensor=p.data, src=global_src_rank, group=self.group, async_op=True)
+                # Direct
+                else:
+                    self.work_handles.append(
+                        (dist.broadcast(tensor=param.data, src=global_src_rank, group=self.group, async_op=True), None)
                     )
 
-            # Catch a trailing bucket
-            if not bucket_sent:
-                bucket_requests.append(
-                    (
-                        dist.broadcast(tensor=buffer, src=global_src_rank, group=self.group, async_op=True),
-                        src_rank,
-                        bucket_params,
-                    )
-                )
+    def _consume_work_handles(self) -> None:
+        # Consume all the futures.
+        #  We reverse the order since oldest futures are the most likely to be ready and non-blocking
+        while len(self.work_handles) > 0:
+            work_handle, callback = self.work_handles.pop(0)  # pop from front
+            work_handle.wait()  # type: ignore
+            if callback is not None:
+                callback()
 
-        # Unroll the initial packed small parameters
-        for work_handle, src_rank, bucket_params in bucket_requests:
-            work_handle.wait()
-            if src_rank != self.rank:
-                for p, offset, end in bucket_params:
-                    p.data.copy_(buffers[src_rank][offset:end].view_as(p.data))
+    def _setup_bucket_strategy(self) -> None:
+        # Tag parameters to either bucket them or broadcast/reduce them directly
+        self._max_work_handles = 0
+        for device, per_rank_params in self.per_device_params.items():
+            for dst_rank, params in enumerate(per_rank_params):
+                offset = 0
+                bucket_size = self.buckets[device][dst_rank].max_size
 
-        # Unroll all the async work items, just in case
-        _ = list(map(lambda x: x.wait(), direct_requests))
+                for param in params:
+                    if (offset + param.numel()) < bucket_size:
+                        # This parameter is small enough to fit in the remaining size of the bucket
+                        self.param_bucket_strategy[param] = True
+                        offset += param.numel()
+                    else:
+                        # The parameters are sorted by size, so all the following parameters
+                        # will be too big and can be skipped
+                        self.param_bucket_strategy[param] = False
+                        self._max_work_handles += 1
+
+                # Register the max offset for this buffer
+                self.buckets[device][dst_rank].max_offset = offset
+                self._max_work_handles += 1  # count the bucket's work handle
