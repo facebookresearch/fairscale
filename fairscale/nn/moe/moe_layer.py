@@ -24,7 +24,6 @@ class _AllToAll(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor) -> Tensor:  # type: ignore
         ctx.group = group
-        world_size = dist.get_world_size(group)
         input = input.contiguous()
         output = torch.empty_like(input)
         dist.all_to_all_single(output, input, group=group)
@@ -64,31 +63,30 @@ class MOELayer(Base):
         for expert in self.experts:
             for p in experts.parameters():
                 p.expert = True  # type: ignore
-
-    def all_to_all_dispatch(self, dispatch_mask: Tensor, input: Tensor) -> Tensor:
-        dispatched_input = torch.einsum("gsec,gsm->egcm", dispatch_mask.float(), input)
-        return _AllToAll.apply(self.group, dispatched_input)
-
-    def all_to_all_combine(self, combine_weights: Tensor, input: Tensor) -> Tensor:
-        expert_output = _AllToAll.apply(self.group, input)
-        return torch.einsum("gsec,egcm->gsm", combine_weights, expert_output)
+        self.world_size = dist.get_world_size(self.group)
+        self.num_local_experts = len(self.experts)
 
     def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
         assert len(input) == 1, "only single input Tensor supported"
-        assert len(input[0].shape) == 4, "input Tensor must have dimensions: (g)roup, (s)equence, (t)oken, (m)odel"
-        assert input[0].shape[0] == len(self.experts), "group dimension size must be equal to number of local experts"
+        assert len(input[0].shape) == 3, "input Tensor must have dimensions: (s)equence, (t)oken, (m)odel"
+        assert input[0].shape[0] % len(self.experts) == 0, "num tokens must be order of number of local experts"
 
         # Implement Algorithm 2 from GShard paper.
-        shape = input[0].shape
-        # Reshape into S tokens per group.
-        reshaped_input = input[0].reshape(shape[0], -1, shape[3])
-        self.l_aux, combine_weights, dispatching_mask = self.gate(reshaped_input)
-        dispatched_input = self.all_to_all_dispatch(dispatching_mask, reshaped_input)
-        assert dispatched_input.shape[1] == len(self.experts)
-        chunks = dispatched_input.chunk(len(self.experts), dim=1)
+        d_model = input[0].shape[2]
+        # Reshape into S tokens by dropping sequence dimension.
+        reshaped_input = input[0].reshape(-1, d_model)
+        self.l_aux, combine_weights, dispatch_mask = self.gate(reshaped_input)
+        dispatched_input = torch.einsum("sec,sm->ecm", dispatch_mask.float(), reshaped_input)
+        dispatched_input = _AllToAll.apply(self.group, dispatched_input)
+        # Re-shape after all-to-all: ecm -> gecm
+        dispatched_input = dispatched_input.reshape(self.world_size, self.num_local_experts, -1, d_model)
+        chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
         expert_outputs = []
         for chunk, expert in zip(chunks, self.experts):
             expert_outputs += [expert(chunk)]
         expert_output = torch.cat(expert_outputs, dim=1)
-        combined_output = self.all_to_all_combine(combine_weights, expert_output)
-        return combined_output.reshape(shape)
+        expert_output = _AllToAll.apply(self.group, expert_output)
+        # Re-shape back: gecm -> ecm
+        expert_output = expert_output.reshape(self.world_size * self.num_local_experts, -1, d_model)
+        combined_output = torch.einsum("sec,ecm->sm", combine_weights, expert_output)
+        return combined_output.reshape(input[0].shape)

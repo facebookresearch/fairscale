@@ -39,7 +39,6 @@ def _reduce(ctx: Any, input_: torch.Tensor) -> torch.Tensor:
         return input_
 
     # All-reduce.
-    print(f"doing all_reduce on {torch.distributed.get_rank()}")
     torch.distributed.all_reduce(input_, group=group)
 
     return input_
@@ -93,12 +92,10 @@ class _CopyToModelParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, input_):  # type: ignore
-        print(f"{torch.distributed.get_rank()}: _CopyToModelParallelRegion Forward")
         return input_
 
     @staticmethod
     def backward(ctx, grad_output):  # type: ignore
-        print(f"{torch.distributed.get_rank()}: _CopyToModelParallelRegion Backward")
         return _reduce(None, grad_output)
 
 
@@ -107,12 +104,10 @@ class _ReduceFromModelParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, input_):  # type: ignore
-        print(f"{torch.distributed.get_rank()}: _ReduceFromModelParallelRegion Forward")
         return _reduce(ctx, input_)
 
     @staticmethod
     def backward(ctx, grad_output):  # type: ignore
-        print(f"{torch.distributed.get_rank()}: _ReduceFromModelParallelRegion Backward")
         return grad_output
 
 
@@ -121,12 +116,10 @@ class _ScatterToModelParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, input_):  # type: ignore
-        print(f"{torch.distributed.get_rank()}: _ScatterToModelParallelRegion Forward")
         return _split(input_)
 
     @staticmethod
     def backward(ctx, grad_output):  # type: ignore
-        print(f"{torch.distributed.get_rank()}: _ScatterToModelParallelRegion Backward")
         return _gather(grad_output)
 
 
@@ -135,12 +128,10 @@ class _GatherFromModelParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, input_):  # type: ignore
-        print(f"{torch.distributed.get_rank()}: _GatherFromModelParallelRegion Forward")
         return _gather(input_)
 
     @staticmethod
     def backward(ctx, grad_output):  # type: ignore
-        print(f"{torch.distributed.get_rank()}: _GatherFromModelParallelRegion Backward")
         return _split(grad_output)
 
 

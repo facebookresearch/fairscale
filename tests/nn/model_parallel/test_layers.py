@@ -436,6 +436,7 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
     model[2].weight.data = saved_weight_2
 
     worker_map = {i: f"Test{i}" for i in range(torch.distributed.get_world_size())}
+    style = Pipe.MultiProcess  # Pipe.AsyncSchedule
 
     if pipe_world_size == 2:
         print(f"actually doing pipe stuff now")
@@ -444,7 +445,7 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
         pipe_model = Pipe(
             model,
             [2, 1],
-            style=Pipe.MultiProcess,
+            style=style,
             group=pipeline_devices,
             worker_map=worker_map,
             input_device=torch.cuda.current_device(),
@@ -511,7 +512,8 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
             failed = False
             with torch.autograd.profiler.profile() as prof:
                 try:
-                    pipe_model.back_helper(pipe_output)
+                    if style == Pipe.MultiProcess:
+                        pipe_model.back_helper(pipe_output)
                 except Exception as e:
                     failed = True
                     print(f"got {e} while doing backward, deadlock?")
@@ -527,6 +529,7 @@ def run_test_pipe(rank, world_size, skip_dist_init=False):
         pipe_model.zero_grad()
         torch.distributed.barrier()
 
+        pipe_model.eval()
         pipe_output = pipe_model(identity())
         updated_ref_output = forward_model(reference, target)
         if torch.distributed.get_rank(mpu.get_pipeline_parallel_group()) == 1:

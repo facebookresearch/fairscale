@@ -426,7 +426,7 @@ class OSS(Optimizer):
         if group is dist.group.WORLD:
             return rank
         else:
-            global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
+            global_rank = dist.distributed_c10d._get_global_rank(group, rank)
         return global_rank
 
     def _distributed_grad_sanity_check(self) -> bool:
