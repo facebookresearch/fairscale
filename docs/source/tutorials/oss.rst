@@ -104,5 +104,45 @@ The above `train` function will then need to be run via a `multiprocessing.spawn
         )
 
 
-to see it in action, you can test it with the following script `here <../../../examples/tutorial_oss.py>`_. 
+to see it in action, you can test it with the following script `here <../../../examples/tutorial_oss.py>`_.
 
+Using PyTorch Automatic Mixed Precision is possible, but it requires a shard-aware GradScaler, which is available in
+`fairscale.optim.grad_scaler`. Autocast can be used as is, and the loss will be scaled and handled in the same way.
+See [the original documentation] (https://pytorch.org/docs/stable/notes/amp_examples.html?highlight=automatic%20mixed%20precision)
+for more information.
+
+.. code-block:: python
+
+
+
+    from fairscale.optim.grad_scaler import ShardedGradScaler
+
+
+    # Creates model and optimizer in default precision
+    model = Net().cuda()
+    optimizer = optim.SGD(model.parameters(), ...)
+
+    # Creates a ShardedGradScaler once at the beginning of training.
+    scaler = ShardedGradScaler()
+
+    for epoch in epochs:
+        for input, target in data:
+            optimizer.zero_grad()
+
+            # Runs the forward pass with autocasting.
+            with autocast():
+                output = model(input)
+                loss = loss_fn(output, target)
+
+            # Scales loss.  Calls backward() on scaled loss to create scaled gradients.
+            # Backward passes under autocast are not recommended.
+            # Backward ops run in the same dtype autocast chose for corresponding forward ops.
+            scaler.scale(loss).backward()
+
+            # scaler.step() first unscales the gradients of the optimizer's assigned params.
+            # If these gradients do not contain infs or NaNs, optimizer.step() is then called,
+            # otherwise, optimizer.step() is skipped.
+            scaler.step(optimizer)
+
+            # Updates the scale for next iteration.
+            scaler.update()

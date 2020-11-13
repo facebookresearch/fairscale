@@ -45,23 +45,24 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
     loss_fn = getLossFun()
 
     base_optimizer_arguments = {"lr": 1e-4}  # any optimizer specific arguments, LR, momentum, etc...
-    if ~use_oss:
-        optimizer = torch.optim.SGD(params=model.parameters(), **base_optimizer_arguments)
-    else:
-        base_optimizer = torch.optim.SGD
-        optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)
+    optimizer = (
+        torch.optim.SGD(params=model.parameters(), lr=1e-4)
+        if ~use_oss
+        else OSS(params=model.parameters(), optim=torch.optim.SGD, default=base_optimizer_arguments)
+    )
 
     training_start = time.monotonic()
     # Any relevant training loop, nothing specific to OSS. For example:
     model.train()
-    for e in range(epochs):
+
+    for _ in range(epochs):
         for (data, target) in dataloader:
             data, target = data.to(rank), target.to(rank)
+
             # Train
             model.zero_grad()
             outputs = model(data)
             loss = loss_fn(outputs, target)
-            loss /= world_size
             loss.backward()
             optimizer.step()
             print(f"Loss: {loss.item()}")

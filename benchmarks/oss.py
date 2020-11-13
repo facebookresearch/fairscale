@@ -134,7 +134,7 @@ def train(
         for batch in dataloader:
             batch__start = time.monotonic()
 
-            def closure(grad_scaler=None):
+            def closure(data=batch, grad_scaler=None):
                 model.zero_grad()
                 if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
@@ -145,14 +145,14 @@ def train(
                 if grad_scaler is not None:
                     # Automatically computes the FW pass in half precision
                     with torch.cuda.amp.autocast():
-                        outputs = model(batch["inputs"])
-                        loss = loss_fn(outputs, batch["label"])
+                        outputs = model(data["inputs"])
+                        loss = loss_fn(outputs, data["label"])
 
                         # Accumulates scaled gradients.
                         grad_scaler.scale(loss).backward()
                 else:
-                    outputs = model(batch["inputs"])
-                    loss = loss_fn(outputs, batch["label"])
+                    outputs = model(data["inputs"])
+                    loss = loss_fn(outputs, data["label"])
                     loss.backward()
 
                 if optim_type == OptimType.oss_sharded_ddp:
@@ -177,8 +177,7 @@ def train(
                         else:
                             final_loss = optimizer.step(closure)
 
-                    if rank == 0:
-                        prof.export_chrome_trace(f"{optim_type}_trace.json")
+                        prof.export_chrome_trace(f"{optim_type}_trace_rank_{rank}.json")
 
                 need_profiling = False  # only profile once
 
