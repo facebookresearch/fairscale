@@ -4,7 +4,8 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-A module wrapper to go with a Sharded Optimizer in order to handle targeted gradient reduction/gathering automatically.
+A nn.Module wrapper to go with a Sharded Optimizer in order to handle targeted gradient
+reduction automatically.
 """
 
 from contextlib import contextmanager
@@ -16,7 +17,7 @@ from torch import nn
 import torch.distributed as dist
 from torch.nn import Parameter
 
-from fairscale.optim.oss import OSS
+from fairscale.optim import OSS
 
 
 def _get_global_rank(group: Any, rank: int) -> int:
@@ -35,15 +36,18 @@ class Gatekeeper(torch.autograd.Function):
     def forward(ctx: Any, work_queue: List[Any], *inputs: Any) -> Any:  # type: ignore
         # Store a handle to the work queue for the BW reduce
         ctx.work_queue = work_queue
+        ctx.mark_dirty(*list(filter(lambda x: isinstance(x, torch.Tensor), inputs)))
         return inputs
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
         # Consume the handles, make sure that all the reduces are done before the optimizer can step
         while len(ctx.work_queue) > 0:
-            wh, callback = ctx.work_queue.pop()
-            if wh is not None:
-                wh.wait()
+            work_handle, callback = ctx.work_queue.pop()
+            print("Gatekeeping", flush=True)
+
+            if work_handle is not None:
+                work_handle.wait()
                 callback()
 
         return tuple([None, *grad_outputs])
@@ -119,7 +123,7 @@ class ShardedDataParallel(nn.Module):
         self._bucket_strategy: List[Tuple[bool, int, int]] = []
         self._bucket_state: Dict[OSS, Dict[torch.device, List[Tuple[int, int]]]] = {}
         self._buffer_size = min(reduce_buffer_size, sum(p.numel() for p in self.base_model.parameters()))
-        self._setup_buckets(reduce_buffer_size)
+        self._setup_buckets()
 
         # Scafolding to be able to reduce the grads during the BW pass
         self._grad_to_be_reduced = [True for _ in filter(lambda x: x.requires_grad, self.base_model.parameters())]
@@ -137,15 +141,12 @@ class ShardedDataParallel(nn.Module):
         # Reset all the grad reduce and bucket state flags
         self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
         for sharded_optimizer in self.sharded_optimizers:
-            for device, per_rank_params in sharded_optimizer.per_device_params.items():
-                for r in range(self.world_size):
-                    self._bucket_state[sharded_optimizer][device][r] = (
+            for device, _ in sharded_optimizer.per_device_params.items():
+                for rank in range(self.world_size):
+                    self._bucket_state[sharded_optimizer][device][rank] = (
                         0,
-                        self._bucket_state[sharded_optimizer][device][r][1],
+                        self._bucket_state[sharded_optimizer][device][rank][1],
                     )
-
-        # mark tensors as "requires_grad" to register the Gatekeeper in the autograd graph
-        inputs = ShardedDataParallel._mark_inputs_requires_grad(*inputs)
 
         # Register the gatekeeper, reduce wise
         inputs = Gatekeeper.apply(self._reduce_work_handles, *inputs)
@@ -163,19 +164,21 @@ class ShardedDataParallel(nn.Module):
         """
         Sync the complete model states in between the ranks
         """
-        work_handles = [
-            dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
-            for t in self.base_model.state_dict().values()
-        ]
+        with torch.no_grad():
+            work_handles = [
+                dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
+                for t in self.base_model.state_dict().values()
+            ]
 
         _ = list(map(lambda x: x.wait(), work_handles))
 
-    def sync_buffers(self, non_blocking: bool = False) -> None:
+    def sync_buffers(self) -> None:
         """
         Sync all the param buffers in between ranks.
         """
-        for x in self.base_model.buffers(recurse=True):
-            dist.broadcast(x.data, self.reference_global_rank, self.process_group, async_op=True)
+        with torch.no_grad():
+            for buffer in self.base_model.buffers(recurse=True):
+                dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True)
 
     @contextmanager
     def no_sync(self) -> Generator:
@@ -185,17 +188,6 @@ class ShardedDataParallel(nn.Module):
         yield
         self.accumulate_grads = old_accumulate_grads
 
-    @staticmethod
-    def _mark_inputs_requires_grad(*inputs: Any) -> Any:
-        if isinstance(inputs, torch.Tensor):
-            inputs.requires_grad = True
-
-        if isinstance(inputs, list) or isinstance(inputs, tuple):
-            for i in filter(lambda x: isinstance(x, torch.Tensor), inputs):
-                i.requires_grad = True
-
-        return inputs
-
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
         for optim in self.sharded_optimizers:
@@ -203,10 +195,12 @@ class ShardedDataParallel(nn.Module):
                 return optim, optim.param_to_rank[param]
 
         assert False, "This parameter is not present in an optimizer, this should not happen"
+        return (None, -1)
 
     def _setup_backward_hooks(self) -> None:
         """
-        Attach a reduce function to each grad-requiring parameter. This makes the gradient reduction automatic whenever there's a BW pass
+        Attach a reduce function to each grad-requiring parameter.
+        This makes the gradient reduction automatic whenever there's a backward pass
         """
 
         parameters_with_grad = list(filter(lambda x: x.requires_grad, self.base_model.parameters()))
@@ -220,8 +214,8 @@ class ShardedDataParallel(nn.Module):
 
             # Return the appropriate hook
             if not should_bucket:
-                # Direct reduce
-                def reduce(*unused: Any) -> None:
+
+                def reduce_direct(*_: Any) -> None:
                     # Skip gradient reduction, do not alter status flags
                     if self.accumulate_grads:
                         return
@@ -250,15 +244,12 @@ class ShardedDataParallel(nn.Module):
                             )
                         )
 
-                return reduce
+                return reduce_direct
 
-            else:
-                # Bucket, update status, and possibly unroll the results
-                def reduce(*unused: Any) -> None:
-                    # Skip gradient reduction, do not alter status flags
-                    if self.accumulate_grads:
-                        return
-
+            # Bucket, update status, and possibly unroll the results
+            def reduce(*_: Any) -> None:
+                # Skip gradient reduction, do not alter status flags
+                if not self.accumulate_grads:
                     bucket = self._reduce_buckets[optimizer][param.device][rank]
                     current_fill, max_fill = self._bucket_state[optimizer][param.device][rank]
 
@@ -275,13 +266,13 @@ class ShardedDataParallel(nn.Module):
                         if current_fill == max_fill:
 
                             def unwrap() -> None:
-                                for p, offset, end in bucket["params"]:
+                                for param, offset, end in bucket["params"]:
                                     if self._grad_to_rank[index] != self.global_rank:
                                         # this rank is not the owner, release the grad
-                                        p.grad = None
+                                        param.grad = None
                                     else:
                                         # this rank is the owner, unroll the results
-                                        p.grad.data.copy_(bucket["buffer"][offset:end].view_as(p.data))
+                                        param.grad.data.copy_(bucket["buffer"][offset:end].view_as(param.data))
 
                             bucket["buffer"] /= self.world_size
 
@@ -297,22 +288,22 @@ class ShardedDataParallel(nn.Module):
                                 )
                             )
 
-                return reduce
+            return reduce
 
         # Go through the parameters, attach the hook
-        for i, p in enumerate(filter(lambda x: x.requires_grad, self.base_model.parameters())):
-            if p.grad is not None and p.grad.requires_grad:
+        for i, param in enumerate(filter(lambda x: x.requires_grad, self.base_model.parameters())):
+            if param.grad is not None and param.grad.requires_grad:
                 raise RuntimeError("ShardedDataParallel only works " "with gradients that don't require grad")
 
             # Register the hook to the next function in line, so that the hook is fired when this grad
             # has properly been computed
-            p_tmp = p.expand_as(p)
+            p_tmp = param.expand_as(param)
             if p_tmp.grad_fn is not None:
                 grad_acc = p_tmp.grad_fn.next_functions[0][0]
                 grad_acc.register_hook(get_reduce_fn(i))
                 self._grad_accs.append(grad_acc)  # keep this function in scope
 
-    def _setup_buckets(self, reduce_buffer_size: int) -> None:
+    def _setup_buckets(self) -> None:
         # Allocate reduce buffers
         # - One buffer per rank per device for each optimizer
         for sharded_optimizer in self.sharded_optimizers:
@@ -330,13 +321,14 @@ class ShardedDataParallel(nn.Module):
         parameters_with_grad = list(filter(lambda x: x.requires_grad, self.base_model.parameters()))
         self._bucket_strategy = [(False, -1, -1) for _ in parameters_with_grad]
 
-        def find_param_index(p: Parameter) -> int:
+        def find_param_index(param: Parameter) -> int:
             # small helper, needed because directly using .index() on a tensor list does not check for identity
             for i, pg in enumerate(parameters_with_grad):
-                if pg is p:
+                if pg is param:
                     return i
 
             assert False
+            return -1
 
         for sharded_optimizer in self.sharded_optimizers:
             self._bucket_state[sharded_optimizer] = {}

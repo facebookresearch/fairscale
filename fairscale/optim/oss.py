@@ -192,8 +192,12 @@ class OSS(Optimizer):
         self._free_other_grads()  # Depending on the DDP engine used, gradients specific to other ranks may still be loaded
 
         # Sync all the updated shards in between the ranks
-        for (device, device_params,) in self.per_device_params.items():  # all the params on this device (inc all ranks)
-            self._broadcast_params(self._broadcast_buffers[device], device_params)
+        with torch.no_grad():
+            for (
+                device,
+                device_params,
+            ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
+                self._broadcast_params(self._broadcast_buffers[device], device_params)
 
         # Sync hypothethical new results from the wrapped optimizer to the exposed param_groups
         self._sync_param_groups(local_to_global=True)
