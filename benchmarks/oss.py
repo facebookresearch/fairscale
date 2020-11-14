@@ -172,8 +172,8 @@ def train(
                     with profiler.record_function("batch"):
                         if scaler is not None:
                             final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
-                            scaler.step(optimizer)  # type: ignore
-                            scaler.update()  # type: ignore
+                            scaler.step(optimizer)
+                            scaler.update()
                         else:
                             final_loss = optimizer.step(closure)
 
@@ -184,8 +184,8 @@ def train(
             else:
                 if scaler is not None:
                     final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
-                    scaler.step(optimizer)  # type: ignore
-                    scaler.update()  # type: ignore
+                    scaler.step(optimizer)
+                    scaler.update()
                 else:
                     final_loss = optimizer.step(closure)
 
