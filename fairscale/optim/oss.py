@@ -53,10 +53,6 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
             the size of the buffer used to batch the small parameter tensors (default 128k).
-
-        autoskip_broken_steps (bool):
-            skip step() for the whole world if a NaN or an inf has been detected in any of the gradients.
-            Prevents deadlocks when used in conjunction with pytorch automatic mixed precision
     """
 
     #: The optimizer used for a given shard
@@ -70,7 +66,6 @@ class OSS(Optimizer):
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
         broadcast_buffer_size: int = 2 ** 17,
-        autoskip_broken_steps: bool = True,
         **default: Any,
     ):
         # Hold all the model params in the root .param_groups
@@ -79,9 +74,7 @@ class OSS(Optimizer):
         self.in_super_constructor = False
 
         # Partition information. lazy evaluation, computed if requested
-        self._per_device_params: OrderedDict[
-            torch.device, List[List[Parameter]]
-        ] = OrderedDict()  # device, rank, params
+        self._per_device_params: Dict[torch.device, List[List[Parameter]]] = OrderedDict()  # device, rank, params
         self._param_rank: Dict[torch.Tensor, int] = {}
         self._partition_parameters: List[List[dict]] = []
 
@@ -92,7 +85,6 @@ class OSS(Optimizer):
         self.global_rank = self.get_global_rank(self.group, self.rank)
 
         self.optim = optim(self.partition_parameters()[self.rank], **default)
-        self.autoskip_broken_steps = autoskip_broken_steps
 
         # - Sync local and global param_groups keys
         for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
@@ -190,10 +182,6 @@ class OSS(Optimizer):
 
         # Run the optimizer step on this shard only:
         self._free_other_grads()
-
-        if self.autoskip_broken_steps and not self._distributed_grad_sanity_check():
-            logging.info("Broken gradients detected in the fleet, skipping this step")
-            return -1.0
 
         if closure is not None:
             loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
@@ -428,30 +416,6 @@ class OSS(Optimizer):
         else:
             global_rank = dist.distributed_c10d._get_global_rank(group, rank)
         return global_rank
-
-    def _distributed_grad_sanity_check(self) -> bool:
-        """ Check across ranks that all gradients are valid, ie. do not contain NaNs or Infs
-        """
-
-        # Check the local grad status
-        local_params = itertools.chain(
-            *[
-                list(filter(lambda x: x.grad is not None, device_params[self.rank]))
-                for device_params in self.per_device_params.values()
-            ]
-        )
-
-        valid_grads = True
-        for p in local_params:
-            if not torch.isfinite(p.grad).all():  # type: ignore  # mypy is filter blind
-                valid_grads = False
-                break
-
-        # Sync the status across all the ranks
-        all_valid = torch.tensor([1 if not valid_grads else 0], device=self._device)
-        dist.all_reduce(all_valid, op=torch.distributed.ReduceOp.MAX, group=self.group)
-
-        return all_valid.item() == 0
 
     def _sync_param_groups(self, local_to_global: bool = False) -> None:
         """Sync learning rate and other optimizer attributes (needed to support schedulers).
