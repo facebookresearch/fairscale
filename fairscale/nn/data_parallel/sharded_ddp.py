@@ -86,7 +86,7 @@ class ShardedDataParallel(nn.Module):
         # Make sure that all ranks start with the same model
         self.sync_all_params()
 
-    def forward(self, *inputs: Any, **_: Any) -> Any:
+    def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         """
         Module forward pass, handles any DDP-specific work in the background. Primes the
         backward pass for gradient reduction to the proper ranks.
@@ -98,7 +98,7 @@ class ShardedDataParallel(nn.Module):
         self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
 
         # Normal FW on the base model
-        return self.base_model(*inputs)
+        return self.base_model(*inputs, **kwargs)
 
     def reduce(self) -> None:
         """ .. deprecated:: 0.0.4
