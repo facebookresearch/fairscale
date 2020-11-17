@@ -19,6 +19,7 @@ import torch.distributed as dist
 from torch.nn import Parameter
 
 from fairscale.optim import OSS
+from fairscale.optim.utils import Workhandle
 
 
 class ShardedDataParallel(nn.Module):
@@ -56,7 +57,7 @@ class ShardedDataParallel(nn.Module):
 
         self.base_model = base_model
         self.sharded_optimizers = [sharded_optimizer] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
-        self.broadcast_buffers = broadcast_buffers
+        self.enable_broadcast_buffers = broadcast_buffers
         self.accumulate_grads = False
 
         # Communication related attributes
@@ -79,7 +80,6 @@ class ShardedDataParallel(nn.Module):
         # Scafolding to be able to reduce the grads during the BW pass
         self._param_iterator = chain(*[optim.param_bucket_strategy.keys() for optim in self.sharded_optimizers])
         self._grad_to_be_reduced = [True for _ in self._param_iterator]
-        print(f"{len(self._grad_to_be_reduced)} grads to be reduced")
         self._grad_accs: List[Callable] = []
         self._setup_backward_hooks()
 
@@ -91,7 +91,7 @@ class ShardedDataParallel(nn.Module):
         Module forward pass, handles any DDP-specific work in the background. Primes the
         backward pass for gradient reduction to the proper ranks.
         """
-        if self.broadcast_buffers:
+        if self.enable_broadcast_buffers:
             self.sync_buffers()
 
         # Reset all the grad reduce and bucket state flags
@@ -162,9 +162,11 @@ class ShardedDataParallel(nn.Module):
 
                     # Async reduce for this buffer, log the future
                     optimizer.work_handles.append(
-                        (
-                            dist.reduce(tensor=param.grad.data, dst=dst_rank, group=self.process_group, async_op=True),
-                            cleanup,
+                        Workhandle(
+                            handle=dist.reduce(
+                                tensor=param.grad.data, dst=dst_rank, group=self.process_group, async_op=True
+                            ),
+                            callback=cleanup,
                         )
                     )
 
@@ -188,26 +190,28 @@ class ShardedDataParallel(nn.Module):
                     if bucket.full():
 
                         def unwrap() -> None:
-                            for param, offset, end in bucket.params:
+                            for flat in bucket.params:
                                 if dst_rank != self.global_rank:
                                     # this rank is not the owner, release the grad
-                                    param.grad = None
+                                    flat.param.grad = None
                                 else:
                                     # this rank is the owner, unroll the results
-                                    assert param.grad is not None
+                                    assert flat.param.grad is not None
 
-                                    param.grad.data.copy_(bucket.buffer[offset:end].view_as(param.data))
+                                    flat.param.grad.data.copy_(
+                                        bucket.buffer[flat.start : flat.stop].view_as(flat.param.data)
+                                    )
 
                             bucket.reset()
 
                         bucket.buffer /= self.world_size
 
                         optimizer.work_handles.append(
-                            (
-                                dist.reduce(
+                            Workhandle(
+                                handle=dist.reduce(
                                     tensor=bucket.buffer, dst=dst_rank, group=self.process_group, async_op=True,
                                 ),
-                                unwrap,
+                                callback=unwrap,
                             )
                         )
 

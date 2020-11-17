@@ -16,7 +16,7 @@ import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
-from .utils import broadcast_object, recursive_copy_to_device
+from .utils import Bucket, Workhandle, broadcast_object, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
@@ -24,50 +24,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
-
-
-class Bucket:
-    """
-    Helper class to simplify the handling of broadcast or reduce buckets
-    """
-
-    def __init__(self, buffer: torch.Tensor) -> None:
-        # The actual flat tensor
-        self.buffer = buffer
-        self.max_size = buffer.numel()
-
-        # Handles to the params and their position in this tensor, can be useful for a callback
-        self.params: List[Tuple[torch.Tensor, int, int]] = []
-
-        # Current status for this buffer
-        self.current_offset = 0
-        self.max_offset = 0
-
-    def reset(self) -> None:
-        """ empty the bucket """
-        self.current_offset = 0
-        self.params.clear()
-
-    def append(self, tensor: torch.Tensor, use_gradient: bool = False) -> bool:
-        """ add a tensor to the bucket """
-
-        end = self.current_offset + tensor.numel()
-
-        if end > self.max_size:
-            return False
-
-        if use_gradient:
-            assert tensor.grad is not None
-
-        data_source = tensor.grad.data if use_gradient else tensor.data  # type: ignore    # mypy is drunk
-        self.buffer[self.current_offset : end].copy_(data_source.view(-1))
-        self.params.append((tensor, self.current_offset, end))
-        self.current_offset = end
-        return True
-
-    def full(self) -> bool:
-        """ is the bucket full ? """
-        return self.current_offset == self.max_offset
 
 
 class OSS(Optimizer):
@@ -149,7 +105,7 @@ class OSS(Optimizer):
                 for _ in range(len(per_device))
             ]
         self.param_bucket_strategy: Dict[torch.Tensor, bool] = {}
-        self.work_handles: List[Tuple[Callable, Optional[Callable]]] = []
+        self.work_handles: List[Workhandle] = []
         self._max_work_handles = -1
         self._setup_bucket_strategy()
 
@@ -549,8 +505,8 @@ class OSS(Optimizer):
         def get_unroll_callback(src_rank: int, bucket: Bucket) -> Callable:
             def unroll() -> None:
                 if src_rank != self.rank:
-                    for param, offset, end in bucket.params:
-                        param.data.copy_(bucket.buffer[offset:end].view_as(param.data))
+                    for flat in bucket.params:
+                        flat.param.data.copy_(bucket.buffer[flat.start : flat.stop].view_as(flat.param.data))
 
                 bucket.reset()
 
@@ -567,28 +523,34 @@ class OSS(Optimizer):
 
                     if bucket.full():
                         self.work_handles.append(
-                            (
-                                dist.broadcast(
+                            Workhandle(
+                                handle=dist.broadcast(
                                     tensor=bucket.buffer, src=global_src_rank, group=self.group, async_op=True
                                 ),
-                                get_unroll_callback(src_rank, bucket),
+                                callback=get_unroll_callback(src_rank, bucket),
                             )
                         )
 
                 # Direct
                 else:
                     self.work_handles.append(
-                        (dist.broadcast(tensor=param.data, src=global_src_rank, group=self.group, async_op=True), None)
+                        Workhandle(
+                            handle=dist.broadcast(
+                                tensor=param.data, src=global_src_rank, group=self.group, async_op=True
+                            ),
+                            callback=None,
+                        )
                     )
 
     def _consume_work_handles(self) -> None:
         # Consume all the futures.
         #  We reverse the order since oldest futures are the most likely to be ready and non-blocking
-        while len(self.work_handles) > 0:
-            work_handle, callback = self.work_handles.pop(0)  # pop from front
-            work_handle.wait()  # type: ignore
-            if callback is not None:
-                callback()
+        for work_handle in self.work_handles:
+            work_handle.handle.wait()
+            if work_handle.callback is not None:
+                work_handle.callback()
+
+        self.work_handles.clear()
 
     def _setup_bucket_strategy(self) -> None:
         # Tag parameters to either bucket them or broadcast/reduce them directly
