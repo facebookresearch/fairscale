@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-:mod:`fairgc.optim` is a package implementing various torch optimization algorithms.
+:mod:`fairscale.optim` is a package implementing various torch optimization algorithms.
 """
 
 try:
