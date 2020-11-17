@@ -1,6 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 from typing import Union, Callable, Optional
+from torch.futures import Future
 
 
 class RRef:
@@ -17,7 +18,7 @@ def rpc_async(
     args: Optional[tuple] = None,
     kwargs: Optional[dict] = None,
     timeout=-1.0,
-) -> None:
+) -> Future:
     ...
 
 

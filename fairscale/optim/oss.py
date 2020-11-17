@@ -5,9 +5,11 @@
 
 from collections import OrderedDict
 import copy
+import itertools
 from itertools import chain
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
+from math import inf
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 import torch.distributed as dist
@@ -248,6 +250,70 @@ class OSS(Optimizer):
 
         return loss
 
+    def clip_grad_norm(self, max_norm: Union[float, int], norm_type: Union[float, int] = 2.0) -> torch.Tensor:
+        """
+        Clip all gradients at this point in time. The norm is computed over all gradients together, as if they were
+        concatenated into a single vector. Gradients are modified in-place.
+
+        Arguments:
+            max_norm (float or int): max norm of the gradients
+            norm_type (float or int): type of the used p-norm. Can be ``'inf'`` for infinity norm.
+
+        Returns:
+            Total norm of the parameters (viewed as a single vector).
+
+        .. note: This is analogous to `torch.nn.utils.clip_grad_norm_` but handles the partitioning and multiple devices per rank
+            under the hood. The default torch util is not applicable here, because each rank only has a partial view of all the grads
+            in the model, so calling it in the OSS context would lead to different scaling being applied per subset of model parameters
+
+        .. warning: This needs to be called on all ranks, since synchronization primitives will be used
+
+        .. warning: Model paralelism -groups other than world- are not yet supported
+        """
+
+        if self.group != dist.group.WORLD:
+            raise NotImplementedError("Clip norm not yet supported for model parallelism (coming soon!)")
+
+        # Compute the max norm for this shards's worth of gradients
+        max_norm = float(max_norm)
+        norm_type = float(norm_type)
+
+        # Filter out the grad-less params, concatenate params from all devices
+        local_params = itertools.chain(
+            *[
+                list(filter(lambda x: x.grad is not None, device_params[self.rank]))
+                for device_params in self.per_device_params.values()
+            ]
+        )
+
+        # Compute the norm on this grad set,
+        # then sync all the norms from all ranks
+        if norm_type == inf:
+            total_norm = max(p.grad.detach().abs().max().to(self._device) for p in local_params)  # type: ignore
+            dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=self.group)
+        else:
+            local_norm = torch.norm(
+                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type).to(self._device) for p in local_params]),  # type: ignore
+                p=norm_type,
+            )
+
+            # local norm result can be accumulated with the remote ones if put to the right power
+            # n_i = sum_rank(a^p)^1/p
+            # -> n_total = all_reduce(n_i^p)^(1/p) = sum_i(n_i^p)^1/p = sum_i(sum_rank(a^p))^1/p
+            total_norm = local_norm ** norm_type
+            dist.all_reduce(total_norm, group=self.group)
+            total_norm = total_norm ** (1.0 / norm_type)
+
+        clip_coef = torch.tensor(max_norm, dtype=total_norm.dtype, device=total_norm.device) / (total_norm + 1e-6)
+
+        if clip_coef < 1:
+            for device, device_params in self.per_device_params.items():
+                for p in filter(lambda x: x.grad is not None, device_params[self.rank]):
+                    p.grad.detach().mul_(clip_coef.to(device))  # type: ignore
+
+        return total_norm
+
+    # State dict interfaces
     def local_state_dict(self) -> dict:
         """Gets this rank's state_dict.
 
@@ -392,6 +458,14 @@ class OSS(Optimizer):
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
 
+    @staticmethod
+    def get_global_rank(group: Any, rank: int) -> int:
+        if group is dist.group.WORLD:
+            return rank
+        else:
+            global_rank = dist.distributed_c10d._get_global_rank(group, rank)
+        return global_rank
+
     def _sync_param_groups(self, local_to_global: bool = False) -> None:
         """Sync learning rate and other optimizer attributes (needed to support schedulers).
         If the global param groups have been altered, and we want to make sure that the
@@ -463,15 +537,6 @@ class OSS(Optimizer):
             for p in partition:
                 for t in p["params"]:
                     t.grad = None
-
-    @staticmethod
-    def get_global_rank(group: Any, rank: int) -> int:
-        """Get this machine's rank in the world, given its rank in a sub-group."""
-        if group is dist.group.WORLD:
-            return rank
-        else:
-            global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
-        return global_rank
 
     def _broadcast_params(self, buckets: List[Bucket], per_rank_params: List[List[Parameter]]) -> None:
         """Helper function to broadcast all the parameters from a given device"""

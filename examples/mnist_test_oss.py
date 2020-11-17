@@ -84,12 +84,7 @@ def train(rank, args, model, device, train_loader, num_epochs):
                 model.zero_grad()
                 outputs = model(data)
                 loss = loss_fn(outputs, target)
-                loss /= WORLD_SIZE
                 loss.backward()
-
-                # if dist.get_rank() == 0:
-                #     print(f"Loss: {loss.item()}")
-
                 ddp.reduce()  # Send the gradients to the appropriate shards
                 return loss
 

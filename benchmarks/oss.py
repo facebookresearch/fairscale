@@ -97,7 +97,11 @@ def train(
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
         model = ShardedDDP(model, optimizer)
     else:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=False)  # type: ignore
+        if args.cpu:
+            device_ids = None
+        else:
+            device_ids = [rank]
+        model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
             if optim_type == OptimType.oss_ddp
@@ -126,7 +130,7 @@ def train(
         for batch in dataloader:
             batch__start = time.monotonic()
 
-            def closure():
+            def closure(data=batch):
                 model.zero_grad()
                 if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
@@ -137,11 +141,11 @@ def train(
                 if not args.cpu and args.amp:
                     # Automatically computes the FW pass in half precision
                     with torch.cuda.amp.autocast():
-                        outputs = model(batch["inputs"])
-                        loss = loss_fn(outputs, batch["label"])
+                        outputs = model(data["inputs"])
+                        loss = loss_fn(outputs, data["label"])
                 else:
-                    outputs = model(batch["inputs"])
-                    loss = loss_fn(outputs, batch["label"])
+                    outputs = model(data["inputs"])
+                    loss = loss_fn(outputs, data["label"])
 
                 loss.backward()
 
@@ -202,10 +206,7 @@ def train(
 
     training_stop = time.monotonic()
     img_per_sec = n_items / (training_stop - training_start) * args.epochs
-    max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
-
     logging.info(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec inc. checkpoint")
-    logging.info(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
 
     # Compute the mean and average img per second
     mean = sum(measurements) / len(measurements)
@@ -247,9 +248,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
-    logging.info(f"Benchmark arguments: {args}")
+    logging.info("Benchmark arguments: %s" % args)
 
-    backend = "nccl" if (not args.gloo or not torch.cuda.is_available()) and not args.cpu else "gloo"
+    BACKEND = "nccl" if (not args.gloo or not torch.cuda.is_available()) and not args.cpu else "gloo"
 
     # Download dataset once for all processes
     dataset, tentatives = None, 0
@@ -261,7 +262,7 @@ if __name__ == "__main__":
                 # Corrupted data, erase and restart
                 shutil.rmtree(TEMPDIR + "/MNIST")
 
-            logging.warning("Failed loading dataset: ", e)
+            logging.warning("Failed loading dataset: %s " % e)
             tentatives += 1
 
     if dataset is None:
@@ -275,7 +276,7 @@ if __name__ == "__main__":
         logging.info("\n*** Benchmark vanilla optimizer")
         mp.spawn(
             train,
-            args=(args, backend, OptimType.vanilla, False,),  # no regression check
+            args=(args, BACKEND, OptimType.vanilla, False,),  # no regression check
             nprocs=args.world_size,
             join=True,
         )
@@ -283,7 +284,7 @@ if __name__ == "__main__":
     if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark OSS with DDP")
         mp.spawn(
-            train, args=(args, backend, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,
+            train, args=(args, BACKEND, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,
         )
 
     if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
@@ -292,7 +293,7 @@ if __name__ == "__main__":
             train,
             args=(
                 args,
-                backend,
+                BACKEND,
                 OptimType.oss_sharded_ddp,
                 False,
             ),  # FIXME: @lefaudeux - SDP should give the same results
