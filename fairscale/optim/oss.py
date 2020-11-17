@@ -48,14 +48,19 @@ class Bucket:
         self.current_offset = 0
         self.params.clear()
 
-    def append(self, tensor: torch.Tensor) -> bool:
+    def append(self, tensor: torch.Tensor, use_gradient: bool = False) -> bool:
         """ add a tensor to the bucket """
+
         end = self.current_offset + tensor.numel()
 
         if end > self.max_size:
             return False
 
-        self.buffer[self.current_offset : end].copy_(tensor.data.view(-1))
+        if use_gradient:
+            assert tensor.grad is not None
+
+        data_source = tensor.grad.data if use_gradient else tensor.data  # type: ignore    # mypy is drunk
+        self.buffer[self.current_offset : end].copy_(data_source.view(-1))
         self.params.append((tensor, self.current_offset, end))
         self.current_offset = end
         return True

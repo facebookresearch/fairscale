@@ -170,7 +170,6 @@ class ShardedDataParallel(nn.Module):
 
                     # If all the reduce operations have been called, add the gatekeeper
                     if len(optimizer.work_handles) == optimizer._max_work_handles:
-                        print(f"{self.rank} - closing reduce")
                         optimizer._consume_work_handles()
 
         # Bucket, update status, and possibly unroll the results
@@ -184,7 +183,7 @@ class ShardedDataParallel(nn.Module):
                     self._grad_to_be_reduced[index] = False
 
                     # Copy to the flat buffer, update the buffer state
-                    assert bucket.append(param.grad)
+                    assert bucket.append(param, use_gradient=True)
 
                     if bucket.full():
 
@@ -195,9 +194,7 @@ class ShardedDataParallel(nn.Module):
                                     param.grad = None
                                 else:
                                     # this rank is the owner, unroll the results
-                                    if param.grad is None:
-                                        print(f"{self.rank} - None grad")
-                                        param.grad = torch.zeros_like(param)
+                                    assert param.grad is not None
 
                                     param.grad.data.copy_(bucket.buffer[offset:end].view_as(param.data))
 
@@ -216,7 +213,6 @@ class ShardedDataParallel(nn.Module):
 
                         # If all the reduce operations have been called, add the gatekeeper
                         if len(optimizer.work_handles) == optimizer._max_work_handles:
-                            print(f"{self.rank} - closing reduce")
                             optimizer._consume_work_handles()
 
         return reduce_bucket if should_bucket else reduce_direct
@@ -228,11 +224,10 @@ class ShardedDataParallel(nn.Module):
         """
 
         # Go through the parameters, attach the hook
-        index = 0
         for sharded_optimizer in self.sharded_optimizers:
             for param, should_bucket in sharded_optimizer.param_bucket_strategy.items():
                 if param.grad is not None and param.grad.requires_grad:
-                    raise RuntimeError("ShardedDataParallel only works " "with gradients that don't require grad")
+                    raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
 
                 # Register the hook to the next function in line,
                 # so that the hook is fired when this grad has properly been computed
@@ -240,7 +235,7 @@ class ShardedDataParallel(nn.Module):
                 assert p_tmp.grad_fn is not None
                 grad_acc = p_tmp.grad_fn.next_functions[0][0]
                 dst_rank = sharded_optimizer.param_to_rank[param]
+                index = len(self._grad_accs)
+
                 grad_acc.register_hook(self._get_reduce_fn(index, param, should_bucket, dst_rank, sharded_optimizer))
                 self._grad_accs.append(grad_acc)  # keep this function in scope
-
-                index += 1
