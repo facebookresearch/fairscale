@@ -27,6 +27,8 @@ from packaging import version
 import pytest
 import torch
 from torch import nn
+from torch.optim.optimizer import Optimizer
+from torch.utils.data import DataLoader, Dataset
 
 from fairscale.nn.model_parallel.initialize import (
     destroy_model_parallel,
@@ -868,6 +870,8 @@ def async_event_loop():
     if pipe.final_stage:
         loss = output.mean()
         loss.backward()
+    elif pipe.group.rank() == 0:
+        pipe.back_helper([])
 
 
 @torch_spawn([4])
@@ -915,6 +919,8 @@ def reuse_lazy():
     if pipe.final_stage:
         pipe_loss = pipe_out.mean()
         pipe_loss.backward()
+    elif pipe.group.rank() == 0:
+        pipe.back_helper([])
 
     model_loss = model_out.mean()
     model_loss.backward()
@@ -1037,3 +1043,81 @@ def test_instantiate_partition():
         expected_order=[[0], [1], [2, 3], [1], [5], [6], [1], [5], [9]],
         expected_ranks=[0, 0, 0, 0, 1, 1, 0, 1, 2],
     )
+
+
+class MySGD(Optimizer):
+    r"""
+    Args:
+        params (iterable): iterable of parameters to optimize or dicts defining
+            parameter groups
+        lr (float): learning rate (required)
+    """
+
+    def __init__(self, params, lr=0.01):
+        defaults = dict(lr=lr)
+        super(MySGD, self).__init__(params, defaults)
+
+    def __setstate__(self, state):
+        super(MySGD, self).__setstate__(state)
+
+    def step(self, closure=None):
+        """ Performs a single optimization step.
+        Arguments:
+            closure (callable, optional): A closure that reevaluates the model
+                and returns the loss.
+        """
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                d_p = p.grad.data
+                p.data.add_(d_p, alpha=-group["lr"])
+        return loss
+
+
+class FakeDataset(Dataset):
+    def __init__(
+        self, input_dim=10, output_dim=10, total_samples=100,
+    ):
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.total_samples = total_samples
+        self.input_samples = torch.rand(self.total_samples, self.input_dim, self.output_dim)
+        self.target_samples = torch.rand(self.total_samples, self.input_dim, self.output_dim)
+
+    def __getitem__(self, index):
+        return {
+            "input": self.input_samples[index, :, :],
+            "target": self.target_samples[index, :, :],
+        }
+
+    def __len__(self):
+        return self.total_samples
+
+
+@torch_spawn([2])
+def async_event_loop_interleave_simple():
+    model = nn.Sequential(nn.Linear(10, 10), nn.ReLU(inplace=False), nn.Linear(10, 10), nn.ReLU(inplace=False))
+    pipe = Pipe(model, [2, 2], style=Pipe.AsyncSchedule, worker_map=get_worker_map(), chunks=10, checkpoint="never")
+    fake_dataset = FakeDataset()
+    fake_dataloader = DataLoader(fake_dataset, batch_size=4, shuffle=True, num_workers=0)
+    loss = nn.MSELoss()
+    opt = MySGD(model.parameters(), lr=0.01)
+    pipe.interleave(fake_dataloader, loss, opt, 0)
+
+
+@torch_spawn([4])
+def async_event_loop_interleave_hard():
+    model = nn.Sequential(nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 10))
+    pipe = Pipe(
+        model, [1, 1, 1, 1], style=Pipe.AsyncSchedule, worker_map=get_worker_map(), chunks=10, checkpoint="never"
+    )
+    fake_dataset = FakeDataset()
+    fake_dataloader = DataLoader(fake_dataset, batch_size=4, shuffle=True, num_workers=0)
+    loss = nn.MSELoss()
+    opt = MySGD(model.parameters(), lr=0.01)
+    pipe.interleave(fake_dataloader, loss, opt, 0)

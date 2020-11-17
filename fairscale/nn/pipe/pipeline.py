@@ -23,14 +23,17 @@ from queue import Empty as QueueEmpty
 from queue import Queue
 from threading import Event
 from types import TracebackType
-from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Type, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Type, Union, cast
 
 import torch
 from torch import Tensor, nn
 from torch.autograd.profiler import record_function
+from torch.optim.optimizer import Optimizer
+from torch.utils.data import DataLoader
 
 from fairscale.nn.model_parallel import get_pipeline_parallel_ranks
 
+from .ampnet import AsyncAMPnetEventLoop
 from .async_schedule import AsyncEventLoop, ModuleWrapper
 from .checkpoint import Checkpointing
 from .copy import Copy, Wait
@@ -294,18 +297,24 @@ class Pipeline:
             event_loop = AsyncEventLoop(
                 self.mp_partitions, self.group, self.transport, self.training, self.checkpoint_stop,
             )
-            if rank == 0 and not self.final_stage:
-                logging.debug(f"{torch.distributed.get_rank()}: entered event head")
-                event_loop.event_loop_head(batches, skip_trackers, event)
-                logging.debug(f"{torch.distributed.get_rank()}: exited event head")
-            elif self.final_stage:
-                logging.debug(f"{torch.distributed.get_rank()}: entered event tail")
-                event_loop.event_loop_tail(batches, skip_trackers)
-                logging.debug(f"{torch.distributed.get_rank()}: exited event tail")
-            else:
-                logging.debug(f"{torch.distributed.get_rank()}: entered event loop")
-                event_loop.event_loop(len(batches), skip_trackers)
-                logging.debug(f"{torch.distributed.get_rank()}: exited event loop")
+
+            try:
+                if rank == 0 and not self.final_stage:
+                    logging.debug(f"{torch.distributed.get_rank()}: entered event head")
+                    self.head_ctx = event_loop.event_loop_head(batches, skip_trackers, event)
+                    logging.debug(f"{torch.distributed.get_rank()}: exited event head")
+                elif self.final_stage:
+                    logging.debug(f"{torch.distributed.get_rank()}: entered event tail")
+                    event_loop.event_loop_tail(batches, skip_trackers)
+                    logging.debug(f"{torch.distributed.get_rank()}: exited event tail")
+                else:
+                    logging.debug(f"{torch.distributed.get_rank()}: entered event loop")
+                    event_loop.event_loop(len(batches), skip_trackers)
+                    logging.debug(f"{torch.distributed.get_rank()}: exited event loop")
+            except Exception as e:
+                print(f"event loop bad")
+                print(f"event loop bad {e}")
+                raise e
 
         self.callcount += 1
 
@@ -553,6 +562,12 @@ class Pipeline:
 
     def back_helper(self, output: List[Batch]) -> None:
         if self.style == PipelineStyle.AsyncSchedule:
+            assert self.group
+            event_loop = AsyncEventLoop(
+                self.mp_partitions, self.group, self.transport, self.training, self.checkpoint_stop,
+            )
+            assert self.head_ctx
+            event_loop.head_backwards(self.head_ctx)
             return
 
         o = list(output)
@@ -595,3 +610,34 @@ class Pipeline:
                     torch.autograd.backward(final_tensors, grad_tensors=grads, retain_graph=True)
                 except Exception as e:
                     raise RuntimeError(f"Autograd failed on {torch.distributed.get_rank()}") from e
+
+    def run_ampnet(
+        self, lm_dataloader: DataLoader, criterion: Any, optimizer: Optimizer, vocab_size: int, weight_prediction: bool
+    ) -> None:
+        partitions = self.mp_partitions
+        n = len(partitions)
+
+        # AMPnet implementation doesn't handle skip_trackers!
+
+        assert self.style is PipelineStyle.AsyncSchedule
+        assert self.group
+        rank = self.group.rank()
+
+        min_update_interval = 10
+
+        ampnet_event_loop = AsyncAMPnetEventLoop(
+            partitions,
+            self.group,
+            self.transport,
+            min_update_interval,
+            weight_prediction,
+            self.checkpoint_stop,
+            self.input_device,
+        )
+
+        if rank == 0:
+            ampnet_event_loop.event_loop_head_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
+        elif self.final_stage:
+            ampnet_event_loop.event_loop_tail_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
+        else:
+            ampnet_event_loop.event_loop_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
