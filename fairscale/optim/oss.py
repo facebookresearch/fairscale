@@ -502,6 +502,9 @@ class OSS(Optimizer):
     def _broadcast_params(self, buckets: List[Bucket], per_rank_params: List[List[Parameter]]) -> None:
         """Helper function to broadcast all the parameters from a given device"""
 
+        # The unroll callback is called when the broadcast is done.
+        # If this rank is a recipiendary and the call was bucketed, the results from the broadcast are unrolled
+        # onto the corresponding parameters.
         def get_unroll_callback(src_rank: int, bucket: Bucket) -> Callable:
             def unroll() -> None:
                 if src_rank != self.rank:
@@ -543,8 +546,10 @@ class OSS(Optimizer):
                     )
 
     def _consume_work_handles(self) -> None:
-        # Consume all the futures.
-        #  We reverse the order since oldest futures are the most likely to be ready and non-blocking
+        """ Consume all the futures which are tied to this optimizer's buckets.
+        We reverse the order since oldest futures are the most likely to be ready and non-blocking
+        """
+
         for work_handle in self.work_handles:
             work_handle.handle.wait()
             if work_handle.callback is not None:
@@ -553,7 +558,15 @@ class OSS(Optimizer):
         self.work_handles.clear()
 
     def _setup_bucket_strategy(self) -> None:
-        # Tag parameters to either bucket them or broadcast/reduce them directly
+        """
+        Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
+        (smallest first), the bucket will hold the smallest elements, the remaining ones will be directly sent
+        over the wire.
+
+        Generating the partition once and for all allows us to save some time at runtime, and to know when all the
+        network requests have been issued.
+        """
+
         self._max_work_handles = 0
         for device, per_rank_params in self.per_device_params.items():
             for dst_rank, params in enumerate(per_rank_params):
