@@ -37,8 +37,10 @@ class ShardedGradScaler(TorchGradScaler):
 
         # Re-use the GradSCaler machinery, but make sure that the status is sync'ed in between the ranks
         optimizer_state = self._per_optimizer_states[id(optimizer)]
+        handles = [dist.all_reduce(v, async_op=True) for v in optimizer_state["found_inf_per_device"].values()]
 
-        for v in optimizer_state["found_inf_per_device"].values():
-            dist.all_reduce(v)
+        # Make sure that the calls are done before moving out
+        _ = list(map(lambda x: x.wait(), handles))
 
+        # Call Torch's GradScaler in turn, states have been synchronized across ranks
         return super().step(optimizer, *args, **kwargs)

@@ -86,7 +86,6 @@ Then sharding the optimizer state is merely a matter of wrapping your optimizer 
                 model.zero_grad()
                 outputs = model(data)
                 loss = loss_fn(outputs, target)
-                loss /= world_size
                 loss.backward()
                 optimizer.step()
 

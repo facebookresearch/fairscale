@@ -25,10 +25,11 @@ Components
    * `tensor parallelism <../../build/html/api/nn/model_parallel.html>`_
 * Optimization:
    * `optimizer state sharding <../../build/html/api/optim/oss.html>`_
+   * `sharded grad scaler - AMP <../../build/html/api/optim/grad_scaler.html>`_
 
 
 .. warning::
-    This library is under active development. 
+    This library is under active development.
     Please be mindful and create an `issue <https://github.com/facebookresearch/fairscale/issues>`_ if you have any trouble and/or suggestion.
 
 
