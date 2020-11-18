@@ -8,7 +8,7 @@ A nn.Module wrapper to go with a Sharded Optimizer in order to handle targeted g
 reduction automatically.
 """
 
-from contextlib import contextmanager
+import contextlib
 from itertools import chain
 import logging
 from typing import Any, Callable, Generator, List, Tuple, Union
@@ -115,17 +115,21 @@ class ShardedDataParallel(nn.Module):
                 for t in self.base_model.state_dict().values()
             ]
 
-        _ = list(map(lambda x: x.wait(), work_handles))
+            _ = list(map(lambda x: x.wait(), work_handles))
 
     def sync_buffers(self) -> None:
         """
         Sync all the param buffers in between ranks (including for instance batch norm statistics).
         """
         with torch.no_grad():
-            for buffer in self.base_model.buffers(recurse=True):
+            work_handles = [
                 dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True)
+                for buffer in self.base_model.buffers(recurse=True)
+            ]
 
-    @contextmanager
+            _ = list(map(lambda x: x.wait(), work_handles))
+
+    @contextlib.contextmanager
     def no_sync(self) -> Generator:
         """A context manager to disable gradient synchronization."""
         old_accumulate_grads = self.accumulate_grads

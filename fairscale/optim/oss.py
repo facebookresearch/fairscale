@@ -197,14 +197,7 @@ class OSS(Optimizer):
         self._free_other_grads()
 
         # Sync all the updated shards in between the ranks
-        with torch.no_grad():
-            for (
-                device,
-                device_params,
-            ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
-                self._broadcast_params(self.buckets[device], device_params)
-
-        self._consume_work_handles()
+        self._broadcast_params()
 
         # Sync hypothethical new results from the wrapped optimizer to the exposed param_groups
         self._sync_param_groups(local_to_global=True)
@@ -499,7 +492,7 @@ class OSS(Optimizer):
                 for t in p["params"]:
                     t.grad = None
 
-    def _broadcast_params(self, buckets: List[Bucket], per_rank_params: List[List[Parameter]]) -> None:
+    def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
 
         # The unroll callback is called when the broadcast is done.
@@ -510,43 +503,54 @@ class OSS(Optimizer):
                 if src_rank != self.rank:
                     for flat in bucket.params:
                         flat.param.data.copy_(bucket.buffer[flat.start : flat.stop].view_as(flat.param.data))
+
                 bucket.reset()
 
             return unroll
 
-        # Bucket and issue all the async calls
-        for (src_rank, params), bucket in zip(enumerate(per_rank_params), buckets):
-            global_src_rank = self.get_global_rank(self.group, src_rank)
+        with torch.no_grad():
+            for (
+                device,
+                device_params,
+            ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
 
-            for param in params:
-                # Bucket broadcast
-                if self.param_bucket_strategy[param]:
-                    assert bucket.append(param), "%s - %s - %s" % (
-                        bucket.max_size,
-                        bucket.current_offset,
-                        param.numel(),
-                    )
+                buckets = self.buckets[device]
 
-                    if bucket.full():
-                        self.work_handles.append(
-                            Workhandle(
-                                handle=dist.broadcast(
-                                    tensor=bucket.buffer, src=global_src_rank, group=self.group, async_op=True
-                                ),
-                                callback=get_unroll_callback(src_rank, bucket),
+                # Bucket and issue all the async calls
+                for (src_rank, params), bucket in zip(enumerate(device_params), buckets):
+                    global_src_rank = self.get_global_rank(self.group, src_rank)
+
+                    for param in params:
+                        # Bucket broadcast
+                        if self.param_bucket_strategy[param]:
+                            assert bucket.append(param), "%s - %s - %s" % (
+                                bucket.max_size,
+                                bucket.current_offset,
+                                param.numel(),
                             )
-                        )
 
-                # Direct
-                else:
-                    self.work_handles.append(
-                        Workhandle(
-                            handle=dist.broadcast(
-                                tensor=param.data, src=global_src_rank, group=self.group, async_op=True
-                            ),
-                            callback=None,
-                        )
-                    )
+                            if bucket.full():
+                                self.work_handles.append(
+                                    Workhandle(
+                                        handle=dist.broadcast(
+                                            tensor=bucket.buffer, src=global_src_rank, group=self.group, async_op=True
+                                        ),
+                                        callback=get_unroll_callback(src_rank, bucket),
+                                    )
+                                )
+
+                        # Direct
+                        else:
+                            self.work_handles.append(
+                                Workhandle(
+                                    handle=dist.broadcast(
+                                        tensor=param.data, src=global_src_rank, group=self.group, async_op=True
+                                    ),
+                                    callback=None,
+                                )
+                            )
+
+        self._consume_work_handles()
 
     def _consume_work_handles(self) -> None:
         """ Consume all the futures which are tied to this optimizer's buckets.
