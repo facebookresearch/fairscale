@@ -94,9 +94,6 @@ class ShardedDataParallel(nn.Module):
         if self.enable_broadcast_buffers:
             self.sync_buffers()
 
-        # Reset all the grad reduce and bucket state flags
-        self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
-
         # Normal FW on the base model
         return self.base_model(*inputs, **kwargs)
 
@@ -120,7 +117,7 @@ class ShardedDataParallel(nn.Module):
 
     def sync_buffers(self) -> None:
         """
-        Sync all the param buffers in between ranks.
+        Sync all the param buffers in between ranks (including for instance batch norm statistics).
         """
         with torch.no_grad():
             for buffer in self.base_model.buffers(recurse=True):
@@ -146,78 +143,96 @@ class ShardedDataParallel(nn.Module):
     def _get_reduce_fn(
         self, index: int, param: torch.Tensor, should_bucket: bool, dst_rank: int, optimizer: OSS
     ) -> Callable:
-        # Return the appropriate hook
+        """
+        Two possible backward hooks for a given parameter: either directly reduce to the appropriate rank,
+        or contribute to a bucket and reduce when the bucket is full.
+
+        Either way a delayed action is necessary and is passed as a callback.
+        """
+
         def reduce_direct(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
-            if not self.accumulate_grads:
-                if param.grad is not None and self._grad_to_be_reduced[index]:
-                    # Make sure that this is not fired twice
-                    self._grad_to_be_reduced[index] = False
-                    param.grad /= self.world_size
+            if not self.accumulate_grads and self._grad_to_be_reduced[index]:
+                assert param.grad is not None
 
-                    # Future work includes clearing up the buffer if possible
-                    def cleanup() -> None:
-                        if dst_rank != self.global_rank:
-                            param.grad = None
+                # Make sure that this is not fired twice
+                self._grad_to_be_reduced[index] = False
+                param.grad /= self.world_size
 
-                    # Async reduce for this buffer, log the future
+                # Future work includes clearing up the buffer if possible
+                def cleanup() -> None:
+                    if dst_rank != self.global_rank:
+                        param.grad = None
+
+                # Async reduce for this buffer, log the future
+                optimizer.work_handles.append(
+                    Workhandle(
+                        handle=dist.reduce(
+                            tensor=param.grad.data, dst=dst_rank, group=self.process_group, async_op=True
+                        ),
+                        callback=cleanup,
+                    )
+                )
+
+                # If all the reduce operations have been called, add the gatekeeper
+                if len(optimizer.work_handles) == optimizer._max_work_handles:
+                    torch.autograd.Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
+
+                    # Reset all the grad reduce and bucket state flags
+                    self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
+
+        # Bucket, update status, and possibly unroll the results
+        def reduce_bucket(*_: Any) -> None:
+            # Skip gradient reduction, do not alter status flags
+            if not self.accumulate_grads and self._grad_to_be_reduced[index]:
+                assert param.grad is not None
+
+                # Make sure that this is not fired twice
+                self._grad_to_be_reduced[index] = False
+
+                # Copy to the flat buffer, update the buffer state
+                bucket = optimizer.buckets[param.device][dst_rank]
+
+                assert bucket.append(param, use_gradient=True), "%s - %s - %s" % (
+                    bucket.max_size,
+                    bucket.current_offset,
+                    param.grad.numel(),
+                )
+
+                if bucket.full():
+
+                    def unwrap() -> None:
+                        for flat in bucket.params:
+                            if dst_rank != self.global_rank:
+                                # this rank is not the owner, release the grad
+                                flat.param.grad = None
+                            else:
+                                # this rank is the owner, unroll the results
+                                assert flat.param.grad is not None
+
+                                flat.param.grad.data.copy_(
+                                    bucket.buffer[flat.start : flat.stop].view_as(flat.param.data)
+                                )
+
+                        bucket.reset()
+
+                    bucket.buffer /= self.world_size
+
                     optimizer.work_handles.append(
                         Workhandle(
                             handle=dist.reduce(
-                                tensor=param.grad.data, dst=dst_rank, group=self.process_group, async_op=True
+                                tensor=bucket.buffer, dst=dst_rank, group=self.process_group, async_op=True,
                             ),
-                            callback=cleanup,
+                            callback=unwrap,
                         )
                     )
 
                     # If all the reduce operations have been called, add the gatekeeper
                     if len(optimizer.work_handles) == optimizer._max_work_handles:
-                        optimizer._consume_work_handles()
+                        torch.autograd.Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
 
-        # Bucket, update status, and possibly unroll the results
-        def reduce_bucket(*_: Any) -> None:
-            # Skip gradient reduction, do not alter status flags
-            if not self.accumulate_grads:
-                bucket = optimizer.buckets[param.device][dst_rank]
-
-                if param.grad is not None and self._grad_to_be_reduced[index]:
-                    # Make sure that this is not fired twice
-                    self._grad_to_be_reduced[index] = False
-
-                    # Copy to the flat buffer, update the buffer state
-                    assert bucket.append(param, use_gradient=True)
-
-                    if bucket.full():
-
-                        def unwrap() -> None:
-                            for flat in bucket.params:
-                                if dst_rank != self.global_rank:
-                                    # this rank is not the owner, release the grad
-                                    flat.param.grad = None
-                                else:
-                                    # this rank is the owner, unroll the results
-                                    assert flat.param.grad is not None
-
-                                    flat.param.grad.data.copy_(
-                                        bucket.buffer[flat.start : flat.stop].view_as(flat.param.data)
-                                    )
-
-                            bucket.reset()
-
-                        bucket.buffer /= self.world_size
-
-                        optimizer.work_handles.append(
-                            Workhandle(
-                                handle=dist.reduce(
-                                    tensor=bucket.buffer, dst=dst_rank, group=self.process_group, async_op=True,
-                                ),
-                                callback=unwrap,
-                            )
-                        )
-
-                        # If all the reduce operations have been called, add the gatekeeper
-                        if len(optimizer.work_handles) == optimizer._max_work_handles:
-                            optimizer._consume_work_handles()
+                        # Reset all the grad reduce and bucket state flags
+                        self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
 
         return reduce_bucket if should_bucket else reduce_direct
 

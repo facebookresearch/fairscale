@@ -522,7 +522,11 @@ class OSS(Optimizer):
             for param in params:
                 # Bucket broadcast
                 if self.param_bucket_strategy[param]:
-                    assert bucket.append(param), f"{bucket.max_size} - {bucket.current_offset} - {[param.numel()]}"
+                    assert bucket.append(param), "%s - %s - %s" % (
+                        bucket.max_size,
+                        bucket.current_offset,
+                        param.numel(),
+                    )
 
                     if bucket.full():
                         self.work_handles.append(
@@ -547,7 +551,7 @@ class OSS(Optimizer):
 
     def _consume_work_handles(self) -> None:
         """ Consume all the futures which are tied to this optimizer's buckets.
-        We reverse the order since oldest futures are the most likely to be ready and non-blocking
+        We start from the first/older ones, since they are the most likely to be ready and non-blocking
         """
 
         for work_handle in self.work_handles:
