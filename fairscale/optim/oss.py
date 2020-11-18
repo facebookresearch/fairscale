@@ -510,7 +510,6 @@ class OSS(Optimizer):
                 if src_rank != self.rank:
                     for flat in bucket.params:
                         flat.param.data.copy_(bucket.buffer[flat.start : flat.stop].view_as(flat.param.data))
-
                 bucket.reset()
 
             return unroll
@@ -562,8 +561,7 @@ class OSS(Optimizer):
         self.work_handles.clear()
 
     def _setup_bucket_strategy(self) -> None:
-        """
-        Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
+        """  Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
         (smallest first), the bucket will hold the smallest elements, the remaining ones will be directly sent
         over the wire.
 
@@ -571,7 +569,6 @@ class OSS(Optimizer):
         network requests have been issued.
         """
 
-        self._max_work_handles = 0
         for device, per_rank_params in self.per_device_params.items():
             for dst_rank, params in enumerate(per_rank_params):
                 offset = 0
@@ -586,8 +583,10 @@ class OSS(Optimizer):
                         # The parameters are sorted by size, so all the following parameters
                         # will be too big and can be skipped
                         self.param_bucket_strategy[param] = False
-                        self._max_work_handles += 1
 
                 # Register the max offset for this buffer
                 self.buckets[device][dst_rank].max_offset = offset
-                self._max_work_handles += 1  # count the bucket's work handle
+
+        # Determine the max work handles in flight:
+        # - all the direct reduce/broadcast + 1 bucket
+        self._max_work_handles = sum(not value for value in self.param_bucket_strategy.values()) + 1

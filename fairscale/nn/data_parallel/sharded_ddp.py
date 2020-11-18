@@ -15,6 +15,7 @@ from typing import Any, Callable, Generator, List, Tuple, Union
 
 import torch
 from torch import nn
+from torch.autograd import Variable
 import torch.distributed as dist
 from torch.nn import Parameter
 
@@ -69,7 +70,8 @@ class ShardedDataParallel(nn.Module):
 
         # Expose the same attributes as PytorchDDP, some frameworks rely on them.
         # See https://pytorch.org/docs/stable/_modules/torch/nn/parallel/distributed.html#DistributedDataParallel
-        self.is_multi_device_module = len({p.device for p in self.base_model.parameters()}) > 1
+        self.devices = {p.device for p in self.base_model.parameters()}
+        self.is_multi_device_module = len(self.devices) > 1
         distinct_device_types = {p.device.type for p in self.base_model.parameters()}
         assert len(distinct_device_types) == 1, (
             "ShardedDataParallel's input module must be on "
@@ -140,6 +142,14 @@ class ShardedDataParallel(nn.Module):
         assert False, "This parameter is not present in an optimizer, this should not happen"
         return (None, -1)
 
+    def _get_device_sync(self) -> Callable:
+        def sync() -> None:
+            for device in self.devices:
+                stream = torch.cuda.current_stream(device)
+                stream.synchronize()
+
+        return sync
+
     def _get_reduce_fn(
         self, index: int, param: torch.Tensor, should_bucket: bool, dst_rank: int, optimizer: OSS
     ) -> Callable:
@@ -149,6 +159,16 @@ class ShardedDataParallel(nn.Module):
 
         Either way a delayed action is necessary and is passed as a callback.
         """
+
+        def gatekeeper() -> None:
+            Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
+
+            # Reset all the grad reduce and bucket state flags
+            self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
+
+            # Sync all streams on all devices
+            if self.device_type == "cuda":
+                Variable._execution_engine.queue_callback(self._get_device_sync())
 
         def reduce_direct(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
@@ -176,10 +196,7 @@ class ShardedDataParallel(nn.Module):
 
                 # If all the reduce operations have been called, add the gatekeeper
                 if len(optimizer.work_handles) == optimizer._max_work_handles:
-                    torch.autograd.Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
-
-                    # Reset all the grad reduce and bucket state flags
-                    self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
+                    gatekeeper()
 
         # Bucket, update status, and possibly unroll the results
         def reduce_bucket(*_: Any) -> None:
@@ -229,10 +246,7 @@ class ShardedDataParallel(nn.Module):
 
                     # If all the reduce operations have been called, add the gatekeeper
                     if len(optimizer.work_handles) == optimizer._max_work_handles:
-                        torch.autograd.Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
-
-                        # Reset all the grad reduce and bucket state flags
-                        self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
+                        gatekeeper()
 
         return reduce_bucket if should_bucket else reduce_direct
 
