@@ -142,14 +142,6 @@ class ShardedDataParallel(nn.Module):
         assert False, "This parameter is not present in an optimizer, this should not happen"
         return (None, -1)
 
-    def _get_device_sync(self) -> Callable:
-        def sync() -> None:
-            for device in self.devices:
-                stream = torch.cuda.current_stream(device)
-                stream.synchronize()
-
-        return sync
-
     def _get_reduce_fn(
         self, index: int, param: torch.Tensor, should_bucket: bool, dst_rank: int, optimizer: OSS
     ) -> Callable:
@@ -165,10 +157,6 @@ class ShardedDataParallel(nn.Module):
 
             # Reset all the grad reduce and bucket state flags
             self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
-
-            # Sync all streams on all devices
-            if self.device_type == "cuda":
-                Variable._execution_engine.queue_callback(self._get_device_sync())
 
         def reduce_direct(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
