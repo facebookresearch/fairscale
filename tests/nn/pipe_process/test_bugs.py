@@ -65,6 +65,7 @@ def python_autograd_function(pipeline_style):
     if model.group.rank() == 1:
         assert torch.allclose(x, y)
 
+    torch.distributed.rpc.shutdown()
     torch.distributed.barrier()
 
 

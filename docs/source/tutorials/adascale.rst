@@ -1,10 +1,9 @@
-AdaScale SGD
-============
+AdaScale SGD Tutorial
+=====================
 
-Note, AdaScale is still experimental. It is being validated. APIs may change
-in the future. Use at your own risk.
-
-`AdaScale <https://arxiv.org/pdf/2007.05105.pdf>`_ adaptively scales the learning rate when using larger batch sizes for data-parallel training. Let's suppose that your trainer looks like
+`AdaScale <https://arxiv.org/pdf/2007.05105.pdf>`_ adaptively scales the learning rate when
+using larger batch sizes for data-parallel training. Let's suppose that your trainer looks
+like the following.
 
 .. code-block:: python
 
@@ -46,7 +45,8 @@ in the future. Use at your own risk.
                 optimizer.step()
 
 
-Applying AdaScale is as simple as wrapping your SGD optimizer with fairscale.optim.AdaScale, as follows
+Applying AdaScale is as simple as wrapping your SGD optimizer with fairscale.optim.AdaScale,
+as follows.
 
 .. code-block:: python
 
