@@ -283,7 +283,9 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
     if model.group:
-        total = torch.Tensor([num_params]).cuda() if torch.cuda.is_available() else torch.Tensor([num_params])
+        total = torch.Tensor([num_params])
+        if torch.cuda.is_available():
+            total = total.cuda()
         torch.distributed.all_reduce(total, group=model.group)
         logging.info(
             f"training model, #prams = {num_params}, group: {model.group.rank()}, grank:"
@@ -305,6 +307,8 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
         if isinstance(model, DDP):
             model = model.module
 
+        if not torch.cuda.is_available():
+            return torch.device("cpu")
         if model.devices:
             return model.devices[0]
         else:
@@ -313,6 +317,9 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
     def get_last_device(model):
         if isinstance(model, DDP):
             model = model.module
+
+        if not torch.cuda.is_available():
+            return torch.device("cpu")
         if model.devices:
             return model.devices[-1]
         else:
@@ -347,9 +354,7 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
         optimizer.zero_grad()
         try:
             if (pipe_group is None or pipe_group.rank() == 0) and not args.ddp_zero:
-                tmp = batch["input"]
-                if torch.cuda.is_available():
-                    tmp = tmp.to(get_first_device(model))
+                tmp = batch["input"].to(get_first_device(model))
                 output = model(tmp)
             else:
                 output = model(batch["input"])
@@ -357,9 +362,7 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
-            target = batch["target"]
-            if torch.cuda.is_available():
-                target = target.to(get_last_device(model))
+            target = batch["target"].to(get_last_device(model))
             output = output.to(target.device)
 
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
