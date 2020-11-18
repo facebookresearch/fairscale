@@ -14,6 +14,7 @@ from typing import Any, List, Optional, cast
 import numpy as np
 import torch
 import torch.autograd.profiler as profiler
+from torch.cuda.amp import GradScaler as TorchGradScaler
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
@@ -25,6 +26,7 @@ from torchvision.transforms import ToTensor
 
 from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 from fairscale.optim import OSS
+from fairscale.optim.grad_scaler import ShardedGradScaler
 
 OPTIM = torch.optim.RMSprop
 TEMPDIR = tempfile.gettempdir()
@@ -92,6 +94,7 @@ def train(
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
     model = cast(nn.Module, model)
+    scaler = (TorchGradScaler() if args.optim_type == OptimType.vanilla else ShardedGradScaler()) if args.amp else None
 
     if optim_type == OptimType.oss_sharded_ddp:
         model = ShardedDDP(
@@ -102,7 +105,6 @@ def train(
             broadcast_buffers=True,
         )
         optimizer = model.sharded_optimizer
-
     else:
         if args.cpu:
             device_ids = None
@@ -136,7 +138,7 @@ def train(
         for batch in dataloader:
             batch__start = time.monotonic()
 
-            def closure(data=batch):
+            def closure(data=batch, grad_scaler=None):
                 model.zero_grad()
                 if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
@@ -144,16 +146,18 @@ def train(
                             next(model.parameters()).norm().item(), next(model.parameters()).grad.norm().item()
                         )
                     )
-                if not args.cpu and args.amp:
+                if grad_scaler is not None:
                     # Automatically computes the FW pass in half precision
                     with torch.cuda.amp.autocast():
                         outputs = model(data["inputs"])
                         loss = loss_fn(outputs, data["label"])
+
+                        # Accumulates scaled gradients.
+                        grad_scaler.scale(loss).backward()
                 else:
                     outputs = model(data["inputs"])
                     loss = loss_fn(outputs, data["label"])
-
-                loss.backward()
+                    loss.backward()
 
                 if optim_type == OptimType.oss_sharded_ddp:
                     model.reduce()
@@ -170,16 +174,24 @@ def train(
                 logging.info("Profiling the run")
                 with profiler.profile(use_cuda=True, record_shapes=True, profile_memory=True) as prof:  # type: ignore
                     with profiler.record_function("batch"):
-                        final_loss = optimizer.step(closure)
-                        logging.info("profiling done")
+                        if scaler is not None:
+                            final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
+                            scaler.step(optimizer)
+                            scaler.update()
+                        else:
+                            final_loss = optimizer.step(closure)
 
-                if rank == 0:
-                    prof.export_chrome_trace(f"{optim_type}_trace.json")
+                        prof.export_chrome_trace(f"{optim_type}_trace_rank_{rank}.json")
 
                 need_profiling = False  # only profile once
 
             else:
-                final_loss = optimizer.step(closure)
+                if scaler is not None:
+                    final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    final_loss = optimizer.step(closure)
 
             if args.debug and rank == 0:
                 logging.debug("buffer: {}".format(next(model.buffers()).norm().item()))

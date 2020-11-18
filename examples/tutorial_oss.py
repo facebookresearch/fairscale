@@ -57,7 +57,8 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
     training_start = time.monotonic()
     # Any relevant training loop, nothing specific to OSS. For example:
     model.train()
-    for e in range(epochs):
+
+    for _ in range(epochs):
         for (data, target) in dataloader:
             data, target = data.to(rank), target.to(rank)
 

@@ -6,4 +6,5 @@ API Reference
 
    optim/adascale
    optim/oss
+   optim/grad_scaler
    nn/pipe

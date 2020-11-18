@@ -29,6 +29,7 @@ Components
    * `tensor parallelism <../../build/html/api/nn/model_parallel.html>`_
 * Optimization:
    * `optimizer state sharding <../../build/html/api/optim/oss.html>`_
+   * `sharded grad scaler - AMP <../../build/html/api/optim/grad_scaler.html>`_
    * `AdaScale SGD <../../build/html/api/optim/adascale.html>`_
 
 
