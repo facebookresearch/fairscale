@@ -736,7 +736,10 @@ class Pipe(Module):
 
                     from .phony import get_phony
 
-                    phony = get_phony(torch.device(torch.cuda.current_device() if torch.cuda.is_available() else "cpu"), requires_grad=True)
+                    phony = get_phony(
+                        torch.device(torch.cuda.current_device() if torch.cuda.is_available() else "cpu"),
+                        requires_grad=True,
+                    )
                     output = PipelinedBackwardPass.apply(output, batches, phony, True)  # self.retain_graph)
                 else:
                     output = microbatch.gather(batches)
