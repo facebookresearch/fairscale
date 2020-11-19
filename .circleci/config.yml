@@ -74,15 +74,16 @@ install_repo_cpu: &install_repo_cpu
   - run:
       name: Install Repository
       command: |
-        python setup.py build develop
+        pip install .
+        # Test import.
+        python -c 'import sys; sys.path = sys.path[1:]; import fairscale'
 
 install_repo_gpu: &install_repo_gpu
   - run:
       name: Install Repository
       command: |
         export CUDA_HOME=/usr/local/cuda-10.1
-        python setup.py build develop
-
+        pip install -e .
 
 run_coverage: &run_coverage
   - run:
