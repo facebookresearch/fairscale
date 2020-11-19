@@ -55,6 +55,7 @@ install_dep_16: &install_dep_16
         sudo apt-get install -y libopenmpi-dev
         pip install --progress-bar off torch==1.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
+        pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
 
@@ -65,6 +66,7 @@ install_dep_17: &install_dep_17
         sudo apt-get install -y libopenmpi-dev
         pip install --progress-bar off torch==1.7.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
+        pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
 
@@ -100,7 +102,7 @@ run_mpi_unittests: &run_mpi_unittests
   - run:
       name: Run MPI Unit Tests
       command: |
-        mpirun -n4 python -m pytest -only-mpi --junitxml=test-results/junit.xml --verbose
+        mpirun -n 4 python -m pytest -p torch_pg.pytest --only-mpi --junitxml=test-results/junit.xml --verbose tests/nn/moe
 
 run_flake8: &run_flake8
   - run:
@@ -178,6 +180,8 @@ jobs:
       - <<: *run_flake8
 
       - <<: *run_unittests
+
+      - <<: *run_mpi_unittests
 
       - store_test_results:
           path: test-results
