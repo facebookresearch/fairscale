@@ -8,3 +8,4 @@ API Reference
    optim/oss
    optim/grad_scaler
    nn/pipe
+   nn/sharded_ddp

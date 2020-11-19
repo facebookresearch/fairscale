@@ -502,7 +502,9 @@ class OSS(Optimizer):
             def unroll() -> None:
                 if src_rank != self.rank:
                     for flat in bucket.params:
-                        flat.param.data.copy_(bucket.buffer[flat.start : flat.stop].view_as(flat.param.data))
+                        flat.param.data.copy_(
+                            bucket.buffer[flat.start : flat.stop].view_as(flat.param.data), non_blocking=True
+                        )
 
                 bucket.reset()
 

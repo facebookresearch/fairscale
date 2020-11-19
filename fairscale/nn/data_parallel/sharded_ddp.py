@@ -36,6 +36,7 @@ class ShardedDataParallel(nn.Module):
             model to be wrapped
         sharded_optimizer (OSS, or list of OSS):
             the sharded optimizer(s) which will decide the gradient partitioning
+
     Keyword Args:
         process_group (torch.nn.Optimizer):
             optimizer to shard (default: SGD)
@@ -45,6 +46,7 @@ class ShardedDataParallel(nn.Module):
             whether to broadcast model buffers in between ranks at the beginning of each forward pass
         reduce_buffer_size (int):
             the size of the per-device-per-rank buffers used for the reduce operation
+
     """
 
     def __init__(
@@ -101,6 +103,7 @@ class ShardedDataParallel(nn.Module):
 
     def reduce(self) -> None:
         """ .. deprecated:: 0.0.4
+
             This does not need to be called, the gradient reduction is done automatically during the BW pass
         """
         logging.warning("This is not useful anymore, gradients have been reduced automatically with the backward pass")
@@ -220,7 +223,7 @@ class ShardedDataParallel(nn.Module):
                                 assert flat.param.grad is not None
 
                                 flat.param.grad.data.copy_(
-                                    bucket.buffer[flat.start : flat.stop].view_as(flat.param.data)
+                                    bucket.buffer[flat.start : flat.stop].view_as(flat.param.data), non_blocking=True
                                 )
 
                         bucket.reset()
