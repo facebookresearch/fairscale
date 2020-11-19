@@ -685,7 +685,7 @@ parser.set_defaults(pipelined_backward=True)
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    bench_multi_process(args, all_at_once=True)
+    # bench_multi_process(args, all_at_once=True)
 
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
         print(f"Running benchmark with args: {args}")
