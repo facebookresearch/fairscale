@@ -35,8 +35,9 @@ import functools
 from typing import Any, Dict, Optional
 
 import numpy as np
+import torch
 from torch.autograd import Variable
-import torch.distributed
+import torch.distributed as dist
 
 
 class AdaScale(object):
@@ -49,7 +50,7 @@ class AdaScale(object):
 
     .. code-block:: python
 
-        optim = torch.optim.SGD(model, lr=0.001)
+        optim = torch.optim.SGD(model.parameters(), lr=0.001)
         model = DistributedDataParallel(model)
         adascale = AdaScale(optim)
 
@@ -65,7 +66,7 @@ class AdaScale(object):
             Optimizer to apply AdaScale to.
         world_size (int):
             Number of world_size for distributed training. If
-            None, defaults to ``torch.distributed.get_world_size()``.
+            None, defaults to ``dist.get_world_size()``.
         scale (float):
             Scaling factor of the batch size, e.g. using a 10x
             larger batch size (summed across all world_size) means a scale of
@@ -87,17 +88,14 @@ class AdaScale(object):
         self._optimizer = optimizer
         self._local_grad_sqr: Optional[torch.Tensor] = None
         self._world_size: int = (
-            world_size
-            if world_size is not None
-            else torch.distributed.get_world_size()
-            if torch.distributed.is_initialized()
-            else 1
+            world_size if world_size is not None else dist.get_world_size() if dist.is_initialized() else 1
         )
         self._smoothing = smoothing
         self._num_backward_calls = 0
         self._num_grads_to_accum = num_gradients_to_accumulate
 
         if self._world_size * self._num_grads_to_accum <= 1:
+            # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
             raise RuntimeError("AdaScale does not support a single worker without grad accumulation.")
 
         # Per-param-group sqr & var states (sigma^2 & mu^2 in the paper).
@@ -255,13 +253,20 @@ class AdaScale(object):
         # Keep track of number of backward calls for gradient accumulation.
         self._num_backward_calls += 1
 
+        # TODO (min): We need to have a way to check that training loop & DDP
+        #             is doing the right thing where the gradient is reduced
+        #             in this backward pass.
+        #             Longer term, we may compute the gain and then inform
+        #             the training loop when it is a good time to step().
         if self._num_backward_calls % self._num_grads_to_accum != 0:
             return
 
         # Since self._local_grad_sqr is FP32, sum shouldn't overflow.
         # This vector has length of # of param_groups, so it is small, but we
         # use async to hide the all_reduce latency, esp when # of nodes is large.
-        work = torch.distributed.all_reduce(self._local_grad_sqr, async_op=True)  # SUM
+        work = None
+        if self._world_size > 1:
+            work = dist.all_reduce(self._local_grad_sqr, async_op=True)  # SUM
 
         # Compute the sums of squares for reduced gradients.
         # Divide by _num_grads_to_accum since the gradients are accumulated.
@@ -275,7 +280,8 @@ class AdaScale(object):
         )
 
         # Wait for all_reduce to be done and move it to cpu & np.
-        work.wait()
+        if work:
+            work.wait()
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
         self._local_grad_sqr = None
 
