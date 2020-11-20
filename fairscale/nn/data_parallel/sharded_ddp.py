@@ -39,11 +39,15 @@ class ShardedDataParallel(nn.Module):
 
     Keyword Args:
         process_group (torch.nn.Optimizer):
-            optimizer to shard (default: SGD)
+            Optimizer to shard (default: SGD)
         process_group (group):
             torch.distributed group (default: group.WORLD)
         broadcast_buffers (bool):
-            whether to broadcast model buffers in between ranks at the beginning of each forward pass
+            Whether to additionally broadcast model buffers in between ranks at the beginning of each forward pass.
+            Same setting as in Pytorch DDP, this is in addition to the broadcast and reduction of the model parameters.
+        sync_models_at_startup (bool):
+            Synchronize the models in between the ranks when starting up. Not needed if each rank has the same seed,
+            or the training restarts from a saved state
 
     """
 
@@ -53,13 +57,17 @@ class ShardedDataParallel(nn.Module):
         sharded_optimizer: Union[OSS, List[OSS]],
         process_group: Any = None,
         broadcast_buffers: bool = True,
+        sync_models_at_startup: bool = True,
     ):
         super().__init__()
 
-        self.base_model = module
+        self.module = module
         self.sharded_optimizers = [sharded_optimizer] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
         self.enable_broadcast_buffers = broadcast_buffers
-        self.accumulate_grads = False
+
+        # Handle a no_sync() context which prevents the gradient synchronization,
+        # accumulate in place
+        self.should_accumulate_grads = False
 
         # Communication related attributes
         self.process_group = process_group if process_group is not None else dist.group.WORLD
@@ -68,11 +76,14 @@ class ShardedDataParallel(nn.Module):
         self.rank = dist.get_rank(self.process_group)
         self.global_rank = OSS.get_global_rank(self.process_group, self.rank)
 
-        # Expose the same attributes as PytorchDDP, some frameworks rely on them.
+        # Expose some of the PytorchDDP attributes, some frameworks rely on them.
         # See https://pytorch.org/docs/stable/_modules/torch/nn/parallel/distributed.html#DistributedDataParallel
-        self.devices = {p.device for p in self.base_model.parameters()}
-        self.is_multi_device_module = len(self.devices) > 1
-        distinct_device_types = {p.device.type for p in self.base_model.parameters()}
+        # device_id related logic is not present, this is not handled
+        devices = {p.device for p in self.module.parameters()}
+        self.is_multi_device_module = len(devices) > 1
+        self.device = list(devices)[0]
+
+        distinct_device_types = {p.device.type for p in self.module.parameters()}
         assert len(distinct_device_types) == 1, (
             "ShardedDataParallel's input module must be on "
             "the same type of devices, but input module parameters are located on {} different device types."
@@ -88,8 +99,8 @@ class ShardedDataParallel(nn.Module):
         self._setup_backward_hooks()
 
         # Make sure that all ranks start with the same model
-        self.sync_params()
-        self.sync_buffers()
+        if sync_models_at_startup:
+            self._sync_params_and_buffers()
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         """
@@ -100,7 +111,7 @@ class ShardedDataParallel(nn.Module):
             self.sync_buffers()
 
         # Normal FW on the base model
-        return self.base_model(*inputs, **kwargs)
+        return self.module(*inputs, **kwargs)
 
     def reduce(self) -> None:
         """ .. deprecated:: 0.0.4
@@ -109,14 +120,14 @@ class ShardedDataParallel(nn.Module):
         """
         logging.warning("This is not useful anymore, gradients have been reduced automatically with the backward pass")
 
-    def sync_params(self) -> None:
+    def _sync_params_and_buffers(self) -> None:
         """
         Sync the complete model states in between the ranks
         """
         with torch.no_grad():
             work_handles = [
                 dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
-                for t in self.base_model.parameters()
+                for t in self.module.state_dict().values()
             ]
 
             _ = list(map(lambda x: x.wait(), work_handles))
@@ -128,7 +139,7 @@ class ShardedDataParallel(nn.Module):
         with torch.no_grad():
             work_handles = [
                 dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True)
-                for buffer in self.base_model.buffers(recurse=True)
+                for buffer in self.module.buffers(recurse=True)
             ]
 
             if blocking:
@@ -137,10 +148,10 @@ class ShardedDataParallel(nn.Module):
     @contextlib.contextmanager
     def no_sync(self) -> Generator:
         """A context manager to disable gradient synchronization."""
-        old_accumulate_grads = self.accumulate_grads
-        self.accumulate_grads = True
+        old_should_accumulate_grads = self.should_accumulate_grads
+        self.should_accumulate_grads = True
         yield
-        self.accumulate_grads = old_accumulate_grads
+        self.should_accumulate_grads = old_should_accumulate_grads
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
@@ -162,6 +173,8 @@ class ShardedDataParallel(nn.Module):
         """
 
         def gatekeeper() -> None:
+            # Make sure that all the asynchronous calls have concluded before moving on. Consume the futures
+            # and execute the delayed actions (release gradients, unroll the buckets)
             Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
 
             # Reset all the grad reduce and bucket state flags
@@ -169,7 +182,7 @@ class ShardedDataParallel(nn.Module):
 
         def reduce_direct(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
-            if not self.accumulate_grads and self._grad_to_be_reduced[index]:
+            if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
                 assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
 
                 # Make sure that this is not fired twice
@@ -198,7 +211,7 @@ class ShardedDataParallel(nn.Module):
         # Bucket, update status, and possibly unroll the results
         def reduce_bucket(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
-            if not self.accumulate_grads and self._grad_to_be_reduced[index]:
+            if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
                 assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
 
                 # Make sure that this is not fired twice
