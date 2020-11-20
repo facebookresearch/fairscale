@@ -115,12 +115,12 @@ class ShardedDataParallel(nn.Module):
         with torch.no_grad():
             work_handles = [
                 dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
-                for t in self.base_model.parameters()
+                for t in self.base_model.state_dict().values()
             ]
 
             _ = list(map(lambda x: x.wait(), work_handles))
 
-    def sync_buffers(self) -> None:
+    def sync_buffers(self, blocking: bool = False) -> None:
         """
         Sync all the param buffers in between ranks (including for instance batch norm statistics).
         """
@@ -130,7 +130,8 @@ class ShardedDataParallel(nn.Module):
                 for buffer in self.base_model.buffers(recurse=True)
             ]
 
-            _ = list(map(lambda x: x.wait(), work_handles))
+            if blocking:
+                _ = list(map(lambda x: x.wait(), work_handles))
 
     @contextlib.contextmanager
     def no_sync(self) -> Generator:
