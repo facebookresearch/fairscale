@@ -12,6 +12,7 @@ fairscale supports:
    * tensor parallelism (fairscale.nn.model_parallel)
 * Optimization:
    * optimizer state sharding (fairscale.optim.oss)
+   * AdaScale SGD (fairscale.optim.AdaScale)
 
 
 ## Requirements
@@ -103,6 +104,13 @@ if __name__ == "__main__":
     )
 ```
 
+### AdaScale SGD
+
+AdaScale can be used to wrap a SGD optimizer and to be used in DDP (Distributed Data Parallel)
+training or non-DDP with gradient accumulation. The benefit is to re-use the same LR
+schedule from a baseline batch size when effective batch size is bigger.
+
+Primary goal is to allow scaling to bigger batch sizes without losing model accuracy.
 
 
 # Testing
