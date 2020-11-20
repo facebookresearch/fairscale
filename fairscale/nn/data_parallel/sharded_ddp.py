@@ -82,7 +82,9 @@ class ShardedDataParallel(nn.Module):
         self.device_type = list(distinct_device_types)[0]
 
         # Scafolding to be able to reduce the grads during the BW pass
-        self._param_iterator = chain(*[optim.param_bucket_strategy.keys() for optim in self.sharded_optimizers])
+        # several optimizers can be present each working on seperate parameter sets,
+        # we build an iterator which goes through all the parameters involved globally
+        self._param_iterator = chain(*[optim.should_bucket_param.keys() for optim in self.sharded_optimizers])
         self._grad_to_be_reduced = [True for _ in self._param_iterator]
         self._grad_accs: List[Callable] = []
         self._setup_backward_hooks()
@@ -115,7 +117,7 @@ class ShardedDataParallel(nn.Module):
         with torch.no_grad():
             work_handles = [
                 dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
-                for t in self.base_model.state_dict().values()
+                for t in self.base_model.parameters()
             ]
 
             _ = list(map(lambda x: x.wait(), work_handles))
@@ -168,7 +170,7 @@ class ShardedDataParallel(nn.Module):
         def reduce_direct(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
             if not self.accumulate_grads and self._grad_to_be_reduced[index]:
-                assert param.grad is not None
+                assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
 
                 # Make sure that this is not fired twice
                 self._grad_to_be_reduced[index] = False
@@ -197,7 +199,7 @@ class ShardedDataParallel(nn.Module):
         def reduce_bucket(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
             if not self.accumulate_grads and self._grad_to_be_reduced[index]:
-                assert param.grad is not None
+                assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
 
                 # Make sure that this is not fired twice
                 self._grad_to_be_reduced[index] = False
@@ -205,7 +207,7 @@ class ShardedDataParallel(nn.Module):
                 # Copy to the flat buffer, update the buffer state
                 bucket = optimizer.buckets[param.device][dst_rank]
 
-                assert bucket.append(param, use_gradient=True), "%s - %s - %s" % (
+                assert bucket.append(param, use_gradient=True), "Bucket overflow: max %s - current %s - adding %s" % (
                     bucket.max_size,
                     bucket.current_offset,
                     param.grad.numel(),
@@ -253,7 +255,7 @@ class ShardedDataParallel(nn.Module):
 
         # Go through the parameters, attach the hook
         for sharded_optimizer in self.sharded_optimizers:
-            for param, should_bucket in sharded_optimizer.param_bucket_strategy.items():
+            for param, should_bucket in sharded_optimizer.should_bucket_param.items():
                 if param.grad is not None and param.grad.requires_grad:
                     raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
 

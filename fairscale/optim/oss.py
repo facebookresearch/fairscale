@@ -104,7 +104,7 @@ class OSS(Optimizer):
                 Bucket(buffer=torch.zeros(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device))
                 for _ in range(len(per_device))
             ]
-        self.param_bucket_strategy: Dict[torch.Tensor, bool] = {}
+        self.should_bucket_param: Dict[torch.Tensor, bool] = {}
         self.work_handles: List[Workhandle] = []
         self._max_work_handles = -1
         self._setup_bucket_strategy()
@@ -524,8 +524,8 @@ class OSS(Optimizer):
 
                     for param in params:
                         # Bucket broadcast
-                        if self.param_bucket_strategy[param]:
-                            assert bucket.append(param), "%s - %s - %s" % (
+                        if self.should_bucket_param[param]:
+                            assert bucket.append(param), "Bucket overflow: max %s - current %s - adding %s" % (
                                 bucket.max_size,
                                 bucket.current_offset,
                                 param.numel(),
@@ -583,16 +583,16 @@ class OSS(Optimizer):
                 for param in params:
                     if (offset + param.numel()) < bucket_size:
                         # This parameter is small enough to fit in the remaining size of the bucket
-                        self.param_bucket_strategy[param] = True
+                        self.should_bucket_param[param] = True
                         offset += param.numel()
                     else:
                         # The parameters are sorted by size, so all the following parameters
                         # will be too big and can be skipped
-                        self.param_bucket_strategy[param] = False
+                        self.should_bucket_param[param] = False
 
                 # Register the max offset for this buffer
                 self.buckets[device][dst_rank].max_offset = offset
 
         # Determine the max work handles in flight:
         # - all the direct reduce/broadcast + 1 bucket
-        self._max_work_handles = sum(not value for value in self.param_bucket_strategy.values()) + 1
+        self._max_work_handles = sum(not value for value in self.should_bucket_param.values()) + 1
