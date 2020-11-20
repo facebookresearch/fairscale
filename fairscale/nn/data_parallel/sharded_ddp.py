@@ -88,7 +88,8 @@ class ShardedDataParallel(nn.Module):
         self._setup_backward_hooks()
 
         # Make sure that all ranks start with the same model
-        self.sync_all_params()
+        self.sync_params()
+        self.sync_buffers()
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         """
@@ -108,14 +109,14 @@ class ShardedDataParallel(nn.Module):
         """
         logging.warning("This is not useful anymore, gradients have been reduced automatically with the backward pass")
 
-    def sync_all_params(self) -> None:
+    def sync_params(self) -> None:
         """
         Sync the complete model states in between the ranks
         """
         with torch.no_grad():
             work_handles = [
                 dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
-                for t in self.base_model.state_dict().values()
+                for t in self.base_model.parameters()
             ]
 
             _ = list(map(lambda x: x.wait(), work_handles))
