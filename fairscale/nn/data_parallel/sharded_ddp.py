@@ -32,7 +32,7 @@ class ShardedDataParallel(nn.Module):
     - add an autograd function which calls the model grad dispatch on the way back
 
      Args:
-        base_model (nn.Module):
+        module (nn.Module):
             model to be wrapped
         sharded_optimizer (OSS, or list of OSS):
             the sharded optimizer(s) which will decide the gradient partitioning
@@ -44,21 +44,19 @@ class ShardedDataParallel(nn.Module):
             torch.distributed group (default: group.WORLD)
         broadcast_buffers (bool):
             whether to broadcast model buffers in between ranks at the beginning of each forward pass
-        reduce_buffer_size (int):
-            the size of the per-device-per-rank buffers used for the reduce operation
 
     """
 
     def __init__(
         self,
-        base_model: nn.Module,
+        module: nn.Module,
         sharded_optimizer: Union[OSS, List[OSS]],
         process_group: Any = None,
         broadcast_buffers: bool = True,
     ):
         super().__init__()
 
-        self.base_model = base_model
+        self.base_model = module
         self.sharded_optimizers = [sharded_optimizer] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
         self.enable_broadcast_buffers = broadcast_buffers
         self.accumulate_grads = False
