@@ -5,7 +5,6 @@ import argparse
 from enum import Enum
 import importlib
 import logging
-import math
 import shutil
 import tempfile
 import time
@@ -218,14 +217,17 @@ def train(
     img_per_sec = n_items / (training_stop - training_start) * args.epochs
     logging.info(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec inc. checkpoint")
 
-    # Compute the mean and average img per second
-    mean = sum(measurements) / len(measurements)
-    diff = map(lambda x: pow(x - mean, 2.0), measurements)
-    std = math.sqrt(sum(diff) / (len(measurements) - 1)) if args.epochs > 2 else -1
-    logging.info(f"[{dist.get_rank()}] : Mean speed: {mean:.2f} +/- {std:.2f}")
+    # Compute the median and median of absolute differences img per second
+    measurements.sort()
+    median = measurements[len(measurements) // 2]
+    abs_diff = list(map(lambda x: abs(x - median), measurements))
+    abs_diff.sort()
+    mad = abs_diff[len(measurements) // 2] if args.epochs > 2 else -1
+
+    logging.info(f"[{dist.get_rank()}] : Median speed: {median:.2f} +/- {mad:.2f}")
 
     if check_regression and dist.get_rank() == 0:
-        assert (mean + 3.0 * std) > args.reference_speed, "Speed regression detected"
+        assert (median + 3.0 * mad) > args.reference_speed, "Speed regression detected"
         assert max_memory < 1.05 * args.reference_memory, "Memory use regression detected"
         assert abs(cast(float, final_loss) - args.reference_loss) < 1e-3, "Loss regression detected"
 
