@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Dict, Optional
+from typing import Dict
 
 import torch
 from torch.cuda.amp import GradScaler as TorchGradScaler
@@ -32,15 +32,15 @@ class ShardedGradScaler(TorchGradScaler):
     def __init__(self) -> None:
         super().__init__()
 
-    def step(self, optimizer: Optimizer, *args: Any, **kwargs: Any) -> Optional[float]:
+    def unscale_(self, optimizer: Optimizer) -> None:
         assert isinstance(optimizer, OSS), "ShardedGradScaler is to be used in combination with a sharded optimizer"
 
-        # Re-use the GradSCaler machinery, but make sure that the status is sync'ed in between the ranks
+        # Call the upstream unscale_ method which will only act on this rank's gradients
+        super().unscale_(optimizer)
+
+        # Synchronize the detected inf across the ranks
         optimizer_state = self._per_optimizer_states[id(optimizer)]
         handles = [dist.all_reduce(v, async_op=True) for v in optimizer_state["found_inf_per_device"].values()]
 
         # Make sure that the calls are done before moving out
         _ = list(map(lambda x: x.wait(), handles))
-
-        # Call Torch's GradScaler in turn, states have been synchronized across ranks
-        return super().step(optimizer, *args, **kwargs)

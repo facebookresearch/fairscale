@@ -124,10 +124,12 @@ run_oss_benchmark: &run_oss_benchmark
         python benchmarks/oss.py --check_regression --world_size 4 --reference_speed 760 --reference_memory 1120 --reference_loss 0.023
 
 run_oss_gloo: &run_oss_gloo
-- run:
-    name: Run OSS with Gloo
-    command: |
-      python benchmarks/oss.py --gloo --optim_type oss_ddp --epochs 3
+  - run:
+      name: Run OSS with Gloo
+      command: |
+        python benchmarks/oss.py --gloo --optim_type oss_ddp --epochs 2
+        python benchmarks/oss.py --gloo --optim_type oss_sharded_ddp --epochs 2
+
 
 run_oss_amp: &run_oss_amp
 - run:

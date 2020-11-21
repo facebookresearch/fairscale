@@ -97,19 +97,10 @@ def train(
     scaler = (TorchGradScaler() if args.optim_type == OptimType.vanilla else ShardedGradScaler()) if args.amp else None
 
     if optim_type == OptimType.oss_sharded_ddp:
-        model = ShardedDDP(
-            model,
-            optimizer=OPTIM,
-            optimizer_params={"lr": 1e-4, "momentum": 0.9},
-            world_size=args.world_size,
-            broadcast_buffers=True,
-        )
-        optimizer = model.sharded_optimizer
+        optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
+        model = ShardedDDP(model, optimizer)
     else:
-        if args.cpu:
-            device_ids = None
-        else:
-            device_ids = [rank]
+        device_ids = None if args.cpu else [rank]
         model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
         optimizer = (
             OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
@@ -120,6 +111,7 @@ def train(
 
     # Reset the memory use counter
     if not args.cpu:
+        torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(rank)
         torch.cuda.synchronize(rank)
 
@@ -158,9 +150,6 @@ def train(
                     outputs = model(data["inputs"])
                     loss = loss_fn(outputs, data["label"])
                     loss.backward()
-
-                if optim_type == OptimType.oss_sharded_ddp:
-                    model.reduce()
 
                 if args.debug and rank == 0 and next(model.parameters()).grad is not None:
                     logging.debug(
