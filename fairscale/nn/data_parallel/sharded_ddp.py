@@ -108,7 +108,9 @@ class ShardedDataParallel(nn.Module):
         backward pass for gradient reduction to the proper ranks.
         """
         if self.enable_broadcast_buffers:
-            self.sync_buffers()
+            # NCCL communications are on a different stream, needs to be blocking
+            # for the subsequent FW to be correct
+            self.sync_buffers(blocking=True)
 
         # Normal FW on the base model
         return self.module(*inputs, **kwargs)
