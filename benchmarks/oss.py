@@ -127,6 +127,8 @@ def train(
         epoch_runtime = 0.0
 
         for batch in dataloader:
+            if not args.cpu:
+                torch.cuda.synchronize(rank)
             batch__start = time.monotonic()
 
             def closure(data=batch, grad_scaler=None):
@@ -192,6 +194,7 @@ def train(
             n_items += args.batch_size
 
             if not args.cpu:
+                # make sure that the cuda kernels are finished before taking a timestamp
                 torch.cuda.synchronize(rank)
 
             batch_end = time.monotonic()
