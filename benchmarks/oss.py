@@ -191,6 +191,9 @@ def train(
 
             n_items += args.batch_size
 
+            if not args.cpu:
+                torch.cuda.synchronize(rank)
+
             batch_end = time.monotonic()
             epoch_runtime += batch_end - batch__start
 
@@ -220,6 +223,7 @@ def train(
     # Compute the median and median of absolute differences img per second
     measurements.sort()
     median = measurements[len(measurements) // 2]
+
     abs_diff = list(map(lambda x: abs(x - median), measurements))
     abs_diff.sort()
     mad = abs_diff[len(measurements) // 2] if args.epochs > 2 else -1
