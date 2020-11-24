@@ -54,6 +54,7 @@ See a more complete example [here](https://github.com/facebookresearch/fairscale
 
 ```python
 import torch
+import torch.distributed as dist
 import torch.multiprocessing as mp
 from fairscale.optim.oss import OSS
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -64,7 +65,7 @@ def train(
     epochs: int):
 
     # DDP
-    dist_init(rank, world_size)
+    dist.init_process_group(backend='nccl', init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
     # Problem statement
     model = myAwesomeModel().to(rank)
