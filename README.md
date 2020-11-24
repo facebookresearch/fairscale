@@ -64,7 +64,7 @@ def train(
     world_size: int,
     epochs: int):
 
-    # DDP
+    # DDP init example
     dist.init_process_group(backend='nccl', init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
     # Problem statement
