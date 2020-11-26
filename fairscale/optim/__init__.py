@@ -6,11 +6,16 @@
 """
 :mod:`fairscale.optim` is a package implementing various torch optimization algorithms.
 """
+import logging
+
+from .adascale import AdaScale
+from .oss import OSS
 
 try:
     from .adam import Adam, Precision
 except ImportError:  # pragma: no cover
     pass  # pragma: no cover
-from .adascale import AdaScale
-from .grad_scaler import GradScaler
-from .oss import OSS
+try:
+    from .grad_scaler import GradScaler
+except ImportError:
+    logging.warning("Torch AMP is not available on this platform")
