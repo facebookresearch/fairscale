@@ -25,12 +25,13 @@ Components
 ----------
 
 * Parallelism:
-   * `pipeline parallelism <../../build/html/api/nn/pipe.html>`_
-   * `tensor parallelism <../../build/html/api/nn/model_parallel.html>`_
+   * `pipeline parallelism <../../en/latest/api/nn/pipe.html>`_
+   * `sharded distributed data parallel <../../en/latest/api/nn/sharded_ddp.html>`_
+
 * Optimization:
-   * `optimizer state sharding <../../build/html/api/optim/oss.html>`_
-   * `sharded grad scaler - AMP <../../build/html/api/optim/grad_scaler.html>`_
-   * `AdaScale SGD <../../build/html/api/optim/adascale.html>`_
+   * `optimizer state sharding <../../en/latest/api/optim/oss.html>`_
+   * `sharded grad scaler - AMP <../../en/latest/api/optim/grad_scaler.html>`_
+   * `AdaScale SGD <../../en/latest/api/optim/adascale.html>`_
 
 
 .. warning::
