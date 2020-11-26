@@ -19,4 +19,3 @@ try:
     from .grad_scaler import GradScaler
 except ImportError:
     logging.warning("Torch AMP is not available on this platform")
-    pass
