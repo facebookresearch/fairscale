@@ -10,6 +10,8 @@ import setuptools
 import torch
 from torch.utils.cpp_extension import CUDA_HOME, BuildExtension, CUDAExtension
 
+this_dir = os.path.dirname(os.path.abspath(__file__))
+
 
 def fetch_requirements():
     with open("requirements.txt") as f:
@@ -35,6 +37,7 @@ if (torch.cuda.is_available() and CUDA_HOME is not None) or force_cuda:
         [
             CUDAExtension(
                 name="fairscale.fused_adam_cuda",
+                include_dirs=[os.path.join(this_dir, "fairscale/clib/fused_adam_cuda")],
                 sources=[
                     "fairscale/clib/fused_adam_cuda/fused_adam_cuda.cpp",
                     "fairscale/clib/fused_adam_cuda/fused_adam_cuda_kernel.cu",

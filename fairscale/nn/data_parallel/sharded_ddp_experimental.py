@@ -127,7 +127,7 @@ class ModelShard(nn.Module):
         for p in self.parameters():
             if p.grad is not None:
                 p.grad /= self.world_size
-                requests.append(dist.reduce(p.grad.data, dst=self.owner_rank, group=self.process_group, async_op=True))  # type: ignore
+                requests.append(dist.reduce(p.grad.data, dst=self.owner_rank, group=self.process_group, async_op=True))
 
         return requests if non_blocking else self.sync(requests)
 
@@ -252,7 +252,7 @@ class ShardedDataParallelExperimental(nn.Module):
         self.process_group = process_group if process_group is not None else torch.distributed.group.WORLD
         self.rank = dist.get_rank(self.process_group)
         self.global_rank = self.get_global_rank(self.process_group, self.rank)
-        self.backend = dist.get_backend(group=self.process_group)  # type: ignore
+        self.backend = dist.get_backend(group=self.process_group)
         self.device = device
         self.offload_device = device
 
@@ -309,7 +309,7 @@ class ShardedDataParallelExperimental(nn.Module):
         if group is dist.group.WORLD:
             return rank
         else:
-            global_rank = dist.distributed_c10d._get_global_rank(group, rank)  # type: ignore
+            global_rank = dist.distributed_c10d._get_global_rank(group, rank)
         return global_rank
 
     def sync_ranks(self, non_blocking: bool = False) -> None:

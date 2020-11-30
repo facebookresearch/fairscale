@@ -21,6 +21,7 @@
 
 import functools
 import inspect
+import multiprocessing
 import os
 import random
 
@@ -64,7 +65,8 @@ def dist_init(rank, world_size, hostname=None):
 
     if version.parse(torch.__version__).release >= (1, 6, 0):
         init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
-        torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size, init_method=init_method)
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=init_method)
         os.environ["MASTER_ADDR"] = hostname
         os.environ["MASTER_PORT"] = "10639"
         init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
@@ -99,17 +101,32 @@ def spawn_for_all_world_sizes(test_func, world_sizes=get_world_sizes(), args=[])
         mp.spawn(test_func, args=(world_size, *args), nprocs=world_size, join=True)
 
 
-def helper(rank, world_size, func, args):
+def worker_process(rank, world_size, func, args, error_queue):
+    """Main function for unit tests launced with torch_spawn"""
+
     dist_init(rank, world_size)
-    initialize_model_parallel(1, world_size)
-    func(*args)
+    kwargs = {}
+    if "OMPI_COMM_WORLD_RANK" not in os.environ:
+        kwargs["pipeline_backend"] = "gloo"
+    initialize_model_parallel(1, world_size, **kwargs)
+    try:
+        func(*args)
+    except BaseException as e:
+        # If the function raises 'Skipped', this indicates pytest.skip(), so
+        # forward it to parent so we can call pytest.skip() there
+        if e.__class__.__name__ == "Skipped":
+            error_queue.put(str(e))
+            return
+        raise e
 
 
 def torch_spawn(world_sizes=None):
     if world_sizes is None:
         world_sizes = get_world_sizes()
 
-    def fixer(func):
+    def prepare_test(func):
+        """Function called with the test function as the argument. Generates a
+        replacement which serves as the actual test function."""
 
         name = func.__name__
         parameters = inspect.signature(func).parameters
@@ -127,21 +144,39 @@ def torch_spawn(world_sizes=None):
                 kwargs[p] for p in parameters if p != "rank"
             )  # converting named parameters to positional parameters to pass to `spawn`
 
+            error_queue = multiprocessing.get_context("spawn").SimpleQueue()
             if "OMPI_COMM_WORLD_RANK" in os.environ:
+                os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
+                os.environ["WORLD_SIZE"] = os.environ["OMPI_COMM_WORLD_SIZE"]
+                os.environ["MASTER_ADDR"] = "localhost"
+                os.environ["MASTER_PORT"] = "10638"
                 torch.distributed.init_process_group("mpi")
                 world_size = torch.distributed.get_world_size()
                 initialize_model_parallel(1, world_size)
                 torch.cuda.set_device(torch.distributed.get_rank() % torch.cuda.device_count())
                 if world_size in world_sizes:
-                    func(*args)
+                    try:
+                        func(*args)
+                    except BaseException as e:
+                        print(f"got exception {e} from test")
+                        import traceback
+
+                        print(f"{traceback.format_exc()}")
+                        raise e
                 else:
                     pytest.skip(f"requested world size doesn't match current world size")
             else:
-                spawn_for_all_world_sizes(helper, world_sizes, (func, args))
+                spawn_for_all_world_sizes(worker_process, world_sizes, (func, args, error_queue))
 
+            if not error_queue.empty():
+                msg = error_queue.get()
+                pytest.skip(msg)
+
+        # Register a function with the same name, prefixed with "test_" in the
+        # calling module, so it will be picked up by pytest
         caller_module = inspect.getmodule(inspect.currentframe().f_back)
         setattr(caller_module, f"test_{name}", replacement)
 
         return func
 
-    return fixer
+    return prepare_test

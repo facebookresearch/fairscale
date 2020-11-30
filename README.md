@@ -16,7 +16,7 @@ fairscale supports:
 
 ## Requirements
 
-* PyTorch >= 1.4
+* PyTorch >= 1.5.1
 
 ## Installation
 
@@ -54,6 +54,7 @@ See a more complete example [here](https://github.com/facebookresearch/fairscale
 
 ```python
 import torch
+import torch.distributed as dist
 import torch.multiprocessing as mp
 from fairscale.optim.oss import OSS
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -63,8 +64,8 @@ def train(
     world_size: int,
     epochs: int):
 
-    # DDP
-    dist_init(rank, world_size)
+    # DDP init example
+    dist.init_process_group(backend='nccl', init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
     # Problem statement
     model = myAwesomeModel().to(rank)
@@ -106,7 +107,7 @@ if __name__ == "__main__":
 
 # Testing
 
-We use circleci to test on PyTorch versions 1.5.1 and 1.6.0 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
+We use circleci to test on PyTorch versions 1.5.1, 1.6.0 and 1.7.0 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
 ## Contributors
 

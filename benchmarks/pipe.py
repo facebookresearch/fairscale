@@ -1,6 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 import argparse
+import logging
 import math
 import os
 import time
@@ -11,14 +12,17 @@ import torch
 from torch.distributed import rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 import torchtext
 from torchtext.data.utils import get_tokenizer
 
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
-from fairscale.nn.pipe import pipe
+from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
+from fairscale.nn.pipe import LazyModule, pipe
 from fairscale.optim import GradScaler
+from fairscale.optim.oss import OSS
 from tests.nn.model_parallel.commons import dist_init, get_worker_map
 
 try:
@@ -164,13 +168,13 @@ def make_model(args, device, ntokens):
 
     if args.lazy_construction:
         layers = [
-            lambda: EmbeddingLayer(ntokens, ninp, initrange),
-            lambda: PositionalEncodingLayer(ninp, dropout),
+            LazyModule(lambda: EmbeddingLayer(ntokens, ninp, initrange)),
+            LazyModule(lambda: PositionalEncodingLayer(ninp, dropout)),
         ]
         for _ in range(ndecoder):
-            layers.append(lambda: TransformerDecoderLayer(ninp, nhead, nhid, dropout))
+            layers.append(LazyModule(lambda: TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
 
-        layers.append(lambda: LinearLayer(ninp, ntokens, initrange))
+        layers.append(LazyModule(lambda: LinearLayer(ninp, ntokens, initrange)))
         model = layers
     else:
         model = TransformerLMSequntial(ntokens, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
@@ -179,7 +183,10 @@ def make_model(args, device, ntokens):
     lr = 0.01  # learning rate
 
     def make_adam(model):
-        return Adam(model.parameters(), lr=lr)
+        if args.ddp_zero:
+            return OSS(params=model.parameters(), optim=Adam, group=get_data_parallel_group(), lr=lr)
+        else:
+            return Adam(model.parameters(), lr=lr)
 
     optimizer = make_adam
     scaler = GradScaler()
@@ -188,8 +195,8 @@ def make_model(args, device, ntokens):
 
 
 def get_tensors_by_size_bucket():
-    import gc
     from collections import defaultdict
+    import gc
 
     size_buckets = defaultdict(int)
     for obj in gc.get_objects():
@@ -202,8 +209,8 @@ def get_tensors_by_size_bucket():
 
 
 def dump_size_buckets(size_buckets, prefix=""):
-    import operator
     from functools import reduce
+    import operator
 
     total = 0
     for key, value in size_buckets.items():
@@ -247,8 +254,8 @@ def check_size_buckets():
 def dump_cuda_tensors():
     print(f"dumping cuda tensors...")
     from functools import reduce
-    import operator
     import gc
+    import operator
 
     for obj in gc.get_objects():
         if not isinstance(obj, torch.Tensor):
@@ -276,9 +283,19 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
     if model.group:
-        print(f"training model, #prams = {num_params}, group: {model.group.rank()}, sizes {model.group.size()}")
+        total = torch.Tensor([num_params])
+        if torch.cuda.is_available():
+            total = total.cuda()
+        torch.distributed.all_reduce(total, group=model.group)
+        logging.info(
+            f"training model, #prams = {num_params}, group: {model.group.rank()}, grank:"
+            f" {torch.distributed.get_rank()}, sizes {model.group.size()}"
+        )
+        torch.distributed.barrier()
+        if model.group.rank() == 0:
+            logging.info(f"total #prams = {total.item()}")
     else:
-        print(f"training model, #prams = {num_params}")
+        logging.info(f"training model, #prams = {num_params}")
     vocab_size = 10000  # FIXME
     total_loss = 0.0
     start_time = time.time()
@@ -287,37 +304,86 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
     optimizer = optimizer(model)
 
     def get_first_device(model):
+        if isinstance(model, DDP):
+            model = model.module
+
+        if not torch.cuda.is_available():
+            return torch.device("cpu")
         if model.devices:
             return model.devices[0]
         else:
             return torch.cuda.current_device()
 
     def get_last_device(model):
+        if isinstance(model, DDP):
+            model = model.module
+
+        if not torch.cuda.is_available():
+            return torch.device("cpu")
         if model.devices:
             return model.devices[-1]
         else:
             return torch.cuda.current_device()
 
+    pipe_group = model.group
+
+    if args.ddp_zero:
+        model = DDP(
+            model,
+            device_ids=[torch.cuda.current_device()],
+            process_group=get_data_parallel_group(),
+            find_unused_parameters=False,
+        )
+
+    if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
+        thing = {"input": torch.zeros(args.batch_size)}
+
+        class FakeDataset:
+            def __getitem__(self, index):
+                return thing
+
+            def __len__(self):
+                return len(lm_dataloader)
+
+        lm_dataloader = FakeDataset()
+
     for i, batch in enumerate(lm_dataloader):
+        bi = batch["input"]
         if args.max_batch and i > args.max_batch:
             break
         optimizer.zero_grad()
-        output = model(batch["input"].to(get_first_device(model)))
+        try:
+            if (pipe_group is None or pipe_group.rank() == 0) and not args.ddp_zero:
+                tmp = batch["input"].to(get_first_device(model))
+                output = model(tmp)
+            else:
+                output = model(batch["input"])
+        except Exception as e:
+            raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
-        if model.group is None or model.group.rank() == model.group.size() - 1:
+        if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
             target = batch["target"].to(get_last_device(model))
             output = output.to(target.device)
+
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
+            if args.ddp_zero:
+                ddp_group = get_data_parallel_group()
+                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM, group=ddp_group)
+                loss /= ddp_group.size()
             loss.backward()
+            del target
         else:
-            model.back_helper(output)
+            if args.ddp_zero:
+                model.module.back_helper(output)
+            else:
+                model.back_helper(output)
 
         del output
 
         torch.nn.utils.clip_grad_value_(model.parameters(), 0.05)
         optimizer.step()
 
-        if model.group is None or model.group.rank() == model.group.size() - 1:
+        if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
             total_loss += loss.item()
             log_interval = 1
             word_counter += batch["ntokens"]
@@ -406,6 +472,17 @@ def benchmark_language_model(train_data, val_data, test_data, model, criterion, 
         print("No regression detected")
 
 
+def generate_balance_weighted(num_devices, num_layers, fraction=0.5):
+    balance = []
+    layers_assigned = 0
+    average_count = num_layers / num_devices
+    last_layers = int(average_count * fraction)
+
+    balance = generate_balance(num_devices - 1, num_layers - last_layers)
+    balance.append(last_layers)
+    return balance
+
+
 def generate_balance(num_devices, num_layers):
     balance = []
     layers_assigned = 0
@@ -421,8 +498,8 @@ def generate_balance(num_devices, num_layers):
 
 
 def make_model_and_data(args, device, new_data: bool = True):
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if new_data:
-        device = torch.device("cuda")
         vocab_size = 10000
         model, criterion, optimizer, scaler = make_model(args, device, vocab_size)
         lm_dataset = BenchmarkLMDataset()
@@ -437,7 +514,6 @@ def make_model_and_data(args, device, new_data: bool = True):
             "vocab_size": vocab_size,
         }
     else:
-        device = torch.device("cuda")
         data = get_data(device)
         ntokens, train_data, val_data, test_data = data
         model, criterion, optimizer, scaler = make_model(args, device, ntokens)
@@ -450,17 +526,17 @@ def make_model_and_data(args, device, new_data: bool = True):
 
 
 def bench_single_process(args):
-    num_devices = torch.cuda.device_count()
+    num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
     init_random_seed(0)
-    device = torch.device("cuda")
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     new_data = True
 
     blob = make_model_and_data(args, None, new_data=new_data)
     model = blob["model"]
 
-    balance = generate_balance(min(num_devices, 8), len(model))
+    balance = generate_balance(min(num_devices, 4), len(model))
     p = pipe.Pipe(
         model, balance, chunks=args.chunks, pipelined_backward=args.pipelined_backward, checkpoint=args.checkpoint
     )
@@ -480,18 +556,20 @@ def run_mp_worker(args, available_workers):
     blob = make_model_and_data(args, None, new_data=new_data)
     model = blob["model"]
 
-    balance = generate_balance(min(available_workers, 8), len(model))
+    balance = generate_balance_weighted(get_pipeline_parallel_group().size(), len(model), 0.8)
     p = pipe.Pipe(
         model,
         balance,
-        style=Pipe.MultiProcess,
+        style=Pipe.AsyncSchedule,
         chunks=args.chunks,
         worker_map=get_worker_map(),
-        input_device=torch.cuda.current_device(),
+        input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
         pipelined_backward=args.pipelined_backward,
         checkpoint=args.checkpoint,
-    ).cuda()
-
+        # loss_fn=blob["criterion"],
+    )
+    if torch.cuda.is_available():
+        p = p.cuda()
     if args.all_at_once and p.pipeline:
         print(f"running all at once")
         p.pipeline.all_at_once = True
@@ -537,18 +615,24 @@ best_device_map = {
 
 def bench_mpi(args):
     guess_rank = int(os.environ["OMPI_COMM_WORLD_RANK"])
-    os.environ["UCX_NET_DEVICES"] = best_device_map[guess_rank]
+    world_size = int(os.environ["OMPI_COMM_WORLD_SIZE"])
+    local_rank = int(os.environ["OMPI_COMM_WORLD_LOCAL_RANK"])
+    os.environ["UCX_NET_DEVICES"] = best_device_map[local_rank]
 
-    torch.distributed.init_process_group(backend="mpi")
     os.environ["MASTER_ADDR"] = args.host
-    os.environ["MASTER_PORT"] = "10639"
+    os.environ["MASTER_PORT"] = "10638"
     if args.socket_name:
         os.environ["GLOO_SOCKET_IFNAME"] = args.socket_name
         os.environ["TP_SOCKET_IFNAME"] = args.socket_name
+
+    torch.distributed.init_process_group(backend="gloo", rank=guess_rank, world_size=world_size)
+
+    os.environ["MASTER_ADDR"] = args.host
+    os.environ["MASTER_PORT"] = "10639"
     init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
     rank = torch.distributed.get_rank()
     world_size = torch.distributed.get_world_size()
-    torch.cuda.set_device(rank % torch.cuda.device_count())
+    torch.cuda.set_device(local_rank % torch.cuda.device_count())
 
     rpc.init_rpc(
         f"Test{rank}",
@@ -558,7 +642,12 @@ def bench_mpi(args):
         rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(rpc_timeout=20, init_method=init_method),
     )
 
-    initialize_model_parallel(1, world_size)
+    backends = {"model_parallel_backend": "nccl", "pipeline_backend": "mpi", "ddp_backend": "nccl"}
+
+    if args.ddp_zero:
+        initialize_model_parallel(1, 4, **backends)
+    else:
+        initialize_model_parallel(1, world_size, **backends)
     init_random_seed(0)
 
     run_mp_worker(args, world_size)
@@ -579,6 +668,7 @@ parser.add_argument("--all-at-once", action="store_true", default=False, help="d
 parser.add_argument("--max-batch", type=int, default=4, help="Max number of batches")
 parser.add_argument("--socket-name", type=str, default=None, help="socket ifname for gloo/tp")
 parser.add_argument("--num-decoder-layers", type=int, default=10, help="Number of decoder layers in the model")
+parser.add_argument("--ddp-zero", action="store_true", default=False, help="enable ddp")
 parser.add_argument(
     "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
 )

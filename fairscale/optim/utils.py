@@ -4,11 +4,68 @@
 # LICENSE file in the root directory of this source tree.
 
 import io
-from typing import Any, Dict
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
 from torch._six import container_abcs
 import torch.distributed as dist
+
+
+class Workhandle:
+    def __init__(self, handle: Any, callback: Optional[Callable]) -> None:
+        self.handle = handle
+        self.callback = callback
+
+
+class FlatParam:
+    def __init__(self, tensor: torch.Tensor, start: int, stop: int) -> None:
+        self.param = tensor
+        self.start = start
+        self.stop = stop
+
+
+class Bucket:
+    """
+    Helper class to simplify the handling of broadcast or reduce buckets
+    """
+
+    def __init__(self, buffer: torch.Tensor) -> None:
+        # The actual flat tensor
+        self.buffer = buffer
+        self.max_size = buffer.numel()
+
+        # Handles to the params and their position in this tensor, can be useful for a callback
+        self.params: List[FlatParam] = []
+
+        # Current status for this buffer
+        self.current_offset = 0
+        self.max_offset = 0
+
+    def reset(self) -> None:
+        """ empty the bucket """
+        self.current_offset = 0
+        self.params.clear()
+
+    def append(self, tensor: torch.Tensor, use_gradient: bool = False) -> bool:
+        """ add a tensor to the bucket """
+
+        end = self.current_offset + tensor.numel()
+
+        if end > self.max_size:
+            return False
+
+        if use_gradient:
+            assert tensor.grad is not None
+
+        data_source = tensor.grad.data if use_gradient else tensor.data  # type: ignore    # mypy is drunk
+        self.buffer[self.current_offset : end].copy_(data_source.view(-1))
+        self.params.append(FlatParam(tensor=tensor, start=self.current_offset, stop=end))
+        self.current_offset = end
+        return True
+
+    def full(self) -> bool:
+        """ is the bucket full ? """
+        return self.current_offset == self.max_offset
 
 
 # Credits:  classy_vision/generic/distributed_util.py

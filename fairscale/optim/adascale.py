@@ -45,6 +45,8 @@ class AdaScale(object):
     distributed and large batch size training. Can be used in combination with
     ``torch.nn.parallel.DistributedDataParallel`` and ``torch.optim.SGD``.
 
+    .. _AdaScale: https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Supplemental.pdf
+
     .. code-block:: python
 
         optim = torch.optim.SGD(model, lr=0.001)
@@ -58,17 +60,19 @@ class AdaScale(object):
                 loss.backward()
                 adascale.step()
 
-    Arguments:
-        optimizer (torch.optim.Optimizer): Optimizer to apply AdaScale to.
-        world_size (int): Number of world_size for distributed training. If
+    Args:
+        optimizer (torch.optim.Optimizer):
+            Optimizer to apply AdaScale to.
+        world_size (int):
+            Number of world_size for distributed training. If
             None, defaults to ``torch.distributed.get_world_size()``.
-        scale (float): Scaling factor of the batch size, e.g. using a 10x
+        scale (float):
+            Scaling factor of the batch size, e.g. using a 10x
             larger batch size (summed across all world_size) means a scale of
             10. If None, defaults to ``world_size``.
-        patch_optimizer (bool): If True, monkey-patches the ``step`` method of
-            the optimizer with the AdaScale ``step`` method.
-
-    .. _AdaScale: https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Supplemental.pdf
+        patch_optimizer (bool):
+            If True, monkey-patches the ``step`` method of
+            the optimizer with the AdaScale's ``step`` method.
     """
 
     def __init__(
@@ -82,7 +86,7 @@ class AdaScale(object):
         self._optimizer = optimizer
         self._optimizer_step = optimizer.step
         self._local_grad_sqr: Optional[torch.Tensor] = None
-        self._world_size: int = world_size if world_size is not None else torch.distributed.get_world_size()
+        self._world_size: int = (world_size if world_size is not None else torch.distributed.get_world_size())
 
         if self._world_size <= 1:
             raise RuntimeError("AdaScale does not support a single worker.")
@@ -126,8 +130,9 @@ class AdaScale(object):
         application to invoke this function to make sure that AdaScale's
         scaling factor matches the actual batch size used during training.
 
-        Arguments:
-            scale (float): New scaling factor to be applied to AdaScale.
+        Args:
+            scale (float):
+                New scaling factor to be applied to AdaScale.
         """
         self._scale = scale
 
@@ -136,7 +141,9 @@ class AdaScale(object):
         Current estimate of the squared l2-norm of the true gradient (sigma
         squared in the AdaScale paper).
 
-        Returns (float): Estimate of squared l2-norm.
+        Returns
+            (float):
+                Estimate of squared l2-norm.
         """
         return np.sum(self.state["grad_sqr_avg"])
 
@@ -145,7 +152,9 @@ class AdaScale(object):
         Current estimate of the trace of the covariance of the true gradient
         (mu squared in the AdaScale paper).
 
-        Returns (float): Estimate of trace of the covariance.
+        Returns
+            (float):
+                Estimate of trace of the covariance.
         """
         return np.sum(self.state["grad_var_avg"])
 
@@ -153,10 +162,13 @@ class AdaScale(object):
         """
         Current estimate of the AdaScale gain ratio (r_t).
 
-        Arguments:
-            scale (float): The batch size scale to estimate the gain ratio for.
+        Args:
+            scale (float):
+                The batch size scale to estimate the gain ratio for.
 
-        Returns (float): Estimate of gain ratio.
+        Returns
+            :(float):
+                Estimate of gain ratio.
         """
         scale = self._scale if scale is None else scale
         var = self.grad_var_avg()
@@ -199,7 +211,11 @@ class AdaScale(object):
         # gradients have been synchronized between each worker.
         self._final_callback_queued = False
         assert isinstance(self._local_grad_sqr, torch.Tensor)
-        torch.distributed.all_reduce(self._local_grad_sqr / self._world_size)
+
+        # self._local_grad_sqr is FP32, sum then div shouldn't overflow.
+        torch.distributed.all_reduce(self._local_grad_sqr)  # SUM
+        self._local_grad_sqr.div_(self._world_size)
+
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
         total_grad_sqr = np.array(
             [sum(param.grad.pow(2).sum().item() for param in group["params"]) for group in self._optimizer.param_groups]
@@ -218,9 +234,14 @@ class AdaScale(object):
         Run one optimizer step using Adascale. Essentially just invokes
         ``optimizer.step(*args, **kwargs)`` with a scaled learning rate.
 
-        Arguments:
-            args: Positional arguments passed to ``optimizer.step``.
-            kwargs: Keyword arguments passed to ``optimizer.step``.
+        Args:
+            args:
+                Positional arguments passed to ``optimizer.step``.
+            kwargs:
+                Keyword arguments passed to ``optimizer.step``.
+        Returns:
+            (Tensor):
+                loss if a closure is passed to the optimizer to reevaluate the model.
         """
         initial_lr = [pg["lr"] for pg in self._optimizer.param_groups]
         for idx, param_group in enumerate(self._optimizer.param_groups):
@@ -243,3 +264,7 @@ class AdaScale(object):
             return self.step(*args, **kwargs)
 
         setattr(self._optimizer, "step", wrapper)
+
+    def zero_grad(self) -> None:
+        """Proxy function to optimizer"""
+        self._optimizer.zero_grad()

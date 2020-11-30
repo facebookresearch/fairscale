@@ -23,7 +23,7 @@ import pytest
 import torch
 from torch import nn
 
-from fairscale.nn.pipe import Pipe
+from fairscale.nn.pipe import LazyModule, Pipe
 from fairscale.nn.pipe.skip import pop, skippable, stash
 from fairscale.nn.pipe.skip.portal import PortalBlue, PortalCopy, PortalOrange
 from tests.nn.model_parallel.commons import get_worker_map, torch_spawn
@@ -33,9 +33,14 @@ from tests.nn.model_parallel.commons import get_worker_map, torch_spawn
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 @pytest.mark.parametrize("balance", [[3], [1, 2], [2, 1], [1, 1, 1]], ids=["3", "1:2", "2:1", "1:1:1"])
 @pytest.mark.parametrize("checkpoint", ["never", "always", "except_last"])
+@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" in os.environ, reason="broken on mpi")
-def x1to3(balance, checkpoint):
+def x1to3(balance, checkpoint, pipeline_style):
     torch.manual_seed(0)
+
+    if pipeline_style == Pipe.AsyncSchedule and len(balance) > 1:
+        print(f"skipping yarg")
+        pytest.skip("Skip tensors NYI for AsyncSchedule")
 
     @skippable(stash=["1to3"])
     class Layer1(nn.Module):
@@ -75,7 +80,7 @@ def x1to3(balance, checkpoint):
         chunks=3,
         checkpoint=checkpoint,
         input_device=torch.cuda.current_device(),
-        style=Pipe.MultiProcess,
+        style=pipeline_style,
         worker_map=get_worker_map(),
         pipelined_backward=False,
     ).cuda()
@@ -101,7 +106,11 @@ def x1to3(balance, checkpoint):
 @torch_spawn([2])
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" in os.environ, reason="broken on mpi")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-def none_skip():
+@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
+def none_skip(pipeline_style):
+    if pipeline_style == Pipe.AsyncSchedule:
+        pytest.skip("Skip tensors NYI for AsyncSchedule")
+
     @skippable(stash=["none"])
     class Stash(nn.Module):
         def forward(self, input):
@@ -119,7 +128,7 @@ def none_skip():
     model = Pipe(
         model,
         [1, 1],
-        style=Pipe.MultiProcess,
+        style=pipeline_style,
         worker_map=get_worker_map(),
         input_device=torch.cuda.current_device(),
         chunks=5,
@@ -151,7 +160,8 @@ def none_skip():
 
 
 @torch_spawn([2])
-def lazy_skippable_error():
+@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
+def lazy_skippable_error(pipeline_style):
     """Using skippable layers in combination with lazy construction is currently
     not supported, check that it raises an Exception"""
 
@@ -163,9 +173,13 @@ def lazy_skippable_error():
     class Layer3(nn.Linear):
         pass
 
-    model = [lambda: Layer1(10, 10), lambda: nn.Linear(10, 10), lambda: Layer3(10, 10)]
+    model = [
+        LazyModule(lambda: Layer1(10, 10)),
+        LazyModule(lambda: nn.Linear(10, 10)),
+        LazyModule(lambda: Layer3(10, 10)),
+    ]
 
     with pytest.raises(ValueError, match="Can't use Skippable layers with multi-process pipe and lazy construction"):
         Pipe(
-            model, [2, 1], style=Pipe.MultiProcess, worker_map=get_worker_map(),
+            model, [2, 1], style=pipeline_style, worker_map=get_worker_map(),
         )

@@ -65,3 +65,7 @@ def pytest_runtest_teardown(item):
         destroy_model_parallel()
         if torch.distributed.is_initialized():
             torch.distributed.destroy_process_group()
+        try:
+            torch.distributed.rpc.shutdown()
+        except Exception:
+            pass
