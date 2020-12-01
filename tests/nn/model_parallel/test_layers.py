@@ -31,13 +31,7 @@ from torch.nn.parameter import Parameter
 from fairscale.nn.model_parallel import initialize as mpu
 from fairscale.nn.model_parallel import layers
 from fairscale.nn.pipe import Pipe
-from tests.nn.model_parallel.commons import (
-    dist_init,
-    get_world_sizes,
-    set_random_seed,
-    spawn_for_all_world_sizes,
-    torch_spawn,
-)
+from fairscale.utils.testing import dist_init, get_world_sizes, set_random_seed, spawn_for_all_world_sizes, torch_spawn
 
 
 def run_test_parallel_embedding(rank, model_parallel_size):

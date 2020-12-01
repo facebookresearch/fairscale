@@ -21,9 +21,7 @@ from collections import OrderedDict
 from copy import deepcopy
 import os
 import time
-from typing import Tuple
 
-from packaging import version
 import pytest
 import torch
 from torch import nn
@@ -34,7 +32,7 @@ from fairscale.nn.model_parallel.initialize import (
     initialize_model_parallel,
 )
 from fairscale.nn.pipe import LazyModule, Pipe
-from tests.nn.model_parallel.commons import get_worker_map, set_random_seed, torch_spawn
+from fairscale.utils.testing import get_worker_map, set_random_seed, torch_spawn, torch_version
 
 
 @torch_spawn([2])
@@ -371,24 +369,6 @@ def checkpoint_eval(pipeline_style):
     eval_output = model(input)
     assert not find_grad_fn(eval_output.grad_fn, "CheckpointBackward")
     assert not find_grad_fn(eval_output.grad_fn, "RecomputeBackward")
-
-
-def torch_version() -> Tuple[int, ...]:
-    result = version.parse(torch.__version__).release
-
-    # Catch torch version if run against internal pre-releases, like `1.8.0a0fb`,
-    # for which version.parse().release will return None (version becomes of LegacyVersion type)
-    if result is None:
-        # Two options here:
-        # - either skip this version,
-        # - or check that Pipe is not broken by this ongoing development.
-
-        # Assuming that we're interested in the second usecase more than the first,
-        # return the pre-release or dev numbering
-        numbering = torch.__version__.split(".")
-        result = (int(numbering[0]), int(numbering[1]), 0)
-    assert result
-    return result
 
 
 @torch_spawn([2])

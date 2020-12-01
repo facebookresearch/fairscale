@@ -8,7 +8,7 @@ from torch.distributed import rpc
 
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import PipeRPCWrapper
-from tests.nn.model_parallel.commons import get_worker_map, torch_spawn
+from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 def init_rpc():
