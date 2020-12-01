@@ -27,13 +27,13 @@ within the different feature sets and relative imports.
 
 import functools
 import inspect
+import logging
 import multiprocessing
 import os
 import random
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy
-from packaging import version
 import pytest
 import torch
 import torch.distributed as dist
@@ -62,21 +62,22 @@ def set_random_seed(seed: int) -> None:
 
 
 def torch_version() -> Tuple[int, ...]:
-    result = version.parse(torch.__version__).release
+    numbering = torch.__version__.split(".")
+
+    assert len(numbering) == 3
 
     # Catch torch version if run against internal pre-releases, like `1.8.0a0fb`,
-    # for which version.parse().release will return None (version becomes of LegacyVersion type)
-    if result is None:
+    if not numbering[2].isnumeric():
         # Two options here:
-        # - either skip this version,
-        # - or check that Pipe is not broken by this ongoing development.
+        # - either skip this version (minor number check is not relevant)
+        # - or check that our codebase is not broken by this ongoing development.
 
         # Assuming that we're interested in the second usecase more than the first,
         # return the pre-release or dev numbering
-        numbering = torch.__version__.split(".")
-        result = (int(numbering[0]), int(numbering[1]), 0)
-    assert result
-    return result
+        logging.warning(f"Pytorch pre-relase version {torch.__version__} - assuming intent to test it")
+        numbering[2] = "0"
+
+    return tuple(int(n) for n in numbering)
 
 
 def dist_init(rank: int, world_size: int, hostname: Optional[str] = None) -> None:
