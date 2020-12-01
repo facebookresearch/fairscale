@@ -18,10 +18,13 @@
 # limitations under the License.
 
 import functools
-from typing import Callable
+import os
+from typing import Any, Callable
 
 import pytest
 import torch
+
+from fairscale.nn.model_parallel import destroy_model_parallel
 
 
 @pytest.fixture(autouse=True)
@@ -48,3 +51,22 @@ def cuda_sleep() -> Callable:
     cycles_per_ms = 1000000 / start.elapsed_time(end)
 
     return functools.partial(cuda_sleep_impl, cycles_per_ms=cycles_per_ms)
+
+
+def pytest_report_header() -> str:
+    return f"torch: {torch.__version__}"
+
+
+def pytest_runtest_setup(item: Any) -> None:
+    print(f"setup mpi function called")
+
+
+def pytest_runtest_teardown(item: Any) -> None:
+    if "OMPI_COMM_WORLD_RANK" in os.environ:
+        destroy_model_parallel()
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+        try:
+            torch.distributed.rpc.shutdown()
+        except Exception:
+            pass

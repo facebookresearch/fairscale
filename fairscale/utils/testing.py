@@ -40,7 +40,7 @@ import torch.distributed as dist
 from torch.distributed import rpc
 import torch.multiprocessing as mp
 
-from fairscale.nn.model_parallel import destroy_model_parallel, initialize_model_parallel
+from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
 
 
@@ -210,22 +210,3 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
         return func
 
     return prepare_test
-
-
-def pytest_report_header() -> str:
-    return f"torch: {torch.__version__}"
-
-
-def pytest_runtest_setup(item: Any) -> None:
-    print(f"setup mpi function called")
-
-
-def pytest_runtest_teardown(item: Any) -> None:
-    if "OMPI_COMM_WORLD_RANK" in os.environ:
-        destroy_model_parallel()
-        if torch.distributed.is_initialized():
-            torch.distributed.destroy_process_group()
-        try:
-            torch.distributed.rpc.shutdown()
-        except Exception:
-            pass
