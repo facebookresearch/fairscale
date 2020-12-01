@@ -17,7 +17,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
 from typing import Callable
 
 import pytest
@@ -27,10 +26,6 @@ import torch
 @pytest.fixture(autouse=True)
 def manual_seed_zero() -> None:
     torch.manual_seed(0)
-
-
-def cuda_sleep_impl(seconds: int, cycles_per_ms: int) -> None:
-    torch.cuda._sleep(int(seconds * cycles_per_ms * 1000))
 
 
 @pytest.fixture(scope="session")
@@ -47,4 +42,7 @@ def cuda_sleep() -> Callable:
     end.synchronize()
     cycles_per_ms = 1000000 / start.elapsed_time(end)
 
-    return functools.partial(cuda_sleep_impl, cycles_per_ms=cycles_per_ms)
+    def cuda_sleep(seconds):
+        torch.cuda._sleep(int(seconds * cycles_per_ms * 1000))
+
+    return cuda_sleep

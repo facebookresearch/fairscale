@@ -17,23 +17,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
 # We're not responsible for pytest decorators
 # mypy: disallow_untyped_decorators = False
+
+"""
+Collection of some testing utilities for the Fairscale library. Please complement as you see fit, but refrain from ad-hoc test utils
+within the different feature sets and relative imports.
+"""
 
 import functools
 import inspect
