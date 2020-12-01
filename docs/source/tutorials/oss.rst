@@ -16,7 +16,7 @@ Let's suppose that your trainer looks like
         world_size: int,
         epochs: int):
 
-        # DDP
+        # process group init
         dist_init(rank, world_size)
 
         # Problem statement
@@ -44,26 +44,28 @@ Let's suppose that your trainer looks like
                 optimizer.step()
 
 
-Then sharding the optimizer state is merely a matter of wrapping your optimizer in fairscale.optim.OSS, as follows
+Then sharding the optimizer state is merely a matter of wrapping your optimizer in fairscale.optim.OSS, as follows.
+DDP can be used in place of ShardedDDP in the example below, but the memory savings will be reduced (the gradients are not as efficiently sharded)
 
 .. code-block:: python
 
 
     import torch
     from fairscale.optim.oss import OSS
-    from torch.nn.parallel import DistributedDataParallel as DDP
+    from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
+
 
     def train(
         rank: int,
         world_size: int,
         epochs: int):
 
-        # DDP
+        # process group init
         dist_init(rank, world_size)
 
         # Problem statement
         model = myAwesomeModel().to(rank)
-        model = DDP(model, device_ids=[rank])
+        model = ShardedDDP(model, device_ids=[rank])
         dataloader = mySuperFastDataloader()
         loss_ln = myVeryRelevantLoss()
 
@@ -104,6 +106,7 @@ The above `train` function will then need to be run via a `multiprocessing.spawn
 
 
 to see it in action, you can test it with the following script `here <../../../examples/tutorial_oss.py>`_.
+
 
 Using PyTorch Automatic Mixed Precision is possible, but it requires a shard-aware GradScaler, which is available in
 `fairscale.optim.grad_scaler`. Autocast can be used as is, and the loss will be scaled and handled in the same way.
