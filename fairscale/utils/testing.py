@@ -1,17 +1,15 @@
-# coding=utf-8
-
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright 2019 Kakao Brain
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#   http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,11 +17,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
+# We're not responsible for pytest decorators
+# mypy: disallow_untyped_decorators = False
+
 import functools
 import inspect
 import multiprocessing
 import os
 import random
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy
 from packaging import version
@@ -33,16 +36,16 @@ import torch.distributed as dist
 from torch.distributed import rpc
 import torch.multiprocessing as mp
 
-from fairscale.nn.model_parallel import initialize_model_parallel
+from fairscale.nn.model_parallel import destroy_model_parallel, initialize_model_parallel
 from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
 
 
 class IdentityLayer(torch.nn.Module):
-    def __init__(self, size, scale=1.0):
+    def __init__(self, size: int, scale: float = 1.0) -> None:
         super(IdentityLayer, self).__init__()
         self.weight = torch.nn.Parameter(scale * torch.randn(size))
 
-    def forward(self):
+    def forward(self, *_: Any, **__: Any) -> Any:
         return self.weight
 
 
@@ -54,7 +57,25 @@ def set_random_seed(seed: int) -> None:
     model_parallel_cuda_manual_seed(seed)
 
 
-def dist_init(rank, world_size, hostname=None):
+def torch_version() -> Tuple[int, ...]:
+    result = version.parse(torch.__version__).release
+
+    # Catch torch version if run against internal pre-releases, like `1.8.0a0fb`,
+    # for which version.parse().release will return None (version becomes of LegacyVersion type)
+    if result is None:
+        # Two options here:
+        # - either skip this version,
+        # - or check that Pipe is not broken by this ongoing development.
+
+        # Assuming that we're interested in the second usecase more than the first,
+        # return the pre-release or dev numbering
+        numbering = torch.__version__.split(".")
+        result = (int(numbering[0]), int(numbering[1]), 0)
+    assert result
+    return result
+
+
+def dist_init(rank: int, world_size: int, hostname: Optional[str] = None) -> None:
     if hostname is None:
         hostname = "localhost"
     print(f"dist init r={rank}, world={world_size}, host={hostname}")
@@ -63,7 +84,7 @@ def dist_init(rank, world_size, hostname=None):
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
 
-    if version.parse(torch.__version__).release >= (1, 6, 0):
+    if torch_version() >= (1, 6, 0):
         init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
         backend = "nccl" if torch.cuda.is_available() else "gloo"
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=init_method)
@@ -77,6 +98,7 @@ def dist_init(rank, world_size, hostname=None):
             backend=rpc.BackendType.TENSORPIPE,
             rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method=init_method),
         )
+
     else:
         if world_size > 1:
             rpc.init_rpc(f"Test{rank}", rank=rank, world_size=world_size)
@@ -87,21 +109,21 @@ def dist_init(rank, world_size, hostname=None):
         torch.cuda.set_device(rank % torch.cuda.device_count())
 
 
-def get_worker_map():
+def get_worker_map() -> Dict[Any, Any]:
     return {rank: f"Test{rank}" for rank in range(dist.get_world_size())}
 
 
-def get_world_sizes():
+def get_world_sizes() -> List[int]:
     limit = torch.cuda.device_count()
     return [x for x in [1, 2, 4, 8] if x <= limit]
 
 
-def spawn_for_all_world_sizes(test_func, world_sizes=get_world_sizes(), args=[]):
+def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_world_sizes(), args: Any = []) -> None:
     for world_size in world_sizes:
-        mp.spawn(test_func, args=(world_size, *args), nprocs=world_size, join=True)
+        mp.spawn(test_func, args=(world_size, *args), nprocs=world_size, join=True)  # type: ignore
 
 
-def worker_process(rank, world_size, func, args, error_queue):
+def worker_process(rank: int, world_size: int, func: Callable, args: Any, error_queue: Any) -> None:
     """Main function for unit tests launced with torch_spawn"""
 
     dist_init(rank, world_size)
@@ -120,11 +142,11 @@ def worker_process(rank, world_size, func, args, error_queue):
         raise e
 
 
-def torch_spawn(world_sizes=None):
+def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
     if world_sizes is None:
         world_sizes = get_world_sizes()
 
-    def prepare_test(func):
+    def prepare_test(func: Callable) -> Callable:
         """Function called with the test function as the argument. Generates a
         replacement which serves as the actual test function."""
 
@@ -138,8 +160,10 @@ def torch_spawn(world_sizes=None):
             )
 
         @functools.wraps(func)
-        def replacement(*args, **kwargs):
+        def replacement(*args: Any, **kwargs: Any) -> None:
             assert args == tuple()
+            assert world_sizes is not None  # mypy crutch
+
             args = tuple(
                 kwargs[p] for p in parameters if p != "rank"
             )  # converting named parameters to positional parameters to pass to `spawn`
@@ -174,9 +198,56 @@ def torch_spawn(world_sizes=None):
 
         # Register a function with the same name, prefixed with "test_" in the
         # calling module, so it will be picked up by pytest
-        caller_module = inspect.getmodule(inspect.currentframe().f_back)
+        current_frame = inspect.currentframe()
+        assert current_frame is not None
+        caller_module = inspect.getmodule(current_frame.f_back)
         setattr(caller_module, f"test_{name}", replacement)
 
         return func
 
     return prepare_test
+
+
+@pytest.fixture(autouse=True)
+def manual_seed_zero() -> None:
+    torch.manual_seed(0)
+
+
+def cuda_sleep_impl(seconds: int, cycles_per_ms: int) -> None:
+    torch.cuda._sleep(int(seconds * cycles_per_ms * 1000))
+
+
+@pytest.fixture(scope="session")
+def cuda_sleep() -> Callable:
+    # Warm-up CUDA.
+    torch.empty(1, device="cuda")
+
+    # From test/test_cuda.py in PyTorch.
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    torch.cuda._sleep(1000000)
+    end.record()
+    end.synchronize()
+    cycles_per_ms = 1000000 / start.elapsed_time(end)
+
+    return functools.partial(cuda_sleep_impl, cycles_per_ms=cycles_per_ms)
+
+
+def pytest_report_header() -> str:
+    return f"torch: {torch.__version__}"
+
+
+def pytest_runtest_setup(item: Any) -> None:
+    print(f"setup mpi function called")
+
+
+def pytest_runtest_teardown(item: Any) -> None:
+    if "OMPI_COMM_WORLD_RANK" in os.environ:
+        destroy_model_parallel()
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+        try:
+            torch.distributed.rpc.shutdown()
+        except Exception:
+            pass

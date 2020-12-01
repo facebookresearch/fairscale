@@ -22,7 +22,7 @@
 import torch
 
 from fairscale.nn.model_parallel import initialize as mpu
-from tests.nn.model_parallel.commons import dist_init, spawn_for_all_world_sizes
+from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
 
 
 def run_test_initialize_model_parallel(rank, model_parallel_size):

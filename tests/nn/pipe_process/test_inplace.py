@@ -22,7 +22,7 @@ import torch
 from torch import nn
 
 from fairscale.nn.pipe import Pipe
-from tests.nn.model_parallel.commons import get_worker_map, torch_spawn
+from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 @torch_spawn([2])
