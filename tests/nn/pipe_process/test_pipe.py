@@ -374,7 +374,6 @@ def checkpoint_eval(pipeline_style):
 
 
 def torch_version() -> Tuple[int, ...]:
-    test_version = "1.8.0a0fb"
     result = version.parse(torch.__version__).release
 
     # Catch torch version if run against internal pre-releases, like `1.8.0a0fb`, for which version.parse() will None
@@ -382,7 +381,7 @@ def torch_version() -> Tuple[int, ...]:
         # Two options here: either skip this version, or check that Pipe is not broken by this ongoing
         # development.
         # Assuming that we're interested in the second usecase more than the first, return the pre-release or dev numbering
-        numbering = test_version.split(".")
+        numbering = torch.__version__.split(".")
         result = (int(numbering[0]), int(numbering[1]), 0)
     assert result
     return result
