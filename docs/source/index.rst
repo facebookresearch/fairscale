@@ -25,13 +25,18 @@ Components
 ----------
 
 * Parallelism:
-   * `pipeline parallelism <../../en/latest/api/nn/pipe.html>`_
-   * `sharded distributed data parallel <../../en/latest/api/nn/sharded_ddp.html>`_
+   * `Pipeline parallelism <../../en/latest/api/nn/pipe.html>`_
 
-* Optimization:
-   * `optimizer state sharding <../../en/latest/api/optim/oss.html>`_
-   * `sharded grad scaler - AMP <../../en/latest/api/optim/grad_scaler.html>`_
+* Sharded training:
+    * `Optimizer state sharding <../../en/latest/api/optim/oss.html>`_
+    * `Sharded grad scaler - automatic mixed precision <../../en/latest/api/optim/grad_scaler.html>`_
+    * `Sharded distributed data parallel <../../en/latest/api/nn/sharded_ddp.html>`_
+
+* Optimization at scale:
    * `AdaScale SGD <../../en/latest/api/optim/adascale.html>`_
+
+
+* `Tutorials <../../en/latest/tutorials/index.html>`_
 
 
 .. warning::

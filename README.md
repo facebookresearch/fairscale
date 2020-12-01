@@ -57,7 +57,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from fairscale.optim.oss import OSS
-from torch.nn.parallel import DistributedDataParallel as DDP
+from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 
 def train(
     rank: int,
@@ -69,7 +69,7 @@ def train(
 
     # Problem statement
     model = myAwesomeModel().to(rank)
-    model = DDP(model, device_ids=[rank])
+    model = ShardedDDP(model, device_ids=[rank])  # this will handle the gradient reduce automatically
     dataloader = mySuperFastDataloader()
     loss_fn = myVeryRelevantLoss()
     base_optimizer = torch.optim.SGD # pick any pytorch compliant optimizer here
