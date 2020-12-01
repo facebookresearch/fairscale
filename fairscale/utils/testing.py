@@ -222,32 +222,6 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
     return prepare_test
 
 
-@pytest.fixture(autouse=True)
-def manual_seed_zero() -> None:
-    torch.manual_seed(0)
-
-
-def cuda_sleep_impl(seconds: int, cycles_per_ms: int) -> None:
-    torch.cuda._sleep(int(seconds * cycles_per_ms * 1000))
-
-
-@pytest.fixture(scope="session")
-def cuda_sleep() -> Callable:
-    # Warm-up CUDA.
-    torch.empty(1, device="cuda")
-
-    # From test/test_cuda.py in PyTorch.
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    start.record()
-    torch.cuda._sleep(1000000)
-    end.record()
-    end.synchronize()
-    cycles_per_ms = 1000000 / start.elapsed_time(end)
-
-    return functools.partial(cuda_sleep_impl, cycles_per_ms=cycles_per_ms)
-
-
 def pytest_report_header() -> str:
     return f"torch: {torch.__version__}"
 
