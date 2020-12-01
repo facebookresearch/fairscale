@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.1.0] - 2020-12-01
+### Added
+- ShardedDataParallel with autoreduce (#157)
+- cpu support for Pipe (#188)
+- ShardedOptim: Distributed Grad Scaler (for torch AMP)  (#182)
+- OSS-aware clip grads, bridge sharded states (#167)
+- oss: add rank_local_state_dict staticmethod (#174)
+- support for PyTorch 1.7.0 (#171)
+- Add implementation of AdaScale (#139)
+
+### Fixed
+- pip package install (#196, #200)
+
 ## [0.0.3] - 2020-10-14
 ### Added
 - multi-process pipe
