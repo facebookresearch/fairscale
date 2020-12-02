@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.1.1] - 2020-12-01
+### Fixed
+- make sure pip package includes header files (#221)
+
 ## [0.1.0] - 2020-12-01
 ### Added
 - ShardedDataParallel with autoreduce (#157)
