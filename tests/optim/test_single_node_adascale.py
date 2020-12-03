@@ -8,21 +8,16 @@
 # pylint: disable=missing-function-docstring
 
 
-import tempfile
-
 import numpy as np
 import pytest
 import torch
 from torch import Tensor
-import torch.distributed as dist
-import torch.multiprocessing as mp
 from torch.nn import Linear
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
 from fairscale.optim import AdaScale
 
-skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
+skip_if_no_gpu = pytest.mark.skipif(torch.cuda.device_count() < 1, reason="1 GPU is required")
 
 
 def test_basic_cpu():
@@ -59,17 +54,23 @@ def test_loss_accum_cpu():
     assert np.allclose(optim.gain(), 1.0), optim.gain()
 
 
-def test_grad_accum_cpu():
+def test_grad_accum_cpu(cpu=True):
     """Test the basic functionality on CPU with gradient accumulation without DDP"""
     model = Linear(2, 2, bias=False)
+    if not cpu:
+        model = model.cuda()
     optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
     for expected_gain in [2.0, 2.0]:  # test 2 iterations catch more corner cases.
         # grad pass 1
         in_data = Tensor([0.0, 1.0])
+        if not cpu:
+            in_data = in_data.cuda()
         out = model(in_data)
         out.sum().backward()
         # grad pass 2
         in_data = Tensor([1.0, 0.0])
+        if not cpu:
+            in_data = in_data.cuda()
         out = model(in_data)
         out.sum().backward()
         # stepping it. Note that if we did more than 2 passes as promised by the
@@ -80,81 +81,14 @@ def test_grad_accum_cpu():
         optim.zero_grad()
 
 
-def test_state_checkpointing_ddp():
+@skip_if_no_gpu
+def test_grad_accum_gpu():
+    test_grad_accum_cpu(cpu=False)
+
+
+def test_state_checkpointing():
     # TODO:
     # run without checkpointing
     # run with checkpointing in the middle
     # assert the results are the same
     pass
-
-
-def _dist_init(rank, world_size, tempfile_name, backend):
-    url = "file://" + tempfile_name
-    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
-
-
-def _test_ddp_func(rank, world_size, tempfile_name):
-    _dist_init(rank, world_size, tempfile_name, backend="nccl")  # Covers nccl
-
-    model = Linear(2, 2, bias=False)
-    model.to("cuda")
-    model = DDP(model, device_ids=[rank])
-    optim = AdaScale(SGD(model.parameters(), lr=0.1))
-    # iter 1
-    in_data = Tensor([0.0, 0.0])
-    in_data[rank] = 1.0
-    in_data = in_data.cuda()
-    out = model(in_data)
-    out.sum().backward()
-    assert np.allclose(optim.gain(), 2.0), optim.gain()
-    optim.step()
-    optim.zero_grad()
-
-    dist.destroy_process_group()
-
-
-@skip_if_single_gpu
-def test_ddp():
-    """Test adascale with DDP without gradient accumulation"""
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-
-    mp.spawn(_test_ddp_func, args=(world_size, temp_file_name), nprocs=world_size, join=True)
-
-
-def _test_ddp_grad_accum_func(rank, world_size, tempfile_name):
-    _dist_init(rank, world_size, tempfile_name, backend="gloo")  # Covers gloo
-
-    model = Linear(4, 2, bias=False)
-    model.to("cuda")
-    model = DDP(model, device_ids=[rank])
-    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
-    with model.no_sync():
-        # iter 1, input vectors are pointing dim0 and dim1
-        in_data = Tensor([0.0] * 4)
-        in_data[rank] = 1.0
-        in_data = in_data.cuda()
-        out = model(in_data)
-        out.sum().backward()
-    # iter 2, input vectors are pointing dim2 and dim3
-    in_data = Tensor([0.0] * 4)
-    in_data[rank + 2] = 1.0
-    in_data = in_data.cuda()
-    out = model(in_data)
-    out.sum().backward()
-    # since all inputs are orthogonal, the gain should be exactly 4.0.
-    assert np.allclose(optim.gain(), 4.0), optim.gain()
-    optim.step()
-    optim.zero_grad()
-
-    dist.destroy_process_group()
-
-
-@skip_if_single_gpu
-def test_grad_accum_ddp():
-    """Test adascale with DDP + gradient accumulation using ddp.no_sync()"""
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-
-    mp.spawn(_test_ddp_grad_accum_func, args=(world_size, temp_file_name), nprocs=world_size, join=True)
