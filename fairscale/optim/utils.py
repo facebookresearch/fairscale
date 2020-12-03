@@ -37,9 +37,39 @@ class Bucket:
         # Handles to the params and their position in this tensor, can be useful for a callback
         self.params: List[FlatParam] = []
 
+        # Optional callback, possibly to unwrap the bucket
+        self.callback: Optional[Callable] = None
+
         # Current status for this buffer
         self.current_offset = 0
         self.max_offset = 0
+        self.global_ref_rank = -1  # Either the destination or the src rank, if reducing or broadcasting for instance
+        self.global_rank = -1
+        self.gradients_based = False
+
+    def unroll(self) -> None:
+        """
+        Dsitribute the contents of the flat buffer back to the attached parameters
+        """
+
+        for flat in self.params:
+            if self.global_ref_rank != self.global_rank and self.gradients_based:
+                # this rank is not the owner, release the grad
+                flat.param.grad = None
+            else:
+                if self.gradients_based:
+                    # this rank is the owner, unroll the results
+                    assert flat.param.grad is not None
+
+                    flat.param.grad.data.copy_(
+                        self.buffer[flat.start : flat.stop].view_as(flat.param.data), non_blocking=True
+                    )
+                else:
+                    flat.param.data.copy_(
+                        self.buffer[flat.start : flat.stop].view_as(flat.param.data), non_blocking=True
+                    )
+
+        self.reset()
 
     def reset(self) -> None:
         """ empty the bucket """
@@ -50,6 +80,7 @@ class Bucket:
         """ add a tensor to the bucket """
 
         end = self.current_offset + tensor.numel()
+        self.gradients_based = use_gradient
 
         if end > self.max_size:
             return False

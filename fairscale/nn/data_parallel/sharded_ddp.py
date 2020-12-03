@@ -229,22 +229,6 @@ class ShardedDataParallel(nn.Module):
                 )
 
                 if bucket.full():
-
-                    def unwrap() -> None:
-                        for flat in bucket.params:
-                            if dst_rank != self.global_rank:
-                                # this rank is not the owner, release the grad
-                                flat.param.grad = None
-                            else:
-                                # this rank is the owner, unroll the results
-                                assert flat.param.grad is not None
-
-                                flat.param.grad.data.copy_(
-                                    bucket.buffer[flat.start : flat.stop].view_as(flat.param.data), non_blocking=True
-                                )
-
-                        bucket.reset()
-
                     bucket.buffer /= self.world_size
 
                     optimizer.work_handles.append(
@@ -252,7 +236,7 @@ class ShardedDataParallel(nn.Module):
                             handle=dist.reduce(
                                 tensor=bucket.buffer, dst=dst_rank, group=self.process_group, async_op=True,
                             ),
-                            callback=unwrap,
+                            callback=bucket.unroll,
                         )
                     )
 

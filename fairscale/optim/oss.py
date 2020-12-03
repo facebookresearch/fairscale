@@ -5,6 +5,7 @@
 
 from collections import OrderedDict
 import copy
+from enum import Enum, auto
 import itertools
 from itertools import chain
 import logging
@@ -24,6 +25,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
+
+
+class BucketFlush(Enum):
+    Reduce = auto()
+    Broadcast = auto()
 
 
 class OSS(Optimizer):
@@ -183,6 +189,10 @@ class OSS(Optimizer):
                 returns the loss. Optional for most optimizers.
 
         .. note: Any extra parameter is passed to the base optimizer as-is"""
+
+        # Check that the buckets have been properly reduced.
+        # If all the backward hooks did not fire, it could be that some reduce calls are in limbo
+        self._handle_trailing_buckets(BucketFlush.Reduce)
 
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         self._sync_param_groups()
@@ -494,22 +504,6 @@ class OSS(Optimizer):
 
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
-
-        # The unroll callback is called when the broadcast is done.
-        # If this rank is a recipiendary and the call was bucketed, the results from the broadcast are unrolled
-        # onto the corresponding parameters.
-        def get_unroll_callback(src_rank: int, bucket: Bucket) -> Callable:
-            def unroll() -> None:
-                if src_rank != self.rank:
-                    for flat in bucket.params:
-                        flat.param.data.copy_(
-                            bucket.buffer[flat.start : flat.stop].view_as(flat.param.data), non_blocking=True
-                        )
-
-                bucket.reset()
-
-            return unroll
-
         with torch.no_grad():
             for (
                 device,
@@ -537,7 +531,7 @@ class OSS(Optimizer):
                                         handle=dist.broadcast(
                                             tensor=bucket.buffer, src=global_src_rank, group=self.group, async_op=True
                                         ),
-                                        callback=get_unroll_callback(src_rank, bucket),
+                                        callback=bucket.unroll,
                                     )
                                 )
 
@@ -553,6 +547,7 @@ class OSS(Optimizer):
                             )
 
         self._consume_work_handles()
+        self._handle_trailing_buckets(BucketFlush.Broadcast)
 
     def _consume_work_handles(self) -> None:
         """ Consume all the futures which are tied to this optimizer's buckets.
@@ -566,6 +561,30 @@ class OSS(Optimizer):
 
         self.work_handles.clear()
 
+    def _handle_trailing_buckets(self, flush_type: BucketFlush) -> None:
+        """
+        Go through the buckets, flush them if not already empty
+        .. warning: Could be that a bucket flush was already requested, needs to be handled carefully
+        """
+
+        for bucket_list in self.buckets.values():
+            for bucket in bucket_list:
+                if bucket.current_offset > 0:
+                    self.work_handles.append(
+                        Workhandle(
+                            handle=dist.broadcast(
+                                tensor=bucket.buffer, src=bucket.global_ref_rank, group=self.group, async_op=True,
+                            )
+                            if flush_type == BucketFlush.Broadcast
+                            else dist.reduce(
+                                tensor=bucket.buffer, dst=bucket.global_ref_rank, group=self.group, async_op=True,
+                            ),
+                            callback=bucket.unroll,
+                        )
+                    )
+
+        self._consume_work_handles()
+
     def _setup_bucket_strategy(self) -> None:
         """  Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
         (smallest first), the bucket will hold the smallest elements, the remaining ones will be directly sent
@@ -578,10 +597,9 @@ class OSS(Optimizer):
         for device, per_rank_params in self.per_device_params.items():
             for dst_rank, params in enumerate(per_rank_params):
                 offset = 0
-                bucket_size = self.buckets[device][dst_rank].max_size
 
                 for param in params:
-                    if (offset + param.numel()) < bucket_size:
+                    if (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
                         # This parameter is small enough to fit in the remaining size of the bucket
                         self.should_bucket_param[param] = True
                         offset += param.numel()
@@ -590,8 +608,10 @@ class OSS(Optimizer):
                         # will be too big and can be skipped
                         self.should_bucket_param[param] = False
 
-                # Register the max offset for this buffer
+                # Register the max offset for this buffer, and the reference rank
                 self.buckets[device][dst_rank].max_offset = offset
+                self.buckets[device][dst_rank].global_ref_rank = self.get_global_rank(self.group, dst_rank)
+                self.buckets[device][dst_rank].global_rank = self.global_rank
 
         # Determine the max work handles in flight:
         # - all the direct reduce/broadcast + 1 bucket
