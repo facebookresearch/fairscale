@@ -7,7 +7,7 @@
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
 
-"""Test AdaScale with a single node (1 CPU or 1 GPU)."""
+""" Test AdaScale with a single node (1 CPU or 1 GPU). """
 
 import tempfile
 

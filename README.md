@@ -112,6 +112,10 @@ schedule from a baseline batch size when effective batch size is bigger.
 
 Primary goal is to allow scaling to bigger batch sizes without losing model accuracy.
 
+At a high level, we want ML researchers to:
+  * go parallel more easily (i.e. reuse the same LR scahedule)
+  * worry not about accuracy loss
+  * get same (or higher) GPU efficiency (fewer steps, less networking, etc.)
 
 # Testing
 
