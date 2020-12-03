@@ -75,6 +75,7 @@ class AdaScale(object):
             Smoothing factor between batches. Default value: 0.9999
         num_gradients_to_accumulate (int):
             Number of passes that we accumulate gradients locally.
+            Default to 1, which does not accumulate gradients.
     """
 
     def __init__(
@@ -253,11 +254,11 @@ class AdaScale(object):
         # Keep track of number of backward calls for gradient accumulation.
         self._num_backward_calls += 1
 
-        # TODO (min): We need to have a way to check that training loop & DDP
-        #             is doing the right thing where the gradient is reduced
-        #             in this backward pass.
-        #             Longer term, we may compute the gain and then inform
-        #             the training loop when it is a good time to step().
+        # TODO (min, mike): We need to have a way to check that training loop & DDP
+        #                   is doing the right thing where the gradient is reduced
+        #                   in this backward pass.
+        #                   Longer term, we may compute the gain and then inform
+        #                   the training loop when it is a good time to step().
         if self._num_backward_calls % self._num_grads_to_accum != 0:
             return
 

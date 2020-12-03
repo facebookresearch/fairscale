@@ -12,7 +12,7 @@ fairscale supports:
    * tensor parallelism (fairscale.nn.model_parallel)
 * Optimization:
    * optimizer state sharding (fairscale.optim.oss)
-   * AdaScale SGD (fairscale.optim.AdaScale)
+   * AdaScale SGD (from fairscale.optim import AdaScale)
 
 
 ## Requirements
@@ -113,8 +113,8 @@ schedule from a baseline batch size when effective batch size is bigger.
 Primary goal is to allow scaling to bigger batch sizes without losing model accuracy.
 
 At a high level, we want ML researchers to:
-  * go parallel more easily (i.e. reuse the same LR scahedule)
-  * worry not about accuracy loss
+  * go parallel more easily (i.e. reuse the same LR schedule)
+  * not worrying about lossing accuracy
   * get same (or higher) GPU efficiency (fewer steps, less networking, etc.)
 
 # Testing
