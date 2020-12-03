@@ -509,7 +509,7 @@ class AsyncEventLoop:
                 for order in next_gradient:
                     value = next_gradient[order]
                     next_gradient[order] = -1
-                    print(f"maybe split {torch.distributed.get_rank()}, {value}")
+                    # print(f"maybe split {torch.distributed.get_rank()}, {value}")
                     if value >= 0:
                         split_batch = activations[order].get(value)
                         if split_batch is not None and split_batch.split is not None:
