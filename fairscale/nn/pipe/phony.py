@@ -28,10 +28,10 @@ from .stream import default_stream, use_stream
 __all__: List[str] = []
 
 
-_phonies: Dict[Tuple[torch.device, bool], Tensor] = {}
+_phonies: Dict[Tuple[torch.device, bool, bool], Tensor] = {}
 
 
-def get_phony(device: torch.device, *, requires_grad: bool) -> Tensor:
+def get_phony(device: torch.device, *, requires_grad: bool, dummy_value: bool = False) -> Tensor:
     """Gets a phony. Phony is tensor without space. It is useful to make
     arbitrary dependency in a autograd graph because it doesn't require any
     gradient accumulation.
@@ -49,13 +49,16 @@ def get_phony(device: torch.device, *, requires_grad: bool) -> Tensor:
                     return phony.detach()  # detach() is necessary.
 
     """
-    key = (device, requires_grad)
+    key = (device, requires_grad, dummy_value)
 
     try:
         phony = _phonies[key]
     except KeyError:
         with use_stream(default_stream(device)):
-            phony = torch.empty(0, device=device, requires_grad=requires_grad)
+            if dummy_value:
+                phony = torch.tensor(1.0, device=device, requires_grad=requires_grad)
+            else:
+                phony = torch.empty(0, device=device, requires_grad=requires_grad)
 
         _phonies[key] = phony
 

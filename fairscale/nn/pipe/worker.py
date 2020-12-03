@@ -66,15 +66,23 @@ class Task:
         *,
         compute: Callable[[], Batch],
         finalize: Optional[Callable[[Batch], None]],
+        split: Optional[Callable[[], torch.Tensor]] = None,
     ) -> None:
         self.stream = stream
         self._compute = compute
         self._finalize = finalize
+        self._split = split
         self._grad_enabled = torch.is_grad_enabled()
 
     def compute(self) -> Batch:
         with use_stream(self.stream), torch.set_grad_enabled(self._grad_enabled):
             return self._compute()
+
+    def split(self) -> Optional[torch.Tensor]:
+        if self._split is None:
+            return None
+        with use_stream(self.stream), torch.set_grad_enabled(self._grad_enabled):
+            return self._split()
 
     def finalize(self, batch: Batch) -> None:
         if self._finalize is None:

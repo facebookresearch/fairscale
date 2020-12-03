@@ -14,7 +14,8 @@ ACTIVATIONS_GRADS_QUEUE = 0
 SKIP_TENSOR_QUEUE = 1
 PORTAL_QUEUE = 2
 EVENT_LOOP_QUEUE = 3
-MESSAGE_GENERATION_START = 4
+PIPE_RPC_QUEUE = 4
+MESSAGE_GENERATION_START = 5
 
 MessageGeneration = MESSAGE_GENERATION_START
 
@@ -23,7 +24,7 @@ TensorOrTensors = Union[Tensor, Tensors]
 
 InputDevice = Union[None, int, str, torch.device]
 Schedule = List[Tuple[int, int]]
-
+LossFunc = Callable[[TensorOrTensors, TensorOrTensors], TensorOrTensors]
 
 class LazyModule:
     def __init__(self, function: Callable[[], nn.Module]):

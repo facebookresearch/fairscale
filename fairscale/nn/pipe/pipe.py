@@ -50,8 +50,6 @@ Devices = Union[Iterable[Device], List[Device]]
 Tensors = Tuple[Tensor, ...]
 TensorOrTensors = Union[Tensor, Tensors]
 
-ListOfLazyModules = List[LazyModule]
-
 if TYPE_CHECKING:
     Module = nn.Module[TensorOrTensors]
     NamedModules = OrderedDict[str, Module]
@@ -90,7 +88,7 @@ def verify_list_of_callable(module: Union[nn.Sequential, list]) -> None:
             raise TypeError(f"layer {type(layer)} must be nn.Module or LazyModule to be partitioned")
 
 
-def verify_module(module: Union[nn.Sequential, ListOfLazyModules]) -> None:
+def verify_module(module: Union[nn.Sequential, List[LazyModule]]) -> None:
     if isinstance(module, Iterable) and not isinstance(module, nn.Sequential):
         verify_list_of_callable(module)
     else:
@@ -156,11 +154,15 @@ class PartitionInfo:
 
 
 def instantiate_partition(
-    module: Union[nn.Sequential, ListOfLazyModules],
+    module: Union[nn.Sequential, List[LazyModule]],
     balance: Iterable[int],
     group: torch.distributed.ProcessGroup,
     style: PipelineStyle,
 ) -> List[ModuleWrapper]:
+    """Take a list of modules (either as nn.Module or LazyModule) and generate a
+    list of ModuleWrapper for the current rank. For PipelineStyle.AsyncSchedule,
+    a ModuleWrapper may be have multiple `Invocation` if it is reused more than
+    once"""
     balance = list(balance)
     check_balance(module, balance, True)
 
@@ -359,7 +361,7 @@ class Pipe(Module):
     heuristics to find your own optimal configuration.
 
     Args:
-        module (torch.nn.Sequential):
+        module (torch.nn.Sequential or List[LazyModule]):
             sequential module to be parallelized
         balance (ints):
             list of number of layers in each partition
@@ -446,7 +448,7 @@ class Pipe(Module):
 
     def __init__(
         self,
-        module: Union[nn.Sequential, ListOfLazyModules],
+        module: Union[nn.Sequential, List[LazyModule]],
         balance: Optional[Iterable[int]] = None,
         *,
         style: PipelineStyle = PipelineStyle.SingleProcess,
@@ -459,7 +461,7 @@ class Pipe(Module):
         deferred_batch_norm: bool = False,
         pipelined_backward: bool = None,
         retain_graph: bool = False,
-        loss_fn: Optional[nn.Module] = None,
+        loss_func: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
 
@@ -485,7 +487,6 @@ class Pipe(Module):
         self.pipelined_backward = pipelined_backward
         self.retain_graph = retain_graph
         self.pipeline: Optional[Pipeline]
-        self.loss_fn = loss_fn
         self.lock = threading.Lock()
 
         self.group = group
@@ -533,6 +534,10 @@ class Pipe(Module):
                 self.group = get_pipeline_parallel_group()
             assert self.group
 
+            assert (
+                loss_func is None or style is PipelineStyle.AsyncSchedule
+            ), "loss_func is only valid for PipelineStyle.AsyncSchedule"
+
             if devices is not None:
                 raise ValueError("'devices' argument only applies to 'PipelineStyle.SingleProcess'")
 
@@ -571,7 +576,6 @@ class Pipe(Module):
                 self.final_stage = False
             else:
                 self.final_stage = rank == len(self.balance) - 1
-                assert loss_fn is None or self.final_stage
 
                 self.pipeline = Pipeline(
                     cast(List[nn.Sequential], self.mp_partitions),
@@ -584,6 +588,7 @@ class Pipe(Module):
                     worker_map=self.worker_map,
                     input_device=self.input_device,
                     final_stage=self.final_stage,
+                    loss_func=loss_func,
                 )
                 del module
             if self.pipelined_backward is None:
@@ -689,7 +694,7 @@ class Pipe(Module):
 
         return self._copy_streams
 
-    def forward(self, input: TensorOrTensors, *, event=None) -> TensorOrTensors:  # type: ignore
+    def forward(self, input: TensorOrTensors, *, target=None) -> TensorOrTensors:  # type: ignore
         """:class:`Pipe` is a fairly transparent module wrapper. It doesn't
         modify the input and output signature of the underlying module. But
         there's type restriction. Input and output have to be a
@@ -719,9 +724,12 @@ class Pipe(Module):
         # Divide a mini-batch into micro-batches.
         batches = microbatch.scatter(input, self.chunks)
 
+        if target is not None:
+            target = microbatch.scatter(target, self.chunks)
+
         # Run pipeline parallelism.
         with self.lock:
-            self.pipeline.run(self.training, batches, event)
+            self.pipeline.run(self.training, batches, target=target)
 
             if self.group and not self.final_stage:
                 # Don't merge micro-batches to avoid unnecessary edges in autograd
@@ -744,14 +752,25 @@ class Pipe(Module):
                 else:
                     output = microbatch.gather(batches)
 
+                if target is not None:
+                    # FIXME(tom) weighted mean if uneven shard
+                    output = torch.mean(cast(Tensor, output)).reshape(1)
+
             return output
 
-    def back_helper(self, output: List[microbatch.Batch]) -> None:
+    def back_helper(self, output: Optional[List[microbatch.Batch]] = None) -> None:
         if self.final_stage:
             raise ValueError("back_helper should only be called on non-final stages")
 
         if self.pipeline:
-            self.pipeline.back_helper(list(reversed(output)))
+            self.pipeline.back_helper(list(reversed(output or [])))
+
+
+def fix_zero_dim(batch: microbatch.Batch, tensor: Tensor) -> Tensor:
+    if batch.atomic and len(tensor.size()) == 0:
+        return tensor.view(1)
+    else:
+        return tensor
 
 
 class PipelinedBackwardPass(torch.autograd.Function):
@@ -765,23 +784,28 @@ class PipelinedBackwardPass(torch.autograd.Function):
     @staticmethod
     # type: ignore
     def backward(ctx, *grads) -> Tuple:
+        tensors: TensorOrTensors
+
         with torch.no_grad():
             grad_batches = microbatch.scatter(grads, len(ctx.batches))
         for grad, batch in reversed(list(zip(grad_batches, ctx.batches))):
             for t in batch:
                 t.retain_grad()
-            torch.autograd.backward(batch.tensor_or_tensors, grad_tensors=(*grad,), retain_graph=ctx.retain_graph)
+            with torch.enable_grad():
+                tensors = fix_zero_dim(batch, cast(Tensor, batch.tensor_or_tensors))
+
+            torch.autograd.backward(tensors, grad_tensors=(*grad,), retain_graph=ctx.retain_graph)
 
         with torch.no_grad():
             if ctx.batches[0].atomic:
-                tensors = tuple(b.tensor.grad for b in ctx.batches)
+                tensors = tuple(fix_zero_dim(b, cast(Tensor, b.tensor.grad)) for b in ctx.batches)
                 output: TensorOrTensors = torch.cat(tensors)
             else:
                 rotated = [[t.grad for t in b.tensors] for b in ctx.batches]
                 output_buf = []
 
                 for tensors in zip(*rotated):
-                    output_buf.append(torch.cat(tensors))
+                    output_buf.append(torch.cat(cast(Tensors, tensors)))
 
                 output = tuple(output_buf)
             del ctx.batches
