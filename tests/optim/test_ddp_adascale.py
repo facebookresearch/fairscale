@@ -96,11 +96,3 @@ def test_grad_accum():
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(_test_grad_accum_func, args=(world_size, temp_file_name), nprocs=world_size, join=True)
-
-
-def test_state_checkpointing():
-    # TODO:
-    # run without checkpointing
-    # run with checkpointing in the middle
-    # assert the results are the same
-    pass

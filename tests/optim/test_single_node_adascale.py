@@ -7,6 +7,9 @@
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
 
+"""Test AdaScale with a single node (1 CPU or 1 GPU)."""
+
+import tempfile
 
 import numpy as np
 import pytest
@@ -83,12 +86,76 @@ def test_grad_accum_cpu(cpu=True):
 
 @skip_if_no_gpu
 def test_grad_accum_gpu():
+    """Test the basic functionality on GPU with gradient accumulation without DDP"""
     test_grad_accum_cpu(cpu=False)
 
 
+@skip_if_no_gpu
 def test_state_checkpointing():
-    # TODO:
-    # run without checkpointing
-    # run with checkpointing in the middle
-    # assert the results are the same
-    pass
+    """ Test state checkpointing on GPU since that's the common case.
+
+        AdaScale doesn't have distributed state. Otherwise, it will need
+        a unit test for checkpointing with DDP.
+    """
+    # Constants.
+    accum_steps = 3
+    in_dim = 5
+
+    # Setup.
+    def make_model_and_optim():
+        model = Linear(in_dim, 2, bias=False)
+        model = model.cuda()
+        optim = AdaScale(SGD(model.parameters(), lr=0.1, momentum=0.9), num_gradients_to_accumulate=accum_steps)
+        return model, optim
+
+    model, optim = make_model_and_optim()
+
+    # Run a bit.
+    def run_a_bit(replay_data=None):
+        print("running")
+        data = []
+        replay_data_idx = 0
+        for _ in range(6):  # run some steps
+            for i in range(accum_steps):
+                if replay_data is None:
+                    in_data = torch.rand(in_dim).cuda()
+                    data.append(in_data)
+                else:
+                    in_data = replay_data[replay_data_idx]
+                    replay_data_idx += 1
+                out = model(in_data)
+                out.sum().backward()
+                # print(out.sum().item())
+                print(model.weight.grad)
+                if i == accum_steps - 1:
+                    optim.step()
+                    optim.zero_grad()
+        return out, data
+
+    run_a_bit()
+
+    with tempfile.NamedTemporaryFile() as f:
+        temp_file_name = f.name
+
+        # Save a checkpoint.
+        torch.save({"model": model.state_dict(), "optim": optim.state_dict()}, temp_file_name)
+
+        # Train more.
+        out, replay_data = run_a_bit()
+
+        # Save the gain and out.
+        expected_out = out.sum().item()
+        expected_gain = optim.gain()
+
+        # Load back the checkpoint.
+        model, optim = make_model_and_optim()  # They both need to start afresh.
+        ckpt = torch.load(temp_file_name)
+        model.load_state_dict(ckpt["model"])
+        optim.load_state_dict(ckpt["optim"])
+
+        # Train the same steps.
+        out, _ = run_a_bit(replay_data)
+
+    # Assert the results.
+    assert np.allclose(out.sum().item(), expected_out), out.sum().item()
+    assert np.allclose(optim.gain(), expected_gain), optim.gain()

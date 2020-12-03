@@ -329,5 +329,13 @@ class AdaScale(object):
         return res
 
     def zero_grad(self) -> None:
-        """Proxy function to optimizer"""
-        self._optimizer.zero_grad()
+        """Proxy function to optimizer, because some training loops need this."""
+        return self._optimizer.zero_grad()
+
+    def state_dict(self) -> Dict:
+        """Proxy function to optimizer, checkpointing needs this."""
+        return self._optimizer.state_dict()
+
+    def load_state_dict(self, data: Dict) -> None:
+        """Proxy function to optimizer, checkpointing needs this."""
+        return self._optimizer.load_state_dict(data)
