@@ -34,6 +34,7 @@ like the following.
 
         # Any relevant training loop. For example:
         model.train()
+        step = 0
         for e in range(epochs):
             for (data, target) in dataloader:
                 data, target = data.to(rank), target.to(rank)
@@ -42,11 +43,13 @@ like the following.
                 outputs = model(data)
                 loss = loss_fn(outputs, target)
                 loss.backward()
+                step += 1
+                update_lr(step)
                 optimizer.step()
 
 
 Applying AdaScale is as simple as wrapping your SGD optimizer with fairscale.optim.AdaScale,
-as follows.
+as follows and uses its gain() to update the effective step and compute learning rate.
 
 .. code-block:: python
 
@@ -81,6 +84,7 @@ as follows.
 
         # Any relevant training loop. For example:
         model.train()
+        step = 0
         for e in range(epochs):
             for (data, target) in dataloader:
                 data, target = data.to(rank), target.to(rank)
@@ -89,4 +93,6 @@ as follows.
                 outputs = model(data)
                 loss = loss_fn(outputs, target)
                 loss.backward()
+                step += optimizer.gain()
+                update_lr(step)
                 optimizer.step()
