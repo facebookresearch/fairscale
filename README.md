@@ -19,16 +19,6 @@ fairscale supports:
    * optimizer state sharding (fairscale.optim.oss)
    * AdaScale SGD (from fairscale.optim import AdaScale)
 
-Parallelism:
-Pipeline parallelism
-
-Sharded training:
-Optimizer state sharding
-
-
-Optimization at scale:
-AdaScale SGD
-
 
 ## Requirements
 
