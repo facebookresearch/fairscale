@@ -1,4 +1,4 @@
-![PyTorch Logo](./docs/source/_static/img/fairscale-logo.png)
+![FairScale Logo](./docs/source/_static/img/fairscale-logo.png)
 
 ![PyPI](https://img.shields.io/pypi/v/fairscale)
 [![Documentation Status](https://readthedocs.org/projects/fairscale/badge/?version=latest)](https://fairscale.readthedocs.io/en/latest/?badge=latest)
