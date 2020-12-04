@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+import tempfile
 
 import pytest
 import torch
@@ -20,15 +21,15 @@ if torch.cuda.is_available():
 else:
     devices = ["cpu"]
 
-os.environ["MASTER_ADDR"] = "localhost"
-os.environ["MASTER_PORT"] = "29501"
+URL = "file://" + tempfile.mkstemp()[1]
+
 if "OMPI_COMM_WORLD_SIZE" in os.environ:
-    dist.init_process_group(backend=dist.Backend.MPI)
+    dist.init_process_group(backend=dist.Backend.MPI, init_method=URL)
 
 
 def setup_module(module):
     if "OMPI_COMM_WORLD_SIZE" not in os.environ:
-        dist.init_process_group(backend=BACKEND, rank=0, world_size=1)
+        dist.init_process_group(backend=BACKEND, rank=0, world_size=1, init_method=URL)
 
 
 def teardown_module(module):

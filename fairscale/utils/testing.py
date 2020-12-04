@@ -31,6 +31,7 @@ import logging
 import multiprocessing
 import os
 import random
+import tempfile
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy
@@ -82,27 +83,23 @@ def torch_version() -> Tuple[int, ...]:
 
 
 def dist_init(rank: int, world_size: int, hostname: Optional[str] = None) -> None:
-    if hostname is None:
-        hostname = "localhost"
-    print(f"dist init r={rank}, world={world_size}, host={hostname}")
-    os.environ["MASTER_ADDR"] = hostname
-    os.environ["MASTER_PORT"] = "10638"
+    print(f"dist init r={rank}, world={world_size}")
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
+    url = "file://" + tempfile.mkstemp()[1]
 
     if torch_version() >= (1, 6, 0):
-        init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
         backend = "nccl" if torch.cuda.is_available() else "gloo"
-        torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=init_method)
-        os.environ["MASTER_ADDR"] = hostname
-        os.environ["MASTER_PORT"] = "10639"
-        init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
+        torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
+
+        # New file for RPC init
+        url = "file://" + tempfile.mkstemp()[1]
         rpc.init_rpc(
             f"Test{rank}",
             rank=rank,
             world_size=world_size,
             backend=rpc.BackendType.TENSORPIPE,
-            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method=init_method),
+            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method=url),
         )
 
     else:

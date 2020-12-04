@@ -49,8 +49,8 @@ def mpu_cross_entropy(batch_size, seq_length, vocab_size, logits_scale, seed):
     return loss, identity.weight.grad
 
 
-def run_test_cross_entropy(rank, model_parallel_size):
-    dist_init(rank, model_parallel_size)
+def run_test_cross_entropy(rank, model_parallel_size, filename):
+    dist_init(rank, model_parallel_size, filename)
 
     if torch.distributed.get_rank() == 0:
         print("> testing cross entropy with model parallel size {} ...".format(model_parallel_size))
