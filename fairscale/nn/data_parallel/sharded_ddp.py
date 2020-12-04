@@ -112,6 +112,9 @@ class ShardedDataParallel(nn.Module):
             # for the subsequent FW to be correct
             self.sync_buffers(blocking=True)
 
+        # Reset all the grad reduce and bucket state flags
+        self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
+
         # Normal FW on the base model
         return self.module(*inputs, **kwargs)
 
@@ -178,9 +181,6 @@ class ShardedDataParallel(nn.Module):
             # Make sure that all the asynchronous calls have concluded before moving on. Consume the futures
             # and execute the delayed actions (release gradients, unroll the buckets)
             Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
-
-            # Reset all the grad reduce and bucket state flags
-            self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
 
         def reduce_direct(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags

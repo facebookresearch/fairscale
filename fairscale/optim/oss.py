@@ -74,6 +74,9 @@ class OSS(Optimizer):
         broadcast_buffer_size: int = 2 ** 17,
         **default: Any,
     ):
+        logging.warning("Disabling bucketing for now, error prone for some models")
+        broadcast_buffer_size = 0
+
         # Hold all the model params in the root .param_groups
         self.in_super_constructor = True
         super().__init__(params, default)
@@ -189,10 +192,6 @@ class OSS(Optimizer):
                 returns the loss. Optional for most optimizers.
 
         .. note: Any extra parameter is passed to the base optimizer as-is"""
-
-        # Check that the buckets have been properly reduced.
-        # If all the backward hooks did not fire, it could be that some reduce calls are in limbo
-        self._handle_trailing_buckets(BucketFlush.Reduce)
 
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         self._sync_param_groups()
@@ -504,6 +503,7 @@ class OSS(Optimizer):
 
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
+
         with torch.no_grad():
             for (
                 device,
@@ -547,7 +547,6 @@ class OSS(Optimizer):
                             )
 
         self._consume_work_handles()
-        self._handle_trailing_buckets(BucketFlush.Broadcast)
 
     def _consume_work_handles(self) -> None:
         """ Consume all the futures which are tied to this optimizer's buckets.
@@ -599,13 +598,13 @@ class OSS(Optimizer):
                 offset = 0
 
                 for param in params:
-                    if (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
-                        # This parameter is small enough to fit in the remaining size of the bucket
+                    # Criteria to decide whether this parameter is to be bucketed or not:
+                    # - enough room in the bucket
+                    # - param not the first one in the DAG, because this may be kicked out of autograd (depending on inputs)
+                    if (offset + param.numel()) < self.buckets[device][dst_rank].max_size and param.is_leaf:
                         self.should_bucket_param[param] = True
                         offset += param.numel()
                     else:
-                        # The parameters are sorted by size, so all the following parameters
-                        # will be too big and can be skipped
                         self.should_bucket_param[param] = False
 
                 # Register the max offset for this buffer, and the reference rank
