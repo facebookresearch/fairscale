@@ -227,8 +227,6 @@ def run_test_two_optimizers(rank, world_size, backend, device, temp_file_name):
         _ = optimizer_1.step(closure=closure)
         _ = optimizer_2.step(closure=closure)
 
-    assert False
-
     dist.destroy_process_group()
 
 
