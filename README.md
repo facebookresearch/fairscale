@@ -12,11 +12,10 @@ fairscale supports:
 * Parallelism:
    * pipeline parallelism (fairscale.nn.Pipe)
 * Sharded training:
-   * Optimizer state sharding
+   * Optimizer state sharding (fairscale.optim.oss)
    * Sharded grad scaler - automatic mixed precision
    * Sharded distributed data parallel
 * Optimization at scale:
-   * optimizer state sharding (fairscale.optim.oss)
    * AdaScale SGD (from fairscale.optim import AdaScale)
 
 
