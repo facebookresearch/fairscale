@@ -1,7 +1,9 @@
-# fairscale
+![PyTorch Logo](./docs/source/_static/img/fairscale-logo.png)
+
 ![PyPI](https://img.shields.io/pypi/v/fairscale)
 [![Documentation Status](https://readthedocs.org/projects/fairscale/badge/?version=latest)](https://fairscale.readthedocs.io/en/latest/?badge=latest)
 [![CircleCI](https://circleci.com/gh/facebookresearch/fairscale.svg?style=shield)](https://app.circleci.com/pipelines/github/facebookresearch/fairscale/) ![PyPI - License](https://img.shields.io/pypi/l/fairscale) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/facebookresearch/fairscale/blob/master/CONTRIBUTING.md)
+--------------------------------------------------------------------------------
 
 ## Description
 fairscale is a PyTorch extension library for high performance and large scale training for optimizing training on one or across multiple machines/nodes. This library extend basic pytorch capabilities while adding new experimental ones.
@@ -9,10 +11,23 @@ fairscale is a PyTorch extension library for high performance and large scale tr
 fairscale supports:
 * Parallelism:
    * pipeline parallelism (fairscale.nn.Pipe)
-   * tensor parallelism (fairscale.nn.model_parallel)
-* Optimization:
+* Sharded training:
+   * Optimizer state sharding
+   * Sharded grad scaler - automatic mixed precision
+   * Sharded distributed data parallel
+* Optimization at scale:
    * optimizer state sharding (fairscale.optim.oss)
    * AdaScale SGD (from fairscale.optim import AdaScale)
+
+Parallelism:
+Pipeline parallelism
+
+Sharded training:
+Optimizer state sharding
+
+
+Optimization at scale:
+AdaScale SGD
 
 
 ## Requirements
