@@ -194,6 +194,8 @@ def run_test_add_param_group(rank, world_size, tempfile_name):
 
 def test_add_param_group():
     world_size = 3
+    if torch.cuda.device_count() < world_size:
+        pytest.skip("Not enough GPUs for NCCL-based test")
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(run_test_add_param_group, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
@@ -309,6 +311,8 @@ def run_test_sharding(rank, world_size, tempfile_name):
 
 def test_sharding():
     world_size = 3
+    if torch.cuda.device_count() < world_size:
+        pytest.skip("Not enough GPUs for NCCL-based test")
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(run_test_sharding, args=(world_size, temp_file_name), nprocs=world_size, join=True)
