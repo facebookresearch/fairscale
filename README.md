@@ -74,13 +74,16 @@ def train(
 
     # Problem statement
     model = myAwesomeModel().to(rank)
-    model = ShardedDDP(model, device_ids=[rank])  # this will handle the gradient reduce automatically
     dataloader = mySuperFastDataloader()
     loss_fn = myVeryRelevantLoss()
     base_optimizer = torch.optim.SGD # pick any pytorch compliant optimizer here
     base_optimizer_arguments = {} # pass any optimizer specific arguments here, or directly below when instantiating OSS
 
+    # Wrap the optimizer in its state sharding brethren
     optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)
+
+    # Wrap the model into ShardedDDP, which will reduce gradients to the proper ranks
+    model = ShardedDDP(model, optimizer)
 
     # Any relevant training loop, nothing specific to OSS. For example:
     model.train()
