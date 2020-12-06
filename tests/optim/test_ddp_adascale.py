@@ -32,7 +32,7 @@ def _dist_init(rank, world_size, tempfile_name, backend):
     torch.cuda.set_device(rank)
 
 
-def _test_basic_func(rank, world_size, tempfile_name):
+def _test_basic_func(rank, world_size, tempfile_name, test_case):
     _dist_init(rank, world_size, tempfile_name, backend="nccl")  # Covers nccl
 
     model = Linear(2, 2, bias=False)
@@ -40,25 +40,38 @@ def _test_basic_func(rank, world_size, tempfile_name):
     model = DDP(model, device_ids=[rank])
     optim = AdaScale(SGD(model.parameters(), lr=0.1))
     # iter 1
-    in_data = Tensor([0.0, 0.0])
-    in_data[rank] = 1.0
+    in_data = Tensor(test_case["input"][rank])
     in_data = in_data.cuda()
     out = model(in_data)
     out.sum().backward()
-    assert np.allclose(optim.gain(), 2.0), optim.gain()
+    assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
     optim.step()
     optim.zero_grad()
 
     dist.destroy_process_group()
 
 
+# IMPORTANT: make sure these test_cases values are sync'ed with the non-DDP
+# test in test_single_node_adascale.py. This way, we make sure gradient accumulation
+# works exactly like that in DDP.
 @skip_if_single_gpu
-def test_basic():
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        # "input" value is a list of input tensors for rank 0 and rank 1.
+        {"input": [[1.0, 0], [0, 1.0]], "expected_gain": 2.0},
+        {"input": [[1.0, 1.0], [1.0, 1.0]], "expected_gain": 1.0000001249999846},
+        {"input": [[-1.0, 1.0], [1.0, -1.0]], "expected_gain": 2.0},
+        {"input": [[1.0, 4.0], [5.0, 0.5]], "expected_gain": 1.5022222222222221},
+        {"input": [[-0.2, 3.0], [5.0, 0.5]], "expected_gain": 1.9433267229211089},
+    ],
+)
+def test_basic(test_case):
     """Test adascale with DDP without gradient accumulation"""
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
-    mp.spawn(_test_basic_func, args=(world_size, temp_file_name), nprocs=world_size, join=True)
+    mp.spawn(_test_basic_func, args=(world_size, temp_file_name, test_case), nprocs=world_size, join=True)
 
 
 def _test_grad_accum_func(rank, world_size, tempfile_name):
