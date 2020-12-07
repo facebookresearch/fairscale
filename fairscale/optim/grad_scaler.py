@@ -32,16 +32,16 @@ class ShardedGradScaler(TorchGradScaler):
 
     def __init__(self) -> None:
         super().__init__()
-        self.warning = True
+        self.display_warning = True
 
     def unscale_(self, optimizer: Optimizer) -> None:
         # Could be a mistake, this scaler is supposed to work with ZeroRedundancyOptimizer only
-        if self.warning and not isinstance(optimizer, OSS):
+        if self.display_warning and not isinstance(optimizer, OSS):
             logging.warning(
                 "ShardedGradScaler is to be used in combination with a sharded optimizer, this could not be checked"
             )
 
-        self.warning = False  # Only warn once
+        self.display_warning = False  # Only warn once
 
         # Call the upstream unscale_ method which will only act on this rank's gradients
         super().unscale_(optimizer)
