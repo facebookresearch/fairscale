@@ -108,17 +108,8 @@ def train(
     if optim_type == OptimType.oss_sharded_ddp:
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
         model = ShardedDDP(model, optimizer)
-    else:
-        device_ids = None if args.cpu else [rank]
-        model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
-        optimizer = (
-            OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
-            if optim_type == OptimType.oss_ddp
-            else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
-        )
-    optimizer = cast(torch.optim.Optimizer, optimizer)
-
-    if optim_type == OptimType.oss_experimental:
+    elif optim_type == OptimType.oss_experimental:
+        # DEBUG
         # This method requires a layer-wise seperable model
         # Unroll the test RestNet101 into ~40 layers
         model_seq = torch.nn.Sequential(
@@ -145,6 +136,16 @@ def train(
         )
         optimizer = ddp_exp.optimizer
         model = ddp_exp
+    else:
+        device_ids = None if args.cpu else [rank]
+        model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
+        optimizer = (
+            OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
+            if optim_type == OptimType.oss_ddp
+            else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
+        )
+
+    optimizer = cast(torch.optim.Optimizer, optimizer)
 
     # Reset the memory use counter
     if not args.cpu:

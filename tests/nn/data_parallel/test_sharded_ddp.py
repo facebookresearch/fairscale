@@ -24,6 +24,8 @@ skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda
 skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
 from contextlib import suppress
 
+from fairscale.utils.testing import GPT2
+
 
 def test_step_on_cpu():
     run_test(backend=dist.Backend.GLOO, device=torch.device("cpu"), world_size=4)
@@ -153,7 +155,6 @@ def run_test_two_inputs(rank, world_size, backend, device, temp_file_name):
         loss.backward()
         return loss
 
-    # The models should stay the same in between the ranks
     for i in range(5):
         _ = optimizer.step(closure=closure)
 
@@ -214,15 +215,17 @@ def run_test_two_optimizers(rank, world_size, backend, device, temp_file_name):
 
     # Optim loop
     def closure():
-        optimizer.zero_grad()
         input_tensor = torch.rand((64, 2)).to(device)
         loss = ddp_model(input_tensor, input_tensor).abs().sum()
         loss.backward()
         return loss
 
-    # The models should stay the same in between the ranks
     for i in range(5):
-        _ = optimizer.step(closure=closure)
+        optimizer_1.zero_grad()
+        optimizer_2.zero_grad()
+
+        _ = optimizer_1.step(closure=closure)
+        _ = optimizer_2.step(closure=closure)
 
     dist.destroy_process_group()
 
@@ -233,4 +236,49 @@ def test_two_optimizers():
     backend = "gloo"
     temp_file_name = tempfile.mkstemp()[1]
     device = "cpu"
-    mp.spawn(run_test_two_inputs, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
+    mp.spawn(run_test_two_optimizers, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
+
+
+def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
+    INPUT_DIM = 32
+    BACH_SIZE = 10
+    STEPS = 10
+
+    url = "file://" + temp_file_name
+    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+    if device == torch.device("cuda"):
+        torch.cuda.set_device(rank)
+
+    torch.manual_seed(rank)
+    np.random.seed(rank)
+    model = GPT2(
+        embed_dim=512, num_heads=2, num_layers=24, num_positions=INPUT_DIM * INPUT_DIM, num_vocab=512, num_classes=2
+    ).to(device)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    ddp_model = ShardedDataParallel(model, optimizer)
+
+    # Optim loop
+    def closure():
+        optimizer.zero_grad()
+        # Force int inputs to prevent the first grad from firing
+        input_tensor = torch.randint(10, (BACH_SIZE, INPUT_DIM)).to(device)
+        loss = ddp_model(input_tensor).abs().sum()
+        loss.backward()
+        return loss
+
+    # Check for bucketing overflows
+    for i in range(STEPS):
+        _ = optimizer.step(closure=closure)
+
+    dist.destroy_process_group()
+
+
+@skip_if_no_cuda
+@skip_if_single_gpu
+def test_gpt2():
+    # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
+    world_size = 2
+    backend = "gloo"
+    temp_file_name = tempfile.mkstemp()[1]
+    device = "cuda"
+    mp.spawn(run_test_gpt2, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)

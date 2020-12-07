@@ -26,7 +26,7 @@ from torch import nn
 from fairscale.nn.pipe import Pipe, is_checkpointing, is_recomputing
 from fairscale.nn.pipe.skip import pop, skippable, stash
 from fairscale.nn.pipe.skip.tracker import current_skip_tracker
-from tests.nn.model_parallel.commons import get_worker_map, torch_spawn
+from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 @skippable(stash=["skip"])

@@ -23,7 +23,7 @@ from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_
 from fairscale.nn.pipe import LazyModule, pipe
 from fairscale.optim import GradScaler
 from fairscale.optim.oss import OSS
-from tests.nn.model_parallel.commons import dist_init, get_worker_map
+from fairscale.utils.testing import dist_init, get_worker_map
 
 try:
     from fairscale.optim import Adam  # type: ignore
