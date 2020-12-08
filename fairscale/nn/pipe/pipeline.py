@@ -180,7 +180,10 @@ def create_task(
             part_id: int = j,
         ) -> TensorOrTensors:
             with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
-                return partition(input)
+                ret = partition(input)
+                if type(ret) is list:
+                    logging.warn("Only Tensor or Tuple of Tensor output is supported")
+                return ret
 
         chk = Checkpointing(function, batch)
         if style is PipelineStyle.SingleProcess:
