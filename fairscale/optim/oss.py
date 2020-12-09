@@ -107,6 +107,7 @@ class OSS(Optimizer):
         # Current default device is set by the parameters allocated to this rank
         self._device = self.partition_parameters()[self.rank][0]["params"][0].device
         self.buckets: Dict[torch.device, List[Bucket]] = {}
+        self.bucket_size = broadcast_buffer_size
         for device, per_device in self.per_device_params.items():
             # Allocate one buffer per rank and per device to group the small parameters
             self.buckets[device] = [
@@ -559,6 +560,7 @@ class OSS(Optimizer):
                 work_handle.callback()
 
         self.work_handles.clear()
+        print(f"{self.rank} - Work handles consumed")
 
     def _handle_trailing_buckets(self, flush_type: BucketFlush) -> None:
         """
@@ -613,5 +615,9 @@ class OSS(Optimizer):
                 self.buckets[device][dst_rank].global_rank = self.global_rank
 
         # Determine the max work handles in flight:
-        # - all the direct reduce/broadcast + 1 bucket
-        self._max_work_handles = sum(not value for value in self.should_bucket_param.values()) + 1
+        # - all the direct reduce/broadcast
+        self._max_work_handles = sum(not value for value in self.should_bucket_param.values())
+
+        # - if we're bucketing, this means more work handles: one per rank and per device
+        if self.bucket_size > 0:
+            self._max_work_handles += len(self.per_device_params.keys()) * self.world_size
