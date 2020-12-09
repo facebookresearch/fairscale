@@ -181,8 +181,11 @@ def create_task(
         ) -> TensorOrTensors:
             with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
                 # XXX:
-                partition.to(input.device)
-                return partition(input)
+                #partition.to(input.device)
+                ret = partition(input)
+                if type(ret) is list:
+                    ret = tuple(ret)
+                return ret
 
         chk = Checkpointing(function, batch)
         if style is PipelineStyle.SingleProcess:
