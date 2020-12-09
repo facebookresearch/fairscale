@@ -39,6 +39,7 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
 
     # DDP
     dist_init(rank, world_size)
+    rank = torch.device("cpu") if DEVICE == "cpu" else rank
 
     # Problem statement
     model = getModel().to(rank)
@@ -52,7 +53,7 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
     else:
         base_optimizer = torch.optim.SGD
         base_optimizer_arguments = {"lr": 1e-4}  # any optimizer specific arguments, LR, momentum, etc...
-        optimizer = OSS(params=model.parameters(), optim=base_optimizer, default=base_optimizer_arguments)
+        optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)
 
     training_start = time.monotonic()
     # Any relevant training loop, nothing specific to OSS. For example:
@@ -82,10 +83,11 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
             print(f"Loss: {loss.item()}")
 
     training_end = time.monotonic()
-    max_memory = torch.cuda.max_memory_allocated(rank)
-
     print(f"[{dist.get_rank()}] : Training done. {training_end-training_start:.2f} sec")
-    print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
+
+    if DEVICE == "cuda":
+        max_memory = torch.cuda.max_memory_allocated(rank)
+        print(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
 
 
 if __name__ == "__main__":
