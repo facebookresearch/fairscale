@@ -74,7 +74,7 @@ class OSS(Optimizer):
         broadcast_buffer_size: int = 2 ** 17,
         **default: Any,
     ):
-        logging.warning("Disabling bucketing for now, error prone for some models")
+        # logging.warning("Disabling bucketing for now, error prone for some models")
         broadcast_buffer_size = 0
 
         # Hold all the model params in the root .param_groups
@@ -598,11 +598,11 @@ class OSS(Optimizer):
             for dst_rank, params in enumerate(per_rank_params):
                 offset = 0
 
-                for param in params:
+                # Only consider the params which will require a gradient
+                for param in filter(lambda p: p.requires_grad, params):
                     # Criteria to decide whether this parameter is to be bucketed or not:
                     # - enough room in the bucket
-                    # - param not the first one in the DAG, because this may be kicked out of autograd (depending on inputs)
-                    if (offset + param.numel()) < self.buckets[device][dst_rank].max_size and param.is_leaf:
+                    if (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
                         self.should_bucket_param[param] = True
                         offset += param.numel()
                     else:
