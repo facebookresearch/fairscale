@@ -96,40 +96,36 @@ class ModelShard(nn.Module):
             ),
         )
 
-        return requests if non_blocking else self.sync(requests)
+        return requests if non_blocking else self._sync(requests)
 
     def backward_load(self, non_blocking: bool = True) -> None:
-        # # Restore all the parameter buffers
-        # requests = []
-        # for p in self.model_shard.parameters():
-        #     requests.append(p.to(device=self.device, non_blocking=non_blocking))
+        self.model_shard.to(self.device, non_blocking=non_blocking)
 
-        # return requests if non_blocking else self.sync(requests)
-        self.model_shard.to(self.device)
-
-    def forward_drop(self) -> None:
+    def forward_drop(self, non_blocking: bool = True) -> None:
         for p in self.model_shard.parameters():
             p.grad = None
 
-            self.model_shard.to(self.offload_device)
+        self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
-    def backward_drop(self) -> None:
+    def backward_drop(self, non_blocking: bool = True) -> None:
         if not self.is_owner:
             # Gradients have been reduced and can be discarded
             for p in self.model_shard.parameters():
                 p.grad = None
 
-            self.model_shard.to(self.offload_device)
+            self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
-    def reduce_grads(self, non_blocking: bool = True) -> Optional[List[Any]]:
+    def reduce_grads(self, non_blocking: bool) -> Optional[List[Any]]:
         requests = []
-        # Issue all the reduce requests async
-        for p in self.parameters():
-            if p.grad is not None:
-                p.grad /= self.world_size
-                requests.append(dist.reduce(p.grad.data, dst=self.owner_rank, group=self.process_group, async_op=True))
 
-        return requests if non_blocking else self.sync(requests)
+        # Send all the gradients to the owner
+        for p in filter(lambda p: p.grad is not None, self.parameters()):
+            assert p.grad is not None  # useless but mypy requires that
+
+            p.grad /= self.world_size
+            requests.append(dist.reduce(p.grad.data, dst=self.owner_rank, group=self.process_group, async_op=True))
+
+        return requests if non_blocking else self._sync(requests)
 
     def sync_buffers(self, non_blocking: bool = True) -> Optional[List[Any]]:
         """
@@ -142,7 +138,7 @@ class ModelShard(nn.Module):
                 self.model_shard.buffers(),
             ),
         )
-        return requests if non_blocking else self.sync(requests)
+        return requests if non_blocking else self._sync(requests)
 
     def sync_parameters(self, non_blocking: bool = True) -> Optional[List[Any]]:
         """
@@ -155,10 +151,10 @@ class ModelShard(nn.Module):
                 self.model_shard.parameters(),
             ),
         )
-        return requests if non_blocking else self.sync(requests)
+        return requests if non_blocking else self._sync(requests)
 
     @staticmethod
-    def sync(requests: Optional[List[Any]]) -> None:
+    def _sync(requests: Optional[List[Any]]) -> None:
         """
         Make an async function synchronous.
         Use this to wrap the function call directly
@@ -200,7 +196,7 @@ class ShardSyncLayer(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
         if ctx.next_shard is not None:
-            ctx.next_shard.reduce_grads()
+            ctx.next_shard.reduce_grads(non_blocking=False)
             ctx.next_shard.backward_drop()
 
         if ctx.prev_shard is not None:
