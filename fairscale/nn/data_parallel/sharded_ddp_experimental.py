@@ -95,17 +95,19 @@ class ModelShard(nn.Module):
                 self.model_shard.parameters(),
             ),
         )
-
+        print("fw load - shard to device + latest params")
         return requests if non_blocking else self._sync(requests)
 
     def backward_load(self, non_blocking: bool = True) -> None:
         self.model_shard.to(self.device, non_blocking=non_blocking)
+        print("bw load - shard to device")
 
     def forward_drop(self, non_blocking: bool = True) -> None:
         for p in self.model_shard.parameters():
             p.grad = None
 
         self.model_shard.to(self.offload_device, non_blocking=non_blocking)
+        print("fw drop - shard to offload device")
 
     def backward_drop(self, non_blocking: bool = True) -> None:
         if not self.is_owner:
@@ -113,7 +115,8 @@ class ModelShard(nn.Module):
             for p in self.model_shard.parameters():
                 p.grad = None
 
-            self.model_shard.to(self.offload_device, non_blocking=non_blocking)
+        print("bw drop - shard to offload device")
+        self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
     def reduce_grads(self, non_blocking: bool) -> Optional[List[Any]]:
         requests = []
@@ -282,7 +285,10 @@ class ShardedDataParallelExperimental(nn.Module):
         self.sync_ranks()
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
+        print(" *** New Batch *** ")
+
         # All inputs need to required_grad to properly track the first sync layer
+        # FIXME: Get rid of the above
         if isinstance(inputs, tuple):
             for i in inputs:
                 i.requires_grad = True

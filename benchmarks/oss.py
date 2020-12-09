@@ -132,7 +132,7 @@ def train(
             optimizer_params={"lr": 1e-4, "momentum": 0.9},
             world_size=args.world_size,
             device=torch.device(torch.cuda.current_device()),
-            offload_device=torch.device(torch.cuda.current_device()),
+            offload_device=torch.device("cpu"),
         )
         optimizer = ddp_exp.optimizer
         model = ddp_exp
