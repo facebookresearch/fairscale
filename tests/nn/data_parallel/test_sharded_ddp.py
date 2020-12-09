@@ -149,13 +149,11 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     def check_same_model_params():
         for pg, ddp_pg in zip(sharded_optimizer.param_groups, ddp_optimizer.param_groups):
             for p, ddp_p in zip(pg["params"], ddp_pg["params"]):
-                assert torch.all(
-                    torch.eq(p, ddp_p)
-                ), f"Model parameters differ in between DDP and ShardedDDP {p} {ddp_p}"
+                assert torch.allclose(p, ddp_p), f"Model parameters differ in between DDP and ShardedDDP {p} {ddp_p}"
 
         # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
         for b, ddp_b in zip(sharded_ddp_model.buffers(), ddp_model.buffers()):
-            assert torch.all(torch.eq(b, ddp_b)), "Model buffers differ in between DDP and ShardedDDP"
+            assert torch.allclose(b, ddp_b), "Model buffers differ in between DDP and ShardedDDP"
 
     # The model should be synchronized in between the ranks at ShardedDataParallel construction time, check that
     check_same_model_params()

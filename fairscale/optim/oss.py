@@ -560,7 +560,6 @@ class OSS(Optimizer):
                 work_handle.callback()
 
         self.work_handles.clear()
-        print(f"{self.rank} - Work handles consumed")
 
     def _handle_trailing_buckets(self, flush_type: BucketFlush) -> None:
         """
