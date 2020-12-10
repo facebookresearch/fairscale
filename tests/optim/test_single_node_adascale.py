@@ -70,6 +70,9 @@ def test_loss_accum_cpu():
         {"input": [[-1.0, 1.0], [1.0, -1.0]], "expected_gain": 2.0},
         {"input": [[1.0, 4.0], [5.0, 0.5]], "expected_gain": 1.5022222222222221},
         {"input": [[-0.2, 3.0], [5.0, 0.5]], "expected_gain": 1.9433267229211089},
+        # "inputs" to trigger multiple iteration tests, which make sure the
+        # smoothing factor calculation is also covered.
+        {"inputs": [[[-0.2, 3.3], [5.2, 0.7]], [[1.0, 4.0], [3.1, 0.1]]], "expected_gain": 1.744159431359284},
     ],
 )
 def test_grad_accum(test_case, cpu):
@@ -81,23 +84,30 @@ def test_grad_accum(test_case, cpu):
         model = model.cuda()
     optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
     expected_gain = test_case["expected_gain"]
-    for exp_gain in [expected_gain, expected_gain]:  # test 2 iterations catch more corner cases.
+    if "input" in test_case:
+        data = [test_case["input"]] * 2
+        gains = [expected_gain] * 2
+    else:
+        data = test_case["inputs"]
+        gains = [None, expected_gain]
+    for in_data, exp_gain in zip(data, gains):  # test 2 iterations catch more corner cases.
         # grad pass 1
-        in_data = Tensor(test_case["input"][0])
+        in_data_0 = Tensor(in_data[0])
         if not cpu:
-            in_data = in_data.cuda()
-        out = model(in_data)
+            in_data_0 = in_data_0.cuda()
+        out = model(in_data_0)
         out.sum().backward()
         # grad pass 2
-        in_data = Tensor(test_case["input"][1])
+        in_data_1 = Tensor(in_data[1])
         if not cpu:
-            in_data = in_data.cuda()
-        out = model(in_data)
+            in_data_1 = in_data_1.cuda()
+        out = model(in_data_1)
         out.sum().backward()
+        if exp_gain is not None:
+            assert np.allclose(optim.gain(), exp_gain), optim.gain()
         # stepping it. Note that if we did more than 2 passes as promised by the
         # num_gradients_to_accumulate argument above, AdaScale is not be able to
         # detect that mistake for now. The result will just be wrong in that case.
-        assert np.allclose(optim.gain(), exp_gain), optim.gain()
         optim.step()
         optim.zero_grad()
 

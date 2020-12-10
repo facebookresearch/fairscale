@@ -39,14 +39,24 @@ def _test_basic_func(rank, world_size, tempfile_name, test_case):
     model.to("cuda")
     model = DDP(model, device_ids=[rank])
     optim = AdaScale(SGD(model.parameters(), lr=0.1))
-    # iter 1
-    in_data = Tensor(test_case["input"][rank])
-    in_data = in_data.cuda()
-    out = model(in_data)
-    out.sum().backward()
-    assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
-    optim.step()
-    optim.zero_grad()
+    if "input" in test_case:
+        # single iter
+        in_data = Tensor(test_case["input"][rank])
+        in_data = in_data.cuda()
+        out = model(in_data)
+        out.sum().backward()
+        assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
+        optim.step()
+        optim.zero_grad()
+    else:
+        # multiple iters
+        for in_data in test_case["inputs"]:
+            in_data = Tensor(in_data[rank]).cuda()
+            out = model(in_data)
+            out.sum().backward()
+            optim.step()
+            optim.zero_grad()
+        assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
 
     dist.destroy_process_group()
 
@@ -64,6 +74,9 @@ def _test_basic_func(rank, world_size, tempfile_name, test_case):
         {"input": [[-1.0, 1.0], [1.0, -1.0]], "expected_gain": 2.0},
         {"input": [[1.0, 4.0], [5.0, 0.5]], "expected_gain": 1.5022222222222221},
         {"input": [[-0.2, 3.0], [5.0, 0.5]], "expected_gain": 1.9433267229211089},
+        # "inputs" to trigger multiple iteration tests, which make sure the
+        # smoothing factor calculation is also covered.
+        {"inputs": [[[-0.2, 3.3], [5.2, 0.7]], [[1.0, 4.0], [3.1, 0.1]]], "expected_gain": 1.744159431359284},
     ],
 )
 def test_basic(test_case):
