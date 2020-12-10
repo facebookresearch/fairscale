@@ -105,7 +105,7 @@ class OSS(Optimizer):
         self._all_states: List[Dict[str, Any]] = []
 
         # Current default device is set by the parameters allocated to this rank
-        self._device = self.partition_parameters()[self.rank][0]["params"][0].device
+        self._device = list(self.per_device_params.keys())[0]
         self.buckets: Dict[torch.device, List[Bucket]] = {}
         self.bucket_size = broadcast_buffer_size
         for device, per_device in self.per_device_params.items():

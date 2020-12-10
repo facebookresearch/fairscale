@@ -257,7 +257,7 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name):
 @skip_if_single_gpu
 def test_ddp_parity_two_optim():
     temp_file_name = tempfile.mkstemp()[1]
-    world_size = torch.cuda.device_count()
+    world_size = 2
     backend = dist.Backend.NCCL
     mp.spawn(run_ddp_parity_two_optim, args=(world_size, backend, temp_file_name), nprocs=world_size, join=True)
 
