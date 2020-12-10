@@ -74,7 +74,7 @@ class OSS(Optimizer):
         broadcast_buffer_size: int = 2 ** 17,
         **default: Any,
     ):
-        logging.warning("Disabling bucketing for now, error prone for some models")
+        # logging.warning("Disabling bucketing for now, error prone for some models")
         broadcast_buffer_size = 0
 
         # Hold all the model params in the root .param_groups
@@ -105,8 +105,9 @@ class OSS(Optimizer):
         self._all_states: List[Dict[str, Any]] = []
 
         # Current default device is set by the parameters allocated to this rank
-        self._device = self.partition_parameters()[self.rank][0]["params"][0].device
+        self._device = list(self.per_device_params.keys())[0]
         self.buckets: Dict[torch.device, List[Bucket]] = {}
+        self.bucket_size = broadcast_buffer_size
         for device, per_device in self.per_device_params.items():
             # Allocate one buffer per rank and per device to group the small parameters
             self.buckets[device] = [
@@ -597,11 +598,11 @@ class OSS(Optimizer):
             for dst_rank, params in enumerate(per_rank_params):
                 offset = 0
 
-                for param in params:
+                # Only consider the params which will require a gradient
+                for param in filter(lambda p: p.requires_grad, params):
                     # Criteria to decide whether this parameter is to be bucketed or not:
                     # - enough room in the bucket
-                    # - param not the first one in the DAG, because this may be kicked out of autograd (depending on inputs)
-                    if (offset + param.numel()) < self.buckets[device][dst_rank].max_size and param.is_leaf:
+                    if (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
                         self.should_bucket_param[param] = True
                         offset += param.numel()
                     else:
@@ -613,5 +614,9 @@ class OSS(Optimizer):
                 self.buckets[device][dst_rank].global_rank = self.global_rank
 
         # Determine the max work handles in flight:
-        # - all the direct reduce/broadcast + 1 bucket
-        self._max_work_handles = sum(not value for value in self.should_bucket_param.values()) + 1
+        # - all the direct reduce/broadcast
+        self._max_work_handles = sum(not value for value in self.should_bucket_param.values())
+
+        # - if we're bucketing, this means more work handles: one per rank and per device
+        if self.bucket_size > 0:
+            self._max_work_handles += len(self.per_device_params.keys()) * self.world_size
