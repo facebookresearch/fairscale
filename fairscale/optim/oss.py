@@ -561,7 +561,7 @@ class OSS(Optimizer):
 
         self.work_handles.clear()
 
-    def _handle_trailing_buckets(self, flush_type: BucketFlush) -> None:
+    def _handle_trailing_buckets(self, flush_type: BucketFlush = BucketFlush.Reduce) -> None:
         """
         Go through the buckets, flush them if not already empty
         .. warning: Could be that a bucket flush was already requested, needs to be handled carefully

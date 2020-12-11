@@ -23,6 +23,18 @@ from fairscale.optim import OSS
 from fairscale.optim.utils import Workhandle
 
 
+class SyncLayer(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, sddp: "ShardedDataParallel", sentinel: torch.Tensor, *inputs) -> Any:  # type: ignore
+        ctx.sddp = sddp
+        return inputs
+
+    @staticmethod
+    def backward(ctx, *grad_inputs: Any):  # type: ignore
+        ctx.sddp._gatekeeper()
+        return tuple((None, None, *(g for g in grad_inputs)))
+
+
 class ShardedDataParallel(nn.Module):
     """
     Wrap the model, and reduce the gradients to the right rank during the backward pass.
@@ -96,6 +108,8 @@ class ShardedDataParallel(nn.Module):
         self._param_iterator = chain(*[optim.should_bucket_param.keys() for optim in self.sharded_optimizers])
         self._grad_to_be_reduced = [True for _ in self._param_iterator]
         self._grad_accs: List[Callable] = []
+        self._sync_layer = SyncLayer()
+
         self._setup_backward_hooks()
 
         # Make sure that all ranks start with the same model
@@ -114,6 +128,11 @@ class ShardedDataParallel(nn.Module):
 
         # Reset all the grad reduce and bucket state flags
         self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
+
+        # Register a layer in the autograd which will fire the gatekeeper during the backward pass
+        sentinel = torch.zeros((1))  # This makes sure that this function is properly registered
+        sentinel.requires_grad = True
+        inputs = self._sync_layer.apply(self, sentinel, *inputs)
 
         # Normal FW on the base model
         return self.module(*inputs, **kwargs)
@@ -167,6 +186,16 @@ class ShardedDataParallel(nn.Module):
         assert False, "This parameter is not present in an optimizer, this should not happen"
         return (None, -1)
 
+    def _gatekeeper(self) -> None:
+        # Make sure that all the asynchronous calls have concluded before moving on. Consume the futures
+        # and execute the delayed actions (release gradients, unroll the buckets)
+        for optimizer in self.sharded_optimizers:
+            Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
+            Variable._execution_engine.queue_callback(optimizer._handle_trailing_buckets)
+
+        # DEBUG
+        print("gatekeeper fired")
+
     def _get_reduce_fn(
         self, index: int, param: torch.Tensor, should_bucket: bool, dst_rank: int, optimizer: OSS
     ) -> Callable:
@@ -176,11 +205,6 @@ class ShardedDataParallel(nn.Module):
 
         Either way a delayed action is necessary and is passed as a callback.
         """
-
-        def gatekeeper() -> None:
-            # Make sure that all the asynchronous calls have concluded before moving on. Consume the futures
-            # and execute the delayed actions (release gradients, unroll the buckets)
-            Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
 
         def reduce_direct(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
@@ -205,10 +229,6 @@ class ShardedDataParallel(nn.Module):
                         callback=cleanup,
                     )
                 )
-
-                # If all the reduce operations have been called, add the gatekeeper
-                if len(optimizer.work_handles) == optimizer._max_work_handles:
-                    gatekeeper()
 
         # Bucket, update status, and possibly unroll the results
         def reduce_bucket(*_: Any) -> None:
@@ -239,10 +259,6 @@ class ShardedDataParallel(nn.Module):
                             callback=bucket.unroll,
                         )
                     )
-
-                    # If all the reduce operations have been called, add the gatekeeper
-                    if len(optimizer.work_handles) == optimizer._max_work_handles:
-                        gatekeeper()
 
         return reduce_bucket if should_bucket else reduce_direct
 

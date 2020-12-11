@@ -130,6 +130,31 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
     return value
 
 
+def recursive_tensor_clone(value: Any) -> Any:
+    """
+    Recursively searches lists, tuples, dicts and clones tensors. Non-tensor values are passed as-is in the result.
+    """
+
+    if isinstance(value, torch.Tensor):
+        return value.clone()
+
+    if isinstance(value, (list, tuple)):
+        values = []
+        for val in value:
+            values.append(recursive_tensor_clone(val))
+
+        return values if isinstance(value, list) else tuple(values)
+
+    if isinstance(value, container_abcs.Mapping):
+        device_val: Dict[str, Any] = {}
+        for key, val in value.items():
+            device_val[key] = recursive_tensor_clone(val)
+
+        return device_val
+
+    return value
+
+
 def broadcast_object(
     obj: Any, src_rank: int, group: object = dist.group.WORLD, dist_device: torch.device = torch.device("cpu")
 ) -> Any:
