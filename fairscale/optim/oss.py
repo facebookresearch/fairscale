@@ -74,9 +74,6 @@ class OSS(Optimizer):
         broadcast_buffer_size: int = 2 ** 17,
         **default: Any,
     ):
-        # logging.warning("Disabling bucketing for now, error prone for some models")
-        broadcast_buffer_size = 0
-
         # Hold all the model params in the root .param_groups
         self.in_super_constructor = True
         super().__init__(params, default)
