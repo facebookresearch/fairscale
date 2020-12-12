@@ -190,11 +190,11 @@ class ShardedDataParallel(nn.Module):
         # Make sure that all the asynchronous calls have concluded before moving on. Consume the futures
         # and execute the delayed actions (release gradients, unroll the buckets)
         for optimizer in self.sharded_optimizers:
+            # Empty in-flight futures
             Variable._execution_engine.queue_callback(optimizer._consume_work_handles)
-            Variable._execution_engine.queue_callback(optimizer._handle_trailing_buckets)
 
-        # DEBUG
-        print("gatekeeper fired")
+            # Catch possible buckets still not flushed
+            Variable._execution_engine.queue_callback(optimizer._handle_trailing_buckets)
 
     def _get_reduce_fn(
         self, index: int, param: torch.Tensor, should_bucket: bool, dst_rank: int, optimizer: OSS
