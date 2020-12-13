@@ -29,6 +29,8 @@ import torch
 from torch import Tensor, nn
 import torch.autograd
 import torch.cuda
+from torch.optim.optimizer import Optimizer
+from torch.utils.data import DataLoader
 
 from fairscale.nn.model_parallel import get_model_parallel_world_size, get_pipeline_parallel_group
 
@@ -752,6 +754,17 @@ class Pipe(Module):
 
         if self.pipeline:
             self.pipeline.back_helper(list(reversed(output)))
+
+    # for ampnet and other async approaches
+    def interleave(
+        self,
+        lm_dataloader: DataLoader,
+        criterion: nn.Module,
+        optimizer: Optimizer,
+        vocab_size: int,
+        weight_prediction: bool = False,
+    ) -> None:
+        self.pipeline.run_ampnet(lm_dataloader, criterion, optimizer, vocab_size, weight_prediction)  # type: ignore
 
 
 class PipelinedBackwardPass(torch.autograd.Function):

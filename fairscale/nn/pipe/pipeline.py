@@ -28,9 +28,12 @@ from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Type, U
 import torch
 from torch import Tensor, nn
 from torch.autograd.profiler import record_function
+from torch.optim.optimizer import Optimizer
+from torch.utils.data import DataLoader
 
 from fairscale.nn.model_parallel import get_pipeline_parallel_ranks
 
+from .ampnet import AsyncAMPnetEventLoop
 from .async_schedule import AsyncEventLoop, ModuleWrapper
 from .checkpoint import Checkpointing
 from .copy import Copy, Wait
@@ -599,3 +602,39 @@ class Pipeline:
                     torch.autograd.backward(final_tensors, grad_tensors=grads, retain_graph=True)
                 except Exception as e:
                     raise RuntimeError(f"Autograd failed on {torch.distributed.get_rank()}") from e
+
+    def run_ampnet(
+        self,
+        lm_dataloader: DataLoader,
+        criterion: nn.Module,
+        optimizer: Optimizer,
+        vocab_size: int,
+        weight_prediction: bool,
+    ) -> None:
+        partitions = self.mp_partitions
+        n = len(partitions)
+
+        # AMPnet implementation doesn't handle skip_trackers!
+
+        assert self.style is PipelineStyle.AsyncSchedule
+        assert self.group
+        rank = self.group.rank()
+
+        min_update_interval = 10
+
+        ampnet_event_loop = AsyncAMPnetEventLoop(
+            partitions,
+            self.group,
+            self.transport,
+            min_update_interval,
+            weight_prediction,
+            self.checkpoint_stop,
+            self.input_device,
+        )
+
+        if rank == 0:
+            ampnet_event_loop.event_loop_head_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
+        elif self.final_stage:
+            ampnet_event_loop.event_loop_tail_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
+        else:
+            ampnet_event_loop.event_loop_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
