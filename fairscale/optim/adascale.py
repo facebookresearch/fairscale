@@ -316,6 +316,12 @@ class AdaScale(object):
         Run one optimizer step using Adascale. Essentially just invokes
         ``optimizer.step(*args, **kwargs)`` with a scaled learning rate.
 
+        .. note::
+        It is possible that this function becames a performance
+        bottleneck if you have frequent updates. To avoid that,
+        making bigger steps and reducing update frequency is generally
+        better for performance.
+
         Args:
             args (Any):
                 Positional arguments passed to ``optimizer.step``.
@@ -348,14 +354,17 @@ class AdaScale(object):
     def state_dict(self) -> Dict:
         """ Proxy function to optimizer, checkpointing needs this.
 
-            Note: Do NOT checkpoint in the middle of gradient accumulation since
-                  associated AdaScale internal states are not saved in the checkpoint.
+            .. note::
+            Do NOT checkpoint in the middle of gradient accumulation since
+            associated AdaScale internal states are not saved in the checkpoint.
         """
         return self._optimizer.state_dict()
 
     def load_state_dict(self, data: Dict) -> None:
         """ Proxy function to optimizer, checkpointing needs this.
 
-            See notes in the comment of `state_dict()`
+            .. note::
+            Do NOT checkpoint in the middle of gradient accumulation since
+            associated AdaScale internal states are not saved in the checkpoint.
         """
         return self._optimizer.load_state_dict(data)
