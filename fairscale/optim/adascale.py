@@ -51,6 +51,9 @@ class AdaScale(Optimizer):
 
     .. _AdaScale: https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Supplemental.pdf
 
+    Here is an overly simple example. For `torch.optim.lr_scheduler`
+    based example, please checkout our tutorial.
+
     .. code-block:: python
 
         optim = torch.optim.SGD(model.parameters(), lr=0.001)
