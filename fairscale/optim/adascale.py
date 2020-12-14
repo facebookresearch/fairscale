@@ -72,7 +72,8 @@ class AdaScale(object):
             larger batch size (summed across all world_size) means a scale of
             10. If None, defaults to ``world_size``.
         smoothing (float):
-            Smoothing factor between batches. Default value: 0.9999
+            Smoothing factor for moving average. If None, it defaults to
+            max(1 - (world_size * num_gradients_to_accumulate)/1000, 0).
         num_gradients_to_accumulate (int):
             Number of passes that we accumulate gradients locally.
             Default to 1, which does not accumulate gradients.
@@ -83,7 +84,7 @@ class AdaScale(object):
         optimizer: torch.optim.Optimizer,
         world_size: Optional[int] = None,
         scale: Optional[float] = None,
-        smoothing: float = 0.999,
+        smoothing: float = None,
         num_gradients_to_accumulate: int = 1,
     ):
         self._optimizer = optimizer
@@ -91,7 +92,6 @@ class AdaScale(object):
         self._world_size: int = (
             world_size if world_size is not None else dist.get_world_size() if dist.is_initialized() else 1
         )
-        self._smoothing = smoothing
         self._num_backward_calls = 0
         self._num_grads_to_accum = num_gradients_to_accumulate
 
@@ -109,6 +109,12 @@ class AdaScale(object):
         )
 
         self.set_scale(self._world_size * self._num_grads_to_accum if scale is None else scale)
+
+        # Set smoothing based on effective world_size rather than scale here, since world_size
+        # determines the number of samples being averaged over at every update
+        self._smoothing = (
+            max(1 - (self._world_size * self._num_grads_to_accum) / 1000, 0) if smoothing is None else smoothing
+        )
 
         # Register the gradient hooks. Note, don't assume every param will generate
         # a gradient (i.e. triggering the hook) in every backward pass.
@@ -295,7 +301,7 @@ class AdaScale(object):
         grad_sqr = total_grad_sqr - grad_var / S
         grad_var = np.maximum(grad_var, 1e-6)
         grad_sqr = np.maximum(grad_sqr, 0.0)
-        theta = self._smoothing ** S
+        theta = self._smoothing
         self._update_avg("grad_sqr_avg", grad_sqr, theta)
         self._update_avg("grad_var_avg", grad_var, theta)
 
