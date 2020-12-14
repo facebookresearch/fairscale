@@ -326,10 +326,11 @@ class AdaScale(Optimizer):
         ``optimizer.step(*args, **kwargs)`` with a scaled learning rate.
 
         .. note::
-        It is possible that this function becames a performance
-        bottleneck if you have frequent updates. To avoid that,
-        making bigger steps and reducing update frequency is generally
-        better for performance.
+
+            It is possible that this function becames a performance
+            bottleneck if you have frequent updates. To avoid that,
+            making bigger steps and reducing update frequency is generally
+            better for performance.
 
         Args:
             args (Any):
@@ -364,8 +365,9 @@ class AdaScale(Optimizer):
         """ Proxy function to optimizer, checkpointing needs this.
 
             .. note::
-            Do NOT checkpoint in the middle of gradient accumulation since
-            associated AdaScale internal states are not saved in the checkpoint.
+
+                Do NOT checkpoint in the middle of gradient accumulation since
+                associated AdaScale internal states are not saved in the checkpoint.
         """
         return self._optimizer.state_dict()
 
@@ -373,7 +375,8 @@ class AdaScale(Optimizer):
         """ Proxy function to optimizer, checkpointing needs this.
 
             .. note::
-            Do NOT checkpoint in the middle of gradient accumulation since
-            associated AdaScale internal states are not saved in the checkpoint.
+
+                Do NOT checkpoint in the middle of gradient accumulation since
+                associated AdaScale internal states are not saved in the checkpoint.
         """
         return self._optimizer.load_state_dict(data)
