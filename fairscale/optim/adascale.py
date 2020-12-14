@@ -38,13 +38,16 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 import torch.distributed as dist
+from torch.optim import Optimizer
 
 
-class AdaScale(object):
+class AdaScale(Optimizer):
     """
     Implements the AdaScale_ algorithm for scaling the learning rate for
     distributed and large batch size training. Can be used in combination with
     ``torch.nn.parallel.DistributedDataParallel`` and ``torch.optim.SGD``.
+
+    Subclass `Optimizer` so that `torch.optim.lr_scheduler` can work.
 
     .. _AdaScale: https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Supplemental.pdf
 
@@ -99,6 +102,9 @@ class AdaScale(object):
         self._num_backward_calls = 0
         self._num_grads_to_accum = num_gradients_to_accumulate
 
+        # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
+        self.param_groups = self._optimizer.param_groups
+
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
             raise RuntimeError("AdaScale does not support a single worker without grad accumulation.")
@@ -127,7 +133,7 @@ class AdaScale(object):
                 param.register_hook(functools.partial(self._backward_hook, idx))
 
     @property
-    def state(self) -> Dict[str, np.ndarray]:
+    def _state(self) -> Dict[str, np.ndarray]:
         """
         Return the states of AdaScale.
         """
@@ -173,9 +179,9 @@ class AdaScale(object):
                 Estimate of squared l2-norm.
         """
         if pg_idx is not None:
-            return self.state["grad_sqr_avg"][pg_idx]
+            return self._state["grad_sqr_avg"][pg_idx]
         else:
-            return np.sum(self.state["grad_sqr_avg"])
+            return np.sum(self._state["grad_sqr_avg"])
 
     def grad_var_avg(self, pg_idx: Optional[int] = None) -> float:
         """
@@ -191,9 +197,9 @@ class AdaScale(object):
                 Estimate of trace of the covariance.
         """
         if pg_idx is not None:
-            return self.state["grad_var_avg"][pg_idx]
+            return self._state["grad_var_avg"][pg_idx]
         else:
-            return np.sum(self.state["grad_var_avg"])
+            return np.sum(self._state["grad_var_avg"])
 
     def gain(self, scale: Optional[float] = None, pg_idx: Optional[int] = None) -> float:
         """
@@ -217,13 +223,13 @@ class AdaScale(object):
     def _update_avg(self, name: str, value: torch.Tensor, factor: float) -> None:
         # This function computes and stores the moving average of a vector
         # using a smoothing factor.
-        biased = self.state.get(name + "_biased", 0.0)
-        unbias = self.state.get(name + "_unbias", 0.0)
+        biased = self._state.get(name + "_biased", 0.0)
+        unbias = self._state.get(name + "_unbias", 0.0)
         biased = factor * biased + (1.0 - factor) * value
         unbias = factor * unbias + (1.0 - factor)
-        self.state[name + "_biased"] = biased
-        self.state[name + "_unbias"] = unbias
-        self.state[name] = biased / unbias
+        self._state[name + "_biased"] = biased
+        self._state[name + "_unbias"] = unbias
+        self._state[name] = biased / unbias
 
     def _backward_hook(self, pg_idx: int, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
