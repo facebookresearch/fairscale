@@ -134,6 +134,7 @@ while not done:
     for sample in dataset:
         ...
         step += optim.gain()
+        optim.step()
         epoch = step // len(dataset)
         if last_epoch != epoch:
             scheduler.step()

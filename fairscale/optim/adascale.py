@@ -47,28 +47,58 @@ class AdaScale(Optimizer):
     distributed and large batch size training. Can be used in combination with
     ``torch.nn.parallel.DistributedDataParallel`` and ``torch.optim.SGD``.
 
-    Subclass `Optimizer` so that `torch.optim.lr_scheduler` can work.
+    Subclass `Optimizer` so that `torch.optim.lr_scheduler` can work. In other words,
+    AdaScale is intended to be a complete wrapper of an torch Optimizer.
 
     .. _AdaScale: https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Supplemental.pdf
 
-    Here is an overly simple example. For `torch.optim.lr_scheduler`
-    based example, please checkout our tutorial.
+    There are several ways to integrate AdaScale with your training loop.
+    We show two examples below.
+
+    Example 1: using PyTorch's `lr_scheduler` classes.
 
     .. code-block:: python
 
-        optim = torch.optim.SGD(model.parameters(), lr=0.001)
+        optim = AdaScale(SGD(model.parameters(), lr=0.001))
         model = DistributedDataParallel(model)
-        adascale = AdaScale(optim)
+        scheduler = LambdaLR(optim, lr_lambda=...)
+
+        last_epoch = 0
+        done = False
+        step = 0
+        while True:
+            for batch in dataset:
+                optim.zero_grad()
+                logits = model()
+                loss = criterion(logits, ...)
+                loss.backward()
+                step += optim.gain()
+                optim.step()
+                epoch = step // len(dataset)
+                if epoch > last_epoch:
+                    scheduler.step()
+                    last_epoch = epoch
+                if epoch >= max_epochs:
+                    done = True
+
+    Example 2: using a custom `update_lr()` function that update the learning
+    rate based on the current step count.
+
+    .. code-block:: python
+
+        optim = AdaScale(SGD(model.parameters(), lr=0.001))
+        model = DistributedDataParallel(model)
 
         step = 0
-        for epoch in ...:
+        while step < max_steps:
             for batch in ...:
                 optim.zero_grad()
-                loss = ...
+                logits = model()
+                loss = criterion()
                 loss.backward()
-                step += adascale.gain()
+                step += optim.gain()
+                optim.step()
                 update_lr(step)
-                adascale.step()
 
     Args:
         optimizer (torch.optim.Optimizer):

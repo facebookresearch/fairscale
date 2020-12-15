@@ -104,5 +104,5 @@ the effective step and compute learning rate schedule accordingly.
                 if last_epoch != epoch:
                     scheduler.step()
                     last_epoch = epoch
-                if epoch >= len(epochs):
+                if epoch >= epochs:
                     done = True
