@@ -6,9 +6,9 @@
 --------------------------------------------------------------------------------
 
 ## Description
-fairscale is a PyTorch extension library for high performance and large scale training on one or multiple machines/nodes. This library extends basic PyTorch capabilities while adding new experimental ones.
+FairScale is a PyTorch extension library for high performance and large scale training on one or multiple machines/nodes. This library extends basic PyTorch capabilities while adding new experimental ones.
 
-fairscale supports:
+FairScale supports:
 * Parallelism:
    * pipeline parallelism (fairscale.nn.Pipe)
 * Sharded training:
