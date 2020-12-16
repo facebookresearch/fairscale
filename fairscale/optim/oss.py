@@ -3,14 +3,14 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections import OrderedDict
+from collections import OrderedDict, deque
 import copy
 from enum import Enum, auto
 import itertools
 from itertools import chain
 import logging
 from math import inf
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Callable, Deque, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 import torch.distributed as dist
@@ -74,8 +74,6 @@ class OSS(Optimizer):
         broadcast_buffer_size: int = 2 ** 17,
         **default: Any,
     ):
-        # logging.warning("Disabling bucketing for now, error prone for some models")
-        broadcast_buffer_size = 0
 
         # Hold all the model params in the root .param_groups
         self.in_super_constructor = True
@@ -92,7 +90,6 @@ class OSS(Optimizer):
         self.world_size = dist.get_world_size(self.group)
         self.rank = dist.get_rank(self.group)
         self.global_rank = self.get_global_rank(self.group, self.rank)
-
         self.optim = optim(self.partition_parameters()[self.rank], **default)
 
         # - Sync local and global param_groups keys
@@ -107,6 +104,11 @@ class OSS(Optimizer):
         # Current default device is set by the parameters allocated to this rank
         self._device = list(self.per_device_params.keys())[0]
         self.buckets: Dict[torch.device, List[Bucket]] = {}
+
+        # if torch.cuda.is_available() and self.world_size <= torch.cuda.device_count():
+        #     broadcast_buffer_size = 0
+        #     logging.warning("Assuming single node job, bucketing is disabled")
+
         self.bucket_size = broadcast_buffer_size
         for device, per_device in self.per_device_params.items():
             # Allocate one buffer per rank and per device to group the small parameters
@@ -115,7 +117,7 @@ class OSS(Optimizer):
                 for _ in range(len(per_device))
             ]
         self.should_bucket_param: Dict[torch.Tensor, bool] = {}
-        self.work_handles: List[Workhandle] = []
+        self.work_handles: Deque[Workhandle] = deque()
         self._max_work_handles = -1
         self._setup_bucket_strategy()
 
@@ -554,12 +556,19 @@ class OSS(Optimizer):
         We start from the first/older ones, since they are the most likely to be ready and non-blocking
         """
 
-        for work_handle in self.work_handles:
+        while len(self.work_handles) > 0:
+            work_handle = self.work_handles.popleft()
             work_handle.handle.wait()
             if work_handle.callback is not None:
                 work_handle.callback()
 
-        self.work_handles.clear()
+    def _try_consume_work_handle(self) -> None:
+        """ Try to consume the oldest future. This is non blocking, if not ready we'll pass
+        """
+        while len(self.work_handles) > 0 and self.work_handles[0].handle.is_completed():
+            work_handle = self.work_handles.popleft()
+            if work_handle.callback is not None:
+                work_handle.callback()
 
     def _handle_trailing_buckets(self, flush_type: BucketFlush) -> None:
         """
@@ -594,6 +603,10 @@ class OSS(Optimizer):
         network requests have been issued.
         """
 
+        # Determine the max work handles in flight:
+        # - count all the buckets on the fly
+        self._max_work_handles = 0
+
         for device, per_rank_params in self.per_device_params.items():
             for dst_rank, params in enumerate(per_rank_params):
                 offset = 0
@@ -604,6 +617,11 @@ class OSS(Optimizer):
                     # - enough room in the bucket
                     if (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
                         self.should_bucket_param[param] = True
+
+                        if offset == 0:
+                            # count this bucket, only once
+                            self._max_work_handles += 1
+
                         offset += param.numel()
                     else:
                         self.should_bucket_param[param] = False
@@ -615,8 +633,4 @@ class OSS(Optimizer):
 
         # Determine the max work handles in flight:
         # - all the direct reduce/broadcast
-        self._max_work_handles = sum(not value for value in self.should_bucket_param.values())
-
-        # - if we're bucketing, this means more work handles: one per rank and per device
-        if self.bucket_size > 0:
-            self._max_work_handles += len(self.per_device_params.keys()) * self.world_size
+        self._max_work_handles += sum(not value for value in self.should_bucket_param.values())
