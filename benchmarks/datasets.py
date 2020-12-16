@@ -28,4 +28,3 @@ def batchify(data, bsz, TEXT, device):
     data = data.narrow(0, 0, nbatch * bsz)
     data = data.view(bsz, -1).t().contiguous()
     return data.to(device)
-
