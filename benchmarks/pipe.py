@@ -47,13 +47,13 @@ def init_random_seed(seed: int):
 
 
 def make_model(args, device, config):
-    ninp = config['ninp']
-    nhead = config['nhead']
-    initrange = config['initrange']
-    dropout = config['dropout']
-    vocab_size = config['vocab_size']
-    nhid = config['nhid']
-    lr = config['lr']
+    ninp = config["ninp"]
+    nhead = config["nhead"]
+    initrange = config["initrange"]
+    dropout = config["dropout"]
+    vocab_size = config["vocab_size"]
+    nhid = config["nhid"]
+    lr = config["lr"]
     ndecoder = args.num_decoder_layers
 
     if args.lazy_construction:
@@ -68,6 +68,7 @@ def make_model(args, device, config):
         model = layers
     else:
         model = TransformerLMSequntial(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
+
     def make_adam(model):
         if args.ddp_zero:
             return OSS(params=model.parameters(), optim=Adam, group=get_data_parallel_group(), lr=lr)
@@ -291,13 +292,13 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
 def evaluate(eval_model, data_source, criterion, bptt, ntokens):
     eval_model.eval()
     total_loss = 0.0
-    
+
     def get_batch(source, i, bptt):
         seq_len = min(bptt, len(source) - 1 - i)
         data = source[i : i + seq_len]
         target = source[i + 1 : i + 1 + seq_len].view(-1)
         return data, target
-    
+
     with torch.no_grad():
         for i in range(0, data_source.size(0) - 1, bptt):
             data, targets = get_batch(data_source, i, bptt)
@@ -396,15 +397,11 @@ def make_model_and_data(args, new_data: bool = True, config=None):
         lm_dataloader = DataLoader(
             lm_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_sentences_lm
         )
-        return {
-            "model": model,
-            "optimizer": optimizer,
-            "data": lm_dataloader
-        }
+        return {"model": model, "optimizer": optimizer, "data": lm_dataloader}
     else:
         data = datasets.get_wikitext2_data(device)
         ntokens, _, _, _ = data
-        config['vocab_size'] = ntokens
+        config["vocab_size"] = ntokens
         model, optimizer = make_model(args, device, ntokens)
         return {
             "model": model,
@@ -412,26 +409,27 @@ def make_model_and_data(args, new_data: bool = True, config=None):
             "data": data,
         }
 
+
 def create_model_config(model_name):
-    if model_name == 'seq_pred':
+    if model_name == "seq_pred":
         return {
-                "vocab_size" : 10000,
-                "ninp" : 2048,  # embedding dimension
-                "nhid" : 2048,  # the dimension of the feedforward network model in nn.TransformerEncoder
-                "nhead" : 32,  # the number of heads in the multiheadattention models
-                "dropout" : 0,
-                "initrange" : 0.1,
-                "criterion" : nn.CrossEntropyLoss(),
-                "lr" : 0.01,  # learning rate
-                "scaler" : GradScaler()
-                }
+            "vocab_size": 10000,
+            "ninp": 2048,  # embedding dimension
+            "nhid": 2048,  # the dimension of the feedforward network model in nn.TransformerEncoder
+            "nhead": 32,  # the number of heads in the multiheadattention models
+            "dropout": 0,
+            "initrange": 0.1,
+            "criterion": nn.CrossEntropyLoss(),
+            "lr": 0.01,  # learning rate
+            "scaler": GradScaler(),
+        }
 
 
 def bench_single_process(args):
     num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
     init_random_seed(0)
-    
+
     config = create_model_config(args.model_name)
     blob = make_model_and_data(args, config=config)
     model = blob["model"]
@@ -444,11 +442,12 @@ def bench_single_process(args):
     del blob["model"]
 
     if args.use_synthetic_data:
-        train(blob["data"], p, config['criterion'], blob["optimizer"], config['vocab_size'], args)
+        train(blob["data"], p, config["criterion"], blob["optimizer"], config["vocab_size"], args)
     else:
         ntokens, train_data, val_data, test_data = blob["data"]
-        benchmark_language_model(train_data, val_data, test_data, p, config['criterion'], blob["optimizer"],
-                                ntokens, args)
+        benchmark_language_model(
+            train_data, val_data, test_data, p, config["criterion"], blob["optimizer"], ntokens, args
+        )
 
 
 def run_mp_worker(args, available_workers):
@@ -479,8 +478,9 @@ def run_mp_worker(args, available_workers):
         train(blob["data"], p, config["criterion"], blob["optimizer"], config["vocab_size"], args)
     else:
         ntokens, train_data, val_data, test_data = blob["data"]
-        benchmark_language_model(train_data, val_data, test_data, p, config["criterion"],
-                                blob["optimizer"], ntokens, args)
+        benchmark_language_model(
+            train_data, val_data, test_data, p, config["criterion"], blob["optimizer"], ntokens, args
+        )
 
 
 def run_worker(rank, world_size, args):
@@ -584,7 +584,9 @@ parser.add_argument(
     "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
 )
 parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data to run benchmarks.")
-parser.add_argument("--model_name", default="seq_pred", choices=["seq_pred", "transformer"], help="Model used to benchmark pipe.")
+parser.add_argument(
+    "--model_name", default="seq_pred", choices=["seq_pred", "transformer"], help="Model used to benchmark pipe."
+)
 parser.set_defaults(pipelined_backward=True)
 
 if __name__ == "__main__":
