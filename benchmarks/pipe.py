@@ -25,7 +25,13 @@ from fairscale.optim import GradScaler
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
 
+import models
+from models import TransformerLMSequntial
+import datasets
+
+
 try:
+    # TODO: When would this happen?
     from fairscale.optim import Adam  # type: ignore
 
     can_benchmark = True
@@ -43,145 +49,28 @@ def init_random_seed(seed: int):
     numpy.random.seed(seed)
 
 
-PIPE_CHUNKS = 2
-iteration_count = 0
-
-
-class EmbeddingLayer(nn.Embedding):
-    def __init__(self, ntoken, ninp, initrange):
-        super().__init__(ntoken, ninp)
-        self.ninp = ninp
-        self.weight.data.uniform_(-initrange, initrange)
-
-    def forward(self, src):
-        return super().forward(src) * math.sqrt(self.ninp)
-
-
-class PositionalEncodingLayer(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=5000):
-        super(PositionalEncodingLayer, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer("pe", pe)
-
-    def forward(self, x):
-        x = x + self.pe[: x.size(0), :]
-        return self.dropout(x)
-
-
-class TransformerDecoderLayer(nn.TransformerEncoderLayer):
-    """Though this class inherits from torch.nn.TransformerEncoderLayer,
-    it functions as a decoder in this model"""
-
-    def __init__(self, ninp, nhead, nhid, droupout):
-        super().__init__(ninp, nhead, nhid, droupout)
-        self.src_mask = None
-
-    def _generate_square_subsequent_mask(self, sz):
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float("-inf")).masked_fill(mask == 1, float(0.0))
-        return mask
-
-    def forward(self, src):
-        global iteration_count
-        iteration_count += 1
-        # if iteration_count == 196:
-        #    dump_cuda_tensors()
-
-        if self.src_mask is None or self.src_mask.size(0) != len(src):
-            device = src.device
-            mask = self._generate_square_subsequent_mask(len(src)).to(device)
-            self.src_mask = mask
-
-        return super().forward(src, self.src_mask)
-
-
-class LinearLayer(nn.Linear):
-    def __init__(self, ninp, ntoken, initrange):
-        super().__init__(ninp, ntoken)
-        self.bias.data.zero_()
-        self.weight.data.uniform_(-initrange, initrange)
-
-
-class TransformerLMSequntial(nn.Sequential):
-    """A small language model based on the design of GPT-2 using nn.Sequeitnal
-    for compatability with Pipe"""
-
-    def __init__(self, ntokens, ninp, nhead, nhid, dropout, initrange, ndecoder):
-        layers = [
-            EmbeddingLayer(ntokens, ninp, initrange),
-            PositionalEncodingLayer(ninp, dropout),
-        ]
-        for _ in range(ndecoder):
-            layers.append(TransformerDecoderLayer(ninp, nhead, nhid, dropout))
-
-        layers.append(LinearLayer(ninp, ntokens, initrange))
-        super(TransformerLMSequntial, self).__init__(*layers)
-
-
-def get_data(device):
-    with warnings.catch_warnings(record=True) as fjldska:
-        TEXT = torchtext.data.Field(
-            tokenize=get_tokenizer("basic_english"), init_token="<sos>", eos_token="<eos>", lower=True
-        )
-        train_txt, val_txt, test_txt = torchtext.datasets.WikiText2.splits(TEXT)
-        TEXT.build_vocab(train_txt)
-        ntokens = len(TEXT.vocab.stoi)
-
-        batch_size = 20
-        eval_batch_size = 10
-        train_data = batchify(train_txt, batch_size, TEXT, device)
-        val_data = batchify(val_txt, eval_batch_size, TEXT, device)
-        test_data = batchify(test_txt, eval_batch_size, TEXT, device)
-
-        return ntokens, train_data, val_data, test_data
-
-
-def batchify(data, bsz, TEXT, device):
-    data = TEXT.numericalize([data.examples[0].text])
-    nbatch = data.size(0) // bsz
-    data = data.narrow(0, 0, nbatch * bsz)
-    data = data.view(bsz, -1).t().contiguous()
-    return data.to(device)
-
-
-def get_batch(source, i, bptt):
-    seq_len = min(bptt, len(source) - 1 - i)
-    data = source[i : i + seq_len]
-    target = source[i + 1 : i + 1 + seq_len].view(-1)
-    return data, target
-
-
-def make_model(args, device, ntokens):
-    ninp = 2048  # embedding dimension
-    nhid = 2048  # the dimension of the feedforward network model in nn.TransformerEncoder
-    nhead = 32  # the number of heads in the multiheadattention models
-    dropout = 0
-    initrange = 0.1
+def make_model(args, device, config):
+    ninp = config['ninp']
+    nhead = config['nhead']
+    initrange = config['initrange']
+    dropout = config['dropout']
+    vocab_size = config['vocab_size']
+    nhid = config['nhid']
+    lr = config['lr']
     ndecoder = args.num_decoder_layers
 
     if args.lazy_construction:
         layers = [
-            LazyModule(lambda: EmbeddingLayer(ntokens, ninp, initrange)),
-            LazyModule(lambda: PositionalEncodingLayer(ninp, dropout)),
+            LazyModule(lambda: models.EmbeddingLayer(vocab_size, ninp, initrange)),
+            LazyModule(lambda: models.PositionalEncodingLayer(ninp, dropout)),
         ]
         for _ in range(ndecoder):
-            layers.append(LazyModule(lambda: TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
+            layers.append(LazyModule(lambda: models.TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
 
-        layers.append(LazyModule(lambda: LinearLayer(ninp, ntokens, initrange)))
+        layers.append(LazyModule(lambda: models.LinearLayer(ninp, vocab_size, initrange)))
         model = layers
     else:
-        model = TransformerLMSequntial(ntokens, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
-
-    criterion = nn.CrossEntropyLoss()
-    lr = 0.01  # learning rate
-
+        model = TransformerLMSequntial(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
     def make_adam(model):
         if args.ddp_zero:
             return OSS(params=model.parameters(), optim=Adam, group=get_data_parallel_group(), lr=lr)
@@ -189,9 +78,7 @@ def make_model(args, device, ntokens):
             return Adam(model.parameters(), lr=lr)
 
     optimizer = make_adam
-    scaler = GradScaler()
-
-    return model, criterion, optimizer, scaler
+    return model, optimizer
 
 
 def get_tensors_by_size_bucket():
@@ -409,7 +296,7 @@ def evaluate(eval_model, data_source, criterion, bptt, ntokens):
     total_loss = 0.0
     with torch.no_grad():
         for i in range(0, data_source.size(0) - 1, bptt):
-            data, targets = get_batch(data_source, i, bptt)
+            data, targets = datasets.get_batch(data_source, i, bptt)
             output = eval_model(data)
             output = output.to(targets.device)
             output_flat = output.view(-1, ntokens)
@@ -497,43 +384,54 @@ def generate_balance(num_devices, num_layers):
     return balance
 
 
-def make_model_and_data(args, device, new_data: bool = True):
+def make_model_and_data(args, new_data: bool = True, config=None):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    if new_data:
-        vocab_size = 10000
-        model, criterion, optimizer, scaler = make_model(args, device, vocab_size)
+    if args.use_synthetic_data:
+        model, optimizer = make_model(args, device, config)
         lm_dataset = BenchmarkLMDataset()
         lm_dataloader = DataLoader(
             lm_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_sentences_lm
         )
         return {
             "model": model,
-            "criterion": criterion,
             "optimizer": optimizer,
-            "data": lm_dataloader,
-            "vocab_size": vocab_size,
+            "data": lm_dataloader
         }
     else:
-        data = get_data(device)
-        ntokens, train_data, val_data, test_data = data
-        model, criterion, optimizer, scaler = make_model(args, device, ntokens)
+        data = datasets.get_wikitext2_data(device)
+        ntokens, _, _, _ = data
+        config['vocab_size'] = ntokens
+        model, optimizer = make_model(args, device, ntokens)
         return {
             "model": model,
-            "criterion": criterion,
             "optimizer": optimizer,
             "data": data,
         }
+
+def create_model_config(model_name):
+    if model_name == 'seq_pred':
+        return {
+                "vocab_size" : 10000,
+                "ninp" : 2048,  # embedding dimension
+                "nhid" : 2048,  # the dimension of the feedforward network model in nn.TransformerEncoder
+                "nhead" : 32,  # the number of heads in the multiheadattention models
+                "dropout" : 0,
+                "initrange" : 0.1,
+                "criterion" : nn.CrossEntropyLoss(),
+                "lr" : 0.01,  # learning rate
+                "scaler" : GradScaler()
+                }
 
 
 def bench_single_process(args):
     num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
     init_random_seed(0)
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    
+    config = create_model_config(args.model_name)
+    print("config ", config)
 
-    new_data = True
-
-    blob = make_model_and_data(args, None, new_data=new_data)
+    blob = make_model_and_data(args, config=config)
     model = blob["model"]
 
     balance = generate_balance(min(num_devices, 4), len(model))
@@ -543,17 +441,18 @@ def bench_single_process(args):
     del model
     del blob["model"]
 
-    if new_data:
-        train(blob["data"], p, blob["criterion"], blob["optimizer"], blob["vocab_size"], args)
+    if args.use_synthetic_data:
+        train(blob["data"], p, config['criterion'], blob["optimizer"], config['vocab_size'], args)
     else:
         ntokens, train_data, val_data, test_data = blob["data"]
-        benchmark_language_model(train_data, val_data, test_data, p, criterion, optimizer, ntokens, args)
+        benchmark_language_model(train_data, val_data, test_data, p, config['criterion'], blob["optimizer"],
+                                ntokens, args)
 
 
 def run_mp_worker(args, available_workers):
-    new_data = True
 
-    blob = make_model_and_data(args, None, new_data=new_data)
+    config = create_model_config(args.model_name)
+    blob = make_model_and_data(args, config=config)
     model = blob["model"]
 
     balance = generate_balance_weighted(get_pipeline_parallel_group().size(), len(model), 0.8)
@@ -574,11 +473,12 @@ def run_mp_worker(args, available_workers):
         print(f"running all at once")
         p.pipeline.all_at_once = True
 
-    if new_data:
-        train(blob["data"], p, blob["criterion"], blob["optimizer"], blob["vocab_size"], args)
+    if args.use_synthetic_data:
+        train(blob["data"], p, config["criterion"], blob["optimizer"], config["vocab_size"], args)
     else:
         ntokens, train_data, val_data, test_data = blob["data"]
-        benchmark_language_model(train_data, val_data, test_data, p, criterion, optimizer, ntokens, args)
+        benchmark_language_model(train_data, val_data, test_data, p, config["criterion"],
+                                blob["optimizer"], ntokens, args)
 
 
 def run_worker(rank, world_size, args):
@@ -681,11 +581,13 @@ parser.add_argument(
 parser.add_argument(
     "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
 )
+parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data to run benchmarks.")
+parser.add_argument("--model_name", default="seq_pred", choices=["seq_pred", "transformer"], help="Model used to benchmark pipe.")
 parser.set_defaults(pipelined_backward=True)
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    # bench_multi_process(args, all_at_once=True)
+    # TODO: Add support for multiprocess benchmarking.
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
         print(f"Running benchmark with args: {args}")
         bench_single_process(args)
