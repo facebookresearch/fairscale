@@ -11,7 +11,7 @@ reduction automatically.
 import contextlib
 from itertools import chain
 import logging
-from typing import Any, Callable, Generator, List, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Tuple, Union
 
 import torch
 from torch import nn
@@ -92,7 +92,8 @@ class ShardedDataParallel(nn.Module):
         # we build an iterator which goes through all the parameters involved globally
         self._param_iterator = chain(*[optim.should_bucket_param.keys() for optim in self.sharded_optimizers])
         self._grad_to_be_reduced = [True for _ in self._param_iterator]
-        self._current_reduce_calls = {o: 0 for o in self.sharded_optimizers}
+        self._current_reduce_calls: Dict[OSS, int] = {}
+        self._clear_counters()
 
         self._grad_accs: List[Callable] = []
         self._setup_backward_hooks()
@@ -112,8 +113,7 @@ class ShardedDataParallel(nn.Module):
             self.sync_buffers(blocking=True)
 
         # Reset all the grad reduce and bucket state flags
-        self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
-        self._current_reduce_calls = {o: 0 for o in self.sharded_optimizers}
+        self._clear_counters()
 
         # Normal FW on the base model
         return self.module(*inputs, **kwargs)
@@ -124,18 +124,6 @@ class ShardedDataParallel(nn.Module):
             This does not need to be called, the gradient reduction is done automatically during the BW pass
         """
         logging.warning("This is not useful anymore, gradients have been reduced automatically with the backward pass")
-
-    def _sync_params_and_buffers(self) -> None:
-        """
-        Sync the complete model states in between the ranks
-        """
-        with torch.no_grad():
-            work_handles = [
-                dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
-                for t in self.module.state_dict().values()
-            ]
-
-            _ = list(map(lambda x: x.wait(), work_handles))
 
     def sync_buffers(self, blocking: bool = False) -> None:
         """
@@ -157,6 +145,12 @@ class ShardedDataParallel(nn.Module):
         self.should_accumulate_grads = True
         yield
         self.should_accumulate_grads = old_should_accumulate_grads
+
+    def _clear_counters(self) -> None:
+        """ Reset all the grad reduce and call counters
+        """
+        self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
+        self._current_reduce_calls = {o: 0 for o in self.sharded_optimizers}
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
@@ -276,3 +270,15 @@ class ShardedDataParallel(nn.Module):
 
                 grad_acc.register_hook(self._get_reduce_fn(index, param, should_bucket, dst_rank, sharded_optimizer))
                 self._grad_accs.append(grad_acc)  # keep this function in scope
+
+    def _sync_params_and_buffers(self) -> None:
+        """
+        Sync the complete model states in between the ranks
+        """
+        with torch.no_grad():
+            work_handles = [
+                dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
+                for t in self.module.state_dict().values()
+            ]
+
+            _ = list(map(lambda x: x.wait(), work_handles))
