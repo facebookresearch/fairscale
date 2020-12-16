@@ -1,10 +1,11 @@
+from helpers import getData, getLossFun, getModel
 import torch
 import torch.optim as optim
 
 import fairscale
-from helpers import getModel, getData, getLossFun
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+RANK = 0  # example
 
 model = getModel()
 data, target = getData()[0]
@@ -19,7 +20,7 @@ optimizer = optim.SGD(model.parameters(), lr=0.001)
 # zero the parameter gradients
 optimizer.zero_grad()
 
-device = torch.device("cuda", rank) if DEVICE == "cuda" else torch.device("cpu")
+device = torch.device("cuda", RANK) if DEVICE == "cuda" else torch.device("cpu")
 
 # outputs and target need to be on the same device
 # forward step
@@ -32,5 +33,6 @@ loss.backward()
 optimizer.step()
 
 print("Finished Training Step")
+
 
 del model
