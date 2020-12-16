@@ -109,8 +109,8 @@ class LinearLayer(nn.Linear):
         self.weight.data.uniform_(-initrange, initrange)
 
 
-class TransformerLMSequntial(nn.Sequential):
-    """A small language model based on the design of GPT-2 using nn.Sequeitnal
+class TransformerLMSequential(nn.Sequential):
+    """A small language model based on the design of GPT-2 using nn.Sequential
     for compatability with Pipe"""
 
     def __init__(self, ntokens, ninp, nhead, nhid, dropout, initrange, ndecoder):
@@ -122,7 +122,7 @@ class TransformerLMSequntial(nn.Sequential):
             layers.append(TransformerDecoderLayer(ninp, nhead, nhid, dropout))
 
         layers.append(LinearLayer(ninp, ntokens, initrange))
-        super(TransformerLMSequntial, self).__init__(*layers)
+        super(TransformerLMSequential, self).__init__(*layers)
 
 
 def get_data(device):
@@ -177,7 +177,7 @@ def make_model(args, device, ntokens):
         layers.append(LazyModule(lambda: LinearLayer(ninp, ntokens, initrange)))
         model = layers
     else:
-        model = TransformerLMSequntial(ntokens, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
+        model = TransformerLMSequential(ntokens, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
     criterion = nn.CrossEntropyLoss()
     lr = 0.01  # learning rate

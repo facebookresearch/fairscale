@@ -24,8 +24,8 @@ from torch.utils.data.distributed import DistributedSampler
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 
+from fairscale.nn.data_parallel import OffloadDataParallelExperimental as OffloadDDPExperimental
 from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
-from fairscale.nn.data_parallel import ShardedDataParallelExperimental as ShardedDDPExperimental
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
 
@@ -69,7 +69,7 @@ class OptimType(str, Enum):
     pytorch = "pytorch"
     oss_ddp = "oss_ddp"
     oss_sharded_ddp = "oss_sharded_ddp"
-    oss_experimental = "oss_experimental"
+    oss_offload_ddp = "oss_offload_ddp"
     everyone = "everyone"
 
 
@@ -108,7 +108,7 @@ def train(
     if optim_type == OptimType.oss_sharded_ddp:
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
         model = ShardedDDP(model, optimizer)
-    elif optim_type == OptimType.oss_experimental:
+    elif optim_type == OptimType.oss_offload_ddp:
         # DEBUG
         # This method requires a layer-wise seperable model
         # Unroll the test RestNet101 into ~40 layers
@@ -126,7 +126,7 @@ def train(
             model.fc,
         )
 
-        ddp_exp = ShardedDDPExperimental(
+        ddp_exp = OffloadDDPExperimental(
             model_cpu=model_seq,
             optimizer=OPTIM,
             optimizer_params={"lr": 1e-4, "momentum": 0.9},
@@ -360,8 +360,8 @@ if __name__ == "__main__":
             join=True,
         )
 
-    if args.optim_type == OptimType.oss_experimental or args.optim_type == OptimType.everyone:
+    if args.optim_type == OptimType.oss_offload_ddp or args.optim_type == OptimType.everyone:
         print("\nBenchmark OSS experimental")
         mp.spawn(
-            train, args=(args, BACKEND, OptimType.oss_experimental, False,), nprocs=args.world_size, join=True,
+            train, args=(args, BACKEND, OptimType.oss_offload_ddp, False,), nprocs=args.world_size, join=True,
         )
