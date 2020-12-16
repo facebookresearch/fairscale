@@ -38,7 +38,7 @@ def run(rank, world_size):
         return
 
     model = getModel()
-    data, target = getData()
+    data, target = getData()[0]
     loss_fn = getLossFun()
 
     device = torch.device("cuda", rank)

@@ -7,7 +7,7 @@ from helpers import getModel, getData, getLossFun
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 model = getModel()
-data, target = getData()
+data, target = getData()[0]
 loss_fn = getLossFun()
 
 model = fairscale.nn.Pipe(model, balance=[2, 1])

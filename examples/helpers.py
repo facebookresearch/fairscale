@@ -14,10 +14,8 @@ def getModel():
     return nn.Sequential(torch.nn.Linear(10, 10), torch.nn.ReLU(), torch.nn.Linear(10, 5))
 
 
-def getData():
-    target = torch.randint(0, 2, size=(20, 1)).squeeze()
-    data = torch.randn(20, 10)
-    return (data, target)
+def getData(n_batches=1):
+    return [(torch.randn(20, 10), torch.randint(0, 2, size=(20, 1)).squeeze()) for i in range(n_batches)]
 
 
 def getLossFun():

@@ -22,7 +22,7 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
 
     # Problem statement
     model = getModel().to(rank)
-    dataloader = [getData()]
+    dataloader = getData(n_batches=1)
     loss_fn = getLossFun()
 
     optimizer: Optional[Union[OSS, torch.optim.SGD]] = None
