@@ -62,12 +62,12 @@ install_dep_160: &install_dep_160
         python -m torch.utils.collect_env
 
 
-install_dep_170: &install_dep_170
+install_dep_171: &install_dep_171
   - run:
       name: Install Dependencies
       command: |
         sudo apt-get install -y libopenmpi-dev
-        pip install --progress-bar off  torch==1.7.0+cu101 torchvision==0.8.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off torch==1.7.1+cu101 torchvision==0.8.2+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -159,14 +159,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-170-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-cpu-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_170
+      - <<: *install_dep_171
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-170-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_cpu
 
@@ -262,7 +262,7 @@ jobs:
       - store_test_results:
           path: test-results
 
-  gpu_tests_170:
+  gpu_tests_171:
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -279,14 +279,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-gpu-170-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-gpu-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_170
+      - <<: *install_dep_171
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-gpu-170-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-gpu-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_gpu
 
@@ -318,7 +318,7 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_170
+      - <<: *install_dep_171
 
       - save_cache:
           paths:
@@ -345,5 +345,5 @@ workflows:
       - cpu_tests
       - gpu_tests_151
       - gpu_tests_160
-      - gpu_tests_170
+      - gpu_tests_171
       - benchmarks
