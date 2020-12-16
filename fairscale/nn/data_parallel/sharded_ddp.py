@@ -37,8 +37,6 @@ class ShardedDataParallel(nn.Module):
             the sharded optimizer(s) which will decide the gradient partitioning
 
     Keyword Args:
-        process_group (torch.nn.Optimizer):
-            Optimizer to shard (default: SGD)
         process_group (group):
             torch.distributed group (default: group.WORLD)
         broadcast_buffers (bool):

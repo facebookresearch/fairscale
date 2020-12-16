@@ -1,29 +1,31 @@
 import os
 
 import torch
+import torch.distributed as dist
 import torch.multiprocessing as mp
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 
 import fairscale
 from fairscale.nn.model_parallel import initialize_model_parallel
+from helpers import dist_init, getModel, getData, getLossFun
+
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def run(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "10638"
-    torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    dist_init(rank, world_size)
     os.environ["MASTER_PORT"] = "10639"
-    torch.distributed.rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
+    dist.rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     initialize_model_parallel(1, world_size)
 
-    model = nn.Sequential(torch.nn.Linear(10, 10), torch.nn.ReLU(), torch.nn.Linear(10, 5))
-    target = torch.randint(0, 2, size=(20, 1)).squeeze()
-    data = torch.randn(20, 10)
-    loss_fn = F.nll_loss
+    model = getModel()
+    data, target = getData()[0]
+    loss_fn = getLossFun()
 
-    device = torch.device("cuda", rank)
+    device = torch.device("cuda", rank) if DEVICE == "cuda" else torch.device("cpu")
 
     model = fairscale.nn.Pipe(
         model,
