@@ -7,26 +7,26 @@ import os
 import time
 import warnings
 
+from benchmark_dataset import BenchmarkLMDataset, collate_sentences_lm
 import datasets
 import models
+from models import TransformerLMSequntial
 import torch
+from torch.distributed import rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
 import torchtext
-from benchmark_dataset import BenchmarkLMDataset, collate_sentences_lm
+from torchtext.data.utils import get_tokenizer
+
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
-from fairscale.nn.model_parallel.initialize import (get_data_parallel_group,
-                                                    get_pipeline_parallel_group)
+from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
 from fairscale.nn.pipe import LazyModule, pipe
 from fairscale.optim import GradScaler
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
-from models import TransformerLMSequntial
-from torch.distributed import rpc
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
-from torchtext.data.utils import get_tokenizer
 
 try:
     from fairscale.optim import Adam  # type: ignore
