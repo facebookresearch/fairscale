@@ -294,9 +294,16 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
 def evaluate(eval_model, data_source, criterion, bptt, ntokens):
     eval_model.eval()
     total_loss = 0.0
+    
+    def get_batch(source, i, bptt):
+        seq_len = min(bptt, len(source) - 1 - i)
+        data = source[i : i + seq_len]
+        target = source[i + 1 : i + 1 + seq_len].view(-1)
+        return data, target
+    
     with torch.no_grad():
         for i in range(0, data_source.size(0) - 1, bptt):
-            data, targets = datasets.get_batch(data_source, i, bptt)
+            data, targets = get_batch(data_source, i, bptt)
             output = eval_model(data)
             output = output.to(targets.device)
             output_flat = output.view(-1, ntokens)
