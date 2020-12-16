@@ -105,9 +105,9 @@ class OSS(Optimizer):
         self._device = list(self.per_device_params.keys())[0]
         self.buckets: Dict[torch.device, List[Bucket]] = {}
 
-        if torch.cuda.is_available() and self.world_size == torch.cuda.device_count():
-            broadcast_buffer_size = 0
-            logging.warning("Assuming single node job, bucketing is disabled")
+        # if torch.cuda.is_available() and self.world_size <= torch.cuda.device_count():
+        #     broadcast_buffer_size = 0
+        #     logging.warning("Assuming single node job, bucketing is disabled")
 
         self.bucket_size = broadcast_buffer_size
         for device, per_device in self.per_device_params.items():

@@ -92,7 +92,8 @@ class ShardedDataParallel(nn.Module):
         # we build an iterator which goes through all the parameters involved globally
         self._param_iterator = chain(*[optim.should_bucket_param.keys() for optim in self.sharded_optimizers])
         self._grad_to_be_reduced = [True for _ in self._param_iterator]
-        self._current_reduce_calls: Dict[OSS, int] = {}
+        self._reduced_grads: Dict[OSS, int] = {}
+        self._reduced_grads_max = {o: len(o.param_to_rank.values()) for o in self.sharded_optimizers}
         self._clear_counters()
 
         self._grad_accs: List[Callable] = []
@@ -150,7 +151,7 @@ class ShardedDataParallel(nn.Module):
         """ Reset all the grad reduce and call counters
         """
         self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
-        self._current_reduce_calls = {o: 0 for o in self.sharded_optimizers}
+        self._reduced_grads = {o: 0 for o in self.sharded_optimizers}
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
@@ -161,9 +162,7 @@ class ShardedDataParallel(nn.Module):
         assert False, "This parameter is not present in an optimizer, this should not happen"
         return (None, -1)
 
-    def _get_reduce_fn(
-        self, index: int, param: torch.Tensor, should_bucket: bool, dst_rank: int, optimizer: OSS
-    ) -> Callable:
+    def _get_reduce_fn(self, index: int, param: torch.Tensor, dst_rank: int, optimizer: OSS) -> Callable:
         """
         Two possible backward hooks for a given parameter: either directly reduce to the appropriate rank,
         or contribute to a bucket and reduce when the bucket is full.
@@ -171,7 +170,7 @@ class ShardedDataParallel(nn.Module):
         Either way a delayed action is necessary and is passed as a callback.
         """
 
-        def reduce_direct(*_: Any) -> None:
+        def reduce(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
             if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
                 assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
@@ -194,7 +193,7 @@ class ShardedDataParallel(nn.Module):
                         callback=cleanup,
                     )
                 )
-                self._current_reduce_calls[optimizer] += 1
+                self._reduced_grads[optimizer] += 1
 
                 # Opportunistically try to empty the queue
                 optimizer._try_consume_work_handle()
@@ -202,51 +201,10 @@ class ShardedDataParallel(nn.Module):
                 # If all the reduce operations have been called,
                 # make sure that all the asynchronous calls have concluded before moving on
                 # and execute the delayed actions (release gradients, unroll the buckets)
-                if self._current_reduce_calls[optimizer] == optimizer._max_work_handles:
+                if self._reduced_grads[optimizer] == self._reduced_grads_max[optimizer]:
                     optimizer._consume_work_handles()
 
-        # Bucket, update status, and possibly unroll the results
-        def reduce_bucket(*_: Any) -> None:
-            # Skip gradient reduction, do not alter status flags
-            if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
-                assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
-
-                # Make sure that this is not fired twice
-                self._grad_to_be_reduced[index] = False
-
-                # Copy to the flat buffer, update the buffer state
-                bucket = optimizer.buckets[param.device][dst_rank]
-
-                assert bucket.append(param, use_gradient=True), "Bucket overflow: max %s - current %s - adding %s" % (
-                    bucket.max_size,
-                    bucket.current_offset,
-                    param.grad.numel(),
-                )
-
-                if bucket.full():
-                    bucket.buffer /= self.world_size
-
-                    optimizer.work_handles.append(
-                        Workhandle(
-                            handle=dist.reduce(
-                                tensor=bucket.buffer, dst=dst_rank, group=self.process_group, async_op=True,
-                            ),
-                            callback=bucket.unroll,
-                        )
-                    )
-
-                    self._current_reduce_calls[optimizer] += 1
-
-                # Opportunistically try to empty the queue
-                optimizer._try_consume_work_handle()
-
-                # If all the reduce operations have been called,
-                # make sure that all the asynchronous calls have concluded before moving on
-                # and execute the delayed actions (release gradients, unroll the buckets)
-                if self._current_reduce_calls[optimizer] == optimizer._max_work_handles:
-                    optimizer._consume_work_handles()
-
-        return reduce_bucket if should_bucket else reduce_direct
+        return reduce
 
     def _setup_backward_hooks(self) -> None:
         """
@@ -256,7 +214,7 @@ class ShardedDataParallel(nn.Module):
 
         # Go through the parameters, attach the hook
         for sharded_optimizer in self.sharded_optimizers:
-            for param, should_bucket in sharded_optimizer.should_bucket_param.items():
+            for param, _ in sharded_optimizer.should_bucket_param.items():
                 if param.grad is not None and param.grad.requires_grad:
                     raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
 
@@ -268,7 +226,7 @@ class ShardedDataParallel(nn.Module):
                 dst_rank = sharded_optimizer.param_to_rank[param]
                 index = len(self._grad_accs)
 
-                grad_acc.register_hook(self._get_reduce_fn(index, param, should_bucket, dst_rank, sharded_optimizer))
+                grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank, sharded_optimizer))
                 self._grad_accs.append(grad_acc)  # keep this function in scope
 
     def _sync_params_and_buffers(self) -> None:
