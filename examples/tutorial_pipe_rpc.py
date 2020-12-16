@@ -3,13 +3,13 @@
 
 import os
 
+from helpers import dist_init, getData, getLossFun, getModel
 import torch
 import torch.optim as optim
 import torch_pg
 
 import fairscale
 from fairscale.nn.model_parallel import initialize_model_parallel
-from helpers import dist_init, getModel, getData, getLossFun
 
 
 def register_optimizer(ctx, model):
@@ -27,7 +27,7 @@ def run(rank, world_size):
     torch_pg.init_mpi()
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "10638"
-    dist_init(rank, world_size) # FIXME (supports gloo)
+    dist_init(rank, world_size)  # FIXME (supports gloo)
     os.environ["MASTER_PORT"] = "10639"
     torch.distributed.rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     initialize_model_parallel(1, world_size, pipeline_backend="mpi")

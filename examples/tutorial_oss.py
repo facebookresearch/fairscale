@@ -1,12 +1,12 @@
 import time
 from typing import Optional, Union, cast
 
+from helpers import dist_init, getData, getLossFun, getModel
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from fairscale.optim.oss import OSS
-from helpers import dist_init, getModel, getData, getLossFun
 
 WORLD_SIZE = 2
 EPOCHS = 3
@@ -18,10 +18,10 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
 
     # DDP
     dist_init(rank, world_size)
-    rank = torch.device("cpu") if DEVICE == "cpu" else rank
+    device = torch.device("cpu") if DEVICE == "cpu" else rank  # type:ignore
 
     # Problem statement
-    model = getModel().to(rank)
+    model = getModel().to(device)
     dataloader = getData(n_batches=1)
     loss_fn = getLossFun()
 
@@ -32,7 +32,9 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
     else:
         base_optimizer = torch.optim.SGD
         base_optimizer_arguments = {"lr": 1e-4}  # any optimizer specific arguments, LR, momentum, etc...
-        optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)
+        optimizer = OSS(
+            params=model.parameters(), optim=base_optimizer, broadcast_buffer_size=2 ** 17, **base_optimizer_arguments
+        )
 
     training_start = time.monotonic()
     # Any relevant training loop, nothing specific to OSS. For example:
@@ -40,7 +42,7 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
 
     for _ in range(epochs):
         for (data, target) in dataloader:
-            data, target = data.to(rank), target.to(rank)
+            data, target = data.to(device), target.to(device)
 
             # Train
             model.zero_grad()
