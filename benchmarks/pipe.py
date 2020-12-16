@@ -28,6 +28,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torchtext.data.utils import get_tokenizer
 
+
 try:
     from fairscale.optim import Adam  # type: ignore
 
