@@ -565,7 +565,7 @@ class OSS(Optimizer):
     def _try_consume_work_handle(self) -> None:
         """ Try to consume the oldest future. This is non blocking, if not ready we'll pass
         """
-        if len(self.work_handles) > 0 and self.work_handles[0].handle.is_completed():
+        while len(self.work_handles) > 0 and self.work_handles[0].handle.is_completed():
             work_handle = self.work_handles.popleft()
             if work_handle.callback is not None:
                 work_handle.callback()
