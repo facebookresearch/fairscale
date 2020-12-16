@@ -10,6 +10,7 @@ import fairscale
 from fairscale.nn.model_parallel import initialize_model_parallel
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+RANK = 0  # example
 
 
 def run(rank, world_size):
@@ -24,7 +25,7 @@ def run(rank, world_size):
     data, target = getData()[0]
     loss_fn = getLossFun()
 
-    device = torch.device("cuda", rank) if DEVICE == "cuda" else torch.device("cpu")
+    device = torch.device("cuda", RANK) if DEVICE == "cuda" else torch.device("cpu")
 
     model = fairscale.nn.Pipe(
         model,
