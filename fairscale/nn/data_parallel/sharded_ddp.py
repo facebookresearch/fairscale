@@ -92,6 +92,8 @@ class ShardedDataParallel(nn.Module):
         # we build an iterator which goes through all the parameters involved globally
         self._param_iterator = chain(*[optim.should_bucket_param.keys() for optim in self.sharded_optimizers])
         self._grad_to_be_reduced = [True for _ in self._param_iterator]
+        self._current_reduce_calls = {o: 0 for o in self.sharded_optimizers}
+
         self._grad_accs: List[Callable] = []
         self._setup_backward_hooks()
 
@@ -111,6 +113,7 @@ class ShardedDataParallel(nn.Module):
 
         # Reset all the grad reduce and bucket state flags
         self._grad_to_be_reduced = [True] * len(self._grad_to_be_reduced)
+        self._current_reduce_calls = {o: 0 for o in self.sharded_optimizers}
 
         # Normal FW on the base model
         return self.module(*inputs, **kwargs)
@@ -197,11 +200,15 @@ class ShardedDataParallel(nn.Module):
                         callback=cleanup,
                     )
                 )
+                self._current_reduce_calls[optimizer] += 1
+
+                # Opportunistically try to empty the queue
+                optimizer._try_consume_work_handle()
 
                 # If all the reduce operations have been called,
                 # make sure that all the asynchronous calls have concluded before moving on
                 # and execute the delayed actions (release gradients, unroll the buckets)
-                if len(optimizer.work_handles) == optimizer._max_work_handles:
+                if self._current_reduce_calls[optimizer] == optimizer._max_work_handles:
                     optimizer._consume_work_handles()
 
         # Bucket, update status, and possibly unroll the results
@@ -234,10 +241,15 @@ class ShardedDataParallel(nn.Module):
                         )
                     )
 
+                    self._current_reduce_calls[optimizer] += 1
+
+                # Opportunistically try to empty the queue
+                optimizer._try_consume_work_handle()
+
                 # If all the reduce operations have been called,
                 # make sure that all the asynchronous calls have concluded before moving on
                 # and execute the delayed actions (release gradients, unroll the buckets)
-                if len(optimizer.work_handles) == optimizer._max_work_handles:
+                if self._current_reduce_calls[optimizer] == optimizer._max_work_handles:
                     optimizer._consume_work_handles()
 
         return reduce_bucket if should_bucket else reduce_direct
