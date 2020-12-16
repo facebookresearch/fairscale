@@ -5,7 +5,6 @@ import logging
 import math
 import os
 import time
-import warnings
 
 from benchmark_dataset import BenchmarkLMDataset, collate_sentences_lm
 import datasets
@@ -17,8 +16,6 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
-import torchtext
-from torchtext.data.utils import get_tokenizer
 
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
