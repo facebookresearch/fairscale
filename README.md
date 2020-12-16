@@ -37,6 +37,9 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+If either of the above fails, add `--no-build-isolation` to the `pip install` command (this could be a problem with recent versions of pip).
+
+
 ## Getting Started
 The full documentation (https://fairscale.readthedocs.io/) contains instructions for getting started and extending fairscale.
 
