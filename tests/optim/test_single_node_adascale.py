@@ -17,6 +17,7 @@ import torch
 from torch import Tensor
 from torch.nn import Linear
 from torch.optim import SGD
+from torch.optim.lr_scheduler import LambdaLR
 
 from fairscale.optim import AdaScale
 
@@ -116,6 +117,9 @@ def test_grad_accum(test_case, cpu):
 def test_state_checkpointing():
     """ Test state checkpointing on GPU since that's the common case.
 
+        Note, we don't support checkpointing in the middle of gradient accumulation
+        step. Therefore, it is not tested here.
+
         AdaScale doesn't have distributed state. Otherwise, it will need
         a unit test for checkpointing with DDP.
     """
@@ -181,3 +185,24 @@ def test_state_checkpointing():
     # Assert the results.
     assert np.allclose(out.sum().item(), expected_out), out.sum().item()
     assert np.allclose(optim.gain(), expected_gain), optim.gain()
+
+
+def test_lr_scheduler():
+    """Test AdaScale working with torch.optim.lr_scheduler """
+    model = Linear(2, 2, bias=False)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=3)
+    # We use 1, not 0.1 here since scheduler.step() is called here first.
+    scheduler = LambdaLR(optim, lr_lambda=lambda epoch: 1 / 10 ** epoch)
+    for epoch in range(3):
+        for data_idx in range(10):
+            for accumulation in range(3):
+                in_data = torch.rand(2)
+                loss = model(in_data).sum()
+                loss.backward()
+            assert optim.gain() <= 3, optim.gain()
+            optim.step()
+            # asserting LR is right
+            assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10 ** epoch), optim.param_groups[0]["lr"]
+        scheduler.step()
+        # asserting LR is right
+        assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10 ** (epoch + 1)), optim.param_groups[0]["lr"]
