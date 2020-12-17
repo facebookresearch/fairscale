@@ -44,6 +44,7 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
         model.register_buffer("test_buffer", torch.ones((1)) * rank)
         model.to(device)
 
+        next(model.parameters()).requires_grad = False
         optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
         ddp_model = ShardedDataParallel(model, optimizer, broadcast_buffers=broadcast_buffers)
 
