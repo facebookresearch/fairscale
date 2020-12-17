@@ -144,6 +144,9 @@ class OSS(Optimizer):
                     # are the really interesting ones
                     if param.requires_grad:
                         sizes[rank] += param.numel()
+                    else:
+                        # If a lot of frozen params, make sure that we still spread them around
+                        sizes[rank] += 1
 
                 for rank, params in enumerate(param_lists):
                     param_group_rank = copy.copy(param_group)

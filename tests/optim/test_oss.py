@@ -181,6 +181,9 @@ def run_test_add_param_group(rank, world_size, tempfile_name):
     params = []
     for size in [4, 5, 2, 6, 4]:
         params.append(torch.rand(size, 1))
+    for p in params:
+        p.requires_grad = True
+
     o = optim.OSS(params, lr=0.1)
     assert len(o.param_groups) == 1
     o.add_param_group({"params": [torch.rand(3, 1)]})
