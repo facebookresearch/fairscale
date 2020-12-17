@@ -634,7 +634,7 @@ class OSS(Optimizer):
                 for param in params:
                     # Criteria to decide whether this parameter is to be bucketed or not:
                     # - enough room in the bucket
-                    if (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
+                    if param.requires_grad and (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
                         self.should_bucket_param.append(True)
 
                         if offset == 0:
