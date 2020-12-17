@@ -10,6 +10,7 @@ from benchmark_dataset import BenchmarkLMDataset, collate_sentences_lm
 import datasets
 import models
 from models import TransformerLMSequntial
+import numpy as np
 import torch
 from torch.distributed import rpc
 import torch.multiprocessing as mp
@@ -43,7 +44,14 @@ def init_random_seed(seed: int):
     numpy.random.seed(seed)
 
 
-def make_model(args, device, config):
+def get_model_and_optimizer(args, device, config):
+
+    if args.model_name == "seq_pred":
+        return get_seq_pred_model(args, device, config)
+
+
+def get_seq_pred_model(args, device, config):
+
     ninp = config["ninp"]
     nhead = config["nhead"]
     initrange = config["initrange"]
@@ -245,10 +253,12 @@ def train(data_config, model, benchmark_config, args):
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
         lm_dataloader = get_fake_dataloader()
 
+    total_words = 0
     for i, batch in enumerate(lm_dataloader):
 
         if args.max_batch and i > args.max_batch:
             break
+        total_words += np.prod(list(batch["input"].size()))
         optimizer.zero_grad()
         try:
             if (pipe_group is None or pipe_group.rank() == 0) and not args.ddp_zero:
@@ -284,7 +294,7 @@ def train(data_config, model, benchmark_config, args):
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
             total_loss += loss.item()
             log_interval = 1
-            word_counter += batch["ntokens"]
+            word_counter += np.prod(list(batch["input"].size()))
             if i % log_interval == 0 and i > 0:
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
@@ -297,10 +307,13 @@ def train(data_config, model, benchmark_config, args):
                 total_loss = 0
                 start_time = time.time()
 
+    return total_words, loss.item()
 
-def evaluate(eval_model, data_source, criterion, bptt, ntokens):
+
+def evaluate(eval_model, data_source, criterion, ntokens):
     eval_model.eval()
     total_loss = 0.0
+    bptt = 35  # Used for evaluation not training.
 
     def get_batch(source, i, bptt):
         seq_len = min(bptt, len(source) - 1 - i)
@@ -311,7 +324,7 @@ def evaluate(eval_model, data_source, criterion, bptt, ntokens):
     with torch.no_grad():
         for i in range(0, data_source.size(0) - 1, bptt):
             data, targets = get_batch(data_source, i, bptt)
-            gioutput = eval_model(data)
+            output = eval_model(data)
             output = output.to(targets.device)
             output_flat = output.view(-1, ntokens)
             total_loss += len(data) * criterion(output_flat, targets).item()
@@ -322,58 +335,48 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
+def verify_seq_pred_run(wps):
+    # Assert that words per second is within 3 standard deviations of the average
+    # of six golden runs
+    assert wps > 36954.4 - (3 * 116.825)
+
+    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
+    print("Peak allocated bytes on cuda:1: {:1d}".format(torch.cuda.memory_stats(1)["allocated_bytes.all.peak"]))
+    print("Peak allocated bytes on cuda:2: {:1d}".format(torch.cuda.memory_stats(2)["allocated_bytes.all.peak"]))
+    print("Peak allocated bytes on cuda:3: {:1d}".format(torch.cuda.memory_stats(3)["allocated_bytes.all.peak"]))
+
+    # Assert that memory usage on each GPU is within 10% of golden run
+    # Right-hand-side is golden run bytes * 110%
+    assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 4061909504 * 1.1
+    assert torch.cuda.memory_stats(1)["allocated_bytes.all.peak"] < 4050944 * 1.1
+    assert torch.cuda.memory_stats(2)["allocated_bytes.all.peak"] < 10427392 * 1.1
+    assert torch.cuda.memory_stats(3)["allocated_bytes.all.peak"] < 2031824896 * 1.1
+    print("No regression detected")
+
+
 def benchmark_language_model(model_config, model, benchmark_config, args):
     ntokens, train_data, val_data, test_data = model_config["data"]
     optimizer = model_config["optimizer"]
     criterion = benchmark_config["criterion"]
     epoch = 1
-    bptt = 35
-    start_time = time.time()
 
     print("-" * 110)
     print("| start of epoch {:1d}".format(epoch))
     print("-" * 110)
-    epoch_start_time = time.time()
-    train(train_data, model, criterion, optimizer, bptt, ntokens, args)
-    val_loss = 1  # evaluate(model, val_data, criterion, bptt, ntokens)
-    print("-" * 89)
-    print(
-        "| end of epoch {:1d} | time: {:5.2f}s | valid loss {:5.2f} ".format(
-            epoch, (time.time() - epoch_start_time), val_loss
-        )
-    )
+    start_time = time.time()
+    n_words, loss = train(data_config, model, benchmark_config, args)
+    elapsed_time = time.time() - start_time
+    wps = nwords / elapsed_time
+    print("-" * 110)
+    print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
 
-    elapsed_time = time.time() - start_time
-    nwords = get_number_of_words(train_data) + get_number_of_words(val_data)
-    wps = nwords / elapsed_time
-
-    test_loss = 1  # evaluate(model, test_data, criterion, bptt, ntokens)
-    print("=" * 89)
-    print(
-        "| end of training | test loss {:5.2f} \n| time: {:5.2f}s | words: {:3d} | wps: {:5.2f}".format(
-            test_loss, elapsed_time, nwords, wps
-        )
-    )
-    print("=" * 110)
-
     if can_benchmark and len(model.balance) == 4:
-        # Assert that words per second is within 3 standard deviations of the average
-        # of six golden runs
-        assert wps > 36954.4 - (3 * 116.825)
 
-        print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
-        print("Peak allocated bytes on cuda:1: {:1d}".format(torch.cuda.memory_stats(1)["allocated_bytes.all.peak"]))
-        print("Peak allocated bytes on cuda:2: {:1d}".format(torch.cuda.memory_stats(2)["allocated_bytes.all.peak"]))
-        print("Peak allocated bytes on cuda:3: {:1d}".format(torch.cuda.memory_stats(3)["allocated_bytes.all.peak"]))
-
-        # Assert that memory usage on each GPU is within 10% of golden run
-        # Right-hand-side is golden run bytes * 110%
-        assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 4061909504 * 1.1
-        assert torch.cuda.memory_stats(1)["allocated_bytes.all.peak"] < 4050944 * 1.1
-        assert torch.cuda.memory_stats(2)["allocated_bytes.all.peak"] < 10427392 * 1.1
-        assert torch.cuda.memory_stats(3)["allocated_bytes.all.peak"] < 2031824896 * 1.1
-        print("No regression detected")
+        if args.model_name == "seq_pred":
+            verify_seq_pred_run(wps)
+        else:
+            raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
 def generate_balance_weighted(num_devices, num_layers, fraction=0.5):
@@ -401,20 +404,38 @@ def generate_balance(num_devices, num_layers):
     return balance
 
 
-def make_model_and_data(args, new_data: bool = True, config=None):
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    if args.use_synthetic_data:
-        model, optimizer = make_model(args, device, config)
+def get_synthetic_dataloader(args):
+
+    if args.model_name == "seq_pred":
         lm_dataset = BenchmarkLMDataset()
         lm_dataloader = DataLoader(
             lm_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_sentences_lm
         )
-        return {"model": model, "optimizer": optimizer, "data": lm_dataloader}
+        return lm_dataloader
     else:
+        raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
+
+
+def get_real_dataloaders(device, config):
+
+    if args.model_name == "seq_pred":
         data = datasets.get_wikitext2_data(device)
         ntokens, _, _, _ = data
         config["vocab_size"] = ntokens
-        model, optimizer = make_model(args, device, ntokens)
+        return data
+    else:
+        raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
+
+
+def create_model_config(args, new_data: bool = True, config=None):
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    if args.use_synthetic_data:
+        model, optimizer = get_model_and_optimizer(args, device, config)
+        dataloader = get_synthetic_dataloader(args)
+        return {"model": model, "optimizer": optimizer, "data": dataloader}
+    else:
+        data = get_real_dataloaders(device, config)
+        model, optimizer = get_model_and_optimizer(args, device, config)
         return {
             "model": model,
             "optimizer": optimizer,
@@ -436,6 +457,8 @@ def create_benchmark_config(model_name):
             "scaler": GradScaler(),
             "clip_value": 0.05,
         }
+    else:
+        raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
 def benchmark_single_process(args):
@@ -444,30 +467,30 @@ def benchmark_single_process(args):
     init_random_seed(0)
 
     benchmark_config = create_benchmark_config(args.model_name)
-    model_config = make_model_and_data(args, config=benchmark_config)
+    model_config = create_model_config(args, config=benchmark_config)
     model = model_config["model"]
 
     balance = generate_balance(min(num_devices, 4), len(model))
-    p = pipe.Pipe(
+    pipe_model = pipe.Pipe(
         model, balance, chunks=args.chunks, pipelined_backward=args.pipelined_backward, checkpoint=args.checkpoint
     )
     del model
     del model_config["model"]
 
     if args.use_synthetic_data:
-        train(model_config, p, benchmark_config, args)
+        train(model_config, pipe_model, benchmark_config, args)
     else:
-        benchmark_language_model(model_config, p, benchmark_config, args)
+        benchmark_language_model(model_config, pipe_model, benchmark_config, args)
 
 
 def run_mp_worker(args, available_workers):
 
     benchmark_config = create_benchmark_config(args.model_name)
-    model_config = make_model_and_data(args, config=benchmark_config)
+    model_config = create_model_config(args, config=benchmark_config)
     model = model_config["model"]
 
     balance = generate_balance_weighted(get_pipeline_parallel_group().size(), len(model), 0.8)
-    p = pipe.Pipe(
+    pipe_model = pipe.Pipe(
         model,
         balance,
         style=Pipe.AsyncSchedule,
@@ -479,15 +502,15 @@ def run_mp_worker(args, available_workers):
         # TODO: Do we need to comment this out? loss_fn=benchmark_config["criterion"],
     )
     if torch.cuda.is_available():
-        p = p.cuda()
-    if args.all_at_once and p.pipeline:
+        pipe_model = pipe_model.cuda()
+    if args.all_at_once and pipe_model.pipeline:
         print(f"running all at once")
-        p.pipeline.all_at_once = True
+        pipe_model.pipeline.all_at_once = True
 
     if args.use_synthetic_data:
-        train(model_config, p, benchmark_config, args)
+        train(model_config, pipe_model, benchmark_config, args)
     else:
-        benchmark_language_model(model_config, p, benchmark_config, args)
+        benchmark_language_model(model_config, pipe_model, benchmark_config, args)
 
 
 def run_worker(rank, world_size, args):
