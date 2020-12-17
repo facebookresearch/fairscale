@@ -393,6 +393,8 @@ class OSS(Optimizer):
                 from a call to :meth:`state_dict`
         """
 
+        print("loading state dict")
+
         # Check whether we got a local or global dict
         if state_dict["local_state_dict"]:
             self.load_local_state_dict(state_dict)
@@ -521,7 +523,7 @@ class OSS(Optimizer):
 
                     for param in params:
                         # Bucket broadcast
-                        if self.should_bucket_param[param]:
+                        if self.bucket_size > 0 and self.should_bucket_param[param]:
                             assert bucket.append(param), "Bucket overflow: max %s - current %s - adding %s" % (
                                 bucket.max_size,
                                 bucket.current_offset,
