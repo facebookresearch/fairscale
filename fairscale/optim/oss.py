@@ -120,7 +120,6 @@ class OSS(Optimizer):
         self.work_handles: Deque[Workhandle] = deque()
         self._max_work_handles = -1
         self._setup_bucket_strategy()
-        print(f"Optimizer set up: {self.rank} - {self._device}")
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
@@ -196,8 +195,6 @@ class OSS(Optimizer):
                 returns the loss. Optional for most optimizers.
 
         .. note: Any extra parameter is passed to the base optimizer as-is"""
-
-        print(f"Optimizer step: {self.rank} - {list(self.per_device_params.keys())[0]}")
 
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         self._sync_param_groups()
@@ -403,8 +400,6 @@ class OSS(Optimizer):
             state_dict (dict): optimizer state. Should be an object returned
                 from a call to :meth:`state_dict`
         """
-
-        print("loading state dict")
 
         # Check whether we got a local or global dict
         if state_dict["local_state_dict"]:
