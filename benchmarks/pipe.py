@@ -246,6 +246,7 @@ def train(data_config, model, benchmark_config, args):
         lm_dataloader = get_fake_dataloader()
 
     for i, batch in enumerate(lm_dataloader):
+
         if args.max_batch and i > args.max_batch:
             break
         optimizer.zero_grad()
@@ -310,7 +311,7 @@ def evaluate(eval_model, data_source, criterion, bptt, ntokens):
     with torch.no_grad():
         for i in range(0, data_source.size(0) - 1, bptt):
             data, targets = get_batch(data_source, i, bptt)
-            output = eval_model(data)
+            gioutput = eval_model(data)
             output = output.to(targets.device)
             output_flat = output.view(-1, ntokens)
             total_loss += len(data) * criterion(output_flat, targets).item()
