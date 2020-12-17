@@ -259,7 +259,7 @@ class OSS(Optimizer):
             dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=self.group)
         else:
             local_norm = torch.norm(
-                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type).to(self._device) for p in local_params]),  # type: ignore
+                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type, dtype=torch.float32).to(self._device) for p in local_params]),  # type: ignore
                 p=norm_type,
             )
 
