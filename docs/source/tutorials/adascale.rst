@@ -31,6 +31,8 @@ like the following.
         optimizer = torch.optim.SGD(
             params=model.parameters(),
             **base_optimizer_arguments)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
+            lr_lambda = lambda x: 1/10**x)
 
         # Any relevant training loop. For example:
         model.train()
@@ -43,10 +45,12 @@ like the following.
                 loss = loss_fn(outputs, target)
                 loss.backward()
                 optimizer.step()
+            scheduler.step()
 
 
-Applying AdaScale is as simple as wrapping your SGD optimizer with fairscale.optim.AdaScale,
-as follows.
+Applying AdaScale is as simple as wrapping your SGD optimizer with
+`fairscale.optim.AdaScale`, as follows and uses its gain() to update
+the effective step and compute learning rate schedule accordingly.
 
 .. code-block:: python
 
@@ -75,13 +79,18 @@ as follows.
         optimizer = torch.optim.SGD(
             params=model.parameters(),
             **base_optimizer_arguments)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
+            lr_lambda = lambda x: 1/10**x)
 
         # Wrap optimizer with AdaScale
         optimizer = AdaScale(optimizer)
 
         # Any relevant training loop. For example:
         model.train()
-        for e in range(epochs):
+        last_epoch = 0
+        step = 0
+        done = False
+        while not done:
             for (data, target) in dataloader:
                 data, target = data.to(rank), target.to(rank)
                 # Train
@@ -89,4 +98,11 @@ as follows.
                 outputs = model(data)
                 loss = loss_fn(outputs, target)
                 loss.backward()
+                step += optimizer.gain()
                 optimizer.step()
+                epoch = step // len(dataloader)
+                if last_epoch != epoch:
+                    scheduler.step()
+                    last_epoch = epoch
+                if epoch >= epochs:
+                    done = True

@@ -17,6 +17,7 @@ import torch
 from torch import Tensor
 from torch.nn import Linear
 from torch.optim import SGD
+from torch.optim.lr_scheduler import LambdaLR
 
 from fairscale.optim import AdaScale
 
@@ -57,42 +58,67 @@ def test_loss_accum_cpu():
     assert np.allclose(optim.gain(), 1.0), optim.gain()
 
 
-def test_grad_accum_cpu(cpu=True):
-    """Test the basic functionality on CPU with gradient accumulation without DDP"""
+# IMPORTANT: make sure these test_cases values are sync'ed with the DDP
+# test in test_ddp_adascale.py. This way, we make sure gradient accumulation
+# works exactly like that in DDP.
+@pytest.mark.parametrize("cpu", [True, False])
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        # "input" value is a list of input tensors for micro-batch 0 and micro-batch 1.
+        {"input": [[1.0, 0], [0, 1.0]], "expected_gain": 2.0},
+        {"input": [[1.0, 1.0], [1.0, 1.0]], "expected_gain": 1.0000001249999846},
+        {"input": [[-1.0, 1.0], [1.0, -1.0]], "expected_gain": 2.0},
+        {"input": [[1.0, 4.0], [5.0, 0.5]], "expected_gain": 1.5022222222222221},
+        {"input": [[-0.2, 3.0], [5.0, 0.5]], "expected_gain": 1.9433267229211089},
+        # "inputs" to trigger multiple iteration tests, which make sure the
+        # smoothing factor calculation is also covered.
+        {"inputs": [[[-0.2, 3.3], [5.2, 0.7]], [[1.0, 4.0], [3.1, 0.1]]], "expected_gain": 1.744159431359284},
+    ],
+)
+def test_grad_accum(test_case, cpu):
+    """Test the basic functionality on CPU/GPU with gradient accumulation without DDP"""
     model = Linear(2, 2, bias=False)
     if not cpu:
+        if torch.cuda.device_count() < 1:
+            pytest.skip("1 GPU is required")
         model = model.cuda()
     optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
-    for expected_gain in [2.0, 2.0]:  # test 2 iterations catch more corner cases.
+    expected_gain = test_case["expected_gain"]
+    if "input" in test_case:
+        data = [test_case["input"]] * 2
+        gains = [expected_gain] * 2
+    else:
+        data = test_case["inputs"]
+        gains = [None, expected_gain]
+    for in_data, exp_gain in zip(data, gains):  # test 2 iterations catch more corner cases.
         # grad pass 1
-        in_data = Tensor([0.0, 1.0])
+        in_data_0 = Tensor(in_data[0])
         if not cpu:
-            in_data = in_data.cuda()
-        out = model(in_data)
+            in_data_0 = in_data_0.cuda()
+        out = model(in_data_0)
         out.sum().backward()
         # grad pass 2
-        in_data = Tensor([1.0, 0.0])
+        in_data_1 = Tensor(in_data[1])
         if not cpu:
-            in_data = in_data.cuda()
-        out = model(in_data)
+            in_data_1 = in_data_1.cuda()
+        out = model(in_data_1)
         out.sum().backward()
+        if exp_gain is not None:
+            assert np.allclose(optim.gain(), exp_gain), optim.gain()
         # stepping it. Note that if we did more than 2 passes as promised by the
         # num_gradients_to_accumulate argument above, AdaScale is not be able to
         # detect that mistake for now. The result will just be wrong in that case.
-        assert np.allclose(optim.gain(), expected_gain), optim.gain()
         optim.step()
         optim.zero_grad()
 
 
 @skip_if_no_gpu
-def test_grad_accum_gpu():
-    """Test the basic functionality on GPU with gradient accumulation without DDP"""
-    test_grad_accum_cpu(cpu=False)
-
-
-@skip_if_no_gpu
 def test_state_checkpointing():
     """ Test state checkpointing on GPU since that's the common case.
+
+        Note, we don't support checkpointing in the middle of gradient accumulation
+        step. Therefore, it is not tested here.
 
         AdaScale doesn't have distributed state. Otherwise, it will need
         a unit test for checkpointing with DDP.
@@ -159,3 +185,24 @@ def test_state_checkpointing():
     # Assert the results.
     assert np.allclose(out.sum().item(), expected_out), out.sum().item()
     assert np.allclose(optim.gain(), expected_gain), optim.gain()
+
+
+def test_lr_scheduler():
+    """Test AdaScale working with torch.optim.lr_scheduler """
+    model = Linear(2, 2, bias=False)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=3)
+    # We use 1, not 0.1 here since scheduler.step() is called here first.
+    scheduler = LambdaLR(optim, lr_lambda=lambda epoch: 1 / 10 ** epoch)
+    for epoch in range(3):
+        for data_idx in range(10):
+            for accumulation in range(3):
+                in_data = torch.rand(2)
+                loss = model(in_data).sum()
+                loss.backward()
+            assert optim.gain() <= 3, optim.gain()
+            optim.step()
+            # asserting LR is right
+            assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10 ** epoch), optim.param_groups[0]["lr"]
+        scheduler.step()
+        # asserting LR is right
+        assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10 ** (epoch + 1)), optim.param_groups[0]["lr"]

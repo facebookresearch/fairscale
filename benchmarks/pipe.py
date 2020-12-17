@@ -66,11 +66,11 @@ def make_model(args, device, config):
     else:
         model = TransformerLMSequntial(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
-    def make_adam(model):
+    def make_adam(params):
         if args.ddp_zero:
-            return OSS(params=model.parameters(), optim=Adam, group=get_data_parallel_group(), lr=lr)
+            return OSS(params=params, optim=Adam, group=get_data_parallel_group(), lr=lr)
         else:
-            return Adam(model.parameters(), lr=lr)
+            return Adam(params, lr=lr)
 
     optimizer = make_adam
     return model, optimizer
@@ -158,8 +158,7 @@ def dump_cuda_tensors():
     pprint.pprint(torch.cuda.memory_stats())
 
 
-def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
-    model.train()
+def log_number_of_parameters(model):
     from functools import reduce
     import operator
 
@@ -170,22 +169,16 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
             total = total.cuda()
         torch.distributed.all_reduce(total, group=model.group)
         logging.info(
-            f"training model, #prams = {num_params}, group: {model.group.rank()}, grank:"
+            f"training model, #params = {num_params}, group: {model.group.rank()}, grank:"
             f" {torch.distributed.get_rank()}, sizes {model.group.size()}"
         )
         torch.distributed.barrier()
         if model.group.rank() == 0:
             logging.info(f"total #prams = {total.item()}")
     else:
-        logging.info(f"training model, #prams = {num_params}")
-    vocab_size = 10000  # FIXME
-    total_loss = 0.0
-    start_time = time.time()
-    word_counter = 0
+        logging.info(f"training model, #params = {num_params}")
 
-    optimizer = optimizer(model)
-
-    def get_first_device(model):
+def get_first_device(model):
         if isinstance(model, DDP):
             model = model.module
 
@@ -196,16 +189,43 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
         else:
             return torch.cuda.current_device()
 
-    def get_last_device(model):
-        if isinstance(model, DDP):
-            model = model.module
+def get_last_device(model):
+    if isinstance(model, DDP):
+        model = model.module
 
-        if not torch.cuda.is_available():
-            return torch.device("cpu")
-        if model.devices:
-            return model.devices[-1]
-        else:
-            return torch.cuda.current_device()
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    if model.devices:
+        return model.devices[-1]
+    else:
+        return torch.cuda.current_device()
+
+def get_fake_dataloader():
+    thing = {"input": torch.zeros(args.batch_size)}
+
+    class FakeDataset:
+        def __getitem__(self, index):
+            return thing
+
+        def __len__(self):
+            return len(lm_dataloader)
+
+    return FakeDataset()
+
+def train(data_config, model, benchmark_config, args):
+    lm_dataloader = data_config['data']
+    criterion = benchmark_config['criterion']
+    vocab_size = benchmark_config['vocab_size']
+    optimizer = data_config['optimizer']
+
+    model.train()
+    log_number_of_parameters(model)
+    
+    total_loss = 0.0
+    start_time = time.time()
+    word_counter = 0
+
+    optimizer = optimizer(model.parameters())
 
     pipe_group = model.group
 
@@ -217,20 +237,12 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
             find_unused_parameters=False,
         )
 
+    # TODO: Why do we need this? Can we use synthetic data instead?
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
-        thing = {"input": torch.zeros(args.batch_size)}
-
-        class FakeDataset:
-            def __getitem__(self, index):
-                return thing
-
-            def __len__(self):
-                return len(lm_dataloader)
-
-        lm_dataloader = FakeDataset()
+        lm_dataloader = get_fake_dataloader()
 
     for i, batch in enumerate(lm_dataloader):
-        bi = batch["input"]
+        
         if args.max_batch and i > args.max_batch:
             break
         optimizer.zero_grad()
@@ -262,7 +274,7 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
 
         del output
 
-        torch.nn.utils.clip_grad_value_(model.parameters(), 0.05)
+        torch.nn.utils.clip_grad_value_(model.parameters(), benchmark_config['clip_value'])
         optimizer.step()
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
@@ -280,10 +292,6 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
                 word_counter = 0
                 total_loss = 0
                 start_time = time.time()
-        # if i >= 10:
-        #    break
-        # torch.cuda.empty_cache()
-        # check_size_buckets()
 
 
 def evaluate(eval_model, data_source, criterion, bptt, ntokens):
@@ -310,7 +318,10 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
-def benchmark_language_model(train_data, val_data, test_data, model, criterion, optimizer, ntokens, args):
+def benchmark_language_model(model_config, model, benchmark_config, args):
+    ntokens, train_data, val_data, test_data = model_config['data']
+    optimizer = model_config['optimizer']
+    criterion = benchmark_config['criterion']
     epoch = 1
     bptt = 35
     start_time = time.time()
@@ -407,7 +418,7 @@ def make_model_and_data(args, new_data: bool = True, config=None):
         }
 
 
-def create_model_config(model_name):
+def create_benchmark_config(model_name):
     if model_name == "seq_pred":
         return {
             "vocab_size": 10000,
@@ -419,39 +430,37 @@ def create_model_config(model_name):
             "criterion": nn.CrossEntropyLoss(),
             "lr": 0.01,  # learning rate
             "scaler": GradScaler(),
+            "clip_value" : 0.05,
         }
 
 
-def bench_single_process(args):
+def benchmark_single_process(args):
     num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
     init_random_seed(0)
 
-    config = create_model_config(args.model_name)
-    blob = make_model_and_data(args, config=config)
-    model = blob["model"]
+    benchmark_config = create_benchmark_config(args.model_name)
+    model_config = make_model_and_data(args, config=benchmark_config)
+    model = model_config["model"]
 
     balance = generate_balance(min(num_devices, 4), len(model))
     p = pipe.Pipe(
         model, balance, chunks=args.chunks, pipelined_backward=args.pipelined_backward, checkpoint=args.checkpoint
     )
     del model
-    del blob["model"]
+    del model_config["model"]
 
     if args.use_synthetic_data:
-        train(blob["data"], p, config["criterion"], blob["optimizer"], config["vocab_size"], args)
+        train(model_config, p, benchmark_config, args)
     else:
-        ntokens, train_data, val_data, test_data = blob["data"]
-        benchmark_language_model(
-            train_data, val_data, test_data, p, config["criterion"], blob["optimizer"], ntokens, args
-        )
+        benchmark_language_model(model_config, p, benchmark_config, args)
 
 
 def run_mp_worker(args, available_workers):
 
-    config = create_model_config(args.model_name)
-    blob = make_model_and_data(args, config=config)
-    model = blob["model"]
+    benchmark_config = create_benchmark_config(args.model_name)
+    model_config = make_model_and_data(args, config=benchmark_config)
+    model = model_config["model"]
 
     balance = generate_balance_weighted(get_pipeline_parallel_group().size(), len(model), 0.8)
     p = pipe.Pipe(
@@ -463,7 +472,7 @@ def run_mp_worker(args, available_workers):
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
         pipelined_backward=args.pipelined_backward,
         checkpoint=args.checkpoint,
-        # loss_fn=blob["criterion"],
+        # TODO: Do we need to comment this out? loss_fn=benchmark_config["criterion"],
     )
     if torch.cuda.is_available():
         p = p.cuda()
@@ -472,12 +481,9 @@ def run_mp_worker(args, available_workers):
         p.pipeline.all_at_once = True
 
     if args.use_synthetic_data:
-        train(blob["data"], p, config["criterion"], blob["optimizer"], config["vocab_size"], args)
+        train(model_config, p, benchmark_config, args)
     else:
-        ntokens, train_data, val_data, test_data = blob["data"]
-        benchmark_language_model(
-            train_data, val_data, test_data, p, config["criterion"], blob["optimizer"], ntokens, args
-        )
+        benchmark_language_model(model_config, p, benchmark_config, args)
 
 
 def run_worker(rank, world_size, args):
@@ -591,7 +597,7 @@ if __name__ == "__main__":
     # TODO: Add support for multiprocess benchmarking.
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
         print(f"Running benchmark with args: {args}")
-        bench_single_process(args)
+        benchmark_single_process(args)
     else:
         if os.environ["OMPI_COMM_WORLD_RANK"] == "0":
             print(f"Running benchmark with args: {args}")
