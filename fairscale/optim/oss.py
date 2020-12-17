@@ -139,7 +139,11 @@ class OSS(Optimizer):
                     # Add this param to rank with smallest size.
                     rank = sizes.index(min(sizes))
                     param_lists[rank].append(param)
-                    sizes[rank] += param.numel()
+
+                    # We're partitioning the optimizer state, so optimizeable parameters
+                    # are the really interesting ones
+                    if param.requires_grad:
+                        sizes[rank] += param.numel()
 
                 for rank, params in enumerate(param_lists):
                     param_group_rank = copy.copy(param_group)
