@@ -116,10 +116,11 @@ class OSS(Optimizer):
                 Bucket(buffer=torch.zeros(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device))
                 for _ in range(len(per_device))
             ]
-        self.should_bucket_param: Dict[torch.Tensor, bool] = {}
+        self.should_bucket_param: List[bool] = []
         self.work_handles: Deque[Workhandle] = deque()
         self._max_work_handles = -1
         self._setup_bucket_strategy()
+        print(f"Optimizer set up: {self.rank} - {self._device}")
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
@@ -195,6 +196,8 @@ class OSS(Optimizer):
                 returns the loss. Optional for most optimizers.
 
         .. note: Any extra parameter is passed to the base optimizer as-is"""
+
+        print(f"Optimizer step: {self.rank} - {list(self.per_device_params.keys())[0]}")
 
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         self._sync_param_groups()
@@ -385,6 +388,14 @@ class OSS(Optimizer):
                 if k != "params":
                     global_group[k] = v
 
+        # Force a re-partitioning, in case the model changed with the new state
+        self._partition_parameters.clear()
+        self._per_device_params.clear()
+        self._param_rank.clear()
+
+        # Update the bucketing strategy accordingly
+        self._setup_bucket_strategy()
+
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """Restore the global parameter groups as well as the shard.
 
@@ -425,6 +436,9 @@ class OSS(Optimizer):
             param_groups = self.partition_parameters()[self.rank]
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
+
+            # Update the bucketing strategy accordingly
+            self._setup_bucket_strategy()
 
     @staticmethod
     def get_global_rank(group: Any, rank: int) -> int:
@@ -510,6 +524,8 @@ class OSS(Optimizer):
         """Helper function to broadcast all the parameters from a given device"""
 
         with torch.no_grad():
+            i_param = 0
+
             for (
                 device,
                 device_params,
@@ -523,7 +539,7 @@ class OSS(Optimizer):
 
                     for param in params:
                         # Bucket broadcast
-                        if self.bucket_size > 0 and self.should_bucket_param[param]:
+                        if self.bucket_size > 0 and self.should_bucket_param[i_param]:
                             assert bucket.append(param), "Bucket overflow: max %s - current %s - adding %s" % (
                                 bucket.max_size,
                                 bucket.current_offset,
@@ -550,6 +566,8 @@ class OSS(Optimizer):
                                     callback=None,
                                 )
                             )
+
+                        i_param += 1
 
         self._consume_work_handles()
 
@@ -613,12 +631,11 @@ class OSS(Optimizer):
             for dst_rank, params in enumerate(per_rank_params):
                 offset = 0
 
-                # Only consider the params which will require a gradient
-                for param in filter(lambda p: p.requires_grad, params):
+                for param in params:
                     # Criteria to decide whether this parameter is to be bucketed or not:
                     # - enough room in the bucket
                     if (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
-                        self.should_bucket_param[param] = True
+                        self.should_bucket_param.append(True)
 
                         if offset == 0:
                             # count this bucket, only once
@@ -626,7 +643,7 @@ class OSS(Optimizer):
 
                         offset += param.numel()
                     else:
-                        self.should_bucket_param[param] = False
+                        self.should_bucket_param.append(False)
 
                 # Register the max offset for this buffer, and the reference rank
                 self.buckets[device][dst_rank].max_offset = offset
@@ -635,4 +652,4 @@ class OSS(Optimizer):
 
         # Determine the max work handles in flight:
         # - all the direct reduce/broadcast
-        self._max_work_handles += sum(not value for value in self.should_bucket_param.values())
+        self._max_work_handles += sum(not value for value in self.should_bucket_param)
