@@ -16,7 +16,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn import Linear, Sequential
 
-from fairscale.nn.data_parallel import ShardedDataParallelExperimental
+from fairscale.nn.data_parallel import OffloadDataParallelExperimental
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
@@ -42,13 +42,13 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
     np.random.seed(rank)
 
     # Any model works. Add one different buffer per rank
-    model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3)).to(device)
+    model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
     model.register_buffer("test_buffer", torch.ones((1)) * rank)
 
-    ddp = ShardedDataParallelExperimental(
+    ddp = OffloadDataParallelExperimental(
         model_cpu=model,
         optimizer=torch.optim.SGD,
-        optimizer_params={"lr": 0.1, "momentum": 0.99},
+        optimizer_params={"lr": 0.001, "momentum": 0.99},
         world_size=world_size,
         device=device,
     )
@@ -65,7 +65,9 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
                     dist.gather(p, gathered, dst=0)
                     if rank == 0:
                         for sync_p in gathered[1:]:
-                            assert torch.all(torch.eq(gathered[0], sync_p)), "Models differ in between ranks"
+                            assert torch.all(
+                                torch.eq(gathered[0], sync_p)
+                            ), f"Models differ in between ranks\n{gathered[0]} vs {sync_p}"
 
         # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
         for b in model.buffers():
