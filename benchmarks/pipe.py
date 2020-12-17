@@ -178,16 +178,18 @@ def log_number_of_parameters(model):
     else:
         logging.info(f"training model, #params = {num_params}")
 
-def get_first_device(model):
-        if isinstance(model, DDP):
-            model = model.module
 
-        if not torch.cuda.is_available():
-            return torch.device("cpu")
-        if model.devices:
-            return model.devices[0]
-        else:
-            return torch.cuda.current_device()
+def get_first_device(model):
+    if isinstance(model, DDP):
+        model = model.module
+
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    if model.devices:
+        return model.devices[0]
+    else:
+        return torch.cuda.current_device()
+
 
 def get_last_device(model):
     if isinstance(model, DDP):
@@ -199,6 +201,7 @@ def get_last_device(model):
         return model.devices[-1]
     else:
         return torch.cuda.current_device()
+
 
 def get_fake_dataloader():
     thing = {"input": torch.zeros(args.batch_size)}
@@ -212,15 +215,16 @@ def get_fake_dataloader():
 
     return FakeDataset()
 
+
 def train(data_config, model, benchmark_config, args):
-    lm_dataloader = data_config['data']
-    criterion = benchmark_config['criterion']
-    vocab_size = benchmark_config['vocab_size']
-    optimizer = data_config['optimizer']
+    lm_dataloader = data_config["data"]
+    criterion = benchmark_config["criterion"]
+    vocab_size = benchmark_config["vocab_size"]
+    optimizer = data_config["optimizer"]
 
     model.train()
     log_number_of_parameters(model)
-    
+
     total_loss = 0.0
     start_time = time.time()
     word_counter = 0
@@ -273,7 +277,7 @@ def train(data_config, model, benchmark_config, args):
 
         del output
 
-        torch.nn.utils.clip_grad_value_(model.parameters(), benchmark_config['clip_value'])
+        torch.nn.utils.clip_grad_value_(model.parameters(), benchmark_config["clip_value"])
         optimizer.step()
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
@@ -318,9 +322,9 @@ def get_number_of_words(data):
 
 
 def benchmark_language_model(model_config, model, benchmark_config, args):
-    ntokens, train_data, val_data, test_data = model_config['data']
-    optimizer = model_config['optimizer']
-    criterion = benchmark_config['criterion']
+    ntokens, train_data, val_data, test_data = model_config["data"]
+    optimizer = model_config["optimizer"]
+    criterion = benchmark_config["criterion"]
     epoch = 1
     bptt = 35
     start_time = time.time()
@@ -429,7 +433,7 @@ def create_benchmark_config(model_name):
             "criterion": nn.CrossEntropyLoss(),
             "lr": 0.01,  # learning rate
             "scaler": GradScaler(),
-            "clip_value" : 0.05,
+            "clip_value": 0.05,
         }
 
 
