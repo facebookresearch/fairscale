@@ -5,7 +5,6 @@
 
 from collections import OrderedDict, deque
 import copy
-from enum import Enum, auto
 import itertools
 from itertools import chain
 import logging
