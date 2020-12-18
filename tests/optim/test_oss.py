@@ -181,6 +181,8 @@ def run_test_add_param_group(rank, world_size, tempfile_name):
     params = []
     for size in [4, 5, 2, 6, 4]:
         params.append(torch.rand(size, 1))
+
+    # Make sure that the params are trainable, enforces size-based partitioning
     for p in params:
         p.requires_grad = True
 
@@ -306,6 +308,11 @@ def run_test_sharding(rank, world_size, tempfile_name):
     params = []
     for size in [5, 4, 2, 6, 4, 3]:
         params.append(torch.rand(size, 1))
+
+    # Make sure that the params are trainable, enforces size-based partitioning
+    for p in params:
+        p.requires_grad = True
+
     o = optim.OSS(params, lr=0.1)
     assert sum([x.numel() for x in o.optim.param_groups[0]["params"]]) == 8
 
