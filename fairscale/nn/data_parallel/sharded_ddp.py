@@ -88,14 +88,20 @@ class ShardedDataParallel(nn.Module):
         self.device_type = list(distinct_device_types)[0]
 
         # Scafolding to be able to reduce the grads during the BW pass
-        # several optimizers can be present each working on seperate parameter sets,
-        # we build an iterator which goes through all the parameters involved globally
-        self._param_iterator = chain(*[optim.should_bucket_param.keys() for optim in self.sharded_optimizers])
-        self._grad_to_be_reduced = [True for _ in self._param_iterator]
+        # several optimizers can be present each working on seperate parameter set which is spread across multiple ranks
+
+        # - we build an iterator which goes through all the parameters involved globally
+        all_param_iterator = chain(
+            *[sum([sum(p, []) for p in optim.per_device_params.values()], []) for optim in self.sharded_optimizers]
+        )
+        self._grad_to_be_reduced = [True for _ in filter(lambda x: x.requires_grad, all_param_iterator)]
+
+        # - keep track of the grads which have already been reduced
         self._reduced_grads: Dict[OSS, int] = {}
         self._reduced_grads_max = {o: len(o.param_to_rank.values()) for o in self.sharded_optimizers}
         self._clear_counters()
 
+        # - setup backward hooks which will be called by Torch's autograd in due time
         self._grad_accs: List[Callable] = []
         self._setup_backward_hooks()
 
@@ -214,20 +220,24 @@ class ShardedDataParallel(nn.Module):
 
         # Go through the parameters, attach the hook
         for sharded_optimizer in self.sharded_optimizers:
-            for param, _ in sharded_optimizer.should_bucket_param.items():
-                if param.grad is not None and param.grad.requires_grad:
-                    raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
+            for (
+                device_per_rank_params
+            ) in sharded_optimizer.per_device_params.values():  # all the params on this device (inc all ranks)
+                for device_params in device_per_rank_params:
+                    for param in filter(lambda x: x.requires_grad, device_params):
+                        if param.grad is not None and param.grad.requires_grad:
+                            raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
 
-                # Register the hook to the next function in line,
-                # so that the hook is fired when this grad has properly been computed
-                p_tmp = param.expand_as(param)
-                assert p_tmp.grad_fn is not None
-                grad_acc = p_tmp.grad_fn.next_functions[0][0]
-                dst_rank = sharded_optimizer.param_to_rank[param]
-                index = len(self._grad_accs)
+                        # Register the hook to the next function in line,
+                        # so that the hook is fired when this grad has properly been computed
+                        p_tmp = param.expand_as(param)
+                        assert p_tmp.grad_fn is not None
+                        grad_acc = p_tmp.grad_fn.next_functions[0][0]
+                        dst_rank = sharded_optimizer.param_to_rank[param]
+                        index = len(self._grad_accs)
 
-                grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank, sharded_optimizer))
-                self._grad_accs.append(grad_acc)  # keep this function in scope
+                        grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank, sharded_optimizer))
+                        self._grad_accs.append(grad_acc)  # keep this function in scope
 
     def _sync_params_and_buffers(self) -> None:
         """

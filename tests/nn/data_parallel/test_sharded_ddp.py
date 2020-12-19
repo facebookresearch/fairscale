@@ -7,6 +7,7 @@
 Testing OssDdp class.
 """
 
+from contextlib import suppress
 import copy
 import tempfile
 from typing import List
@@ -21,12 +22,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
+from fairscale.utils.testing import GPT2
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
-from contextlib import suppress
-
-from fairscale.utils.testing import GPT2
 
 
 def run_one_step(rank, world_size, backend, device, temp_file_name):
@@ -43,6 +42,8 @@ def run_one_step(rank, world_size, backend, device, temp_file_name):
         model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
         model.register_buffer("test_buffer", torch.ones((1)) * rank)
         model.to(device)
+
+        next(model.parameters()).requires_grad = False  # Test non-trainable parameters
 
         optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
         ddp_model = ShardedDataParallel(model, optimizer, broadcast_buffers=broadcast_buffers)
