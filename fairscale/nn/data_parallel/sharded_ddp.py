@@ -254,15 +254,14 @@ class ShardedDataParallel(nn.Module):
 
             _ = list(map(lambda x: x.wait(), work_handles))
 
-    def _passing_sync_batchnorm_handle(self, parent_module):
+    def _passing_sync_batchnorm_handle(self, module):
         """
         Passes handle required for ``torch.nn.modules.SyncBatchNorm``.
         Adapted from ``torch.nn.distributed.DistributedDataParallel``.
         """
-        for dev_idx, module in enumerate(parent_module):
-            for layer in module.modules():
-                if isinstance(layer, torch.nn.modules.SyncBatchNorm):
-                    assert self.device_type != 'cpu', "SyncBatchNorm layers only work with GPU modules"
-                    # device_id logic has not been handled, assume single-process single-device
-                    # SyncBatchNorm only supports DDP with single-process single-device anyway'
-                    layer._specify_ddp_gpu_num(1)
+        for layer in module.modules():
+            if isinstance(layer, torch.nn.modules.SyncBatchNorm):
+                assert self.device_type != 'cpu', "SyncBatchNorm layers only work with GPU modules"
+                # device_id logic has not been handled, assume single-process single-device
+                # SyncBatchNorm only supports DDP with single-process single-device anyway'
+                layer._specify_ddp_gpu_num(1)
