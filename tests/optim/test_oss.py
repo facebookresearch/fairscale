@@ -178,21 +178,47 @@ class TestSingleRank(unittest.TestCase):
 
 def run_test_add_param_group(rank, world_size, tempfile_name):
     dist_init(rank, world_size, tempfile_name)
-    params = []
-    for size in [4, 5, 2, 6, 4]:
-        params.append(torch.rand(size, 1))
 
-    # Make sure that the params are trainable, enforces size-based partitioning
-    for p in params:
-        p.requires_grad = True
+    # Test with all parameters trainable to begin with
+    def all_trainable():
+        params = []
+        for size in [4, 5, 2, 6, 4]:
+            params.append(torch.rand(size, 1))
 
-    o = optim.OSS(params, lr=0.1)
-    assert len(o.param_groups) == 1
-    o.add_param_group({"params": [torch.rand(3, 1)]})
-    assert len(o.param_groups) == 2
-    # Verify that added group is added to the correct partition making all have 8 elements.
-    assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == 8
-    assert len(o.optim.param_groups) == 2
+        # Make sure that the params are trainable, enforces size-based partitioning
+        for p in params:
+            p.requires_grad = True
+
+        o = optim.OSS(params, lr=0.1)
+
+        assert len(o.param_groups) == 1
+        o.add_param_group({"params": [torch.rand(3, 1)]})
+
+        assert len(o.param_groups) == 2
+        # Verify that added group is added to the correct partition making all have 8 elements.
+        assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == 8
+        assert len(o.optim.param_groups) == 2
+
+    # Test a pathological config with a first big non-trainable param
+    def some_trainable():
+        params = []
+        for size in [100, 3, 5, 2, 6, 4]:
+            params.append(torch.rand(size, 1))
+
+        # Make sure that the params are trainable, enforces size-based partitioning
+        for p in params[1:]:
+            p.requires_grad = True
+
+        o = optim.OSS(params, lr=0.1)
+
+        assert len(o.param_groups) == 1
+        o.add_param_group({"params": [torch.rand(3, 1)]})
+
+        assert len(o.param_groups) == 2
+        assert len(o.optim.param_groups) == 2
+
+    all_trainable()
+    some_trainable()
 
     dist.destroy_process_group()
 
