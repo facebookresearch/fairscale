@@ -26,7 +26,7 @@ def get_wikitext2_data(device):
 
 
 def batchify(data, bsz, text_field, device):
-    """Return data that batched and placed on the specified device."""
+    """Return batched data that is placed on the specified device."""
     data = text_field.numericalize([data.examples[0].text])
     nbatch = data.size(0) // bsz
     data = data.narrow(0, 0, nbatch * bsz)
