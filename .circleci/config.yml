@@ -82,7 +82,7 @@ install_repo_gpu: &install_repo_gpu
   - run:
       name: Install Repository
       command: |
-        export CUDA_HOME=/usr/local/cuda-10.1
+        export CUDA_HOME=/usr/local/cuda-11.0
         pip install -e .
 
 run_coverage: &run_coverage
