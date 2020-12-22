@@ -70,7 +70,7 @@ install_dep_17: &install_dep_17
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
 
-install_dep_17: &install_dep_17_benchmarks
+install_dep_17_benchmarks: &install_dep_17_benchmarks
   # FIXME: need to be removed when properly handling torch 1.7.1
   # short term fix is to override the default pip installed torch
   - run:
