@@ -5,7 +5,6 @@
 
 from collections import OrderedDict, deque
 import copy
-from enum import Enum, auto
 import itertools
 from itertools import chain
 import logging
@@ -25,11 +24,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
-
-
-class BucketFlush(Enum):
-    Reduce = auto()
-    Broadcast = auto()
 
 
 class OSS(Optimizer):
@@ -139,7 +133,16 @@ class OSS(Optimizer):
                     # Add this param to rank with smallest size.
                     rank = sizes.index(min(sizes))
                     param_lists[rank].append(param)
-                    sizes[rank] += param.numel()
+
+                    # We're partitioning the optimizer state,
+                    # so trainable parameters are the ones which really count
+                    if param.requires_grad:
+                        sizes[rank] += param.numel()
+                    else:
+                        # Spread frozen params on a per-tensor basis
+                        # Mostly useful for balance partitions for fine tuning for instance
+                        # Not required strictly speaking
+                        sizes[rank] += 1
 
                 for rank, params in enumerate(param_lists):
                     param_group_rank = copy.copy(param_group)
@@ -584,30 +587,6 @@ class OSS(Optimizer):
             work_handle = self.work_handles.popleft()
             if work_handle.callback is not None:
                 work_handle.callback()
-
-    def _handle_trailing_buckets(self, flush_type: BucketFlush) -> None:
-        """
-        Go through the buckets, flush them if not already empty
-        .. warning: Could be that a bucket flush was already requested, needs to be handled carefully
-        """
-
-        for bucket_list in self.buckets.values():
-            for bucket in bucket_list:
-                if bucket.current_offset > 0:
-                    self.work_handles.append(
-                        Workhandle(
-                            handle=dist.broadcast(
-                                tensor=bucket.buffer, src=bucket.global_ref_rank, group=self.group, async_op=True,
-                            )
-                            if flush_type == BucketFlush.Broadcast
-                            else dist.reduce(
-                                tensor=bucket.buffer, dst=bucket.global_ref_rank, group=self.group, async_op=True,
-                            ),
-                            callback=bucket.unroll,
-                        )
-                    )
-
-        self._consume_work_handles()
 
     def _setup_bucket_strategy(self) -> None:
         """  Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
