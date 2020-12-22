@@ -5,6 +5,7 @@ import math
 import torch
 import torch.nn as nn
 
+
 # FIXME: Add docstring explaining why we wrap the Embedding layer.
 class EmbeddingLayer(nn.Embedding):
     def __init__(self, ntoken, ninp, initrange):
