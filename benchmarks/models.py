@@ -6,18 +6,21 @@ import torch
 import torch.nn as nn
 
 
-# FIXME: Add docstring explaining why we wrap the Embedding layer.
 class EmbeddingLayer(nn.Embedding):
+    """Wrapped nn.Embedding layer to allow for weight initialization."""
+
     def __init__(self, ntoken, ninp, initrange):
         super().__init__(ntoken, ninp)
-        self.ninp = ninp
+        self.ninp = math.sqrt(ninp)
         self.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, src):
-        return super().forward(src) * math.sqrt(self.ninp)
+        return super().forward(src) * self.ninp
 
 
 class PositionalEncodingLayer(nn.Module):
+    """PositionalEncoding layer for a given Transformer model."""
+
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super(PositionalEncodingLayer, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -36,11 +39,10 @@ class PositionalEncodingLayer(nn.Module):
 
 
 class TransformerDecoderLayer(nn.TransformerEncoderLayer):
-    """Though this class inherits from torch.nn.TransformerEncoderLayer,
-    it functions as a decoder in this model"""
+    """TransformerDecoder layer which inherits from nn.TransformerEncoderLayer."""
 
-    def __init__(self, ninp, nhead, nhid, droupout):
-        super().__init__(ninp, nhead, nhid, droupout)
+    def __init__(self, ninp, nhead, nhid, dropout):
+        super().__init__(ninp, nhead, nhid, dropout)
         self.src_mask = None
 
     def _generate_square_subsequent_mask(self, sz):
@@ -49,6 +51,7 @@ class TransformerDecoderLayer(nn.TransformerEncoderLayer):
         return mask
 
     def forward(self, src):
+        # TODO(anj-s): Fix the data format so that we have [seq_len, batch_size, embedding dim].
         if self.src_mask is None or self.src_mask.size(0) != len(src):
             device = src.device
             mask = self._generate_square_subsequent_mask(len(src)).to(device)
@@ -58,6 +61,8 @@ class TransformerDecoderLayer(nn.TransformerEncoderLayer):
 
 
 class LinearLayer(nn.Linear):
+    """Wrapped nn.Linear layer to allow for weight initialization."""
+
     def __init__(self, ninp, ntoken, initrange):
         super().__init__(ninp, ntoken)
         self.bias.data.zero_()
@@ -65,8 +70,7 @@ class LinearLayer(nn.Linear):
 
 
 class TransformerLMSequntial(nn.Sequential):
-    """A small language model based on the design of GPT-2 using nn.Sequeitnal
-    for compatability with Pipe"""
+    """A GPT-2 based nn.Sequeitnal language model."""
 
     def __init__(self, ntokens, ninp, nhead, nhid, dropout, initrange, ndecoder):
         layers = [

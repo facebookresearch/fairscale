@@ -9,7 +9,6 @@ import time
 from benchmark_dataset import BenchmarkLMDataset, collate_sentences_lm
 import datasets
 import models
-from models import TransformerLMSequntial
 import torch
 from torch.distributed import rpc
 import torch.multiprocessing as mp
@@ -64,7 +63,7 @@ def make_model(args, device, config):
         layers.append(LazyModule(lambda: models.LinearLayer(ninp, vocab_size, initrange)))
         model = layers
     else:
-        model = TransformerLMSequntial(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
+        model = models.TransformerLMSequntial(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
     def make_adam(params):
         if args.ddp_zero:
@@ -179,39 +178,27 @@ def log_number_of_parameters(model):
         logging.info(f"training model, #params = {num_params}")
 
 
-def get_first_device(model):
+def get_device(model, index):
     if isinstance(model, DDP):
         model = model.module
 
     if not torch.cuda.is_available():
         return torch.device("cpu")
     if model.devices:
-        return model.devices[0]
+        return model.devices[index]
     else:
         return torch.cuda.current_device()
 
 
-def get_last_device(model):
-    if isinstance(model, DDP):
-        model = model.module
-
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    if model.devices:
-        return model.devices[-1]
-    else:
-        return torch.cuda.current_device()
-
-
-def get_fake_dataloader():
-    thing = {"input": torch.zeros(args.batch_size)}
+def get_fake_dataloader(lm_dataloader_len):
+    fake_input = {"input": torch.zeros(args.batch_size)}
 
     class FakeDataset:
         def __getitem__(self, index):
-            return thing
+            return fake_input
 
         def __len__(self):
-            return len(lm_dataloader)
+            return lm_dataloader_len
 
     return FakeDataset()
 
@@ -241,18 +228,17 @@ def train(data_config, model, benchmark_config, args):
             find_unused_parameters=False,
         )
 
-    # FIXME: Why do we need this? Can we use synthetic data instead?
+    # TODO(anj-s): Avoid sending fake data to all replicas except the first and last one.
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
-        lm_dataloader = get_fake_dataloader()
+        lm_dataloader = get_fake_dataloader(len(lm_dataloader))
 
     for i, batch in enumerate(lm_dataloader):
-
         if args.max_batch and i > args.max_batch:
             break
         optimizer.zero_grad()
         try:
             if (pipe_group is None or pipe_group.rank() == 0) and not args.ddp_zero:
-                tmp = batch["input"].to(get_first_device(model))
+                tmp = batch["input"].to(get_device(model, 0))
                 output = model(tmp)
             else:
                 output = model(batch["input"])
@@ -260,7 +246,7 @@ def train(data_config, model, benchmark_config, args):
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
-            target = batch["target"].to(get_last_device(model))
+            target = batch["target"].to(get_device(model, -1))
             output = output.to(target.device)
 
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
@@ -401,7 +387,7 @@ def generate_balance(num_devices, num_layers):
     return balance
 
 
-def make_model_and_data(args, new_data: bool = True, config=None):
+def make_model_and_data(args, config=None):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if args.use_synthetic_data:
         model, optimizer = make_model(args, device, config)
@@ -423,6 +409,8 @@ def make_model_and_data(args, new_data: bool = True, config=None):
 
 
 def create_benchmark_config(model_name):
+    """Return a dict with configurations required for benchmarking `model_name` model."""
+
     if model_name == "seq_pred":
         return {
             "vocab_size": 10000,
@@ -439,6 +427,8 @@ def create_benchmark_config(model_name):
 
 
 def benchmark_single_process(args):
+    """Benchmark a given model using a single process and multiple devices."""
+
     num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
     init_random_seed(0)
@@ -476,7 +466,7 @@ def run_mp_worker(args, available_workers):
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
         pipelined_backward=args.pipelined_backward,
         checkpoint=args.checkpoint,
-        # FIXME: Do we need to comment this out? loss_fn=benchmark_config["criterion"],
+        # TODO(anj-s): Do we need to comment this out? loss_fn=benchmark_config["criterion"],
     )
     if torch.cuda.is_available():
         p = p.cuda()
@@ -598,7 +588,7 @@ parser.set_defaults(pipelined_backward=True)
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    # FIXME: Add support for multiprocess benchmarking.
+    # TODO(anj-s): Add support for multiprocess benchmarking.
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
         print(f"Running benchmark with args: {args}")
         benchmark_single_process(args)

@@ -8,6 +8,7 @@ from torchtext.data.utils import get_tokenizer
 
 def get_wikitext2_data(device):
     """Return batched data from wikitext2 dataset for training, validation and testing."""
+
     with warnings.catch_warnings(record=True) as _:
         text_field = torchtext.data.Field(
             tokenize=get_tokenizer("basic_english"), init_token="<sos>", eos_token="<eos>", lower=True
@@ -27,6 +28,7 @@ def get_wikitext2_data(device):
 
 def batchify(data, bsz, text_field, device):
     """Return batched data that is placed on the specified device."""
+
     data = text_field.numericalize([data.examples[0].text])
     nbatch = data.size(0) // bsz
     data = data.narrow(0, 0, nbatch * bsz)
