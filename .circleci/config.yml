@@ -59,7 +59,7 @@ install_dep_16: &install_dep_16
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
 
-install_dep_17: &install_dep_17
+install_dep_17_cpu: &install_dep_17_cpu
   - run:
       name: Install Dependencies
       command: |
@@ -70,7 +70,7 @@ install_dep_17: &install_dep_17
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
 
-install_dep_17_benchmarks: &install_dep_17_benchmarks
+install_dep_17_gpu: &install_dep_17_gpu
   # FIXME: need to be removed when properly handling torch 1.7.1
   # short term fix is to override the default pip installed torch
   - run:
@@ -170,7 +170,7 @@ jobs:
           keys:
             - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17
+      - <<: *install_dep_17_cpu
 
       - save_cache:
           paths:
@@ -290,7 +290,7 @@ jobs:
           keys:
             - cache-key-gpu17-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17
+      - <<: *install_dep_17_gpu
 
       - save_cache:
           paths:
@@ -327,7 +327,7 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17_benchmarks
+      - <<: *install_dep_17_gpu
 
       - save_cache:
           paths:
