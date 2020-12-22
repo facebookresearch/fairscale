@@ -82,7 +82,7 @@ class AdaScale(Optimizer):
                     done = True
 
     Example 2: using a custom `update_lr()` function that update the learning
-    rate based on the current step count.
+    rate based on the current step count per epoch.
 
     .. code-block:: python
 
@@ -113,10 +113,16 @@ class AdaScale(Optimizer):
             ``world_size * num_gradients_to_accumulate``.
         smoothing (float):
             Smoothing factor for moving average. If None, it defaults to
-            max(1 - (world_size * num_gradients_to_accumulate)/1000, 0).
+            ``max(1 - (world_size * num_gradients_to_accumulate)/1000, 0)``.
         num_gradients_to_accumulate (int):
-            Number of passes that we accumulate gradients locally.
+            Number of passes that we accumulate gradients locally
+            between each optimizer step.
             Default to 1, which does not accumulate gradients.
+        debias_ewma (bool):
+            (experimental) Use debias exponential moving average
+            for smoothing and mu and sigma variables. False will
+            use the method in the paper Appendix B.3.
+            Default: True.
     """
 
     def __init__(
@@ -126,6 +132,7 @@ class AdaScale(Optimizer):
         scale: Optional[float] = None,
         smoothing: float = None,
         num_gradients_to_accumulate: int = 1,
+        debias_ewma: bool = True,
     ):
         self._optimizer = optimizer
         self._local_grad_sqr: Optional[torch.Tensor] = None
@@ -134,9 +141,12 @@ class AdaScale(Optimizer):
         )
         self._num_backward_calls = 0
         self._num_grads_to_accum = num_gradients_to_accumulate
+        self._debias_ewma = debias_ewma
 
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
         self.param_groups = self._optimizer.param_groups
+
+        self.set_num_gradients_to_accumulate(num_gradients_to_accumulate, update_smoothing=True)
 
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
@@ -151,19 +161,33 @@ class AdaScale(Optimizer):
             },
         )
 
+        self._scale = 1.0  # Assign to inform mypy about the typing of this variable.
         self.set_scale(self._world_size * self._num_grads_to_accum if scale is None else scale)
 
-        # Set smoothing based on effective world_size rather than scale here, since world_size
-        # determines the number of samples being averaged over at every update
-        self._smoothing = (
-            max(1 - (self._world_size * self._num_grads_to_accum) / 1000, 0) if smoothing is None else smoothing
-        )
-
         # Register the gradient hooks. Note, don't assume every param will generate
-        # a gradient (i.e. triggering the hook) in every backward pass.
+        # a gradient (i.e. triggering the hook) in every backward pass. See
+        # ``find_unused_params`` in the DDP class in ``torch.nn.parallel``.
+        self._hook_handles = []
         for idx, param_group in enumerate(self._optimizer.param_groups):
             for param in param_group["params"]:
-                param.register_hook(functools.partial(self._backward_hook, idx))
+                h = param.register_hook(functools.partial(self._backward_hook, idx))
+                self._hook_handles.append(h)
+
+    def __del__(self) -> None:
+        """ Unhook in case caller forgets to call unhook.
+
+            This however may not "work" since there would be circular reference
+            between the hook objects and this objects. In that case, neither will
+            get GC'ed. Calling unhook explicitly if you really want to delete
+            AdaScale from memory.
+        """
+        self.unhook()
+
+    def unhook(self) -> None:
+        """Clean up hook handles when we are gone."""
+        for h in self._hook_handles:
+            h.remove()
+        self._hook_handles = []
 
     @property
     def _state(self) -> Dict[str, np.ndarray]:
@@ -180,13 +204,31 @@ class AdaScale(Optimizer):
         baseline batch size is 32, but using a scaled-up batch size of 80, then
         then the scaling factor is 2.5.
 
+        This is exposed API mainly for logging purpose. Note, this is different
+        from ``self.gain()``.
+
         Returns:
             (float):
                 The current scaling factor.
         """
         return self._scale
 
-    def set_scale(self, scale: float) -> None:
+    @property
+    def smoothing(self) -> float:
+        """
+        The smoothing constant used in exponentially-weighted moving average
+        tracking the gradient norm mean and variance within AdaScale.
+
+        This is exposed API since the value is computed and caller may
+        want to obtain this value and log it.
+
+        Returns:
+            (float):
+                The current smoothing value.
+        """
+        return self._smoothing
+
+    def set_scale(self, scale: float, update_estimate: bool = True) -> None:
         """
         Set the scaling factor of the current batch size. It is up to the
         application to invoke this function to make sure that AdaScale's
@@ -195,7 +237,19 @@ class AdaScale(Optimizer):
         Args:
             scale (float):
                 New scaling factor to be applied to AdaScale.
+            update_estimate (bool):
+                Whether to update the scale-depenent estimate of gradient
+                variance; this is highly recommended. (default: True)
         """
+        assert scale >= 1, "Scale must be at least 1"
+        if update_estimate and hasattr(self, "_scale"):
+            assert self._scale >= 1, "bug: old scale isn't valid"
+            # Rescale grad_var_avg to account for the change in scale
+            if self._debias_ewma and "grad_var_avg_biased" in self._state:
+                self._state["grad_var_avg_biased"] *= self._scale / scale
+            elif "grad_var_avg_total" in self._state:  # _debias_ewma==False
+                self._state["grad_var_avg_total"] *= self._scale / scale
+            self._state["grad_var_avg"] *= self._scale / scale
         self._scale = scale
 
     def grad_sqr_avg(self, pg_idx: Optional[int] = None) -> float:
@@ -234,13 +288,11 @@ class AdaScale(Optimizer):
         else:
             return np.sum(self._state["grad_var_avg"])
 
-    def gain(self, scale: Optional[float] = None, pg_idx: Optional[int] = None) -> float:
+    def gain(self, pg_idx: Optional[int] = None) -> float:
         """
         Current estimate of the AdaScale gain ratio (r_t in the paper).
 
         Args:
-            scale (float):
-                Optional batch size scale to estimate the gain ratio for.
             pg_idx (int):
                 Optional index of a parameter group.
 
@@ -248,21 +300,37 @@ class AdaScale(Optimizer):
             (float):
                 Estimate of gain ratio.
         """
-        scale = self._scale if scale is None else scale
         var = self.grad_var_avg(pg_idx)
         sqr = self.grad_sqr_avg(pg_idx)
-        return (var + sqr) / (var / scale + sqr)
+        gain = (var + sqr) / (var / self.scale + sqr)
+        return gain
 
     def _update_avg(self, name: str, value: torch.Tensor, factor: float) -> None:
-        # This function computes and stores the moving average of a vector
-        # using a smoothing factor.
-        biased = self._state.get(name + "_biased", 0.0)
-        unbias = self._state.get(name + "_unbias", 0.0)
-        biased = factor * biased + (1.0 - factor) * value
-        unbias = factor * unbias + (1.0 - factor)
-        self._state[name + "_biased"] = biased
-        self._state[name + "_unbias"] = unbias
-        self._state[name] = biased / unbias
+        if self._debias_ewma:
+            # This function computes and stores the moving average of a vector
+            # using a smoothing factor.
+            biased = self._state.get(name + "_biased", 0.0)
+            unbias = self._state.get(name + "_unbias", 0.0)
+            biased = factor * biased + (1.0 - factor) * value
+            unbias = factor * unbias + (1.0 - factor)
+            self._state[name + "_biased"] = biased
+            self._state[name + "_unbias"] = unbias
+            self._state[name] = biased / unbias
+        else:
+            # Moving average procedure described in Appendix B.3
+            # For iterations t < 1 / (1 - smoothing) define grad_var_avg
+            # and grad_sqr_avg as mean of the past samples. After that
+            # start using running average.
+            count = self._state.get(name + "_count", 0)
+            count += 1
+            self._state[name + "_count"] = count
+            if count < 1 / (1 - self._smoothing):
+                total = self._state.get(name + "_total", 0.0)
+                total += value
+                self._state[name + "_total"] = total
+                self._state[name] = total / count
+            else:
+                self._state[name] = factor * self._state[name] + (1.0 - factor) * value
 
     def _backward_hook(self, pg_idx: int, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
@@ -270,7 +338,9 @@ class AdaScale(Optimizer):
 
         # Store the local gradient square sums in a vector.
         if self._local_grad_sqr is None:
-            self._local_grad_sqr = torch.zeros(len(self._optimizer.param_groups), device=grad.device)
+            self._local_grad_sqr = torch.zeros(
+                len(self._optimizer.param_groups), device=grad.device, requires_grad=False,
+            )
         self._local_grad_sqr[pg_idx] += grad.pow(2).sum()
 
         # Now, ensure we queue a callback at the end of the callback queue.
@@ -322,14 +392,14 @@ class AdaScale(Optimizer):
 
         # Compute the sums of squares for reduced gradients.
         # Divide by _num_grads_to_accum since the gradients are accumulated.
-        #
-        # Note: we are mutating the gradients here!!!
         total_grad_sqr = np.array(
-            [
-                sum(param.grad.div_(self._num_grads_to_accum).pow(2).sum().item() for param in group["params"])
-                for group in self._optimizer.param_groups
-            ]
+            [sum(param.grad.pow(2).sum().item() for param in group["params"]) for group in self._optimizer.param_groups]
         )
+        # Divide by (_num_grads_to_accum ** 2) to account for gradient
+        # accumulation.
+        if self._num_grads_to_accum > 1:
+            # np array doesn't support /=.
+            total_grad_sqr = total_grad_sqr / (self._num_grads_to_accum ** 2)
 
         # Wait for all_reduce to be done and move it to cpu & np.
         if work:
@@ -338,15 +408,18 @@ class AdaScale(Optimizer):
         self._local_grad_sqr = None
 
         # See appendix B.3 of the paper.
+        # Modified to handle cases where scale != world_size
         #
-        # local_grad_sqr is \sigma_{i=1}^{S}\norm{g_t_i}
-        # total_grad_sqr is \norm{g_t}
+        # local_grad_sqr is \sum_{i=1}^{c N} \norm{g_t_i}^2
+        # where N is world size and c is num_grads_to_accum
+        # total_grad_sqr is \norm{\bar{g}_t}^2
         S = self._scale
-        grad_var = local_grad_sqr / (S - 1) - total_grad_sqr * S / (S - 1)
+        cN = self._world_size * self._num_grads_to_accum
+        grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
         grad_sqr = total_grad_sqr - grad_var / S
         grad_var = np.maximum(grad_var, 1e-6)
         grad_sqr = np.maximum(grad_sqr, 0.0)
-        theta = self._smoothing
+        theta = self.smoothing
         self._update_avg("grad_sqr_avg", grad_sqr, theta)
         self._update_avg("grad_var_avg", grad_var, theta)
 
@@ -410,3 +483,29 @@ class AdaScale(Optimizer):
                 associated AdaScale internal states are not saved in the checkpoint.
         """
         return self._optimizer.load_state_dict(data)
+
+    def set_num_gradients_to_accumulate(self, num_gradients_to_accumulate: int, update_smoothing: bool = True,) -> None:
+        """Set the number of gradients to accumulate to a new value.
+
+        This is experimental. This could be called while training so that
+        we can gradually increasing the steps between updates.
+
+        TODO (min): need a way of determine how much to increase the step size?
+
+        Args:
+            num_gradients_to_accumulate (int):
+                Number of gradients to accumulate (calls to backward) between
+                each optimizer step
+            update_smoothing (bool):
+                Whether to update smoothing factor or not. Default: True.
+        """
+        assert num_gradients_to_accumulate >= 1
+        self._num_grads_to_accum = num_gradients_to_accumulate
+        if update_smoothing:
+            # Set smoothing based on effective world_size rather than scale here,
+            # since world_size determines the number of samples being averaged over
+            # at every update.
+            #
+            # When effective world size is large enough, smoothing is probably
+            # not needed, so the smoothing factor is 0.
+            self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
