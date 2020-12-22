@@ -241,7 +241,7 @@ def train(data_config, model, benchmark_config, args):
             find_unused_parameters=False,
         )
 
-    # TODO: Why do we need this? Can we use synthetic data instead?
+    # FIXME: Why do we need this? Can we use synthetic data instead?
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
         lm_dataloader = get_fake_dataloader()
 
@@ -476,7 +476,7 @@ def run_mp_worker(args, available_workers):
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
         pipelined_backward=args.pipelined_backward,
         checkpoint=args.checkpoint,
-        # TODO: Do we need to comment this out? loss_fn=benchmark_config["criterion"],
+        # FIXME: Do we need to comment this out? loss_fn=benchmark_config["criterion"],
     )
     if torch.cuda.is_available():
         p = p.cuda()
@@ -598,7 +598,7 @@ parser.set_defaults(pipelined_backward=True)
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    # TODO: Add support for multiprocess benchmarking.
+    # FIXME: Add support for multiprocess benchmarking.
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
         print(f"Running benchmark with args: {args}")
         benchmark_single_process(args)
