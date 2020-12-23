@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 
+# TODO(anj-s): Identify if we need this initialization logic for the below wrapped layers.
 class EmbeddingLayer(nn.Embedding):
     """Wrapped nn.Embedding layer to allow for weight initialization."""
 
@@ -52,6 +53,7 @@ class TransformerDecoderLayer(nn.TransformerEncoderLayer):
 
     def forward(self, src):
         # TODO(anj-s): Fix the data format so that we have [seq_len, batch_size, embedding dim].
+        # Currently real data has seq_len as the second dimension and batch_size as the first dimension.
         if self.src_mask is None or self.src_mask.size(0) != len(src):
             device = src.device
             mask = self._generate_square_subsequent_mask(len(src)).to(device)

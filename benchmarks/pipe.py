@@ -1,14 +1,20 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 import argparse
+from collections import defaultdict
+from functools import reduce
+import gc
 import logging
 import math
+import operator
 import os
+import pprint
 import time
 
 from benchmark_dataset import BenchmarkLMDataset, collate_sentences_lm
 import datasets
 import models
+import numpy
 import torch
 from torch.distributed import rpc
 import torch.multiprocessing as mp
@@ -35,7 +41,6 @@ except ImportError:
 
 
 def init_random_seed(seed: int):
-    import numpy
 
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -76,8 +81,6 @@ def make_model(args, device, config):
 
 
 def get_tensors_by_size_bucket():
-    from collections import defaultdict
-    import gc
 
     size_buckets = defaultdict(int)
     for obj in gc.get_objects():
@@ -90,8 +93,6 @@ def get_tensors_by_size_bucket():
 
 
 def dump_size_buckets(size_buckets, prefix=""):
-    from functools import reduce
-    import operator
 
     total = 0
     for key, value in size_buckets.items():
@@ -134,9 +135,6 @@ def check_size_buckets():
 
 def dump_cuda_tensors():
     print(f"dumping cuda tensors...")
-    from functools import reduce
-    import gc
-    import operator
 
     for obj in gc.get_objects():
         if not isinstance(obj, torch.Tensor):
@@ -151,15 +149,10 @@ def dump_cuda_tensors():
         total += this
         print(f"{key} : {value}, {this}")
     print(f"total size = {total}")
-
-    import pprint
-
     pprint.pprint(torch.cuda.memory_stats())
 
 
 def log_number_of_parameters(model):
-    from functools import reduce
-    import operator
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
     if model.group:
@@ -580,7 +573,7 @@ parser.add_argument(
 parser.add_argument(
     "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
 )
-parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data to run benchmarks.")
+parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data for a sample training run.")
 parser.add_argument(
     "--model_name", default="seq_pred", choices=["seq_pred", "transformer"], help="Model used to benchmark pipe."
 )
