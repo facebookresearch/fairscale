@@ -145,6 +145,9 @@ class AdaScale(Optimizer):
         self._num_grads_to_accum = num_gradients_to_accumulate
         self._debias_ewma = debias_ewma
 
+        # For checking correctness.
+        self._in_backward = False
+
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
         self.param_groups = self._optimizer.param_groups
 
@@ -243,6 +246,7 @@ class AdaScale(Optimizer):
                 Whether to update the scale-depenent estimate of gradient
                 variance; this is highly recommended. (default: True)
         """
+        assert not self._in_backward, "Don't change scale in backward phase"
         assert scale >= 1, "Scale must be at least 1"
         if update_estimate and hasattr(self, "_scale"):
             assert self._scale >= 1, "bug: old scale isn't valid"
@@ -337,6 +341,7 @@ class AdaScale(Optimizer):
     def _backward_hook(self, pg_idx: int, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
+        self._in_backward = True
 
         # Store the local gradient square sums in a vector.
         if self._local_grad_sqr is None:
@@ -383,6 +388,7 @@ class AdaScale(Optimizer):
         #                   Longer term, we may compute the gain and then inform
         #                   the training loop when it is a good time to step().
         if self._num_backward_calls % self._num_grads_to_accum != 0:
+            assert self._in_backward, "We should still be in backward phase"
             return
 
         # Since self._local_grad_sqr is FP32, sum shouldn't overflow.
@@ -424,6 +430,8 @@ class AdaScale(Optimizer):
         theta = self.smoothing
         self._update_avg("grad_sqr_avg", grad_sqr, theta)
         self._update_avg("grad_var_avg", grad_var, theta)
+        # Final backward is done.
+        self._in_backward = False
 
     def step(self, *args: Any, **kwargs: Any) -> Optional[float]:
         """
@@ -447,6 +455,7 @@ class AdaScale(Optimizer):
             (Tensor):
                 The loss tensor if a closure if used to re-evaluate the model.
         """
+        assert not self._in_backward, "Don't step without finishing backward phase"
         # Set original LR and set new LR.
         original_lr = []
         for idx, param_group in enumerate(self._optimizer.param_groups):
@@ -464,6 +473,7 @@ class AdaScale(Optimizer):
 
     def zero_grad(self) -> None:
         """Proxy function to optimizer, because some training loops need this."""
+        assert not self._in_backward, "Don't zero_grad in backward"
         return self._optimizer.zero_grad()
 
     def state_dict(self) -> Dict:
@@ -474,6 +484,7 @@ class AdaScale(Optimizer):
                 Do NOT checkpoint in the middle of gradient accumulation since
                 associated AdaScale internal states are not saved in the checkpoint.
         """
+        assert not self._in_backward, "Don't checkpoint in backward"
         return self._optimizer.state_dict()
 
     def load_state_dict(self, data: Dict) -> None:
@@ -484,6 +495,7 @@ class AdaScale(Optimizer):
                 Do NOT checkpoint in the middle of gradient accumulation since
                 associated AdaScale internal states are not saved in the checkpoint.
         """
+        assert not self._in_backward, "Don't load checkpoint in backward"
         return self._optimizer.load_state_dict(data)
 
     def set_num_gradients_to_accumulate(self, num_gradients_to_accumulate: int, update_smoothing: bool = True,) -> None:
@@ -506,6 +518,7 @@ class AdaScale(Optimizer):
             update_smoothing (bool):
                 Whether to update smoothing factor or not. Default: True.
         """
+        assert not self._in_backward, "Don't change num_grad_to_accum in backward"
         assert num_gradients_to_accumulate >= 1
         self._num_grads_to_accum = num_gradients_to_accumulate
         if update_smoothing:

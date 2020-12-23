@@ -41,7 +41,7 @@ def test_loss_accum_cpu():
     """
     model = Linear(2, 2, bias=False)
     # num_gradients_to_accumulate value doesn't matter in this negative test.
-    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=123)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=3)
     # data 1
     in_data = Tensor([0.0, 1.0])
     loss = model(in_data).sum()
@@ -53,9 +53,9 @@ def test_loss_accum_cpu():
     loss += model(in_data).sum()
     # backward, but gradient is only produced once by the autograd engine.
     loss.backward()
-    # therefore, the gain will always be 1, which renders adascale as noop.
-    optim.step()
+    # The gain will always be 1, which renders adascale as noop.
     assert np.allclose(optim.gain(), 1.0), optim.gain()
+    # We don't call optim.step(), since it will detect that backward is not yet done.
 
 
 # IMPORTANT: make sure these test_cases values are sync'ed with the DDP
