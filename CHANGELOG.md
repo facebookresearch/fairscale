@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AdaScale: Added support of torch.lr_scheduler
 
 ### Fixed
-- tbd
+- AdaScale: smoothing factor value fixed when using gradient accumulation
+- Pipe: documentation on balancing functions
 
 ## [0.1.1] - 2020-12-01
 ### Fixed
