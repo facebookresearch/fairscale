@@ -490,9 +490,14 @@ class AdaScale(Optimizer):
         """Set the number of gradients to accumulate to a new value.
 
         This is experimental. This could be called while training so that
-        we can gradually increasing the steps between updates.
+        we can gradually increasing the steps between updates. Almost always
+        `set_scale` needs to be called to update the scale as well.
 
         TODO (min): need a way of determine how much to increase the step size?
+        TODO (min): have both `set_scale` and `set_num_gradients_to_accumulate`
+                    is hard to use and easy to make mistake. I think it is better
+                    to specific a specify a `base_scale`. But more discussion is
+                    needed here.
 
         Args:
             num_gradients_to_accumulate (int):
