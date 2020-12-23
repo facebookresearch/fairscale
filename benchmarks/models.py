@@ -54,6 +54,7 @@ class TransformerDecoderLayer(nn.TransformerEncoderLayer):
     def forward(self, src):
         # TODO(anj-s): Fix the data format so that we have [seq_len, batch_size, embedding dim].
         # Currently real data has seq_len as the second dimension and batch_size as the first dimension.
+        # We need to mask the sequence length dimension and not the batch size.
         if self.src_mask is None or self.src_mask.size(0) != len(src):
             device = src.device
             mask = self._generate_square_subsequent_mask(len(src)).to(device)
