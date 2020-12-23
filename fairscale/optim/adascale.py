@@ -104,25 +104,27 @@ class AdaScale(Optimizer):
         optimizer (torch.optim.Optimizer):
             Optimizer to apply AdaScale to.
         world_size (int):
-            Number of world_size for distributed training. If
-            None, defaults to ``dist.get_world_size()``.
+            Number of world_size for distributed training.
+            If None, defaults to ``dist.get_world_size()``.
         scale (float):
             Scaling factor of the batch size from scale equals 1, e.g. using a 10x
             larger batch size (summed across all ranks with gradient accumulation)
-            means a scale of 10. If None, defaults to
-            ``world_size * num_gradients_to_accumulate``.
+            means a scale of 10.
+            If None, defaults to ``world_size * num_gradients_to_accumulate``.
         smoothing (float):
-            Smoothing factor for moving average. If None, it defaults to
-            ``max(1 - (world_size * num_gradients_to_accumulate)/1000, 0)``.
+            Smoothing factor for moving average.
+            If None, it defaults to ``max(1 - (world_size * num_gradients_to_accumulate)/1000, 0)``.
         num_gradients_to_accumulate (int):
             Number of passes that we accumulate gradients locally
-            between each optimizer step.
+            between each optimizer step. This can be changed during
+            training as long as the train loop changes gradient accumulation
+            accordingly.
             Default to 1, which does not accumulate gradients.
         debias_ewma (bool):
             (experimental) Use debias exponential moving average
             for smoothing and mu and sigma variables. False will
-            use the method in the paper Appendix B.3.
-            Default: True.
+            use the method in the paper's Appendix B.3.
+            Default: True, which is what have been validated so far.
     """
 
     def __init__(
