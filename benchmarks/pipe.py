@@ -66,6 +66,7 @@ def get_model_and_optimizer(args, device, config):
 
 
 def get_seq_pred_model(args, device, config):
+    """Get language model used for sequence prediction."""
 
     ninp = config["ninp"]
     nhead = config["nhead"]
@@ -236,7 +237,7 @@ def train(data_config, model, benchmark_config, args):
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
         lm_dataloader = get_fake_dataloader(len(lm_dataloader))
 
-    total_words = 0
+    total_tokens = 0
     for i, batch in enumerate(lm_dataloader):
         if args.max_batch and i > args.max_batch:
             break
@@ -293,9 +294,11 @@ def train(data_config, model, benchmark_config, args):
     return total_tokens, loss.item()
 
 
+# TODO(anj-s): Add an option for users to be able to benchmark evaluate.
 def evaluate(eval_model, data_source, criterion, ntokens):
     eval_model.eval()
     total_loss = 0.0
+    # TODO(anj-s): Move this to the benchmark config if we want to benchmark evaluation.
     bptt = 35
 
     def get_batch(source, i, bptt):
@@ -383,7 +386,7 @@ def generate_balance(num_devices, num_layers):
 
 
 def get_synthetic_dataloader(args):
-    """Return a dict with the given model, dataset and optimizer."""
+    """Returns dataloader for synthetic data."""
 
     if args.model_name == "seq_pred":
         lm_dataset = BenchmarkLMDataset()
@@ -396,6 +399,7 @@ def get_synthetic_dataloader(args):
 
 
 def get_real_dataloaders(device, config):
+    """Returns dataloaders for real data."""
 
     if args.model_name == "seq_pred":
         data = datasets.get_wikitext2_data(device)
@@ -406,7 +410,9 @@ def get_real_dataloaders(device, config):
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def create_model_config(args, new_data: bool = True, config=None):
+def create_model_config(args, config=None):
+    """Return a dict with the given model, dataset and optimizer."""
+
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if args.use_synthetic_data:
         model, optimizer = get_model_and_optimizer(args, device, config)
