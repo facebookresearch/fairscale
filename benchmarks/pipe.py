@@ -277,7 +277,7 @@ def train(data_config, model, benchmark_config, args):
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
             total_loss += loss.item()
             log_interval = 1
-            total_tokens_per_log_interval += total_tokens
+            total_tokens_per_log_interval += batch["input"].numel()
             if i % log_interval == 0 and i > 0:
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
