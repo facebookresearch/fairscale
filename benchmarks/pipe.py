@@ -66,7 +66,7 @@ def get_model_and_optimizer(args, device, config):
 
 
 def get_seq_pred_model(args, device, config):
-    """Get language model used for sequence prediction."""
+    """Get language model(based on GPT-2) used for sequence prediction."""
 
     ninp = config["ninp"]
     nhead = config["nhead"]
@@ -322,6 +322,8 @@ def get_number_of_words(data):
 
 
 def verify_seq_pred_run(wps):
+    """Verify that words per second for a given benchmark run matches the golden data."""
+
     # Assert that words per second is within 3 standard deviations of the average
     # of six golden runs
     assert wps > 36954.4 - (3 * 116.825)
