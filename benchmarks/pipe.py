@@ -381,6 +381,8 @@ def generate_balance(num_devices, num_layers):
 
 
 def make_model_and_data(args, config=None):
+    """Return a dict with the given model, dataset and optimizer."""
+
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if args.use_synthetic_data:
         model, optimizer = make_model(args, device, config)
