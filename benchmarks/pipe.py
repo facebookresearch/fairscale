@@ -1,15 +1,19 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 import argparse
+from collections import defaultdict
+from functools import reduce
+import gc
 import logging
 import math
+import operator
 import os
+import pprint
 import time
 
 from benchmark_dataset import BenchmarkLMDataset, collate_sentences_lm
 import datasets
 import models
-from models import TransformerLMSequntial
 import numpy as np
 import torch
 from torch.distributed import rpc
@@ -37,17 +41,28 @@ except ImportError:
 
 
 def init_random_seed(seed: int):
-    import numpy
 
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    numpy.random.seed(seed)
+    np.random.seed(seed)
 
 
 def get_model_and_optimizer(args, device, config):
+    """Return instantiated model and optimizer function."""
 
     if args.model_name == "seq_pred":
-        return get_seq_pred_model(args, device, config)
+        model = get_seq_pred_model(args, device, config)
+
+    lr = config["lr"]
+
+    def make_adam(params):
+        if args.ddp_zero:
+            return OSS(params=params, optim=Adam, group=get_data_parallel_group(), lr=lr)
+        else:
+            return Adam(params, lr=lr)
+
+    optimizer = make_adam
+    return model, optimizer
 
 
 def get_seq_pred_model(args, device, config):
@@ -58,7 +73,6 @@ def get_seq_pred_model(args, device, config):
     dropout = config["dropout"]
     vocab_size = config["vocab_size"]
     nhid = config["nhid"]
-    lr = config["lr"]
     ndecoder = args.num_decoder_layers
 
     if args.lazy_construction:
@@ -72,21 +86,12 @@ def get_seq_pred_model(args, device, config):
         layers.append(LazyModule(lambda: models.LinearLayer(ninp, vocab_size, initrange)))
         model = layers
     else:
-        model = TransformerLMSequntial(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
+        model = models.TransformerLMSequntial(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
-    def make_adam(params):
-        if args.ddp_zero:
-            return OSS(params=params, optim=Adam, group=get_data_parallel_group(), lr=lr)
-        else:
-            return Adam(params, lr=lr)
-
-    optimizer = make_adam
-    return model, optimizer
+    return model
 
 
 def get_tensors_by_size_bucket():
-    from collections import defaultdict
-    import gc
 
     size_buckets = defaultdict(int)
     for obj in gc.get_objects():
@@ -99,8 +104,6 @@ def get_tensors_by_size_bucket():
 
 
 def dump_size_buckets(size_buckets, prefix=""):
-    from functools import reduce
-    import operator
 
     total = 0
     for key, value in size_buckets.items():
@@ -143,9 +146,6 @@ def check_size_buckets():
 
 def dump_cuda_tensors():
     print(f"dumping cuda tensors...")
-    from functools import reduce
-    import gc
-    import operator
 
     for obj in gc.get_objects():
         if not isinstance(obj, torch.Tensor):
@@ -160,15 +160,10 @@ def dump_cuda_tensors():
         total += this
         print(f"{key} : {value}, {this}")
     print(f"total size = {total}")
-
-    import pprint
-
     pprint.pprint(torch.cuda.memory_stats())
 
 
 def log_number_of_parameters(model):
-    from functools import reduce
-    import operator
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
     if model.group:
@@ -187,39 +182,27 @@ def log_number_of_parameters(model):
         logging.info(f"training model, #params = {num_params}")
 
 
-def get_first_device(model):
+def get_device(model, index):
     if isinstance(model, DDP):
         model = model.module
 
     if not torch.cuda.is_available():
         return torch.device("cpu")
     if model.devices:
-        return model.devices[0]
+        return model.devices[index]
     else:
         return torch.cuda.current_device()
 
 
-def get_last_device(model):
-    if isinstance(model, DDP):
-        model = model.module
-
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    if model.devices:
-        return model.devices[-1]
-    else:
-        return torch.cuda.current_device()
-
-
-def get_fake_dataloader():
-    thing = {"input": torch.zeros(args.batch_size)}
+def get_fake_dataloader(lm_dataloader_len):
+    fake_input = {"input": torch.zeros(args.batch_size)}
 
     class FakeDataset:
         def __getitem__(self, index):
-            return thing
+            return fake_input
 
         def __len__(self):
-            return len(lm_dataloader)
+            return lm_dataloader_len
 
     return FakeDataset()
 
@@ -249,20 +232,20 @@ def train(data_config, model, benchmark_config, args):
             find_unused_parameters=False,
         )
 
-    # TODO: Why do we need this? Can we use synthetic data instead?
+    # TODO(anj-s): Avoid sending fake data to all replicas except the first and last one.
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
-        lm_dataloader = get_fake_dataloader()
+        lm_dataloader = get_fake_dataloader(len(lm_dataloader))
 
     total_words = 0
     for i, batch in enumerate(lm_dataloader):
-
         if args.max_batch and i > args.max_batch:
             break
-        total_words += np.prod(list(batch["input"].size()))
+        total_tokens += batch["input"].numel()
+
         optimizer.zero_grad()
         try:
             if (pipe_group is None or pipe_group.rank() == 0) and not args.ddp_zero:
-                tmp = batch["input"].to(get_first_device(model))
+                tmp = batch["input"].to(get_device(model, 0))
                 output = model(tmp)
             else:
                 output = model(batch["input"])
@@ -270,7 +253,7 @@ def train(data_config, model, benchmark_config, args):
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
-            target = batch["target"].to(get_last_device(model))
+            target = batch["target"].to(get_device(model, -1))
             output = output.to(target.device)
 
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
@@ -294,26 +277,26 @@ def train(data_config, model, benchmark_config, args):
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
             total_loss += loss.item()
             log_interval = 1
-            word_counter += np.prod(list(batch["input"].size()))
+            total_tokens_per_log_interval += total_tokens
             if i % log_interval == 0 and i > 0:
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
                 print(
                     "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
-                        i, word_counter / elapsed, cur_loss, math.exp(cur_loss)
+                        i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
                     )
                 )
-                word_counter = 0
+                total_tokens_per_log_interval = 0
                 total_loss = 0
                 start_time = time.time()
 
-    return total_words, loss.item()
+    return total_tokens, loss.item()
 
 
 def evaluate(eval_model, data_source, criterion, ntokens):
     eval_model.eval()
     total_loss = 0.0
-    bptt = 35  # Used for evaluation not training.
+    bptt = 35
 
     def get_batch(source, i, bptt):
         seq_len = min(bptt, len(source) - 1 - i)
@@ -340,18 +323,13 @@ def verify_seq_pred_run(wps):
     # of six golden runs
     assert wps > 36954.4 - (3 * 116.825)
 
-    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
-    print("Peak allocated bytes on cuda:1: {:1d}".format(torch.cuda.memory_stats(1)["allocated_bytes.all.peak"]))
-    print("Peak allocated bytes on cuda:2: {:1d}".format(torch.cuda.memory_stats(2)["allocated_bytes.all.peak"]))
-    print("Peak allocated bytes on cuda:3: {:1d}".format(torch.cuda.memory_stats(3)["allocated_bytes.all.peak"]))
+    for i in range(4):
+        print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]))
 
     # Assert that memory usage on each GPU is within 10% of golden run
     # Right-hand-side is golden run bytes * 110%
-    assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 4061909504 * 1.1
-    assert torch.cuda.memory_stats(1)["allocated_bytes.all.peak"] < 4050944 * 1.1
-    assert torch.cuda.memory_stats(2)["allocated_bytes.all.peak"] < 10427392 * 1.1
-    assert torch.cuda.memory_stats(3)["allocated_bytes.all.peak"] < 2031824896 * 1.1
-    print("No regression detected")
+    for i, golden_ref in zip(range(4), [4061909504, 4050944, 10427392, 2031824896]):
+        assert torch.cuda.memory_stats(i)["allocated_bytes.all.peak"] < golden_ref * 1.1
 
 
 def benchmark_language_model(model_config, model, benchmark_config, args):
@@ -376,7 +354,7 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
         if args.model_name == "seq_pred":
             verify_seq_pred_run(wps)
         else:
-            raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
+            raise RuntimeError("Unrecognized args.model_name " % args.model_name)
 
 
 def generate_balance_weighted(num_devices, num_layers, fraction=0.5):
@@ -405,6 +383,7 @@ def generate_balance(num_devices, num_layers):
 
 
 def get_synthetic_dataloader(args):
+    """Return a dict with the given model, dataset and optimizer."""
 
     if args.model_name == "seq_pred":
         lm_dataset = BenchmarkLMDataset()
@@ -444,6 +423,8 @@ def create_model_config(args, new_data: bool = True, config=None):
 
 
 def create_benchmark_config(model_name):
+    """Return a dict with configurations required for benchmarking `model_name` model."""
+
     if model_name == "seq_pred":
         return {
             "vocab_size": 10000,
@@ -462,6 +443,8 @@ def create_benchmark_config(model_name):
 
 
 def benchmark_single_process(args):
+    """Benchmark a given model using a single process and multiple devices."""
+
     num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
     init_random_seed(0)
@@ -499,7 +482,7 @@ def run_mp_worker(args, available_workers):
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
         pipelined_backward=args.pipelined_backward,
         checkpoint=args.checkpoint,
-        # TODO: Do we need to comment this out? loss_fn=benchmark_config["criterion"],
+        # TODO(anj-s): Do we need to comment this out? loss_fn=benchmark_config["criterion"],
     )
     if torch.cuda.is_available():
         pipe_model = pipe_model.cuda()
@@ -613,7 +596,7 @@ parser.add_argument(
 parser.add_argument(
     "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
 )
-parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data to run benchmarks.")
+parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data for a sample training run.")
 parser.add_argument(
     "--model_name", default="seq_pred", choices=["seq_pred", "transformer"], help="Model used to benchmark pipe."
 )
@@ -621,7 +604,7 @@ parser.set_defaults(pipelined_backward=True)
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    # TODO: Add support for multiprocess benchmarking.
+    # TODO(anj-s): Add support for multiprocess benchmarking.
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
         print(f"Running benchmark with args: {args}")
         benchmark_single_process(args)

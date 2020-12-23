@@ -5,7 +5,6 @@
 
 from collections import OrderedDict, deque
 import copy
-from enum import Enum, auto
 import itertools
 from itertools import chain
 import logging
@@ -25,11 +24,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
-
-
-class BucketFlush(Enum):
-    Reduce = auto()
-    Broadcast = auto()
 
 
 class OSS(Optimizer):
@@ -116,7 +110,7 @@ class OSS(Optimizer):
                 Bucket(buffer=torch.zeros(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device))
                 for _ in range(len(per_device))
             ]
-        self.should_bucket_param: Dict[torch.Tensor, bool] = {}
+        self.should_bucket_param: List[bool] = []
         self.work_handles: Deque[Workhandle] = deque()
         self._max_work_handles = -1
         self._setup_bucket_strategy()
@@ -139,7 +133,16 @@ class OSS(Optimizer):
                     # Add this param to rank with smallest size.
                     rank = sizes.index(min(sizes))
                     param_lists[rank].append(param)
-                    sizes[rank] += param.numel()
+
+                    # We're partitioning the optimizer state,
+                    # so trainable parameters are the ones which really count
+                    if param.requires_grad:
+                        sizes[rank] += param.numel()
+                    else:
+                        # Spread frozen params on a per-tensor basis
+                        # Mostly useful for balance partitions for fine tuning for instance
+                        # Not required strictly speaking
+                        sizes[rank] += 1
 
                 for rank, params in enumerate(param_lists):
                     param_group_rank = copy.copy(param_group)
@@ -259,7 +262,7 @@ class OSS(Optimizer):
             dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=self.group)
         else:
             local_norm = torch.norm(
-                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type).to(self._device) for p in local_params]),  # type: ignore
+                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type, dtype=torch.float32).to(self._device) for p in local_params]),  # type: ignore
                 p=norm_type,
             )
 
@@ -385,6 +388,14 @@ class OSS(Optimizer):
                 if k != "params":
                     global_group[k] = v
 
+        # Force a re-partitioning, in case the model changed with the new state
+        self._partition_parameters.clear()
+        self._per_device_params.clear()
+        self._param_rank.clear()
+
+        # Update the bucketing strategy accordingly
+        self._setup_bucket_strategy()
+
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """Restore the global parameter groups as well as the shard.
 
@@ -392,8 +403,6 @@ class OSS(Optimizer):
             state_dict (dict): optimizer state. Should be an object returned
                 from a call to :meth:`state_dict`
         """
-
-        print("loading state dict")
 
         # Check whether we got a local or global dict
         if state_dict["local_state_dict"]:
@@ -425,6 +434,9 @@ class OSS(Optimizer):
             param_groups = self.partition_parameters()[self.rank]
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
+
+            # Update the bucketing strategy accordingly
+            self._setup_bucket_strategy()
 
     @staticmethod
     def get_global_rank(group: Any, rank: int) -> int:
@@ -510,6 +522,8 @@ class OSS(Optimizer):
         """Helper function to broadcast all the parameters from a given device"""
 
         with torch.no_grad():
+            i_param = 0
+
             for (
                 device,
                 device_params,
@@ -523,7 +537,7 @@ class OSS(Optimizer):
 
                     for param in params:
                         # Bucket broadcast
-                        if self.bucket_size > 0 and self.should_bucket_param[param]:
+                        if self.bucket_size > 0 and self.should_bucket_param[i_param]:
                             assert bucket.append(param), "Bucket overflow: max %s - current %s - adding %s" % (
                                 bucket.max_size,
                                 bucket.current_offset,
@@ -551,6 +565,8 @@ class OSS(Optimizer):
                                 )
                             )
 
+                        i_param += 1
+
         self._consume_work_handles()
 
     def _consume_work_handles(self) -> None:
@@ -572,30 +588,6 @@ class OSS(Optimizer):
             if work_handle.callback is not None:
                 work_handle.callback()
 
-    def _handle_trailing_buckets(self, flush_type: BucketFlush) -> None:
-        """
-        Go through the buckets, flush them if not already empty
-        .. warning: Could be that a bucket flush was already requested, needs to be handled carefully
-        """
-
-        for bucket_list in self.buckets.values():
-            for bucket in bucket_list:
-                if bucket.current_offset > 0:
-                    self.work_handles.append(
-                        Workhandle(
-                            handle=dist.broadcast(
-                                tensor=bucket.buffer, src=bucket.global_ref_rank, group=self.group, async_op=True,
-                            )
-                            if flush_type == BucketFlush.Broadcast
-                            else dist.reduce(
-                                tensor=bucket.buffer, dst=bucket.global_ref_rank, group=self.group, async_op=True,
-                            ),
-                            callback=bucket.unroll,
-                        )
-                    )
-
-        self._consume_work_handles()
-
     def _setup_bucket_strategy(self) -> None:
         """  Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
         (smallest first), the bucket will hold the smallest elements, the remaining ones will be directly sent
@@ -613,12 +605,11 @@ class OSS(Optimizer):
             for dst_rank, params in enumerate(per_rank_params):
                 offset = 0
 
-                # Only consider the params which will require a gradient
-                for param in filter(lambda p: p.requires_grad, params):
+                for param in params:
                     # Criteria to decide whether this parameter is to be bucketed or not:
                     # - enough room in the bucket
-                    if (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
-                        self.should_bucket_param[param] = True
+                    if param.requires_grad and (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
+                        self.should_bucket_param.append(True)
 
                         if offset == 0:
                             # count this bucket, only once
@@ -626,7 +617,7 @@ class OSS(Optimizer):
 
                         offset += param.numel()
                     else:
-                        self.should_bucket_param[param] = False
+                        self.should_bucket_param.append(False)
 
                 # Register the max offset for this buffer, and the reference rank
                 self.buckets[device][dst_rank].max_offset = offset
@@ -635,4 +626,4 @@ class OSS(Optimizer):
 
         # Determine the max work handles in flight:
         # - all the direct reduce/broadcast
-        self._max_work_handles += sum(not value for value in self.should_bucket_param.values())
+        self._max_work_handles += sum(not value for value in self.should_bucket_param)
