@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [next rel] - TBD
 ### Added
 - AdaScale: Added gradient accumulation feature
+- AdaScale: Added support of torch.lr_scheduler
 
 ### Fixed
 - tbd
