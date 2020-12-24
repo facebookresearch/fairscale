@@ -205,9 +205,9 @@ class AdaScale(Optimizer):
     def scale(self) -> float:
         """
         The scaling factor of the current batch size, relative to the baseline
-        batch size when training with a single worker. For example, if the
-        baseline batch size is 32, but using a scaled-up batch size of 80, then
-        then the scaling factor is 2.5.
+        batch size, which could be a DDP training. For example, if the
+        baseline batch size is 32 on 2 GPUs, but using a scaled-up batch size
+        of 80 on 4 GPUs, then then the scaling factor is 80 * 4 / 32 / 2 = 5.
 
         This is exposed API mainly for logging purpose. Note, this is different
         from ``self.gain()``.
@@ -258,7 +258,7 @@ class AdaScale(Optimizer):
             self._state["grad_var_avg"] *= self._scale / scale
         self._scale = scale
 
-    def grad_sqr_avg(self, pg_idx: Optional[int] = None) -> float:
+    def _grad_sqr_avg(self, pg_idx: Optional[int] = None) -> float:
         """
         Current estimate of the squared l2-norm of the true gradient
         (sigma squared in the AdaScale paper).
@@ -276,7 +276,7 @@ class AdaScale(Optimizer):
         else:
             return np.sum(self._state["grad_sqr_avg"])
 
-    def grad_var_avg(self, pg_idx: Optional[int] = None) -> float:
+    def _grad_var_avg(self, pg_idx: Optional[int] = None) -> float:
         """
         Current estimate of the trace of the covariance of the true gradient
         (mu squared in the AdaScale paper).
@@ -301,13 +301,14 @@ class AdaScale(Optimizer):
         Args:
             pg_idx (int):
                 Optional index of a parameter group.
+                Default None: returns "averaged" gain for all groups.
 
         Returns:
             (float):
                 Estimate of gain ratio.
         """
-        var = self.grad_var_avg(pg_idx)
-        sqr = self.grad_sqr_avg(pg_idx)
+        var = self._grad_var_avg(pg_idx)
+        sqr = self._grad_sqr_avg(pg_idx)
         gain = (var + sqr) / (var / self.scale + sqr)
         return gain
 
