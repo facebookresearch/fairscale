@@ -20,6 +20,7 @@
 # limitations under the License.
 
 import os
+import tempfile
 
 import pytest
 import torch
@@ -34,8 +35,8 @@ from fairscale.nn.pipe import Pipe
 from fairscale.utils.testing import dist_init, get_world_sizes, set_random_seed, spawn_for_all_world_sizes, torch_spawn
 
 
-def run_test_parallel_embedding(rank, model_parallel_size):
-    dist_init(rank, model_parallel_size)
+def run_test_parallel_embedding(rank, model_parallel_size, filename):
+    dist_init(rank, model_parallel_size, filename)
 
     if torch.distributed.get_rank() == 0:
         print("> testing parallel embedding with model parallel size {} ...".format(model_parallel_size))
@@ -104,8 +105,8 @@ def run_test_parallel_embedding(rank, model_parallel_size):
         print(">> passed the test :-)")
 
 
-def run_test_initialize_affine_weight(rank, model_parallel_size):
-    dist_init(rank, model_parallel_size)
+def run_test_initialize_affine_weight(rank, model_parallel_size, filename):
+    dist_init(rank, model_parallel_size, filename)
 
     mpu.initialize_model_parallel(model_parallel_size)
     if torch.distributed.get_rank() == 0:
@@ -180,8 +181,8 @@ class IdentityLayer2D(torch.nn.Module):
         return self.weight
 
 
-def run_test_column_parallel_linear(rank, model_parallel_size):
-    dist_init(rank, model_parallel_size)
+def run_test_column_parallel_linear(rank, model_parallel_size, filename):
+    dist_init(rank, model_parallel_size, filename)
 
     mpu.initialize_model_parallel(model_parallel_size)
     if torch.distributed.get_rank() == 0:
@@ -241,8 +242,8 @@ def run_test_column_parallel_linear(rank, model_parallel_size):
         print(" >> passed the test :-)")
 
 
-def run_test_row_parallel_linear(rank, model_parallel_size):
-    dist_init(rank, model_parallel_size)
+def run_test_row_parallel_linear(rank, model_parallel_size, filename):
+    dist_init(rank, model_parallel_size, filename)
 
     mpu.initialize_model_parallel(model_parallel_size)
     if torch.distributed.get_rank() == 0:
@@ -301,14 +302,14 @@ def run_test_row_parallel_linear(rank, model_parallel_size):
         print(" >> passed the test :-)")
 
 
-def run_test_pipe(rank, world_size, skip_dist_init=False):
+def run_test_pipe(rank, world_size, filename, skip_dist_init=False):
     pipe_world_size = 2
 
     if world_size == 1:
         return
 
     if not skip_dist_init:
-        dist_init(rank, world_size)
+        dist_init(rank, world_size, filename)
     else:
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = "29502"
@@ -566,7 +567,8 @@ def test_row_parallel():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 def mpi_pipe():
     mpu.destroy_model_parallel()
-    run_test_pipe(torch.distributed.get_rank(), torch.distributed.get_world_size(), skip_dist_init=True)
+    tempfile_init = tempfile.mkstemp()[1]
+    run_test_pipe(torch.distributed.get_rank(), torch.distributed.get_world_size(), tempfile_init, skip_dist_init=True)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")

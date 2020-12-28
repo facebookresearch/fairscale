@@ -59,7 +59,7 @@ install_dep_16: &install_dep_16
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
 
-install_dep_17: &install_dep_17
+install_dep_17_cpu: &install_dep_17_cpu
   - run:
       name: Install Dependencies
       command: |
@@ -69,6 +69,20 @@ install_dep_17: &install_dep_17
         pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
+
+install_dep_17_gpu: &install_dep_17_gpu
+  # FIXME: need to be removed when properly handling torch 1.7.1
+  # short term fix is to override the default pip installed torch
+  - run:
+      name: Install Dependencies
+      command: |
+        sudo apt-get install -y libopenmpi-dev
+        pip install --progress-bar off -r requirements-test.txt
+        pip install --progress-bar off torch==1.7.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
+        python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -m torch.utils.collect_env
+
 
 install_repo_cpu: &install_repo_cpu
   - run:
@@ -157,7 +171,7 @@ jobs:
           keys:
             - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17
+      - <<: *install_dep_17_cpu
 
       - save_cache:
           paths:
@@ -277,7 +291,7 @@ jobs:
           keys:
             - cache-key-gpu17-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17
+      - <<: *install_dep_17_gpu
 
       - save_cache:
           paths:
@@ -314,7 +328,7 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17
+      - <<: *install_dep_17_gpu
 
       - save_cache:
           paths:
