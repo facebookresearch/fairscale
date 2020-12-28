@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import torch
 from torch import Tensor
-from torch.nn import Linear
+from torch.nn import Linear, Sequential
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -188,7 +188,7 @@ def test_state_checkpointing():
 
 
 def test_lr_scheduler():
-    """Test AdaScale working with torch.optim.lr_scheduler """
+    """Test AdaScale working with torch.optim.lr_scheduler."""
     model = Linear(2, 2, bias=False)
     optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=3)
     # We use 1, not 0.1 here since scheduler.step() is called here first.
@@ -206,3 +206,70 @@ def test_lr_scheduler():
         scheduler.step()
         # asserting LR is right
         assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10 ** (epoch + 1)), optim.param_groups[0]["lr"]
+
+
+@skip_if_no_gpu
+@pytest.mark.parametrize("debias_ewma", [True, False])
+def test_add_param_group(debias_ewma):
+    """Test AdaScale supports add_param_group() API."""
+    model1 = Linear(2, 2, bias=True)
+    with torch.no_grad():
+        # make weights and bias deterministic, which is needed for
+        # multi-layer models. For them, adascale gain is affected by
+        # parameters from other layers.
+        model1.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0]).reshape(2, 2))
+        model1.bias.fill_(0.1)
+    optim = AdaScale(SGD(model1.parameters(), lr=0.1), num_gradients_to_accumulate=2, debias_ewma=debias_ewma)
+    assert len(optim._hook_handles) == 2
+
+    model2 = Linear(2, 3, bias=True)
+    with torch.no_grad():
+        # make weights and bias deterministic
+        model2.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).reshape(3, 2))
+        model2.bias.fill_(0.2)
+    optim.add_param_group({"params": model2.parameters()})
+    assert len(optim._hook_handles) == 4
+
+    # make sure we can run the model.
+    model = Sequential(model1, model2).cuda()
+    in_data_0 = Tensor([1.0, 2.0]).cuda()
+    out = model(in_data_0)
+    out.sum().backward()
+
+    in_data_1 = Tensor([3.0, 4.0]).cuda()
+    out = model(in_data_1)
+    out.sum().backward()
+
+    # make sure the gains are right and we can step.
+    # since this is the first step, debias_ewma doesn't affect the value.
+    assert np.allclose(optim.gain(), 1.1440223454935758)
+    assert np.allclose(optim.gain(0), 1.1428571428571428)
+    assert np.allclose(optim.gain(1), 1.1471258476157762)
+    optim.step()
+
+    # make sure we can add a PG again after stepping.
+    model3 = Linear(3, 4, bias=True)
+    with torch.no_grad():
+        # make weights and bias deterministic
+        model3.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] * 2).reshape(4, 3))
+        model3.bias.fill_(0.2)
+    optim.add_param_group({"params": model3.parameters()})
+    assert len(optim._hook_handles) == 6
+
+    # make sure we can run the model.
+    model = Sequential(model1, model2, model3).cuda()
+    in_data_0 = Tensor([1.0, 2.0]).cuda()
+    out = model(in_data_0)
+    out.sum().backward()
+
+    in_data_1 = Tensor([3.0, 4.0]).cuda()
+    out = model(in_data_1)
+    out.sum().backward()
+
+    # make sure gains are right and we can step.
+    # the last PG's gain is not affected by debias_ewma since it is the first step for that PG.
+    assert np.allclose(optim.gain(), 1.1711342960340743 if debias_ewma else 1.1760960226735786)
+    assert np.allclose(optim.gain(0), 1.0045687695285042 if debias_ewma else 1.0045776319944453)
+    assert np.allclose(optim.gain(1), 1.2184881264548717 if debias_ewma else 1.2184877742714733)
+    assert np.allclose(optim.gain(2), 1.117381091722702)
+    optim.step()

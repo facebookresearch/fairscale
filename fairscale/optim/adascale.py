@@ -32,7 +32,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import functools
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -145,9 +145,6 @@ class AdaScale(Optimizer):
         self._num_grads_to_accum = num_gradients_to_accumulate
         self._debias_ewma = debias_ewma
 
-        # For checking correctness.
-        self._in_backward = False
-
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
         self.param_groups = self._optimizer.param_groups
 
@@ -169,10 +166,17 @@ class AdaScale(Optimizer):
         self._scale = 1.0  # Assign to inform mypy about the typing of this variable.
         self.set_scale(self._world_size * self._num_grads_to_accum if scale is None else scale)
 
-        # Register the gradient hooks. Note, don't assume every param will generate
-        # a gradient (i.e. triggering the hook) in every backward pass. See
-        # ``find_unused_params`` in the DDP class in ``torch.nn.parallel``.
-        self._hook_handles = []
+        self._hook_handles: List[Any] = []
+        self._hook()
+
+    def _hook(self) -> None:
+        """ Internal function to register the gradient hooks.
+
+            Note, don't assume every parameter will generate a gradient (i.e. triggering the hook)
+            in every backward pass, which is the reason that we have ``find_unused_params`` flag
+            in the DDP class in ``torch.nn.parallel``.
+        """
+        assert self._hook_handles == [], "Must run unhook first"
         for idx, param_group in enumerate(self._optimizer.param_groups):
             for param in param_group["params"]:
                 h = param.register_hook(functools.partial(self._backward_hook, idx))
@@ -189,7 +193,14 @@ class AdaScale(Optimizer):
         self.unhook()
 
     def unhook(self) -> None:
-        """Clean up hook handles when we are gone."""
+        """ Unregister hook handles.
+
+            This is public because caller may need to call this to ensure all GPU
+            memory are released. Otherwise, the hook may prevent parameters from being
+            released from the GPU memory pool.
+
+            Internally, we use this to support ``add_param_group()`` API.
+        """
         for h in self._hook_handles:
             h.remove()
         self._hook_handles = []
@@ -246,7 +257,7 @@ class AdaScale(Optimizer):
                 Whether to update the scale-depenent estimate of gradient
                 variance; this is highly recommended. (default: True)
         """
-        assert not self._in_backward, "Don't change scale in backward phase"
+        assert self._local_grad_sqr is None, "Don't change scale in backward phase"
         assert scale >= 1, "Scale must be at least 1"
         if update_estimate and hasattr(self, "_scale"):
             assert self._scale >= 1, "bug: old scale isn't valid"
@@ -312,12 +323,12 @@ class AdaScale(Optimizer):
         gain = (var + sqr) / (var / self.scale + sqr)
         return gain
 
-    def _update_avg(self, name: str, value: torch.Tensor, factor: float) -> None:
+    def _update_avg(self, name: str, value: np.ndarray, factor: float) -> None:
         if self._debias_ewma:
             # This function computes and stores the moving average of a vector
             # using a smoothing factor.
-            biased = self._state.get(name + "_biased", 0.0)
-            unbias = self._state.get(name + "_unbias", 0.0)
+            biased = self._state.get(name + "_biased", np.zeros(value.shape[0]))
+            unbias = self._state.get(name + "_unbias", np.zeros(value.shape[0]))
             biased = factor * biased + (1.0 - factor) * value
             unbias = factor * unbias + (1.0 - factor)
             self._state[name + "_biased"] = biased
@@ -328,12 +339,21 @@ class AdaScale(Optimizer):
             # For iterations t < 1 / (1 - smoothing) define grad_var_avg
             # and grad_sqr_avg as mean of the past samples. After that
             # start using running average.
+            #
+            # Note: we only keep a single _count for all parameter groups.
+            #       Ideally, it should be a vector and in case a PG is added
+            #       after some iterations are done. But, then the if condition
+            #       below will need to be a np.where. I leave this corner
+            #       case to a future exercise.
             count = self._state.get(name + "_count", 0)
             count += 1
             self._state[name + "_count"] = count
             if count < 1 / (1 - self._smoothing):
-                total = self._state.get(name + "_total", 0.0)
-                total += value
+                total = self._state.get(name + "_total", None)
+                if total is None:
+                    total = value
+                else:
+                    total += value
                 self._state[name + "_total"] = total
                 self._state[name] = total / count
             else:
@@ -342,9 +362,10 @@ class AdaScale(Optimizer):
     def _backward_hook(self, pg_idx: int, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
-        self._in_backward = True
 
         # Store the local gradient square sums in a vector.
+        # This vector is also used for error checking. Whenever it is not None,
+        # it means that we are in backward pass.
         if self._local_grad_sqr is None:
             self._local_grad_sqr = torch.zeros(
                 len(self._optimizer.param_groups), device=grad.device, requires_grad=False,
@@ -389,7 +410,7 @@ class AdaScale(Optimizer):
         #                   Longer term, we may compute the gain and then inform
         #                   the training loop when it is a good time to step().
         if self._num_backward_calls % self._num_grads_to_accum != 0:
-            assert self._in_backward, "We should still be in backward phase"
+            assert self._local_grad_sqr is not None, "We should still be in backward phase"
             return
 
         # Since self._local_grad_sqr is FP32, sum shouldn't overflow.
@@ -414,7 +435,6 @@ class AdaScale(Optimizer):
         if work:
             work.wait()
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
-        self._local_grad_sqr = None
 
         # See appendix B.3 of the paper.
         # Modified to handle cases where scale != world_size
@@ -431,8 +451,8 @@ class AdaScale(Optimizer):
         theta = self.smoothing
         self._update_avg("grad_sqr_avg", grad_sqr, theta)
         self._update_avg("grad_var_avg", grad_var, theta)
-        # Final backward is done.
-        self._in_backward = False
+        # Indicating backward is done.
+        self._local_grad_sqr = None
 
     def step(self, *args: Any, **kwargs: Any) -> Optional[float]:
         """
@@ -456,7 +476,7 @@ class AdaScale(Optimizer):
             (Tensor):
                 The loss tensor if a closure if used to re-evaluate the model.
         """
-        assert not self._in_backward, "Don't step without finishing backward phase"
+        assert self._local_grad_sqr is None, "Don't step without finishing backward phase"
         # Set original LR and set new LR.
         original_lr = []
         for idx, param_group in enumerate(self._optimizer.param_groups):
@@ -472,9 +492,30 @@ class AdaScale(Optimizer):
 
         return res
 
+    def add_param_group(self, pg: Dict) -> None:
+        """ Support adding parameter groups
+
+            We need to re-size some of the state and re-register the backward hooks.
+        """
+        assert self._local_grad_sqr is None, "Can't add parameter group during backward"
+        self._optimizer.add_param_group(pg)
+        # Update the hooks.
+        self.unhook()
+        self._hook()
+        # Extend the states.
+        for name in self._state.keys():
+            assert name.startswith("grad_sqr_avg") or name.startswith("grad_var_avg"), name
+            if isinstance(self._state[name], int):
+                # This is the "_count" variable.
+                continue
+            # must be a np array, extend it with the right value and check the shape.
+            val = 1 if name == "grad_sqr_avg" else 0
+            self._state[name] = np.append(self._state[name], val)
+            assert self._state[name].shape == (len(self._optimizer.param_groups),)
+
     def zero_grad(self) -> None:
         """Proxy function to optimizer, because some training loops need this."""
-        assert not self._in_backward, "Don't zero_grad in backward"
+        assert self._local_grad_sqr is None, "Don't zero_grad in backward"
         return self._optimizer.zero_grad()
 
     def state_dict(self) -> Dict:
@@ -485,7 +526,7 @@ class AdaScale(Optimizer):
                 Do NOT checkpoint in the middle of gradient accumulation since
                 associated AdaScale internal states are not saved in the checkpoint.
         """
-        assert not self._in_backward, "Don't checkpoint in backward"
+        assert self._local_grad_sqr is None, "Don't checkpoint in backward"
         return self._optimizer.state_dict()
 
     def load_state_dict(self, data: Dict) -> None:
@@ -496,7 +537,7 @@ class AdaScale(Optimizer):
                 Do NOT checkpoint in the middle of gradient accumulation since
                 associated AdaScale internal states are not saved in the checkpoint.
         """
-        assert not self._in_backward, "Don't load checkpoint in backward"
+        assert self._local_grad_sqr is None, "Don't load checkpoint in backward"
         return self._optimizer.load_state_dict(data)
 
     def set_num_gradients_to_accumulate(self, num_gradients_to_accumulate: int, update_smoothing: bool = True,) -> None:
@@ -519,7 +560,7 @@ class AdaScale(Optimizer):
             update_smoothing (bool):
                 Whether to update smoothing factor or not. Default: True.
         """
-        assert not self._in_backward, "Don't change num_grad_to_accum in backward"
+        assert self._local_grad_sqr is None, "Don't change num_grad_to_accum in backward"
         assert num_gradients_to_accumulate >= 1
         self._num_grads_to_accum = num_gradients_to_accumulate
         if update_smoothing:
