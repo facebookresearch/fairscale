@@ -134,8 +134,11 @@ def get_world_sizes() -> List[int]:
 def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_world_sizes(), args: Any = []) -> None:
 
     for world_size in world_sizes:
-        filename = tempfile.mkstemp()[1]
+        if torch.cuda.is_available() and torch.cuda.device_count() < world_size:
+            logging.warning("Requested world size cannot be reached on this machine, not enough GPUs")
+            continue
 
+        filename = tempfile.mkstemp()[1]
         mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=True)  # type: ignore
 
 
@@ -157,10 +160,19 @@ def worker_process(rank: int, world_size: int, filename: str, func: Callable, ar
             return
 
         # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
-        torch.distributed.destroy_process_group()
+        teardown()
         raise e
 
-    torch.distributed.destroy_process_group()
+    teardown()
+
+
+def teardown() -> None:
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+    try:
+        torch.distributed.rpc.shutdown()
+    except Exception:
+        pass
 
 
 def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
@@ -202,7 +214,9 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
                 if world_size in world_sizes:
                     try:
                         func(*args)
+                        teardown()
                     except BaseException as e:
+                        teardown()
                         print(f"got exception {e} from test")
                         import traceback
 
