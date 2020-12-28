@@ -83,6 +83,13 @@ def torch_version() -> Tuple[int, ...]:
 
 
 def dist_init(rank: int, world_size: int, filename: str) -> None:
+    """
+    Initialize torch distributed, based on a temporary file shared across ranks, which makes it possible for unrelated
+    tests to be run concurrently.
+
+    .. warning: This limits the usecase to all ranks being on the same node
+    """
+
     print(f"dist init r={rank}, world={world_size}")
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
@@ -148,6 +155,9 @@ def worker_process(rank: int, world_size: int, filename: str, func: Callable, ar
         if e.__class__.__name__ == "Skipped":
             error_queue.put(str(e))
             return
+
+        # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
+        torch.distributed.destroy_process_group()
         raise e
 
     torch.distributed.destroy_process_group()
