@@ -64,7 +64,7 @@ def set_random_seed(seed: int) -> None:
 
 
 def torch_version() -> Tuple[int, ...]:
-    numbering = torch.__version__.split(".")
+    numbering = torch.__version__.split("+")[0].split(".")
 
     assert len(numbering) == 3
 
