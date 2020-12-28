@@ -42,7 +42,7 @@ from torch.distributed import rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
-from fairscale.nn.model_parallel import initialize_model_parallel
+from fairscale.nn.model_parallel import destroy_model_parallel, initialize_model_parallel
 from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
 
 
@@ -82,7 +82,7 @@ def torch_version() -> Tuple[int, ...]:
     return tuple(int(n) for n in numbering)
 
 
-def dist_init(rank: int, world_size: int, filename: str) -> None:
+def dist_init(rank: int, world_size: int, filename: str) -> bool:
     """
     Initialize torch distributed, based on a temporary file shared across ranks, which makes it possible for unrelated
     tests to be run concurrently.
@@ -97,6 +97,11 @@ def dist_init(rank: int, world_size: int, filename: str) -> None:
 
     if torch_version() >= (1, 6, 0):
         backend = "nccl" if torch.cuda.is_available() else "gloo"
+
+        if backend == "nccl" and torch.cuda.device_count() < world_size:
+            logging.warning("Requested world size cannot be reached on this machine, not enough GPUs")
+            return False
+
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
 
         # New file for RPC init
@@ -121,6 +126,8 @@ def dist_init(rank: int, world_size: int, filename: str) -> None:
     if torch.cuda.is_available() and torch.cuda.device_count():
         torch.cuda.set_device(rank % torch.cuda.device_count())
 
+    return True
+
 
 def get_worker_map() -> Dict[Any, Any]:
     return {rank: f"Test{rank}" for rank in range(dist.get_world_size())}
@@ -134,10 +141,6 @@ def get_world_sizes() -> List[int]:
 def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_world_sizes(), args: Any = []) -> None:
 
     for world_size in world_sizes:
-        if torch.cuda.is_available() and torch.cuda.device_count() < world_size:
-            logging.warning("Requested world size cannot be reached on this machine, not enough GPUs")
-            continue
-
         filename = tempfile.mkstemp()[1]
         mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=True)  # type: ignore
 
@@ -145,28 +148,29 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
 def worker_process(rank: int, world_size: int, filename: str, func: Callable, args: Any, error_queue: Any) -> None:
     """Main function for unit tests launced with torch_spawn"""
 
-    dist_init(rank, world_size, filename)
-    kwargs = {}
-    if "OMPI_COMM_WORLD_RANK" not in os.environ:
-        kwargs["pipeline_backend"] = "gloo"
-    initialize_model_parallel(1, world_size, **kwargs)
-    try:
-        func(*args)
-    except BaseException as e:
-        # If the function raises 'Skipped', this indicates pytest.skip(), so
-        # forward it to parent so we can call pytest.skip() there
-        if e.__class__.__name__ == "Skipped":
-            error_queue.put(str(e))
-            return
+    if dist_init(rank, world_size, filename):
+        kwargs = {}
+        if "OMPI_COMM_WORLD_RANK" not in os.environ:
+            kwargs["pipeline_backend"] = "gloo"
+        initialize_model_parallel(1, world_size, **kwargs)
+        try:
+            func(*args)
+        except BaseException as e:
+            # If the function raises 'Skipped', this indicates pytest.skip(), so
+            # forward it to parent so we can call pytest.skip() there
+            if e.__class__.__name__ == "Skipped":
+                error_queue.put(str(e))
+                return
 
-        # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
+            # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
+            teardown()
+            raise e
+
         teardown()
-        raise e
-
-    teardown()
 
 
 def teardown() -> None:
+    destroy_model_parallel()
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
     try:

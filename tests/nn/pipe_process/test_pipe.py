@@ -449,6 +449,7 @@ def exception(pipeline_style):
 
 # FIXME(tom) should probably signal to all hosts in group to stop
 @torch_spawn([4])
+@pytest.mark.skipif(torch.cuda.is_available() and torch.cuda.device_count() < 4, reason="Not enough GPUs")
 @pytest.mark.xfail(strict=True)
 @pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
 def exception_early_stop_asap(pipeline_style):
