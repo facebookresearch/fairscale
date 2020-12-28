@@ -3,7 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Dict
+import logging
+from typing import Any, Dict
 
 import torch
 from torch.cuda.amp import GradScaler as TorchGradScaler
@@ -29,18 +30,29 @@ class ShardedGradScaler(TorchGradScaler):
     documentation https://pytorch.org/docs/stable/amp.html#torch.cuda.amp.GradScaler
     """
 
-    def __init__(self) -> None:
+    def __init__(self, process_group: Any = dist.group.WORLD) -> None:
         super().__init__()
+        self.display_warning = True
+        self.group = process_group
 
     def unscale_(self, optimizer: Optimizer) -> None:
-        assert isinstance(optimizer, OSS), "ShardedGradScaler is to be used in combination with a sharded optimizer"
+        # Could be a mistake, this scaler is supposed to work with ZeroRedundancyOptimizer only
+        if self.display_warning and not isinstance(optimizer, OSS):
+            logging.warning(
+                "ShardedGradScaler is to be used in combination with a sharded optimizer, this could not be checked"
+            )
+
+        self.display_warning = False  # Only warn once
 
         # Call the upstream unscale_ method which will only act on this rank's gradients
         super().unscale_(optimizer)
 
         # Synchronize the detected inf across the ranks
         optimizer_state = self._per_optimizer_states[id(optimizer)]
-        handles = [dist.all_reduce(v, async_op=True) for v in optimizer_state["found_inf_per_device"].values()]
+        handles = [
+            dist.all_reduce(v, async_op=True, group=self.group)
+            for v in optimizer_state["found_inf_per_device"].values()
+        ]
 
         # Make sure that the calls are done before moving out
         _ = list(map(lambda x: x.wait(), handles))

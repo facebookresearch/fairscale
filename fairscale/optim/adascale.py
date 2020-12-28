@@ -38,28 +38,67 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 import torch.distributed as dist
+from torch.optim import Optimizer
 
 
-class AdaScale(object):
+class AdaScale(Optimizer):
     """
     Implements the AdaScale_ algorithm for scaling the learning rate for
     distributed and large batch size training. Can be used in combination with
     ``torch.nn.parallel.DistributedDataParallel`` and ``torch.optim.SGD``.
 
+    Subclass `Optimizer` so that `torch.optim.lr_scheduler` can work. In other words,
+    AdaScale is intended to be a complete wrapper of an torch Optimizer.
+
     .. _AdaScale: https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Supplemental.pdf
+
+    There are several ways to integrate AdaScale with your training loop.
+    We show two examples below.
+
+    Example 1: using PyTorch's `lr_scheduler` classes.
 
     .. code-block:: python
 
-        optim = torch.optim.SGD(model.parameters(), lr=0.001)
+        optim = AdaScale(SGD(model.parameters(), lr=0.001))
         model = DistributedDataParallel(model)
-        adascale = AdaScale(optim)
+        scheduler = LambdaLR(optim, lr_lambda=...)
 
-        for epoch in ...:
+        last_epoch = 0
+        done = False
+        step = 0
+        while True:
+            for batch in dataset:
+                optim.zero_grad()
+                logits = model()
+                loss = criterion(logits, ...)
+                loss.backward()
+                step += optim.gain()
+                optim.step()
+                epoch = step // len(dataset)
+                if epoch > last_epoch:
+                    scheduler.step()
+                    last_epoch = epoch
+                if epoch >= max_epochs:
+                    done = True
+
+    Example 2: using a custom `update_lr()` function that update the learning
+    rate based on the current step count.
+
+    .. code-block:: python
+
+        optim = AdaScale(SGD(model.parameters(), lr=0.001))
+        model = DistributedDataParallel(model)
+
+        step = 0
+        while step < max_steps:
             for batch in ...:
                 optim.zero_grad()
-                loss = ...
+                logits = model()
+                loss = criterion()
                 loss.backward()
-                adascale.step()
+                step += optim.gain()
+                optim.step()
+                update_lr(step)
 
     Args:
         optimizer (torch.optim.Optimizer):
@@ -68,11 +107,13 @@ class AdaScale(object):
             Number of world_size for distributed training. If
             None, defaults to ``dist.get_world_size()``.
         scale (float):
-            Scaling factor of the batch size, e.g. using a 10x
-            larger batch size (summed across all world_size) means a scale of
-            10. If None, defaults to ``world_size``.
+            Scaling factor of the batch size from scale equals 1, e.g. using a 10x
+            larger batch size (summed across all ranks with gradient accumulation)
+            means a scale of 10. If None, defaults to
+            ``world_size * num_gradients_to_accumulate``.
         smoothing (float):
-            Smoothing factor between batches. Default value: 0.9999
+            Smoothing factor for moving average. If None, it defaults to
+            max(1 - (world_size * num_gradients_to_accumulate)/1000, 0).
         num_gradients_to_accumulate (int):
             Number of passes that we accumulate gradients locally.
             Default to 1, which does not accumulate gradients.
@@ -83,7 +124,7 @@ class AdaScale(object):
         optimizer: torch.optim.Optimizer,
         world_size: Optional[int] = None,
         scale: Optional[float] = None,
-        smoothing: float = 0.999,
+        smoothing: float = None,
         num_gradients_to_accumulate: int = 1,
     ):
         self._optimizer = optimizer
@@ -91,9 +132,11 @@ class AdaScale(object):
         self._world_size: int = (
             world_size if world_size is not None else dist.get_world_size() if dist.is_initialized() else 1
         )
-        self._smoothing = smoothing
         self._num_backward_calls = 0
         self._num_grads_to_accum = num_gradients_to_accumulate
+
+        # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
+        self.param_groups = self._optimizer.param_groups
 
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
@@ -110,6 +153,12 @@ class AdaScale(object):
 
         self.set_scale(self._world_size * self._num_grads_to_accum if scale is None else scale)
 
+        # Set smoothing based on effective world_size rather than scale here, since world_size
+        # determines the number of samples being averaged over at every update
+        self._smoothing = (
+            max(1 - (self._world_size * self._num_grads_to_accum) / 1000, 0) if smoothing is None else smoothing
+        )
+
         # Register the gradient hooks. Note, don't assume every param will generate
         # a gradient (i.e. triggering the hook) in every backward pass.
         for idx, param_group in enumerate(self._optimizer.param_groups):
@@ -117,7 +166,7 @@ class AdaScale(object):
                 param.register_hook(functools.partial(self._backward_hook, idx))
 
     @property
-    def state(self) -> Dict[str, np.ndarray]:
+    def _state(self) -> Dict[str, np.ndarray]:
         """
         Return the states of AdaScale.
         """
@@ -163,9 +212,9 @@ class AdaScale(object):
                 Estimate of squared l2-norm.
         """
         if pg_idx is not None:
-            return self.state["grad_sqr_avg"][pg_idx]
+            return self._state["grad_sqr_avg"][pg_idx]
         else:
-            return np.sum(self.state["grad_sqr_avg"])
+            return np.sum(self._state["grad_sqr_avg"])
 
     def grad_var_avg(self, pg_idx: Optional[int] = None) -> float:
         """
@@ -181,9 +230,9 @@ class AdaScale(object):
                 Estimate of trace of the covariance.
         """
         if pg_idx is not None:
-            return self.state["grad_var_avg"][pg_idx]
+            return self._state["grad_var_avg"][pg_idx]
         else:
-            return np.sum(self.state["grad_var_avg"])
+            return np.sum(self._state["grad_var_avg"])
 
     def gain(self, scale: Optional[float] = None, pg_idx: Optional[int] = None) -> float:
         """
@@ -207,13 +256,13 @@ class AdaScale(object):
     def _update_avg(self, name: str, value: torch.Tensor, factor: float) -> None:
         # This function computes and stores the moving average of a vector
         # using a smoothing factor.
-        biased = self.state.get(name + "_biased", 0.0)
-        unbias = self.state.get(name + "_unbias", 0.0)
+        biased = self._state.get(name + "_biased", 0.0)
+        unbias = self._state.get(name + "_unbias", 0.0)
         biased = factor * biased + (1.0 - factor) * value
         unbias = factor * unbias + (1.0 - factor)
-        self.state[name + "_biased"] = biased
-        self.state[name + "_unbias"] = unbias
-        self.state[name] = biased / unbias
+        self._state[name + "_biased"] = biased
+        self._state[name + "_unbias"] = unbias
+        self._state[name] = biased / unbias
 
     def _backward_hook(self, pg_idx: int, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
@@ -252,6 +301,8 @@ class AdaScale(object):
         assert isinstance(self._local_grad_sqr, torch.Tensor)
 
         # Keep track of number of backward calls for gradient accumulation.
+        # TODO (min): this may not work with activation checkpointing when
+        #             multiple backward calls happen in a big backward.
         self._num_backward_calls += 1
 
         # TODO (min, mike): We need to have a way to check that training loop & DDP
@@ -295,7 +346,7 @@ class AdaScale(object):
         grad_sqr = total_grad_sqr - grad_var / S
         grad_var = np.maximum(grad_var, 1e-6)
         grad_sqr = np.maximum(grad_sqr, 0.0)
-        theta = self._smoothing ** S
+        theta = self._smoothing
         self._update_avg("grad_sqr_avg", grad_sqr, theta)
         self._update_avg("grad_var_avg", grad_var, theta)
 
@@ -303,6 +354,13 @@ class AdaScale(object):
         """
         Run one optimizer step using Adascale. Essentially just invokes
         ``optimizer.step(*args, **kwargs)`` with a scaled learning rate.
+
+        .. note::
+
+            It is possible that this function becames a performance
+            bottleneck if you have frequent updates. To avoid that,
+            making bigger steps and reducing update frequency is generally
+            better for performance.
 
         Args:
             args (Any):
@@ -334,9 +392,21 @@ class AdaScale(object):
         return self._optimizer.zero_grad()
 
     def state_dict(self) -> Dict:
-        """Proxy function to optimizer, checkpointing needs this."""
+        """ Proxy function to optimizer, checkpointing needs this.
+
+            .. note::
+
+                Do NOT checkpoint in the middle of gradient accumulation since
+                associated AdaScale internal states are not saved in the checkpoint.
+        """
         return self._optimizer.state_dict()
 
     def load_state_dict(self, data: Dict) -> None:
-        """Proxy function to optimizer, checkpointing needs this."""
+        """ Proxy function to optimizer, checkpointing needs this.
+
+            .. note::
+
+                Do NOT checkpoint in the middle of gradient accumulation since
+                associated AdaScale internal states are not saved in the checkpoint.
+        """
         return self._optimizer.load_state_dict(data)

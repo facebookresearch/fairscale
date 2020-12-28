@@ -82,18 +82,21 @@ def torch_version() -> Tuple[int, ...]:
     return tuple(int(n) for n in numbering)
 
 
-def dist_init(rank: int, world_size: int, hostname: Optional[str] = None) -> None:
+def dist_init(rank: int, world_size: int, filename: str) -> None:
     print(f"dist init r={rank}, world={world_size}")
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
-    url = "file://" + tempfile.mkstemp()[1]
+    url = "file://" + filename
 
     if torch_version() >= (1, 6, 0):
         backend = "nccl" if torch.cuda.is_available() else "gloo"
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
 
         # New file for RPC init
-        url = "file://" + tempfile.mkstemp()[1]
+        filename_rpc = filename + "_rpc"
+        open(filename_rpc, "w")
+
+        url = "file://" + filename_rpc
         rpc.init_rpc(
             f"Test{rank}",
             rank=rank,
@@ -106,7 +109,7 @@ def dist_init(rank: int, world_size: int, hostname: Optional[str] = None) -> Non
         if world_size > 1:
             rpc.init_rpc(f"Test{rank}", rank=rank, world_size=world_size)
         else:
-            torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+            torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size, init_method=url)
 
     if torch.cuda.is_available() and torch.cuda.device_count():
         torch.cuda.set_device(rank % torch.cuda.device_count())
@@ -122,14 +125,17 @@ def get_world_sizes() -> List[int]:
 
 
 def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_world_sizes(), args: Any = []) -> None:
+
     for world_size in world_sizes:
-        mp.spawn(test_func, args=(world_size, *args), nprocs=world_size, join=True)  # type: ignore
+        filename = tempfile.mkstemp()[1]
+
+        mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=True)  # type: ignore
 
 
-def worker_process(rank: int, world_size: int, func: Callable, args: Any, error_queue: Any) -> None:
+def worker_process(rank: int, world_size: int, filename: str, func: Callable, args: Any, error_queue: Any) -> None:
     """Main function for unit tests launced with torch_spawn"""
 
-    dist_init(rank, world_size)
+    dist_init(rank, world_size, filename)
     kwargs = {}
     if "OMPI_COMM_WORLD_RANK" not in os.environ:
         kwargs["pipeline_backend"] = "gloo"

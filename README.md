@@ -6,9 +6,9 @@
 --------------------------------------------------------------------------------
 
 ## Description
-fairscale is a PyTorch extension library for high performance and large scale training for optimizing training on one or across multiple machines/nodes. This library extend basic pytorch capabilities while adding new experimental ones.
+FairScale is a PyTorch extension library for high performance and large scale training on one or multiple machines/nodes. This library extends basic PyTorch capabilities while adding new experimental ones.
 
-fairscale supports:
+FairScale supports:
 * Parallelism:
    * pipeline parallelism (fairscale.nn.Pipe)
 * Sharded training:
@@ -36,6 +36,9 @@ cd fairscale
 pip install -r requirements.txt
 pip install -e .
 ```
+
+If either of the above fails, add `--no-build-isolation` to the `pip install` command (this could be a problem with recent versions of pip).
+
 
 ## Getting Started
 The full documentation (https://fairscale.readthedocs.io/) contains instructions for getting started and extending fairscale.
@@ -74,13 +77,16 @@ def train(
 
     # Problem statement
     model = myAwesomeModel().to(rank)
-    model = ShardedDDP(model, device_ids=[rank])  # this will handle the gradient reduce automatically
     dataloader = mySuperFastDataloader()
     loss_fn = myVeryRelevantLoss()
     base_optimizer = torch.optim.SGD # pick any pytorch compliant optimizer here
     base_optimizer_arguments = {} # pass any optimizer specific arguments here, or directly below when instantiating OSS
 
+    # Wrap the optimizer in its state sharding brethren
     optimizer = OSS(params=model.parameters(), optim=base_optimizer, **base_optimizer_arguments)
+
+    # Wrap the model into ShardedDDP, which will reduce gradients to the proper ranks
+    model = ShardedDDP(model, optimizer)
 
     # Any relevant training loop, nothing specific to OSS. For example:
     model.train()
@@ -113,6 +119,32 @@ if __name__ == "__main__":
 AdaScale can be used to wrap a SGD optimizer and to be used in DDP (Distributed Data Parallel)
 training or non-DDP with gradient accumulation. The benefit is to re-use the same LR
 schedule from a baseline batch size when effective batch size is bigger.
+
+```python
+from torch.optim import SGD
+from torch.optim.lr_scheduler import LambdaLR  # or your scheduler
+from fairscale.optim import AdaScale
+
+...
+optim = AdaScale(SGD(model.parameters(), lr=0.1))
+scheduler = LambdaLR(optim, ...)
+...
+# Note: the train loop should be with DDP or with gradient accumulation.
+last_epoch = 0
+step = 0
+done = False
+while not done:
+    for sample in dataset:
+        ...
+        step += optim.gain()
+        optim.step()
+        epoch = step // len(dataset)
+        if last_epoch != epoch:
+            scheduler.step()
+            last_epoch = epoch
+        if epoch > max_epoch:
+            done = True
+```
 
 Primary goal is to allow scaling to bigger batch sizes without losing model accuracy.
 

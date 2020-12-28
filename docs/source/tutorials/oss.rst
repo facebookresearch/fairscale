@@ -65,7 +65,6 @@ DDP can be used in place of ShardedDDP in the example below, but the memory savi
 
         # Problem statement
         model = myAwesomeModel().to(rank)
-        model = ShardedDDP(model, device_ids=[rank])
         dataloader = mySuperFastDataloader()
         loss_ln = myVeryRelevantLoss()
 
@@ -78,6 +77,9 @@ DDP can be used in place of ShardedDDP in the example below, but the memory savi
             params=model.parameters(),
             optim=base_optimizer,
             **base_optimizer_arguments)
+
+        # Wrap the model into ShardedDDP, which will reduce gradients to the proper ranks
+        model = ShardedDDP(model, optimizer)
 
         # Any relevant training loop, nothing specific to OSS. For example:
         model.train()

@@ -21,16 +21,9 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
+from fairscale.utils.testing import dist_init
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-
-BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
-DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
-
-
-def dist_init(rank, world_size, tempfile_name, backend=BACKEND):
-    url = "file://" + tempfile_name
-    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
 
 
 class TestSingleRank(unittest.TestCase):
@@ -178,22 +171,55 @@ class TestSingleRank(unittest.TestCase):
 
 def run_test_add_param_group(rank, world_size, tempfile_name):
     dist_init(rank, world_size, tempfile_name)
-    params = []
-    for size in [4, 5, 2, 6, 4]:
-        params.append(torch.rand(size, 1))
-    o = optim.OSS(params, lr=0.1)
-    assert len(o.param_groups) == 1
-    o.add_param_group({"params": [torch.rand(3, 1)]})
-    assert len(o.param_groups) == 2
-    # Verify that added group is added to the correct partition making all have 8 elements.
-    assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == 8
-    assert len(o.optim.param_groups) == 2
+
+    # Test with all parameters trainable to begin with
+    def all_trainable():
+        params = []
+        for size in [4, 5, 2, 6, 4]:
+            params.append(torch.rand(size, 1))
+
+        # Make sure that the params are trainable, enforces size-based partitioning
+        for p in params:
+            p.requires_grad = True
+
+        o = optim.OSS(params, lr=0.1)
+
+        assert len(o.param_groups) == 1
+        o.add_param_group({"params": [torch.rand(3, 1)]})
+
+        assert len(o.param_groups) == 2
+        # Verify that added group is added to the correct partition making all have 8 elements.
+        assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == 8
+        assert len(o.optim.param_groups) == 2
+
+    # Test a pathological config with a first big non-trainable param
+    def some_trainable():
+        params = []
+        for size in [100, 3, 5, 2, 6, 4]:
+            params.append(torch.rand(size, 1))
+
+        # Make sure that the params are trainable, enforces size-based partitioning
+        for p in params[1:]:
+            p.requires_grad = True
+
+        o = optim.OSS(params, lr=0.1)
+
+        assert len(o.param_groups) == 1
+        o.add_param_group({"params": [torch.rand(3, 1)]})
+
+        assert len(o.param_groups) == 2
+        assert len(o.optim.param_groups) == 2
+
+    all_trainable()
+    some_trainable()
 
     dist.destroy_process_group()
 
 
 def test_add_param_group():
     world_size = 3
+    if torch.cuda.device_count() < world_size:
+        pytest.skip("Not enough GPUs for NCCL-based test")
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(run_test_add_param_group, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
@@ -301,6 +327,11 @@ def run_test_sharding(rank, world_size, tempfile_name):
     params = []
     for size in [5, 4, 2, 6, 4, 3]:
         params.append(torch.rand(size, 1))
+
+    # Make sure that the params are trainable, enforces size-based partitioning
+    for p in params:
+        p.requires_grad = True
+
     o = optim.OSS(params, lr=0.1)
     assert sum([x.numel() for x in o.optim.param_groups[0]["params"]]) == 8
 
@@ -309,6 +340,8 @@ def run_test_sharding(rank, world_size, tempfile_name):
 
 def test_sharding():
     world_size = 3
+    if torch.cuda.device_count() < world_size:
+        pytest.skip("Not enough GPUs for NCCL-based test")
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(run_test_sharding, args=(world_size, temp_file_name), nprocs=world_size, join=True)
