@@ -150,6 +150,8 @@ def worker_process(rank: int, world_size: int, filename: str, func: Callable, ar
             return
         raise e
 
+    torch.distributed.destroy_process_group()
+
 
 def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
     if world_sizes is None:

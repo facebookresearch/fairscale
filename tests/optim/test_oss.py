@@ -21,9 +21,16 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
-from fairscale.utils.testing import dist_init
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
+
+BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
+DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
+
+
+def dist_init(rank, world_size, tempfile_name, backend=BACKEND):
+    url = "file://" + tempfile_name
+    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
 
 
 class TestSingleRank(unittest.TestCase):
