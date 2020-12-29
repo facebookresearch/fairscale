@@ -305,3 +305,17 @@ def test_set_num_gradients_to_accumulate(test_case):
 
     assert np.allclose(optim.gain(), exp_gain), optim.gain()
     optim.step()
+
+
+def test_debias_ewma():
+    """Test debias_ewma experimental feature"""
+    model = Linear(2, 2, bias=False)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2, debias_ewma=True)
+    for _ in range(4):
+        optim.zero_grad()
+        out = model(Tensor([0.0, 1.0]))
+        out.sum().backward()
+        out = model(Tensor([1.0, 0.0]))
+        out.sum().backward()
+        assert np.allclose(optim.gain(), 2.0), optim.gain()
+        optim.step()
