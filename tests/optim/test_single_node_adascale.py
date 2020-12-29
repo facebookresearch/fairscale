@@ -278,9 +278,9 @@ def test_add_param_group(debias_ewma):
 @pytest.mark.parametrize(
     "test_case",
     [
-        {"new_accum": 3, "exp_gain": 1.1190662277452972},
-        {"new_accum": 6, "exp_gain": 1.0619749887486511},
-        {"new_accum": 9, "exp_gain": 1.0339000994448166},
+        {"new_accum": 3, "exp_gain": 1.2573902104603087},
+        {"new_accum": 6, "exp_gain": 1.0903738977361481},
+        {"new_accum": 9, "exp_gain": 1.0432658660558123},
     ],
 )
 def test_set_num_gradients_to_accumulate(test_case):
@@ -297,6 +297,7 @@ def test_set_num_gradients_to_accumulate(test_case):
     assert np.allclose(optim.gain(), 2.0)
     optim.step()
 
+    optim.zero_grad()
     optim.set_scale(float(new_accum))
     optim.set_num_gradients_to_accumulate(new_accum)
     for _ in range(new_accum):
