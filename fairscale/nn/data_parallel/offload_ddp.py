@@ -237,8 +237,8 @@ class ShardSyncLayer(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx: Any, prev_shard: Optional[ModelShard], next_shard: Optional[ModelShard], *inputs: Any) -> Any:  # type: ignore
-        # Drop the shard we just went through
-        if prev_shard:
+        # Drop the shard we just went through, except if this is the last one in line
+        if prev_shard and next_shard:
             prev_shard.forward_drop(non_blocking=True)
 
         if next_shard:
@@ -257,7 +257,7 @@ class ShardSyncLayer(torch.autograd.Function):
             ctx.next_shard.backward_drop(non_blocking=True)
 
         # Opportunistically pre-load ahead of the compute wavefront
-        if ctx.prev_shard is not None:
+        if ctx.prev_shard:
             ctx.prev_shard.backward_load(non_blocking=True)
 
         # The returned variables need to mirror the forward inputs
@@ -268,10 +268,11 @@ class ShardSyncLayer(torch.autograd.Function):
 
 
 class OffloadDataParallelExperimental(nn.Module):
-    """Implements distributed data parallel training with optimizer state sharding.
+    """Implements distributed data parallel training with optimizer state sharding and model sharding.
 
     This experiments with a different way to get to the full zero suite
     The model is sharded, then the normal distributed data parallel algorithm can be used on a per-model shard basis.
+    Each shard is offloaded and loaded following a compute wavefront, during the forward and backward pass.
 
     All the gradients are centralized on a given rank (which is model-shard dependent, so that the gradients
     redundancy can be removed). Each model shard can be updated by a normal pytorch optimizer.
@@ -357,19 +358,10 @@ class OffloadDataParallelExperimental(nn.Module):
         self.sync_ranks()
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
-        # # All inputs need to required_grad to properly track the first sync layer
-        # # FIXME: Get rid of the above
-        # if isinstance(inputs, tuple):
-        #     for i in inputs:
-        #         i.requires_grad = True
-        # elif isinstance(inputs, torch.Tensor):
-        #     inputs.requires_grad = True
-
         # Slice per slice FW, sync in between
         syncRanks = ShardSyncLayer.apply
 
         for i, (prev, next) in enumerate(zip([None, *self.model_slices], [*self.model_slices, None],)):
-
             # Per shard FW
             inputs = prev(*inputs) if prev else inputs
 
