@@ -273,3 +273,35 @@ def test_add_param_group(debias_ewma):
     assert np.allclose(optim.gain(1), 1.2184881264548717 if debias_ewma else 1.2184877742714733)
     assert np.allclose(optim.gain(2), 1.117381091722702)
     optim.step()
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        {"new_accum": 3, "exp_gain": 1.1190662277452972},
+        {"new_accum": 6, "exp_gain": 1.0619749887486511},
+        {"new_accum": 9, "exp_gain": 1.0339000994448166},
+    ],
+)
+def test_set_num_gradients_to_accumulate(test_case):
+    """Test set_num_gradients_to_accumulate experimental feature."""
+    new_accum = test_case["new_accum"]
+    exp_gain = test_case["exp_gain"]
+
+    model = Linear(2, 2, bias=False)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
+    out = model(Tensor([0.0, 1.0]))
+    out.sum().backward()
+    out = model(Tensor([1.0, 0.0]))
+    out.sum().backward()
+    assert np.allclose(optim.gain(), 2.0)
+    optim.step()
+
+    optim.set_scale(float(new_accum))
+    optim.set_num_gradients_to_accumulate(new_accum)
+    for _ in range(new_accum):
+        out = model(Tensor([0.0, 1.0]))
+        out.sum().backward()
+
+    assert np.allclose(optim.gain(), exp_gain), optim.gain()
+    optim.step()

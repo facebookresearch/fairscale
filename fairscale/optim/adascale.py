@@ -142,6 +142,7 @@ class AdaScale(Optimizer):
             world_size if world_size is not None else dist.get_world_size() if dist.is_initialized() else 1
         )
         self._num_backward_calls = 0
+        self._last_final_backward_call = 0
         self._num_grads_to_accum = num_gradients_to_accumulate
         self._debias_ewma = debias_ewma
 
@@ -409,7 +410,12 @@ class AdaScale(Optimizer):
         #                   in this backward pass.
         #                   Longer term, we may compute the gain and then inform
         #                   the training loop when it is a good time to step().
-        if self._num_backward_calls % self._num_grads_to_accum != 0:
+        assert (
+            self._num_backward_calls - self._last_final_backward_call
+        ) <= self._num_grads_to_accum, (
+            f"bug: {self._num_backward_calls} - {self._last_final_backward_call} should <= {self._num_grads_to_accum}"
+        )
+        if (self._num_backward_calls - self._last_final_backward_call) % self._num_grads_to_accum != 0:
             assert self._local_grad_sqr is not None, "We should still be in backward phase"
             return
 
@@ -451,6 +457,7 @@ class AdaScale(Optimizer):
         theta = self.smoothing
         self._update_avg("grad_sqr_avg", grad_sqr, theta)
         self._update_avg("grad_var_avg", grad_var, theta)
+        self._last_final_backward_call = self._num_backward_calls
         # Indicating backward is done.
         self._local_grad_sqr = None
 
@@ -544,7 +551,7 @@ class AdaScale(Optimizer):
         """Set the number of gradients to accumulate to a new value.
 
         This is experimental. This could be called while training so that
-        we can gradually increasing the steps between updates. Almost always
+        we can gradually increasing the steps between updates. Almost always,
         `set_scale` needs to be called to update the scale as well.
 
         TODO (min): need a way of determine how much to increase the step size?
@@ -561,7 +568,7 @@ class AdaScale(Optimizer):
                 Whether to update smoothing factor or not. Default: True.
         """
         assert self._local_grad_sqr is None, "Don't change num_grad_to_accum in backward"
-        assert num_gradients_to_accumulate >= 1
+        assert num_gradients_to_accumulate >= 1, f"Invalid value {num_gradients_to_accumulate}"
         self._num_grads_to_accum = num_gradients_to_accumulate
         if update_smoothing:
             # Set smoothing based on effective world_size rather than scale here,
