@@ -21,14 +21,15 @@ import torch.distributed as dist
 
 
 class SplitStrategy(enum.Enum):
+    """
+    Strategy used to shard a model. Each shard can hold the same number of layers, or hold the same cumulated parameter size.
+    """
+
     NUM_LAYERS = enum.auto()
-    FLOPS = enum.auto()
     MEMORY = enum.auto()
 
 
 def _split(modules: nn.Sequential, number_shards: int, strategy: SplitStrategy) -> List[List[nn.Module]]:
-    # TODO: Weight by flops or parameter size
-
     splits: List[List[nn.Module]] = [[] for _ in range(number_shards)]
     n = len(modules) // number_shards
 
@@ -49,13 +50,12 @@ def _split(modules: nn.Sequential, number_shards: int, strategy: SplitStrategy) 
 
     if strategy == SplitStrategy.MEMORY:
         # Count the number of parameters per exposed layer, use that as a proxy for memory footprint
-        logging.info(f"Aiming for the same memory footprint per shard")
         number_parameters_per_layer = [sum(p.numel() for p in m.parameters()) for m in modules]
         total_number_params = sum(number_parameters_per_layer)
         number_parameters_per_shard = total_number_params // number_shards
 
         logging.info(
-            f"This model has {total_number_params // 1000 } k parameters, aiming for {number_parameters_per_shard // 1000 } k parameters per shard"
+            f"This model has {total_number_params/1e6:.2f}M parameters, aiming for {number_parameters_per_shard/1e6:.2f}M parameters per shard"
         )
 
         current_shard = 0
@@ -111,6 +111,7 @@ class ModelShard(nn.Module):
         self.device = device
         self.offload_device = offload_device
         self.should_offload_optimizer = offload_optimizer
+
         self.model_shard.to(offload_device)
 
         if not self.is_owner:
@@ -252,7 +253,7 @@ class ShardSyncLayer(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
         if ctx.next_shard:
-            ctx.next_shard.reduce_grads(non_blocking=False)
+            ctx.next_shard.reduce_grads(non_blocking=True)
             ctx.next_shard.backward_drop(non_blocking=True)
 
         # Opportunistically pre-load ahead of the compute wavefront
@@ -295,9 +296,11 @@ class OffloadDataParallelExperimental(nn.Module):
         broadcast_buffers (bool, optional):
             whether to sync all the model buffers at the beginning of a FW pass
 
-        async_memory_transfers (bool):
-            opportunistically overlap computations and memory transfers.
-            This speeds up forward and backward passes, but consumes a bit more memory
+        shard_split_strategy(`SplitStrategy`):
+            how to shard the model. Can be iso-layer or iso-parameter size
+
+        offload_optimizer (bool):
+            move optimizer computations to the offload device (for instance CPU), which saves more memory but slows down
     """
 
     def __init__(
@@ -310,6 +313,8 @@ class OffloadDataParallelExperimental(nn.Module):
         offload_device: torch.device = torch.device("cpu"),
         process_group: Any = None,
         broadcast_buffers: bool = True,
+        shard_split_strategy: SplitStrategy = SplitStrategy.MEMORY,
+        offload_optimizer: bool = False,
     ):
         super().__init__()
 
@@ -321,8 +326,8 @@ class OffloadDataParallelExperimental(nn.Module):
         self.device = device
         self.offload_device = device
 
-        # Slice the model into sequential shards. Several logics could be used, flops or memory based for instance
-        splits = _split(model_cpu, self.world_size, SplitStrategy.MEMORY)
+        # Slice the model into roughly equivalent sequential shards
+        splits = _split(model_cpu, self.world_size, shard_split_strategy)
 
         # Each rank either owns the slice, or temporarily helps processing it in a data parallel fashion
         self.model_slices: List[nn.Module] = []
@@ -339,6 +344,7 @@ class OffloadDataParallelExperimental(nn.Module):
                     device=device,
                     offload_device=offload_device,
                     broadcast_bufers=broadcast_buffers,
+                    offload_optimizer=False,
                 )
             )
 
@@ -351,13 +357,13 @@ class OffloadDataParallelExperimental(nn.Module):
         self.sync_ranks()
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
-        # All inputs need to required_grad to properly track the first sync layer
-        # FIXME: Get rid of the above
-        if isinstance(inputs, tuple):
-            for i in inputs:
-                i.requires_grad = True
-        elif isinstance(inputs, torch.Tensor):
-            inputs.requires_grad = True
+        # # All inputs need to required_grad to properly track the first sync layer
+        # # FIXME: Get rid of the above
+        # if isinstance(inputs, tuple):
+        #     for i in inputs:
+        #         i.requires_grad = True
+        # elif isinstance(inputs, torch.Tensor):
+        #     inputs.requires_grad = True
 
         # Slice per slice FW, sync in between
         syncRanks = ShardSyncLayer.apply
