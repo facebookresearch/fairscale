@@ -236,35 +236,39 @@ class ShardSyncLayer(torch.autograd.Function):
      """
 
     @staticmethod
-    def forward(ctx: Any, prev_shard: Optional[ModelShard], next_shard: Optional[ModelShard], *inputs: Any) -> Any:  # type: ignore
+    def forward(ctx: Any, p2_shard: Optional[ModelShard], p1_shard: Optional[ModelShard], n1_shard: Optional[ModelShard], n2_shard: Optional[ModelShard], *inputs: Any) -> Any:  # type: ignore
         # Drop the shard we just went through, except if this is the last one in line
-        if prev_shard and next_shard:
-            prev_shard.forward_drop(non_blocking=True)
+        if p1_shard and n1_shard:
+            p1_shard.forward_drop(non_blocking=True)
 
-        if next_shard:
-            next_shard.forward_load(sync=True, non_blocking=True)
+        # Start the load of the next shard in line, opportunistically look ahead
+        if n2_shard:
+            n2_shard.forward_load(sync=True, non_blocking=True)
 
-        ctx.prev_shard = prev_shard
-        ctx.next_shard = next_shard
+        ctx.p2_shard = p2_shard
+        ctx.p1_shard = p1_shard
+        ctx.n1_shard = n1_shard
+        ctx.n2_shard = n2_shard
 
         outputs = inputs
+
         return outputs
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
-        if ctx.next_shard:
-            ctx.next_shard.reduce_grads(non_blocking=True)
-            ctx.next_shard.backward_drop(non_blocking=True)
+        if ctx.n1_shard:
+            ctx.n1_shard.reduce_grads(non_blocking=True)
+            ctx.n1_shard.backward_drop(non_blocking=True)
 
         # Opportunistically pre-load ahead of the compute wavefront
-        if ctx.prev_shard:
-            ctx.prev_shard.backward_load(non_blocking=True)
+        if ctx.p2_shard:
+            ctx.p2_shard.backward_load(non_blocking=True)
 
         # The returned variables need to mirror the forward inputs
         if isinstance(grad_outputs, tuple):
-            return None, None, grad_outputs[0]
+            return None, None, None, None, grad_outputs[0]
 
-        return None, None, grad_outputs
+        return None, None, None, None, grad_outputs
 
 
 class OffloadDataParallelExperimental(nn.Module):
@@ -361,12 +365,19 @@ class OffloadDataParallelExperimental(nn.Module):
         # Slice per slice FW, sync in between
         syncRanks = ShardSyncLayer.apply
 
-        for i, (prev, next) in enumerate(zip([None, *self.model_slices], [*self.model_slices, None],)):
+        for i, (p2, p1, n1, n2) in enumerate(
+            zip(
+                [None, None, *self.model_slices],
+                [None, *self.model_slices],
+                [*self.model_slices, None],
+                [*self.model_slices, None, None],
+            )
+        ):
             # Per shard FW
-            inputs = prev(*inputs) if prev else inputs
+            inputs = p1(*inputs) if p1 else inputs
 
             # Call the custom autograd hooks (discard/load slices FW and BW)
-            inputs = syncRanks(prev, next, *inputs)
+            inputs = syncRanks(p2, p1, n1, n2, *inputs)
 
         return inputs[0] if len(inputs) == 1 else inputs
 
