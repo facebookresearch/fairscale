@@ -29,13 +29,13 @@ class SplitStrategy(enum.Enum):
 def _split(modules: nn.Sequential, number_shards: int, strategy: SplitStrategy) -> List[List[nn.Module]]:
     # TODO: Weight by flops or parameter size
 
-    if strategy == SplitStrategy.NUM_LAYERS:
-        # Naive sharding for now, slice by the number of layers
-        # This is probably suboptimal if the complexity or size of the layers vary by a lot
+    splits: List[List[nn.Module]] = [[] for _ in range(number_shards)]
+    n = len(modules) // number_shards
 
-        splits: List[List[nn.Module]] = [[] for _ in range(number_shards)]
+    if strategy == SplitStrategy.NUM_LAYERS:
+        # Naive sharding, slice by the number of layers
+        # This is probably suboptimal if the complexity or size of the layers vary by a lot
         i = 0
-        n = len(modules) // number_shards
 
         logging.info(f"Aiming for {n} blocks per shard")
 
@@ -44,6 +44,30 @@ def _split(modules: nn.Sequential, number_shards: int, strategy: SplitStrategy) 
                 i += 1
 
             splits[i].append(m)
+
+        return splits
+
+    if strategy == SplitStrategy.MEMORY:
+        # Count the number of parameters per exposed layer, use that as a proxy for memory footprint
+        logging.info(f"Aiming for the same memory footprint per shard")
+        number_parameters_per_layer = [sum(p.numel() for p in m.parameters()) for m in modules]
+        total_number_params = sum(number_parameters_per_layer)
+        number_parameters_per_shard = total_number_params // number_shards
+
+        logging.info(
+            f"This model has {total_number_params // 1000 } k parameters, aiming for {number_parameters_per_shard // 1000 } k parameters per shard"
+        )
+
+        current_shard = 0
+
+        for m in modules:
+            # Number of parameters in the current shard
+            number_shard_params = sum(p.numel() for sm in splits[current_shard] for p in sm.parameters())
+            splits[current_shard].append(m)
+
+            # This shard is big enough, point to the next one
+            if number_shard_params + sum(p.numel() for p in m.parameters()) > number_parameters_per_shard:
+                current_shard += 1
 
         return splits
 
@@ -294,7 +318,7 @@ class OffloadDataParallelExperimental(nn.Module):
         self.offload_device = device
 
         # Slice the model into sequential shards. Several logics could be used, flops or memory based for instance
-        splits = _split(model_cpu, self.world_size, SplitStrategy.NUM_LAYERS)
+        splits = _split(model_cpu, self.world_size, SplitStrategy.MEMORY)
 
         # Each rank either owns the slice, or temporarily helps processing it in a data parallel fashion
         self.model_slices: List[nn.Module] = []
