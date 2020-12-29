@@ -87,6 +87,8 @@ def dist_init(rank: int, world_size: int, filename: str) -> bool:
     Initialize torch distributed, based on a temporary file shared across ranks, which makes it possible for unrelated
     tests to be run concurrently.
 
+    Return false if not enough GPUs present in the system.
+
     .. warning: This limits the usecase to all ranks being on the same node
     """
 
@@ -148,25 +150,27 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
 def worker_process(rank: int, world_size: int, filename: str, func: Callable, args: Any, error_queue: Any) -> None:
     """Main function for unit tests launced with torch_spawn"""
 
-    if dist_init(rank, world_size, filename):
-        kwargs = {}
-        if "OMPI_COMM_WORLD_RANK" not in os.environ:
-            kwargs["pipeline_backend"] = "gloo"
-        initialize_model_parallel(1, world_size, **kwargs)
-        try:
-            func(*args)
-        except BaseException as e:
-            # If the function raises 'Skipped', this indicates pytest.skip(), so
-            # forward it to parent so we can call pytest.skip() there
-            if e.__class__.__name__ == "Skipped":
-                error_queue.put(str(e))
-                return
+    if not dist_init(rank, world_size, filename):
+        return
 
-            # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
-            teardown()
-            raise e
+    kwargs = {}
+    if "OMPI_COMM_WORLD_RANK" not in os.environ:
+        kwargs["pipeline_backend"] = "gloo"
+    initialize_model_parallel(1, world_size, **kwargs)
+    try:
+        func(*args)
+    except BaseException as e:
+        # If the function raises 'Skipped', this indicates pytest.skip(), so
+        # forward it to parent so we can call pytest.skip() there
+        if e.__class__.__name__ == "Skipped":
+            error_queue.put(str(e))
+            return
 
+        # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
         teardown()
+        raise e
+
+    teardown()
 
 
 def teardown() -> None:
