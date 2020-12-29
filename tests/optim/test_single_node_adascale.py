@@ -243,10 +243,11 @@ def test_add_param_group(debias_ewma):
 
     # make sure the gains are right and we can step.
     # since this is the first step, debias_ewma doesn't affect the value.
-    assert np.allclose(optim.gain(), 1.1440223454935758)
-    assert np.allclose(optim.gain(0), 1.1428571428571428)
-    assert np.allclose(optim.gain(1), 1.1471258476157762)
+    assert np.allclose(optim.gain(), 1.1440223454935758), optim.gain()
+    assert np.allclose(optim.gain(0), 1.1428571428571428), optim.gain(0)
+    assert np.allclose(optim.gain(1), 1.1471258476157762), optim.gain(1)
     optim.step()
+    optim.zero_grad()
 
     # make sure we can add a PG again after stepping.
     model3 = Linear(3, 4, bias=True)
@@ -269,11 +270,12 @@ def test_add_param_group(debias_ewma):
 
     # make sure gains are right and we can step.
     # the last PG's gain is not affected by debias_ewma since it is the first step for that PG.
-    assert np.allclose(optim.gain(), 1.1711342960340743 if debias_ewma else 1.1760960226735786)
-    assert np.allclose(optim.gain(0), 1.0045687695285042 if debias_ewma else 1.0045776319944453)
-    assert np.allclose(optim.gain(1), 1.2184881264548717 if debias_ewma else 1.2184877742714733)
-    assert np.allclose(optim.gain(2), 1.117381091722702)
+    assert np.allclose(optim.gain(), 1.1191193589460822 if debias_ewma else 1.1192783954732368), optim.gain()
+    assert np.allclose(optim.gain(0), 1.1428571880897151 if debias_ewma else 1.142857188085096), optim.gain(0)
+    assert np.allclose(optim.gain(1), 1.1167103578364508 if debias_ewma else 1.1167104954034948), optim.gain(1)
+    assert np.allclose(optim.gain(2), 1.117381091722702), optim.gain(2)
     optim.step()
+    optim.zero_grad()
 
 
 @pytest.mark.parametrize(
@@ -297,8 +299,8 @@ def test_set_num_gradients_to_accumulate(test_case):
     out.sum().backward()
     assert np.allclose(optim.gain(), 2.0)
     optim.step()
-
     optim.zero_grad()
+
     optim.set_scale(float(new_accum))
     optim.set_num_gradients_to_accumulate(new_accum)
     for _ in range(new_accum):
@@ -307,6 +309,7 @@ def test_set_num_gradients_to_accumulate(test_case):
 
     assert np.allclose(optim.gain(), exp_gain), optim.gain()
     optim.step()
+    optim.zero_grad()
 
 
 def test_debias_ewma():
@@ -314,10 +317,10 @@ def test_debias_ewma():
     model = Linear(2, 2, bias=False)
     optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2, debias_ewma=True)
     for _ in range(4):
-        optim.zero_grad()
         out = model(Tensor([0.0, 1.0]))
         out.sum().backward()
         out = model(Tensor([1.0, 0.0]))
         out.sum().backward()
         assert np.allclose(optim.gain(), 2.0), optim.gain()
         optim.step()
+        optim.zero_grad()
