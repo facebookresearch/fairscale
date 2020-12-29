@@ -144,7 +144,7 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
 
     for world_size in world_sizes:
         filename = tempfile.mkstemp()[1]
-        mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=True)  # type: ignore
+        mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=True, start_method="fork")  # type: ignore
 
 
 def worker_process(rank: int, world_size: int, filename: str, func: Callable, args: Any, error_queue: Any) -> None:
