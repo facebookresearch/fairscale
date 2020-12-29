@@ -207,44 +207,35 @@ class ShardSyncLayer(torch.autograd.Function):
      """
 
     @staticmethod
-    def forward(ctx: Any, p2_shard: Optional[ModelShard], p1_shard: Optional[ModelShard], n1_shard: Optional[ModelShard], n2_shard: Optional[ModelShard], *inputs: Any) -> Any:  # type: ignore
+    def forward(ctx: Any, prev_shard: Optional[ModelShard], next_shard: Optional[ModelShard], *inputs: Any) -> Any:  # type: ignore
         # Drop the shard we just went through
-        if p1_shard:
-            p1_shard.forward_drop()
+        if prev_shard:
+            prev_shard.forward_drop(non_blocking=True)
 
-        # Look ahead and start loading one shard in advance
-        if n1_shard:
-            n1_shard.forward_load(sync=False, non_blocking=False)
+        if next_shard:
+            next_shard.forward_load(sync=True, non_blocking=True)
 
-        if n2_shard:
-            n2_shard.forward_load(sync=True, non_blocking=False)
-
-        ctx.p2_shard = p2_shard
-        ctx.p1_shard = p1_shard
-        ctx.n1_shard = n1_shard
-        ctx.n2_shard = n2_shard
+        ctx.prev_shard = prev_shard
+        ctx.next_shard = next_shard
 
         outputs = inputs
         return outputs
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
-        if ctx.n1_shard:
-            ctx.n1_shard.reduce_grads(non_blocking=False)
-            ctx.n1_shard.backward_drop()
+        if ctx.next_shard:
+            ctx.next_shard.reduce_grads(non_blocking=False)
+            ctx.next_shard.backward_drop(non_blocking=True)
 
         # Opportunistically pre-load ahead of the compute wavefront
-        if ctx.p1_shard is not None:
-            ctx.p1_shard.backward_load(non_blocking=False)
-
-        if ctx.p2_shard is not None:
-            ctx.p2_shard.backward_load(non_blocking=False)
+        if ctx.prev_shard is not None:
+            ctx.prev_shard.backward_load(non_blocking=True)
 
         # The returned variables need to mirror the forward inputs
         if isinstance(grad_outputs, tuple):
-            return None, None, None, None, grad_outputs[0]
+            return None, None, grad_outputs[0]
 
-        return None, None, None, None, grad_outputs
+        return None, None, grad_outputs
 
 
 class OffloadDataParallelExperimental(nn.Module):
@@ -291,7 +282,6 @@ class OffloadDataParallelExperimental(nn.Module):
         offload_device: torch.device = torch.device("cpu"),
         process_group: Any = None,
         broadcast_buffers: bool = True,
-        async_memory_transfers: bool = True,
     ):
         super().__init__()
 
@@ -328,14 +318,6 @@ class OffloadDataParallelExperimental(nn.Module):
             if i_slice == self.rank:
                 self.optimizer = optimizer(nn.Sequential(*module_shard).parameters(), **optimizer_params)
 
-        if async_memory_transfers:
-            for i, shard in enumerate(self.model_slices):
-                if i > 0:
-                    shard.model_shard_lookback = self.model_slices[i - 1]
-
-                if i < len(self.model_slices) - 1:
-                    shard.model_shard_lookahead = self.model_slices[i + 1]
-
         # Expose a unified view of the slices
         self.model = torch.nn.Sequential(*self.model_slices)
         self.sync_ranks()
@@ -352,19 +334,13 @@ class OffloadDataParallelExperimental(nn.Module):
         # Slice per slice FW, sync in between
         syncRanks = ShardSyncLayer.apply
 
-        for i, (p2, p1, n1, n2) in enumerate(
-            zip(
-                [None, None, *self.model_slices],
-                [None, *self.model_slices],
-                [*self.model_slices, None],
-                [*self.model_slices, None, None],
-            )
-        ):
+        for i, (prev, next) in enumerate(zip([None, *self.model_slices], [*self.model_slices, None],)):
+
             # Per shard FW
-            inputs = p1(*inputs) if p1 else inputs
+            inputs = prev(*inputs) if prev else inputs
 
             # Call the custom autograd hooks (discard/load slices FW and BW)
-            inputs = syncRanks(p2, p1, n1, n2, *inputs)
+            inputs = syncRanks(prev, next, *inputs)
 
         return inputs[0] if len(inputs) == 1 else inputs
 
