@@ -372,7 +372,7 @@ def test_scale_not_equal_default(test_case):
     for i in range(4):
         out = model(Tensor(data[i]))
         out.sum().backward()
-    # Since the input are perfect orthogonal, the gain should be at the scale.
+    # Since the inputs are perfect orthogonal, the gain should be at the scale.
     assert np.allclose(optim.gain(), exp_gain), optim.gain()
 
 
