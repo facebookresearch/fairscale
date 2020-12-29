@@ -347,3 +347,32 @@ def test_gradient_value():
     assert np.allclose(model.weight.grad.numpy(), [[0.0, 2.0], [0.0, 2.0]]), model.weight.grad
     optim.zero_grad()
     assert np.allclose(model.weight.grad.numpy(), [[0.0, 0.0], [0.0, 0.0]]), model.weight.grad
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        {"scale": None, "exp_gain": 4.0},  # default, baseline is single batch
+        {"scale": 4.0 / 3, "exp_gain": 4.0 / 3},  # baseline is grad_accum = 3
+        {"scale": 4.0 / 2, "exp_gain": 2.0},  # baseline is grad_accum = 2
+        {"scale": 4.0 / 1, "exp_gain": 4.0},  # baseline is single batch
+    ],
+)
+def test_scale_not_equal_default(test_case):
+    """Test gain value when scale doesn't equal world size * grad_accum"""
+    scale = test_case["scale"]
+    exp_gain = test_case["exp_gain"]
+    model = Linear(4, 2, bias=False)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=4, scale=scale)
+
+    data = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    for i in range(4):
+        out = model(Tensor(data[i]))
+        out.sum().backward()
+    # Since the input are perfect orthogonal, the gain should be at the scale.
+    assert np.allclose(optim.gain(), exp_gain), optim.gain()
