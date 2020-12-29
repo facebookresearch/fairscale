@@ -62,12 +62,16 @@ def _split(modules: nn.Sequential, number_shards: int, strategy: SplitStrategy) 
 
         for m in modules:
             # Number of parameters in the current shard
-            number_shard_params = sum(p.numel() for sm in splits[current_shard] for p in sm.parameters())
-            splits[current_shard].append(m)
+            current_shard_params = sum(p.numel() for sm in splits[current_shard] for p in sm.parameters())
 
             # This shard is big enough, point to the next one
-            if number_shard_params + sum(p.numel() for p in m.parameters()) > number_parameters_per_shard:
+            if (
+                current_shard_params + sum(p.numel() for p in m.parameters()) > number_parameters_per_shard
+                and current_shard < number_shards - 1
+            ):
                 current_shard += 1
+
+            splits[current_shard].append(m)
 
         return splits
 
