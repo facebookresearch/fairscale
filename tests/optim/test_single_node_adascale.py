@@ -9,6 +9,7 @@
 
 """ Test AdaScale with a single node (1 CPU or 1 GPU). """
 
+import gc
 import tempfile
 
 import numpy as np
@@ -376,3 +377,37 @@ def test_scale_not_equal_default(test_case):
         out.sum().backward()
     # Since the input are perfect orthogonal, the gain should be at the scale.
     assert np.allclose(optim.gain(), exp_gain), optim.gain()
+
+
+@skip_if_no_gpu
+def test_unhook():
+    """Test unhook that frees the tensor from CUDA memory."""
+    model = Linear(123, 456, bias=False).cuda()  # unique shape so that it can be found
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
+
+    def find_tensor():
+        """ Find the weight tensor from the heap
+
+            Return True if found.
+        """
+        for obj in gc.get_objects():
+            try:
+                # Only need to check parameter type objects
+                if "torch.nn.parameter.Parameter" not in str(type(obj)):
+                    continue
+                if torch.is_tensor(obj) or (hasattr(obj, "data") and torch.is_tensor(obj.data)):
+                    print(obj.shape)
+                    if obj.shape == (456, 123):
+                        return True
+            except Exception as e:
+                pass
+        return False
+
+    torch.cuda.empty_cache()
+    assert find_tensor(), "something wrong with gc-based method to find the tensor"
+
+    optim.unhook()
+    del model
+    del optim
+    torch.cuda.empty_cache()
+    assert not find_tensor(), "tensor should have been released"
