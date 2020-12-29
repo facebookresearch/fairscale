@@ -139,7 +139,6 @@ def test_state_checkpointing():
 
     # Run a bit.
     def run_a_bit(replay_data=None):
-        print("running")
         data = []
         replay_data_idx = 0
         for _ in range(6):  # run some steps
@@ -152,8 +151,6 @@ def test_state_checkpointing():
                     replay_data_idx += 1
                 out = model(in_data)
                 out.sum().backward()
-                # print(out.sum().item())
-                print(model.weight.grad)
                 if i == accum_steps - 1:
                     optim.step()
                     optim.zero_grad()
@@ -396,7 +393,6 @@ def test_unhook():
                 if "torch.nn.parameter.Parameter" not in str(type(obj)):
                     continue
                 if torch.is_tensor(obj) or (hasattr(obj, "data") and torch.is_tensor(obj.data)):
-                    print(obj.shape)
                     if obj.shape == (456, 123):
                         return True
             except Exception as e:
