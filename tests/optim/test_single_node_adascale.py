@@ -201,6 +201,7 @@ def test_lr_scheduler():
                 loss.backward()
             assert optim.gain() <= 3, optim.gain()
             optim.step()
+            optim.zero_grad()
             # asserting LR is right
             assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10 ** epoch), optim.param_groups[0]["lr"]
         scheduler.step()
