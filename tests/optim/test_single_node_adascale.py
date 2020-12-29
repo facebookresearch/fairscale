@@ -324,3 +324,26 @@ def test_debias_ewma():
         assert np.allclose(optim.gain(), 2.0), optim.gain()
         optim.step()
         optim.zero_grad()
+
+
+def test_gradient_value():
+    """Test that we don't mutate the gradients during backward"""
+    model = Linear(2, 2, bias=False)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
+
+    # fwd 1
+    out = model(Tensor([0.0, 1.0]))
+    out.sum().backward()
+    assert np.allclose(model.weight.grad.numpy(), [[0.0, 1.0], [0.0, 1.0]]), model.weight.grad
+
+    # fwd 2, grad is accumulated
+    out = model(Tensor([0.0, 1.0]))
+    out.sum().backward()
+    assert np.allclose(model.weight.grad.numpy(), [[0.0, 2.0], [0.0, 2.0]]), model.weight.grad
+
+    # assert gain and grad value before/after step/zero_grad
+    assert np.allclose(optim.gain(), 1.0000002499999376), optim.gain()
+    optim.step()
+    assert np.allclose(model.weight.grad.numpy(), [[0.0, 2.0], [0.0, 2.0]]), model.weight.grad
+    optim.zero_grad()
+    assert np.allclose(model.weight.grad.numpy(), [[0.0, 0.0], [0.0, 0.0]]), model.weight.grad
