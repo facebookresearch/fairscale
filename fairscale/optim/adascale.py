@@ -454,9 +454,8 @@ class AdaScale(Optimizer):
         grad_sqr = total_grad_sqr - grad_var / S
         grad_var = np.maximum(grad_var, 1e-6)
         grad_sqr = np.maximum(grad_sqr, 0.0)
-        theta = self.smoothing
-        self._update_avg("grad_sqr_avg", grad_sqr, theta)
-        self._update_avg("grad_var_avg", grad_var, theta)
+        self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
+        self._update_avg("grad_var_avg", grad_var, self.smoothing)
         self._last_final_backward_call = self._num_backward_calls
         # Indicating backward is done.
         self._local_grad_sqr = None
