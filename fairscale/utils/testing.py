@@ -145,7 +145,7 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
     for world_size in world_sizes:
         filename = tempfile.mkstemp()[1]
         context = mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=False)  # type: ignore
-        context.join(timeout=100.0)
+        context.join(timeout=60.0)
 
 
 def worker_process(rank: int, world_size: int, filename: str, func: Callable, args: Any, error_queue: Any) -> None:
@@ -162,14 +162,15 @@ def worker_process(rank: int, world_size: int, filename: str, func: Callable, ar
         func(*args)
         teardown()
     except BaseException as e:
+        # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
+        teardown()
+
         # If the function raises 'Skipped', this indicates pytest.skip(), so
         # forward it to parent so we can call pytest.skip() there
         if e.__class__.__name__ == "Skipped":
             error_queue.put(str(e))
             return
 
-        # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
-        teardown()
         raise e
 
 
