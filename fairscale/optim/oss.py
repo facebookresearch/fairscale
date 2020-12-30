@@ -208,9 +208,6 @@ class OSS(Optimizer):
         else:
             loss = self.optim.step(**kwargs)
 
-        # Depending on the DDP engine used, gradients specific to other ranks may still be loaded
-        self._free_other_grads()
-
         # Sync all the updated shards in between the ranks
         self._broadcast_params()
 
@@ -506,17 +503,6 @@ class OSS(Optimizer):
                 global_rank = self.get_global_rank(self.group, rank)
                 # Discard this tensor/rank, broadcast necessary for syncing
                 broadcast_object(empty_buffer, src_rank=global_rank, group=self.group, dist_device=self._device)
-
-    def _free_other_grads(self) -> None:
-        """Free all the gradients only useful for the other ranks
-        """
-        for rank, partition in enumerate(self.partition_parameters()):
-            if rank == self.rank:
-                continue
-
-            for p in partition:
-                for t in p["params"]:
-                    t.grad = None
 
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""

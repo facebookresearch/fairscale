@@ -66,7 +66,7 @@ def get_problem(rank, world_size, batch_size, device, model_name: str):
 
 
 class OptimType(str, Enum):
-    pytorch = "pytorch"
+    vanilla = "pytorch"
     oss_ddp = "oss_ddp"
     oss_sharded_ddp = "oss_sharded_ddp"
     oss_offload_ddp = "oss_offload_ddp"
@@ -77,7 +77,7 @@ def train(
     rank: int,
     args: argparse.Namespace,
     backend: str = "gloo",
-    optim_type: OptimType = OptimType.pytorch,
+    optim_type: OptimType = OptimType.vanilla,
     check_regression: bool = True,
 ):
     logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
@@ -103,7 +103,7 @@ def train(
     # Shard the optimizer, test different methods
     optimizer: Optional[torch.optim.Optimizer] = None
     model = cast(nn.Module, model)
-    scaler = (TorchGradScaler() if args.optim_type == OptimType.pytorch else ShardedGradScaler()) if args.amp else None
+    scaler = (TorchGradScaler() if args.optim_type == OptimType.vanilla else ShardedGradScaler()) if args.amp else None
 
     if optim_type == OptimType.oss_sharded_ddp:
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
@@ -212,7 +212,6 @@ def train(
                             final_loss = optimizer.step(closure)
 
                 prof.export_chrome_trace(f"{optim_type}_trace_rank_{rank}.json")
-
                 need_profiling = False  # only profile once
 
             else:
@@ -331,11 +330,11 @@ if __name__ == "__main__":
         logging.info("Dataset downloaded")
 
     # Benchmark the different configurations, via multiple processes
-    if args.optim_type == OptimType.pytorch or args.optim_type == OptimType.everyone:
+    if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark vanilla optimizer")
         mp.spawn(
             train,
-            args=(args, BACKEND, OptimType.pytorch, False,),  # no regression check
+            args=(args, BACKEND, OptimType.vanilla, False,),  # no regression check
             nprocs=args.world_size,
             join=True,
         )
