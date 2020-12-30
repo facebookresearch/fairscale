@@ -238,6 +238,7 @@ def train(data_config, model, benchmark_config, args):
         lm_dataloader = get_fake_dataloader(len(lm_dataloader))
 
     total_tokens = 0
+    total_tokens_per_log_interval = 0
     for i, batch in enumerate(lm_dataloader):
         if args.max_batch and i > args.max_batch:
             break
