@@ -316,7 +316,8 @@ def test_ddp_attributes():
     # - device_type
 
     url = "file://" + tempfile.mkstemp()[1]
-    dist.init_process_group(init_method=url, backend="gloo", rank=0, world_size=1)
+    backend = dist.Backend.NCCL
+    dist.init_process_group(init_method=url, backend=backend, rank=0, world_size=1)
 
     model = Sequential(Linear(2, 3), Linear(3, 3))
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
@@ -325,6 +326,37 @@ def test_ddp_attributes():
     assert hasattr(ddp_model, "is_multi_device_module")
     assert hasattr(ddp_model, "device_type")
     dist.destroy_process_group()
+
+
+def run_test_ddp_sync_batch_norm(rank, world_size, backend, device, temp_file_name):
+    url = "file://" + temp_file_name
+    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+
+    model = Sequential(Linear(2, 3), torch.nn.BatchNorm1d(3), Linear(3, 3)).to(device)
+    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    ddp_model = ShardedDataParallel(model, optimizer)
+
+    assert isinstance(model[1], torch.nn.SyncBatchNorm)
+    # Ensures sync batch norm handles have been added
+    ddp_model(torch.randn(2, 2).to(device))
+    dist.destroy_process_group()
+
+
+@skip_if_no_cuda
+@skip_if_single_gpu
+def test_ddp_sync_batch_norm():
+    # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
+    world_size = 2
+    backend = "gloo"
+    temp_file_name = tempfile.mkstemp()[1]
+    device = "cuda"
+    mp.spawn(
+        run_test_ddp_sync_batch_norm,
+        args=(world_size, backend, device, temp_file_name),
+        nprocs=world_size,
+        join=True
+    )
 
 
 def run_test_two_optimizers(rank, world_size, backend, device, temp_file_name):
