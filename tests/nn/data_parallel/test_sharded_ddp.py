@@ -344,8 +344,9 @@ def run_test_ddp_sync_batch_norm(rank, world_size, backend, device, temp_file_na
 
 
 @skip_if_no_cuda
+@skip_if_single_gpu
 def test_ddp_sync_batch_norm():
-    # Check that ShardedDDP is compatible with sync batch norm
+    # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
     world_size = 2
     backend = "gloo"
     temp_file_name = tempfile.mkstemp()[1]
