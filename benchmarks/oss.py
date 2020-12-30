@@ -18,17 +18,25 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim import Optimizer
 from torch.utils.data import BatchSampler, DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 
+from fairscale.nn.data_parallel import OffloadDataParallelExperimental as OffloadDDPExperimental
 from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
 
 OPTIM = torch.optim.RMSprop
 TEMPDIR = tempfile.gettempdir()
+
+
+class ReshapeModule(torch.nn.Module):
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        return x
 
 
 def dist_init(rank, world_size, backend):
@@ -61,6 +69,7 @@ class OptimType(str, Enum):
     vanilla = "pytorch"
     oss_ddp = "oss_ddp"
     oss_sharded_ddp = "oss_sharded_ddp"
+    oss_offload_ddp = "oss_offload_ddp"
     everyone = "everyone"
 
 
@@ -82,6 +91,7 @@ def train(
         torch.cuda.manual_seed(0)
     torch.manual_seed(0)  # also sets the cuda seed
     np.random.seed(0)
+    torch.cuda.device(rank)
 
     if backend == "nccl":
         torch.backends.cudnn.deterministic = True
@@ -90,7 +100,7 @@ def train(
     device = torch.device("cpu") if args.cpu else torch.device(rank)
     model, dataloader, loss_fn = get_problem(rank, args.world_size, args.batch_size, device, args.torchvision_model)
 
-    # Shard the optimizer
+    # Shard the optimizer, test different methods
     optimizer: Optional[torch.optim.Optimizer] = None
     model = cast(nn.Module, model)
     scaler = (TorchGradScaler() if args.optim_type == OptimType.vanilla else ShardedGradScaler()) if args.amp else None
@@ -98,6 +108,34 @@ def train(
     if optim_type == OptimType.oss_sharded_ddp:
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
         model = ShardedDDP(model, optimizer)
+    elif optim_type == OptimType.oss_offload_ddp:
+        # DEBUG
+        # This method requires a layer-wise seperable model
+        # Unroll the test RestNet101 into ~40 layers
+        model_seq = torch.nn.Sequential(
+            model.conv1,
+            model.bn1,
+            model.relu,
+            model.maxpool,
+            *model.layer1,
+            *model.layer2,
+            *model.layer3,
+            *model.layer4,
+            model.avgpool,
+            ReshapeModule(),
+            model.fc,
+        )
+
+        ddp_exp = OffloadDDPExperimental(
+            model_cpu=model_seq,
+            optimizer=OPTIM,
+            optimizer_params={"lr": 1e-4, "momentum": 0.9},
+            world_size=args.world_size,
+            device=torch.device(torch.cuda.current_device()),
+            offload_device=torch.device("cpu"),
+        )
+        optimizer = ddp_exp.optimizer
+        model = ddp_exp
     else:
         device_ids = None if args.cpu else [rank]
         model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
@@ -106,6 +144,7 @@ def train(
             if optim_type == OptimType.oss_ddp
             else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
         )
+
     optimizer = cast(torch.optim.Optimizer, optimizer)
 
     # Reset the memory use counter
@@ -120,6 +159,7 @@ def train(
 
     measurements = []
     final_loss: Optional[float] = -1.0
+    optimizer = cast(Optimizer, optimizer)
     need_profiling = args.profile
 
     for epoch in range(args.epochs):
@@ -317,4 +357,10 @@ if __name__ == "__main__":
             ),  # FIXME: @lefaudeux - SDP should give the same results
             nprocs=args.world_size,
             join=True,
+        )
+
+    if args.optim_type == OptimType.oss_offload_ddp or args.optim_type == OptimType.everyone:
+        print("\nBenchmark OSS experimental")
+        mp.spawn(
+            train, args=(args, BACKEND, OptimType.oss_offload_ddp, False,), nprocs=args.world_size, join=True,
         )
