@@ -171,8 +171,7 @@ def train(
                         else:
                             final_loss = optimizer.step(closure)
 
-                        prof.export_chrome_trace(f"{optim_type}_trace_rank_{rank}.json")
-
+                prof.export_chrome_trace(f"{optim_type}_trace_rank_{rank}.json")
                 need_profiling = False  # only profile once
 
             else:

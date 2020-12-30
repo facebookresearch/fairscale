@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - AdaScale: smoothing factor value fixed when using gradient accumulation (#235)
 - Pipe: documentation on balancing functions (#243)
+- ShardedDDP: handle typical NLP models
+- ShardedDDP: better partitioning when finetuning
+
 
 ## [0.1.1] - 2020-12-01
 ### Fixed
