@@ -23,6 +23,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from fairscale.nn.pipe import Pipe
+from fairscale.utils.testing import skip_if_single_gpu
 
 
 def test_python_autograd_function():
@@ -81,7 +82,7 @@ def test_exception_no_hang():
         model(torch.rand(3))
 
 
-@pytest.mark.skipif(torch.cuda.device_count() < 2, reason="2 cuda devices required")
+@skip_if_single_gpu
 def test_tuple_wait(cuda_sleep):
     # In v0.0.3, Wait is applied to only the first tensor on a micro-batch.
     # Under this behavior, if checkpointing was disabled, there's a possibility

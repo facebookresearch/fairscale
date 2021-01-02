@@ -20,8 +20,7 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 
 from fairscale.optim import AdaScale
-
-skip_if_no_gpu = pytest.mark.skipif(torch.cuda.device_count() < 1, reason="1 GPU is required")
+from fairscale.utils.testing import skip_if_no_cuda
 
 
 def test_basic_cpu():
@@ -113,15 +112,15 @@ def test_grad_accum(test_case, cpu):
         optim.zero_grad()
 
 
-@skip_if_no_gpu
+@skip_if_no_cuda
 def test_state_checkpointing():
-    """ Test state checkpointing on GPU since that's the common case.
+    """Test state checkpointing on GPU since that's the common case.
 
-        Note, we don't support checkpointing in the middle of gradient accumulation
-        step. Therefore, it is not tested here.
+    Note, we don't support checkpointing in the middle of gradient accumulation
+    step. Therefore, it is not tested here.
 
-        AdaScale doesn't have distributed state. Otherwise, it will need
-        a unit test for checkpointing with DDP.
+    AdaScale doesn't have distributed state. Otherwise, it will need
+    a unit test for checkpointing with DDP.
     """
     # Constants.
     accum_steps = 3

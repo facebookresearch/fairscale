@@ -45,6 +45,14 @@ import torch.nn as nn
 from fairscale.nn.model_parallel import destroy_model_parallel, initialize_model_parallel
 from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
 
+skip_if_no_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.device_count() < 1, reason="CUDA required"
+)
+
+skip_if_single_gpu = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.device_count() < 2, reason="multiple GPUs required"
+)
+
 
 class IdentityLayer(torch.nn.Module):
     def __init__(self, size: int, scale: float = 1.0) -> None:
@@ -144,7 +152,7 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
 
     for world_size in world_sizes:
         filename = tempfile.mkstemp()[1]
-        context = mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=False)  # type: ignore
+        context = mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=False)
         context.join(timeout=60.0)
 
 
@@ -232,7 +240,7 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
                         print(f"{traceback.format_exc()}")
                         raise e
                 else:
-                    pytest.skip(f"requested world size doesn't match current world size")
+                    pytest.skip("Requested world size doesn't match current world size")
             else:
                 spawn_for_all_world_sizes(worker_process, world_sizes, (func, args, error_queue))
 
@@ -258,7 +266,11 @@ class _Block(nn.Module):
         self.ln_1 = nn.LayerNorm(embed_dim)
         self.ln_2 = nn.LayerNorm(embed_dim)
         self.attn = nn.MultiheadAttention(embed_dim, num_heads)  # type: ignore
-        self.mlp = nn.Sequential(nn.Linear(embed_dim, embed_dim * 4), nn.GELU(), nn.Linear(embed_dim * 4, embed_dim),)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.GELU(),
+            nn.Linear(embed_dim * 4, embed_dim),
+        )
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         x = inputs[0]
@@ -274,6 +286,10 @@ class _Block(nn.Module):
 
 
 class GPT2(nn.Module):
+    """
+    GPT2 pytorch implementation, for testing purposes in the image-GPT context
+    Credits: https://github.com/teddykoker/image-gpt"""
+
     def __init__(
         self, embed_dim: int, num_heads: int, num_layers: int, num_positions: int, num_vocab: int, num_classes: int
     ) -> None:

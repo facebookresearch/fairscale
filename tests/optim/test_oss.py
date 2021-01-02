@@ -21,8 +21,7 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
-
-skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
+from fairscale.utils.testing import skip_if_no_cuda, skip_if_single_gpu
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
@@ -225,7 +224,7 @@ def run_test_add_param_group(rank, world_size, tempfile_name):
 
 def test_add_param_group():
     world_size = 3
-    if torch.cuda.device_count() < world_size:
+    if not torch.cuda.is_available() or torch.cuda.device_count() < world_size:
         pytest.skip("Not enough GPUs for NCCL-based test")
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(run_test_add_param_group, args=(world_size, temp_file_name), nprocs=world_size, join=True)
@@ -273,9 +272,9 @@ def run_test_step(rank, world_size, tempfile_name):
     dist.destroy_process_group()
 
 
-@skip_if_no_cuda
+@skip_if_single_gpu
 def test_step():
-    world_size = min(2, torch.cuda.device_count())
+    world_size = max(2, torch.cuda.device_count())
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(run_test_step, args=(world_size, temp_file_name), nprocs=world_size, join=True)
@@ -347,7 +346,7 @@ def run_test_sharding(rank, world_size, tempfile_name):
 
 def test_sharding():
     world_size = 3
-    if torch.cuda.device_count() < world_size:
+    if not torch.cuda.is_available() or torch.cuda.device_count() < world_size:
         pytest.skip("Not enough GPUs for NCCL-based test")
     temp_file_name = tempfile.mkstemp()[1]
 
@@ -411,7 +410,10 @@ def test_collect_shards():
     reference_rank = 0
 
     mp.spawn(
-        run_test_collect_shards, args=(world_size, reference_rank, temp_file_name), nprocs=world_size, join=True,
+        run_test_collect_shards,
+        args=(world_size, reference_rank, temp_file_name),
+        nprocs=world_size,
+        join=True,
     )
 
 
@@ -488,7 +490,10 @@ def test_multiple_groups():
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(
-        run_test_multiple_groups, args=(world_size, temp_file_name), nprocs=world_size, join=True,
+        run_test_multiple_groups,
+        args=(world_size, temp_file_name),
+        nprocs=world_size,
+        join=True,
     )
 
 
@@ -516,10 +521,16 @@ def run_gradient_clipping(rank, world_size, tempfile_name):
         # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
         # gradient norm computation from OSS and adds a dependency.
         # to keep the comparison apples-to-apples DDP is used in both cases
-        model_oss = DDP(module=model_oss, device_ids=[rank],)
+        model_oss = DDP(
+            module=model_oss,
+            device_ids=[rank],
+        )
         sharded_optimizer = optim.OSS(model_oss.parameters(), lr=0.1, momentum=0.99)
 
-        model = DDP(model, device_ids=[rank],)
+        model = DDP(
+            model,
+            device_ids=[rank],
+        )
 
         loss_fn = torch.nn.L1Loss()
         loss_fn.to(device)
@@ -563,7 +574,10 @@ def test_gradient_clipping():
     reference_rank = 0
 
     mp.spawn(
-        run_gradient_clipping, args=(world_size, temp_file_name), nprocs=world_size, join=True,
+        run_gradient_clipping,
+        args=(world_size, temp_file_name),
+        nprocs=world_size,
+        join=True,
     )
 
 
@@ -578,7 +592,9 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     inputs = torch.rand((batch, input_width), device=device)
 
     model_oss1 = torch.nn.Sequential(
-        torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden), torch.nn.Linear(hidden, target_width),
+        torch.nn.Linear(input_width, hidden),
+        torch.nn.Linear(hidden, hidden),
+        torch.nn.Linear(hidden, target_width),
     ).to(device)
     model_oss2 = copy.deepcopy(model_oss1)
 
@@ -586,9 +602,15 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
     # gradient norm computation from OSS and adds a dependency.
     # to keep the comparison apples-to-apples DDP is used in both cases
-    model_oss1 = DDP(module=model_oss1, device_ids=[rank],)
+    model_oss1 = DDP(
+        module=model_oss1,
+        device_ids=[rank],
+    )
     sharded_optimizer1 = optim.OSS(model_oss1.parameters(), lr=0.1, momentum=0.99)
-    model_oss2 = DDP(module=model_oss2, device_ids=[rank],)
+    model_oss2 = DDP(
+        module=model_oss2,
+        device_ids=[rank],
+    )
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
 
     def run_grad_step(device, model, optimizer):
@@ -661,5 +683,8 @@ def test_state_dict_distributed():
         world_size = min(world_size, torch.cuda.device_count())
 
     mp.spawn(
-        run_state_dict_distributed, args=(world_size, temp_file_name), nprocs=world_size, join=True,
+        run_state_dict_distributed,
+        args=(world_size, temp_file_name),
+        nprocs=world_size,
+        join=True,
     )
