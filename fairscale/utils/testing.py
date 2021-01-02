@@ -152,7 +152,7 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
 
     for world_size in world_sizes:
         filename = tempfile.mkstemp()[1]
-        context = mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=False)
+        context = mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=False)  # type: ignore
         context.join(timeout=60.0)
 
 
@@ -266,7 +266,11 @@ class _Block(nn.Module):
         self.ln_1 = nn.LayerNorm(embed_dim)
         self.ln_2 = nn.LayerNorm(embed_dim)
         self.attn = nn.MultiheadAttention(embed_dim, num_heads)  # type: ignore
-        self.mlp = nn.Sequential(nn.Linear(embed_dim, embed_dim * 4), nn.GELU(), nn.Linear(embed_dim * 4, embed_dim),)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.GELU(),
+            nn.Linear(embed_dim * 4, embed_dim),
+        )
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         x = inputs[0]
