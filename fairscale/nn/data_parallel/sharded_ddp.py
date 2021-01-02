@@ -261,7 +261,7 @@ class ShardedDataParallel(nn.Module):
         """
         for layer in module.modules():
             if isinstance(layer, torch.nn.modules.SyncBatchNorm):
-                assert self.device_type != 'cpu', "SyncBatchNorm layers only work with GPU modules"
+                assert self.device_type != "cpu", "SyncBatchNorm layers only work with GPU modules"
                 # device_id logic has not been handled, assume single-process single-device
                 # SyncBatchNorm only supports DDP with single-process single-device anyway'
                 layer._specify_ddp_gpu_num(1)
