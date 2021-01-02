@@ -274,7 +274,7 @@ def run_test_step(rank, world_size, tempfile_name):
 
 @skip_if_single_gpu
 def test_step():
-    world_size = max(2, torch.cuda.device_count())
+    world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(run_test_step, args=(world_size, temp_file_name), nprocs=world_size, join=True)
