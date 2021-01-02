@@ -316,8 +316,7 @@ def test_ddp_attributes():
     # - device_type
 
     url = "file://" + tempfile.mkstemp()[1]
-    backend = dist.Backend.NCCL
-    dist.init_process_group(init_method=url, backend=backend, rank=0, world_size=1)
+    dist.init_process_group(init_method=url, backend="gloo", rank=0, world_size=1)
 
     model = Sequential(Linear(2, 3), Linear(3, 3))
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
@@ -352,10 +351,7 @@ def test_ddp_sync_batch_norm():
     temp_file_name = tempfile.mkstemp()[1]
     device = "cuda"
     mp.spawn(
-        run_test_ddp_sync_batch_norm,
-        args=(world_size, backend, device, temp_file_name),
-        nprocs=world_size,
-        join=True
+        run_test_ddp_sync_batch_norm, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True
     )
 
 
