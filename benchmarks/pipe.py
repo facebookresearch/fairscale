@@ -608,7 +608,9 @@ parser.add_argument(
 parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data for a sample training run.")
 parser.add_argument(
     # TODO(anj-s): In the process of adding more models and hence the requirement for a flag.
-    "--model_name", default="lm", help="Language Model(LM) used to benchmark nn.pipe."
+    "--model_name",
+    default="lm",
+    help="Language Model(LM) used to benchmark nn.pipe.",
 )
 parser.set_defaults(pipelined_backward=True)
 
