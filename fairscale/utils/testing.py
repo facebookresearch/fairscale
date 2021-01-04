@@ -152,6 +152,8 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
 
     for world_size in world_sizes:
         filename = tempfile.mkstemp()[1]
+
+        # (lefaudeux) Let mp handle the process joining, join=False and handling context has been unstable in the past
         mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=True)  # type: ignore
 
 
