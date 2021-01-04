@@ -206,7 +206,7 @@ def test_lr_scheduler():
         assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10 ** (epoch + 1)), optim.param_groups[0]["lr"]
 
 
-@skip_if_no_gpu
+@skip_if_no_cuda
 @pytest.mark.parametrize("debias_ewma", [True, False])
 def test_add_param_group(debias_ewma):
     """Test AdaScale supports add_param_group() API."""
@@ -375,7 +375,7 @@ def test_scale_not_equal_default(test_case):
     assert np.allclose(optim.gain(), exp_gain), optim.gain()
 
 
-@skip_if_no_gpu
+@skip_if_no_cuda
 def test_unhook():
     """Test unhook that frees the tensor from CUDA memory."""
     model = Linear(123, 456, bias=False).cuda()  # unique shape so that it can be found
