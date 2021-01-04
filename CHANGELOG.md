@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [next rel] - TBD
 ### Added
-- AdaScale: Added gradient accumulation feature (#202)
-- AdaScale: Added support of torch.lr_scheduler (#229)
+- AdaScale:
+  . Added gradient accumulation feature (#202)
+  . Added support of torch.lr_scheduler (#229)
+  . Added support for add_param_groups (#266)
+  . Added support for scale != world_size (#266)
 
 ### Fixed
 - AdaScale: smoothing factor value fixed when using gradient accumulation (#235)
