@@ -19,14 +19,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import torch
 
 from fairscale.nn.model_parallel import initialize as mpu
 from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
 
 
-def run_test_initialize_model_parallel(rank, model_parallel_size):
-    dist_init(rank, model_parallel_size)
+def run_test_initialize_model_parallel(rank, model_parallel_size, filename):
+    dist_init(rank, model_parallel_size, filename)
 
     if torch.distributed.get_rank() == 0:
         print("> testing initialize_model_parallel with size {} ...".format(model_parallel_size))
@@ -62,8 +63,8 @@ def run_test_initialize_model_parallel(rank, model_parallel_size):
         print(">> passed the test :-)")
 
 
-def run_test_get_model_parallel_src_rank(rank, model_parallel_size_):
-    dist_init(rank, model_parallel_size_)
+def run_test_get_model_parallel_src_rank(rank, model_parallel_size_, filename):
+    dist_init(rank, model_parallel_size_, filename)
 
     if torch.distributed.get_rank() == 0:
         print("> testing get_model_parallel_src_rank with size {} ...".format(model_parallel_size_))

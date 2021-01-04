@@ -12,11 +12,11 @@ class EmbeddingLayer(nn.Embedding):
 
     def __init__(self, ntoken, ninp, initrange):
         super().__init__(ntoken, ninp)
-        self.ninp = math.sqrt(ninp)
+        self.ninp_sqrt = math.sqrt(ninp)
         self.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, src):
-        return super().forward(src) * self.ninp
+        return super().forward(src) * self.ninp_sqrt
 
 
 class PositionalEncodingLayer(nn.Module):

@@ -31,6 +31,7 @@ import logging
 import multiprocessing
 import os
 import random
+import tempfile
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy
@@ -41,7 +42,7 @@ from torch.distributed import rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
-from fairscale.nn.model_parallel import initialize_model_parallel
+from fairscale.nn.model_parallel import destroy_model_parallel, initialize_model_parallel
 from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
 
 
@@ -63,7 +64,7 @@ def set_random_seed(seed: int) -> None:
 
 
 def torch_version() -> Tuple[int, ...]:
-    numbering = torch.__version__.split(".")
+    numbering = torch.__version__.split("+")[0].split(".")
 
     assert len(numbering) == 3
 
@@ -81,38 +82,53 @@ def torch_version() -> Tuple[int, ...]:
     return tuple(int(n) for n in numbering)
 
 
-def dist_init(rank: int, world_size: int, hostname: Optional[str] = None) -> None:
-    if hostname is None:
-        hostname = "localhost"
-    print(f"dist init r={rank}, world={world_size}, host={hostname}")
-    os.environ["MASTER_ADDR"] = hostname
-    os.environ["MASTER_PORT"] = "10638"
+def dist_init(rank: int, world_size: int, filename: str) -> bool:
+    """
+    Initialize torch distributed, based on a temporary file shared across ranks, which makes it possible for unrelated
+    tests to be run concurrently.
+
+    Return false if not enough GPUs present in the system.
+
+    .. warning: This limits the usecase to all ranks being on the same node
+    """
+
+    print(f"dist init r={rank}, world={world_size}")
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
+    url = "file://" + filename
 
     if torch_version() >= (1, 6, 0):
-        init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
         backend = "nccl" if torch.cuda.is_available() else "gloo"
-        torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=init_method)
-        os.environ["MASTER_ADDR"] = hostname
-        os.environ["MASTER_PORT"] = "10639"
-        init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
+
+        if backend == "nccl" and torch.cuda.device_count() < world_size:
+            logging.warning("Requested world size cannot be reached on this machine, not enough GPUs")
+            return False
+
+        torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
+
+        # New file for RPC init
+        filename_rpc = filename + "_rpc"
+        open(filename_rpc, "w")
+
+        url = "file://" + filename_rpc
         rpc.init_rpc(
             f"Test{rank}",
             rank=rank,
             world_size=world_size,
             backend=rpc.BackendType.TENSORPIPE,
-            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method=init_method),
+            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method=url),
         )
 
     else:
         if world_size > 1:
             rpc.init_rpc(f"Test{rank}", rank=rank, world_size=world_size)
         else:
-            torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+            torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size, init_method=url)
 
     if torch.cuda.is_available() and torch.cuda.device_count():
         torch.cuda.set_device(rank % torch.cuda.device_count())
+
+    return True
 
 
 def get_worker_map() -> Dict[Any, Any]:
@@ -125,27 +141,47 @@ def get_world_sizes() -> List[int]:
 
 
 def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_world_sizes(), args: Any = []) -> None:
+
     for world_size in world_sizes:
-        mp.spawn(test_func, args=(world_size, *args), nprocs=world_size, join=True)  # type: ignore
+        filename = tempfile.mkstemp()[1]
+        context = mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=False)  # type: ignore
+        context.join(timeout=60.0)
 
 
-def worker_process(rank: int, world_size: int, func: Callable, args: Any, error_queue: Any) -> None:
+def worker_process(rank: int, world_size: int, filename: str, func: Callable, args: Any, error_queue: Any) -> None:
     """Main function for unit tests launced with torch_spawn"""
 
-    dist_init(rank, world_size)
+    if not dist_init(rank, world_size, filename):
+        return
+
     kwargs = {}
     if "OMPI_COMM_WORLD_RANK" not in os.environ:
         kwargs["pipeline_backend"] = "gloo"
     initialize_model_parallel(1, world_size, **kwargs)
     try:
         func(*args)
+        teardown()
     except BaseException as e:
+        # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
+        teardown()
+
         # If the function raises 'Skipped', this indicates pytest.skip(), so
         # forward it to parent so we can call pytest.skip() there
         if e.__class__.__name__ == "Skipped":
             error_queue.put(str(e))
             return
+
         raise e
+
+
+def teardown() -> None:
+    destroy_model_parallel()
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+    try:
+        torch.distributed.rpc.shutdown()
+    except Exception:
+        pass
 
 
 def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
@@ -187,7 +223,9 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
                 if world_size in world_sizes:
                     try:
                         func(*args)
+                        teardown()
                     except BaseException as e:
+                        teardown()
                         print(f"got exception {e} from test")
                         import traceback
 

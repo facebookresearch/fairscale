@@ -105,6 +105,9 @@ class ShardedDataParallel(nn.Module):
         self._grad_accs: List[Callable] = []
         self._setup_backward_hooks()
 
+        # passing a handle to torch.nn.SyncBatchNorm layer
+        self._passing_sync_batchnorm_handle(self.module)
+
         # Make sure that all ranks start with the same model
         if sync_models_at_startup:
             self._sync_params_and_buffers()
@@ -126,9 +129,9 @@ class ShardedDataParallel(nn.Module):
         return self.module(*inputs, **kwargs)
 
     def reduce(self) -> None:
-        """ .. deprecated:: 0.0.4
+        """.. deprecated:: 0.0.4
 
-            This does not need to be called, the gradient reduction is done automatically during the BW pass
+        This does not need to be called, the gradient reduction is done automatically during the BW pass
         """
         logging.warning("This is not useful anymore, gradients have been reduced automatically with the backward pass")
 
@@ -154,8 +157,7 @@ class ShardedDataParallel(nn.Module):
         self.should_accumulate_grads = old_should_accumulate_grads
 
     def _clear_counters(self) -> None:
-        """ Reset all the grad reduce and call counters
-        """
+        """Reset all the grad reduce and call counters"""
         self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
         self._reduced_grads = {o: 0 for o in self.sharded_optimizers}
 
@@ -250,3 +252,15 @@ class ShardedDataParallel(nn.Module):
             ]
 
             _ = list(map(lambda x: x.wait(), work_handles))
+
+    def _passing_sync_batchnorm_handle(self, module: nn.Module) -> None:
+        """
+        Passes handle required for ``torch.nn.modules.SyncBatchNorm``.
+        Adapted from ``torch.nn.distributed.DistributedDataParallel``.
+        """
+        for layer in module.modules():
+            if isinstance(layer, torch.nn.modules.SyncBatchNorm):
+                assert self.device_type != "cpu", "SyncBatchNorm layers only work with GPU modules"
+                # device_id logic has not been handled, assume single-process single-device
+                # SyncBatchNorm only supports DDP with single-process single-device anyway'
+                layer._specify_ddp_gpu_num(1)  # type: ignore
