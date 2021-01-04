@@ -50,8 +50,8 @@ def init_random_seed(seed: int):
 def get_model_and_optimizer(args, device, config):
     """Return instantiated model and optimizer function."""
 
-    if args.model_name == "seq_pred":
-        model = get_seq_pred_model(args, device, config)
+    if args.model_name == "lm":
+        model = get_lm_model(args, device, config)
 
     lr = config["lr"]
 
@@ -65,7 +65,7 @@ def get_model_and_optimizer(args, device, config):
     return model, optimizer
 
 
-def get_seq_pred_model(args, device, config):
+def get_lm_model(args, device, config):
     """Get language model(based on GPT-2) used for sequence prediction."""
 
     ninp = config["ninp"]
@@ -322,7 +322,7 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
-def verify_seq_pred_run(wps):
+def verify_lm_run(wps):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
     # Assert that words per second is within 3 standard deviations of the average
@@ -357,8 +357,8 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
 
     if can_benchmark and len(model.balance) == 4:
 
-        if args.model_name == "seq_pred":
-            verify_seq_pred_run(wps)
+        if args.model_name == "lm":
+            verify_lm_run(wps)
         else:
             raise RuntimeError("Unrecognized args.model_name " % args.model_name)
 
@@ -391,7 +391,7 @@ def generate_balance(num_devices, num_layers):
 def get_synthetic_dataloader(args):
     """Returns dataloader for synthetic data."""
 
-    if args.model_name == "seq_pred":
+    if args.model_name == "lm":
         lm_dataset = BenchmarkLMDataset()
         lm_dataloader = DataLoader(
             lm_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_sentences_lm
@@ -404,7 +404,7 @@ def get_synthetic_dataloader(args):
 def get_real_dataloaders(device, config):
     """Returns dataloaders for real data."""
 
-    if args.model_name == "seq_pred":
+    if args.model_name == "lm":
         data = datasets.get_wikitext2_data(device)
         ntokens, _, _, _ = data
         config["vocab_size"] = ntokens
@@ -434,7 +434,7 @@ def create_model_config(args, config=None):
 def create_benchmark_config(model_name):
     """Return a dict with configurations required for benchmarking `model_name` model."""
 
-    if model_name == "seq_pred":
+    if model_name == "lm":
         return {
             "vocab_size": 10000,
             "ninp": 2048,  # embedding dimension
@@ -607,7 +607,8 @@ parser.add_argument(
 )
 parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data for a sample training run.")
 parser.add_argument(
-    "--model_name", default="seq_pred", choices=["seq_pred", "transformer"], help="Model used to benchmark pipe."
+    # TODO(anj-s): In the process of adding more models and hence the requirement for a flag.
+    "--model_name", default="lm", help="Language Model(LM) used to benchmark nn.pipe."
 )
 parser.set_defaults(pipelined_backward=True)
 
