@@ -11,7 +11,6 @@ See https://github.com/pytorch/pytorch/issues/42849 for more context. Credits to
 """
 
 from builtins import isinstance
-import enum
 import logging
 from typing import Any, Dict, List, Optional, Type
 
@@ -20,62 +19,35 @@ from torch import nn
 import torch.distributed as dist
 
 
-class SplitStrategy(enum.Enum):
-    """
-    Strategy used to shard a model. Each shard can hold the same number of layers, or hold the same cumulated parameter size.
-    """
-
-    NUM_LAYERS = enum.auto()
-    MEMORY = enum.auto()
-
-
-def _split(modules: nn.Sequential, number_shards: int, strategy: SplitStrategy) -> List[List[nn.Module]]:
+def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
     splits: List[List[nn.Module]] = [[] for _ in range(number_shards)]
     n = len(modules) // number_shards
 
-    if strategy == SplitStrategy.NUM_LAYERS:
-        # Naive sharding, slice by the number of layers
-        # This is probably suboptimal if the complexity or size of the layers vary by a lot
-        i = 0
+    # Count the number of parameters per exposed layer, use that as a proxy for memory footprint
+    number_parameters_per_layer = [sum(p.numel() for p in m.parameters()) for m in modules]
+    total_number_params = sum(number_parameters_per_layer)
+    number_parameters_per_shard = total_number_params // number_shards
 
-        logging.info(f"Aiming for {n} blocks per shard")
+    logging.info(
+        f"This model has {total_number_params/1e6:.2f}M parameters, aiming for {number_parameters_per_shard/1e6:.2f}M parameters per shard"
+    )
 
-        for m in modules:
-            if splits and len(splits[i]) == n and (i < number_shards - 1):
-                i += 1
+    current_shard = 0
 
-            splits[i].append(m)
+    for m in modules:
+        # Number of parameters in the current shard
+        current_shard_params = sum(p.numel() for sm in splits[current_shard] for p in sm.parameters())
 
-        return splits
+        # This shard is big enough, point to the next one
+        if (
+            current_shard_params + sum(p.numel() for p in m.parameters()) > number_parameters_per_shard
+            and current_shard < number_shards - 1
+        ):
+            current_shard += 1
 
-    if strategy == SplitStrategy.MEMORY:
-        # Count the number of parameters per exposed layer, use that as a proxy for memory footprint
-        number_parameters_per_layer = [sum(p.numel() for p in m.parameters()) for m in modules]
-        total_number_params = sum(number_parameters_per_layer)
-        number_parameters_per_shard = total_number_params // number_shards
+        splits[current_shard].append(m)
 
-        logging.info(
-            f"This model has {total_number_params/1e6:.2f}M parameters, aiming for {number_parameters_per_shard/1e6:.2f}M parameters per shard"
-        )
-
-        current_shard = 0
-
-        for m in modules:
-            # Number of parameters in the current shard
-            current_shard_params = sum(p.numel() for sm in splits[current_shard] for p in sm.parameters())
-
-            # This shard is big enough, point to the next one
-            if (
-                current_shard_params + sum(p.numel() for p in m.parameters()) > number_parameters_per_shard
-                and current_shard < number_shards - 1
-            ):
-                current_shard += 1
-
-            splits[current_shard].append(m)
-
-        return splits
-
-    raise NotImplementedError("This split strategy is not supported yet")
+    return splits
 
 
 class ModelShard(nn.Module):
@@ -301,9 +273,6 @@ class OffloadDataParallelExperimental(nn.Module):
         broadcast_buffers (bool, optional):
             whether to sync all the model buffers at the beginning of a FW pass
 
-        shard_split_strategy(`SplitStrategy`):
-            how to shard the model. Can be iso-layer or iso-parameter size
-
         offload_optimizer (bool):
             move optimizer computations to the offload device (for instance CPU), which saves more memory but slows down
     """
@@ -318,7 +287,6 @@ class OffloadDataParallelExperimental(nn.Module):
         offload_device: torch.device = torch.device("cpu"),
         process_group: Any = None,
         broadcast_buffers: bool = True,
-        shard_split_strategy: SplitStrategy = SplitStrategy.MEMORY,
         offload_optimizer: bool = False,
     ):
         super().__init__()
@@ -332,7 +300,7 @@ class OffloadDataParallelExperimental(nn.Module):
         self.offload_device = device
 
         # Slice the model into roughly equivalent sequential shards
-        splits = _split(model_cpu, self.world_size, shard_split_strategy)
+        splits = _split(model_cpu, self.world_size)
 
         # Each rank either owns the slice, or temporarily helps processing it in a data parallel fashion
         self.model_slices: List[nn.Module] = []
