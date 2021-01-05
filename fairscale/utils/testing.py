@@ -90,7 +90,7 @@ def torch_version() -> Tuple[int, ...]:
     return tuple(int(n) for n in numbering)
 
 
-def dist_init(rank: int, world_size: int, filename: str) -> bool:
+def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "") -> bool:
     """
     Initialize torch distributed, based on a temporary file shared across ranks, which makes it possible for unrelated
     tests to be run concurrently.
@@ -113,10 +113,6 @@ def dist_init(rank: int, world_size: int, filename: str) -> bool:
             return False
 
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
-
-        # New file for RPC init
-        filename_rpc = filename + "_rpc"
-        open(filename_rpc, "w")
 
         url_rpc = "file://" + filename_rpc
         rpc.init_rpc(
@@ -153,26 +149,34 @@ def get_world_sizes() -> List[int]:
 def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_world_sizes(), args: Any = []) -> None:
 
     for world_size in world_sizes:
-        filename = tempfile.mkstemp()[1]
+        _, filename = tempfile.mkstemp()
+        _, filename_rpc = tempfile.mkstemp()
 
         # (lefaudeux) Let mp handle the process joining, join=False and handling context has been unstable in the past
-        mp.spawn(test_func, args=(world_size, filename, *args), nprocs=world_size, join=True)  # type: ignore
+        mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)  # type: ignore
 
 
-def worker_process(rank: int, world_size: int, filename: str, func: Callable, args: Any, error_queue: Any) -> None:
+def worker_process(
+    rank: int, world_size: int, filename: str, filename_rpc: str, func: Callable, args: Any, error_queue: Any
+) -> None:
     """Main function for unit tests launced with torch_spawn"""
 
-    if not dist_init(rank, world_size, filename):
+    if not dist_init(rank, world_size, filename, filename_rpc):
+        logging.warning("failed initializing torch distributed")
         return
 
     kwargs = {}
     if "OMPI_COMM_WORLD_RANK" not in os.environ:
         kwargs["pipeline_backend"] = "gloo"
+
     initialize_model_parallel(1, world_size, **kwargs)
+
     try:
         func(*args)
         teardown()
     except BaseException as e:
+        logging.warning(f" Rank {rank}: {e}")
+
         # Make sure that the group is properly destroyed, even for tests which check for exceptions being raised
         teardown()
 
@@ -187,6 +191,7 @@ def worker_process(rank: int, world_size: int, filename: str, func: Callable, ar
 
 def teardown() -> None:
     destroy_model_parallel()
+
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
     try:
@@ -237,7 +242,6 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
                         teardown()
                     except BaseException as e:
                         teardown()
-                        print(f"got exception {e} from test")
                         import traceback
 
                         print(f"{traceback.format_exc()}")
