@@ -21,8 +21,7 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
-
-skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
+from fairscale.utils.testing import skip_if_no_cuda, skip_if_single_gpu
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
@@ -225,7 +224,7 @@ def run_test_add_param_group(rank, world_size, tempfile_name):
 
 def test_add_param_group():
     world_size = 3
-    if torch.cuda.device_count() < world_size:
+    if not torch.cuda.is_available() or torch.cuda.device_count() < world_size:
         pytest.skip("Not enough GPUs for NCCL-based test")
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(run_test_add_param_group, args=(world_size, temp_file_name), nprocs=world_size, join=True)
@@ -273,9 +272,9 @@ def run_test_step(rank, world_size, tempfile_name):
     dist.destroy_process_group()
 
 
-@skip_if_no_cuda
+@skip_if_single_gpu
 def test_step():
-    world_size = min(2, torch.cuda.device_count())
+    world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(run_test_step, args=(world_size, temp_file_name), nprocs=world_size, join=True)
@@ -347,7 +346,7 @@ def run_test_sharding(rank, world_size, tempfile_name):
 
 def test_sharding():
     world_size = 3
-    if torch.cuda.device_count() < world_size:
+    if not torch.cuda.is_available() or torch.cuda.device_count() < world_size:
         pytest.skip("Not enough GPUs for NCCL-based test")
     temp_file_name = tempfile.mkstemp()[1]
 
