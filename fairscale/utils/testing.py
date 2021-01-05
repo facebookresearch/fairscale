@@ -118,20 +118,22 @@ def dist_init(rank: int, world_size: int, filename: str) -> bool:
         filename_rpc = filename + "_rpc"
         open(filename_rpc, "w")
 
-        url = "file://" + filename_rpc
+        url_rpc = "file://" + filename_rpc
         rpc.init_rpc(
             f"Test{rank}",
             rank=rank,
             world_size=world_size,
             backend=rpc.BackendType.TENSORPIPE,
-            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method=url),
+            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method=url_rpc),
         )
 
     else:
         if world_size > 1:
             rpc.init_rpc(f"Test{rank}", rank=rank, world_size=world_size)
-        else:
+        elif torch.cuda.is_available():
             torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size, init_method=url)
+        else:
+            return False
 
     if torch.cuda.is_available() and torch.cuda.device_count():
         torch.cuda.set_device(rank % torch.cuda.device_count())
