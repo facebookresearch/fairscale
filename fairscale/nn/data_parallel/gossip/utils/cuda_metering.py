@@ -47,9 +47,7 @@ class CudaEventRecorder(object):
 
     def find_time_elapsed(self):
         if self.end_event is None:
-            raise Exception(
-                f"stopEvent was not called for event with name {self.event_name}"
-            )
+            raise Exception(f"stopEvent was not called for event with name {self.event_name}")
 
         self.end_event.synchronize()
         return self.start_event.elapsed_time(self.end_event)
@@ -70,13 +68,8 @@ class CudaEventRecorder(object):
             for event_recorder in event_recorder_list:
                 time_taken_list.append(event_recorder.find_time_elapsed())
 
-            all_timings_str += (
-                "{}: Time taken: avg: {}, std: {}, count: " "{}\n"
-            ).format(
-                event_name,
-                np.mean(time_taken_list),
-                np.std(time_taken_list),
-                len(time_taken_list),
+            all_timings_str += ("{}: Time taken: avg: {}, std: {}, count: " "{}\n").format(
+                event_name, np.mean(time_taken_list), np.std(time_taken_list), len(time_taken_list),
             )
 
         return all_timings_str

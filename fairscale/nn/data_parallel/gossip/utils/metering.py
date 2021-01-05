@@ -50,9 +50,7 @@ class Meter(object):
         self.avg = self.sum / self.count
         self.sqsum += (val ** 2) * n
         if self.count > 1:
-            self.std = (
-                (self.sqsum - (self.sum ** 2) / self.count) / (self.count - 1)
-            ) ** 0.5
+            self.std = ((self.sqsum - (self.sum ** 2) / self.count) / (self.count - 1)) ** 0.5
         if self.stateful:
             self.value_history.append(val)
             mad = 0
@@ -68,10 +66,6 @@ class Meter(object):
                 return str("{dm.val:.3f},{dm.avg:.3f},{dm.std:.3f}".format(dm=self))
         else:
             if self.stateful:
-                return str(self.ptag) + str(
-                    ": {dm.val:.3f} ({dm.avg:.3f} +- {dm.mad:.3f})".format(dm=self)
-                )
+                return str(self.ptag) + str(": {dm.val:.3f} ({dm.avg:.3f} +- {dm.mad:.3f})".format(dm=self))
             else:
-                return str(self.ptag) + str(
-                    ": {dm.val:.3f} ({dm.avg:.3f} +- {dm.std:.3f})".format(dm=self)
-                )
+                return str(self.ptag) + str(": {dm.val:.3f} ({dm.avg:.3f} +- {dm.std:.3f})".format(dm=self))

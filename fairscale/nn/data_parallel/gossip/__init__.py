@@ -7,7 +7,7 @@
 
 from .ad_psgd import BilatGossipDataParallel
 from .distributed import GossipDataParallel
-
+from .gossiper import PushPull, PushSum
 from .graph_manager import (
     DynamicBipartiteExponentialGraph,
     DynamicBipartiteLinearGraph,
@@ -18,8 +18,5 @@ from .graph_manager import (
     RingGraph,
 )
 from .mixing_manager import MixingManager, UniformMixing
-
-from .gossiper import PushSum, PushPull
-
 from .utils import communicate
 from .utils.cuda_metering import CudaEventRecorder

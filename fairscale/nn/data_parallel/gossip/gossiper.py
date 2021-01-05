@@ -31,14 +31,7 @@ class Gossiper(object):
     """ Generic gossip averaging object for multi-peer communication """
 
     def __init__(
-        self,
-        msg,
-        graph,
-        device=None,
-        mixing=None,
-        logger=None,
-        rank=None,
-        world_size=None,
+        self, msg, graph, device=None, mixing=None, logger=None, rank=None, world_size=None,
     ):
         """
         Initialize generic averaging class designed for multi-peer comms
@@ -64,9 +57,7 @@ class Gossiper(object):
         self.world_size = world_size
         assert isinstance(graph, GraphManager)
         self._graph_manager = graph
-        self.peers_per_itr_device = torch.tensor(
-            [self._graph_manager.peers_per_itr], device=device, dtype=msg.dtype
-        )
+        self.peers_per_itr_device = torch.tensor([self._graph_manager.peers_per_itr], device=device, dtype=msg.dtype)
         # This might need to be made float16 later on
         self.passive = self._graph_manager.is_passive()
         self.refresh_peers_(rotate=False)  # sets in- and out-peers attributes
@@ -184,9 +175,7 @@ class PushSum(Gossiper):
         # out_msg must be on the correct device
         assert out_msg.device.type == self.device.type
         if self.logger is not None:
-            self.logger.debug(
-                "in/out -peers {}/{}".format(self.in_edges, self.out_edges)
-            )
+            self.logger.debug("in/out -peers {}/{}".format(self.in_edges, self.out_edges))
 
         # prepare messages for gossip
         mixed_out_msgs = self.mix_out_msg_(out_msg, ps_weight, residual)
@@ -195,20 +184,13 @@ class PushSum(Gossiper):
         for out_edge in self.out_edges:
             msg = next(mixed_out_msgs)
             assert self.rank == out_edge.src
-            req = dist.broadcast(
-                tensor=msg,
-                src=out_edge.src,
-                group=out_edge.process_group,
-                async_op=True,
-            )
+            req = dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group, async_op=True,)
             self.out_msg_buffer.append((req, msg))
 
         # blocking recv w/ some code optimization to avoid buffer prep overhead
         if len(self.in_edges) == 1 and residual:
             in_edge = self.in_edges[0]
-            dist.broadcast(
-                tensor=self.in_msg_buffer, src=in_edge.src, group=in_edge.process_group
-            )
+            dist.broadcast(tensor=self.in_msg_buffer, src=in_edge.src, group=in_edge.process_group)
 
         # regular non-blocking recv
         else:
@@ -220,9 +202,7 @@ class PushSum(Gossiper):
 
             for in_edge in self.in_edges:
                 dist.broadcast(
-                    tensor=self.placeholder,
-                    src=in_edge.src,
-                    group=in_edge.process_group,
+                    tensor=self.placeholder, src=in_edge.src, group=in_edge.process_group,
                 )
                 self.in_msg_buffer.add_(self.placeholder)
 
@@ -238,9 +218,7 @@ class PushPull(Gossiper):
         # out_msg must be on the correct device
         assert out_msg.device.type == self.device.type
         if self.logger is not None:
-            self.logger.debug(
-                "in/out -peers {}/{}".format(self.in_edges, self.out_edges)
-            )
+            self.logger.debug("in/out -peers {}/{}".format(self.in_edges, self.out_edges))
 
         # prepare messages for gossip
         mixed_out_msgs = self.mix_out_msg_(out_msg, ps_weight, residual)
@@ -250,23 +228,15 @@ class PushPull(Gossiper):
             out_edge, in_edge = self.out_edges[0], self.in_edges[0]
             msg = next(mixed_out_msgs)
             if not self.passive:
+                dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
                 dist.broadcast(
-                    tensor=msg, src=out_edge.src, group=out_edge.process_group
-                )
-                dist.broadcast(
-                    tensor=self.in_msg_buffer,
-                    src=in_edge.src,
-                    group=in_edge.process_group,
+                    tensor=self.in_msg_buffer, src=in_edge.src, group=in_edge.process_group,
                 )
             else:
                 dist.broadcast(
-                    tensor=self.in_msg_buffer,
-                    src=in_edge.src,
-                    group=in_edge.process_group,
+                    tensor=self.in_msg_buffer, src=in_edge.src, group=in_edge.process_group,
                 )
-                dist.broadcast(
-                    tensor=msg, src=out_edge.src, group=out_edge.process_group
-                )
+                dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
 
         # regular send-recv
         else:
@@ -280,23 +250,15 @@ class PushPull(Gossiper):
             for out_edge, in_edge in zip(self.out_edges, self.in_edges):
                 msg = next(mixed_out_msgs)
                 if not self.passive:
+                    dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
                     dist.broadcast(
-                        tensor=msg, src=out_edge.src, group=out_edge.process_group
-                    )
-                    dist.broadcast(
-                        tensor=self.placeholder,
-                        src=in_edge.src,
-                        group=in_edge.process_group,
+                        tensor=self.placeholder, src=in_edge.src, group=in_edge.process_group,
                     )
                 else:
                     dist.broadcast(
-                        tensor=self.placeholder,
-                        src=in_edge.src,
-                        group=in_edge.process_group,
+                        tensor=self.placeholder, src=in_edge.src, group=in_edge.process_group,
                     )
-                    dist.broadcast(
-                        tensor=msg, src=out_edge.src, group=out_edge.process_group
-                    )
+                    dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
                 self.in_msg_buffer.add_(self.placeholder)
 
         self.refresh_peers_()
@@ -314,31 +276,28 @@ class BilatPushPull(Gossiper):
         assert len(self.in_edges) == 1 and len(self.out_edges) == 1
         out_edge, in_edge = self.out_edges[0], self.in_edges[0]
         if self.logger is not None:
-            self.logger.debug('in/out -edges {}/{}'.format(in_edge, out_edge))
+            self.logger.debug("in/out -edges {}/{}".format(in_edge, out_edge))
 
         if not self.passive:
             # prepare messages for gossip
-            mixed_out_msgs = self.mix_out_msg_(out_msg, 1., residual=True)
+            mixed_out_msgs = self.mix_out_msg_(out_msg, 1.0, residual=True)
             msg = next(mixed_out_msgs)
             # blocking send/recv
-            dist.broadcast(tensor=msg, src=out_edge.src,
-                           group=out_edge.process_group)
-            dist.broadcast(tensor=self.in_msg_buffer, src=in_edge.src,
-                           group=in_edge.process_group)
+            dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
+            dist.broadcast(tensor=self.in_msg_buffer, src=in_edge.src, group=in_edge.process_group)
             completed = True
         else:
             if self._pending_req is None:
                 self._pending_req = dist.broadcast(
-                    tensor=self.in_msg_buffer, src=in_edge.src,
-                    group=in_edge.process_group, async_op=True)
+                    tensor=self.in_msg_buffer, src=in_edge.src, group=in_edge.process_group, async_op=True
+                )
             if self._pending_req.is_completed():
                 # prepare messages for gossip
-                mixed_out_msgs = self.mix_out_msg_(out_msg, 1., residual=True)
+                mixed_out_msgs = self.mix_out_msg_(out_msg, 1.0, residual=True)
                 msg = next(mixed_out_msgs)
                 if self.logger is not None:
-                    self.logger.debug('req. completed; sending to {}'.format(out_edge))
-                dist.broadcast(tensor=msg, src=out_edge.src,
-                               group=out_edge.process_group)
+                    self.logger.debug("req. completed; sending to {}".format(out_edge))
+                dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
                 self._pending_req = None
                 completed = True
             else:

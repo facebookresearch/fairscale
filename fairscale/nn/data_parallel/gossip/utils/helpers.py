@@ -88,10 +88,7 @@ def communicate(tensors, communication_op, logger=None):
         if logger is not None:
             logger.debug("Commmunication completed")
         with torch.no_grad():
-            for f, t in zip(
-                unflatten_tensors(flat_tensor, tensors_by_dtype[dtype]),
-                tensors_by_dtype[dtype],
-            ):
+            for f, t in zip(unflatten_tensors(flat_tensor, tensors_by_dtype[dtype]), tensors_by_dtype[dtype],):
                 t.copy_(f)
         if logger is not None:
             logger.debug("Unflatten completed")
@@ -159,7 +156,8 @@ class MultiProcessAdapter(logging.LoggerAdapter):
     """
     Creates an adapter to make logging for multiple processes cleaner.
     """
+
     def process(self, msg, kwargs):
         # use process_num from kwargs or the default given on instantiation
-        process_num = kwargs.pop('process_num', self.extra['process_num'])
-        return f'process: {process_num} {msg}', kwargs
+        process_num = kwargs.pop("process_num", self.extra["process_num"])
+        return f"process: {process_num} {msg}", kwargs

@@ -31,9 +31,7 @@ class Edge(object):
 
 
 class GraphManager(object):
-    def __init__(
-        self, rank, world_size, nprocs_per_node=1, local_rank=0, peers_per_itr=1
-    ):
+    def __init__(self, rank, world_size, nprocs_per_node=1, local_rank=0, peers_per_itr=1):
         assert int(peers_per_itr) >= 1
         self.rank = rank
         self.world_size = world_size
@@ -129,9 +127,7 @@ class GraphManager(object):
         """ Incerement group indices to point to the next out-peer """
         increment = self.peers_per_itr
         for i, group_index in enumerate(self._group_indices):
-            self._group_indices[i] = int(
-                (group_index + increment) % len(self.phone_book[self.rank])
-            )
+            self._group_indices[i] = int((group_index + increment) % len(self.phone_book[self.rank]))
 
     def _rotate_forward(self, r, p):
         """ Helper function returns peer that is p hops ahead of r """
@@ -171,9 +167,7 @@ class DynamicDirectedExponentialGraph(GraphManager):
 class NPeerDynamicDirectedExponentialGraph(GraphManager):
     def _make_graph(self):
         for rank in range(self.world_size):
-            for i in range(
-                0, int(mlog(self.world_size - 1, self._peers_per_itr + 1)) + 1
-            ):
+            for i in range(0, int(mlog(self.world_size - 1, self._peers_per_itr + 1)) + 1):
                 for j in range(1, self._peers_per_itr + 1):
                     distance_to_neighbor = j * ((self._peers_per_itr + 1) ** i)
                     f_peer = self._rotate_forward(rank, distance_to_neighbor)
@@ -203,14 +197,10 @@ class DynamicBipartiteExponentialGraph(GraphManager):
                     f_peer = self._rotate_forward(rank, 1 + 2 ** i)
                     b_peer = self._rotate_backward(rank, 1 + 2 ** i)
                 # create directory for non-passive peers
-                if not self.is_passive(rank) and (
-                    self.is_passive(f_peer) and self.is_passive(b_peer)
-                ):
+                if not self.is_passive(rank) and (self.is_passive(f_peer) and self.is_passive(b_peer)):
                     self._add_peers(rank, [f_peer, b_peer])
                 # create directory for passive peers
-                elif self.is_passive(rank) and (
-                    not (self.is_passive(f_peer) or self.is_passive(b_peer))
-                ):
+                elif self.is_passive(rank) and (not (self.is_passive(f_peer) or self.is_passive(b_peer))):
                     self._add_peers(rank, [f_peer, b_peer])
 
     def is_regular_graph(self):
@@ -257,14 +247,10 @@ class DynamicBipartiteLinearGraph(GraphManager):
                 f_peer = self._rotate_forward(rank, i)
                 b_peer = self._rotate_backward(rank, i)
                 # create directory for non-passive peers
-                if not self.is_passive(rank) and (
-                    self.is_passive(f_peer) and self.is_passive(b_peer)
-                ):
+                if not self.is_passive(rank) and (self.is_passive(f_peer) and self.is_passive(b_peer)):
                     self._add_peers(rank, [f_peer, b_peer])
                 # create directory for passive peers
-                elif self.is_passive(rank) and (
-                    not (self.is_passive(f_peer) or self.is_passive(b_peer))
-                ):
+                elif self.is_passive(rank) and (not (self.is_passive(f_peer) or self.is_passive(b_peer))):
                     self._add_peers(rank, [f_peer, b_peer])
 
     def is_regular_graph(self):

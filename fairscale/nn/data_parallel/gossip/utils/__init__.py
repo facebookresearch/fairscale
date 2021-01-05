@@ -6,6 +6,7 @@
 #
 
 from .helpers import (
+    MultiProcessAdapter,
     communicate,
     create_process_group,
     flatten_tensors,
@@ -13,5 +14,4 @@ from .helpers import (
     is_power_of,
     make_logger,
     unflatten_tensors,
-    MultiProcessAdapter,
 )
