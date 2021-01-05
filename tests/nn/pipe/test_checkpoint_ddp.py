@@ -22,6 +22,7 @@ from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from fairscale.nn.pipe.checkpoint import Checkpointing, Function, TensorOrTensors
 from fairscale.nn.pipe.microbatch import Batch
+from fairscale.utils.testing import skip_if_no_cuda, skip_if_single_gpu
 
 # This test is mainly for checking pytorch & checkpointing behavior. pipe's checkpointing
 # code is tested already in another file. Therefore, we can run this test less frequently.
@@ -30,8 +31,6 @@ run_test = False
 if os.getpid() % 100 == 42:
     run_test = True
 
-skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
 skip_if_not_needed = pytest.mark.skipif(not run_test, reason="Skipping due to test frequency")
 
 
