@@ -5,7 +5,6 @@
 # LICENSE file in the root directory of this source tree.
 #
 
-from .ad_psgd import BilatGossipDataParallel
 from .distributed import GossipDataParallel
 from .gossiper import PushPull, PushSum
 from .graph_manager import (
