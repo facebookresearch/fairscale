@@ -216,7 +216,12 @@ class OSS(Optimizer):
 
         return loss
 
-    def clip_grad_norm(self, max_norm: Union[float, int], norm_type: Union[float, int] = 2.0, filter_params_fn = None) -> torch.Tensor:
+    def clip_grad_norm(
+        self,
+        max_norm: Union[float, int],
+        norm_type: Union[float, int] = 2.0,
+        filter_params_fn: Callable[[chain[Parameter]], chain[Parameter]] = None,
+    ) -> torch.Tensor:
         """
         Clip all gradients at this point in time. The norm is computed over all gradients together, as if they were
         concatenated into a single vector. Gradients are modified in-place.
