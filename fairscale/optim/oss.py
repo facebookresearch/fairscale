@@ -220,7 +220,7 @@ class OSS(Optimizer):
         self,
         max_norm: Union[float, int],
         norm_type: Union[float, int] = 2.0,
-        filter_params_fn: Callable[[chain[Parameter]], chain[Parameter]] = None,
+        filter_params_fn: Callable[[Any], Any] = None,
     ) -> torch.Tensor:
         """
         Clip all gradients at this point in time. The norm is computed over all gradients together, as if they were
