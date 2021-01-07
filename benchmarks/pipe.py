@@ -28,7 +28,6 @@ from fairscale.optim import GradScaler
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
 
-
 try:
     from fairscale.optim import Adam  # type: ignore
 
@@ -86,8 +85,9 @@ def get_lm_model(args, device, config):
         layers.append(LazyModule(lambda: transformer_lm.LinearLayer(ninp, vocab_size, initrange)))
         model = layers
     else:
-        model = transformer_lm.TransformerLMSequential(vocab_size, ninp, nhead, nhid, dropout,
-                                                       initrange, ndecoder).to(device)
+        model = transformer_lm.TransformerLMSequential(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(
+            device
+        )
 
     return model
 
@@ -209,7 +209,7 @@ def get_fake_dataloader(lm_dataloader_len):
 
 
 def train(data_config, model, benchmark_config, args):
-    lm_dataloader,_,_ = data_config["data"]
+    lm_dataloader, _, _ = data_config["data"]
     criterion = benchmark_config["criterion"]
     vocab_size = benchmark_config["vocab_size"]
     optimizer = data_config["optimizer"]
@@ -240,18 +240,20 @@ def train(data_config, model, benchmark_config, args):
     total_tokens = 0
     total_tokens_per_log_interval = 0
     bptt = 2
+
     def get_batch(source):
         seq_len = len(source) - 1
         data = source[0:seq_len]
-        target = source[1:1+seq_len]
+        target = source[1 : 1 + seq_len]
         return data, target
+
     for i, batch in enumerate(lm_dataloader):
         if args.use_synthetic_data:
             source = batch["input"]
             target = batch["target"]
         else:
             source, target = get_batch(batch)
-        
+
         if args.max_batch and i > args.max_batch:
             break
         total_tokens += source.numel()
@@ -312,7 +314,7 @@ def evaluate(eval_model, data_source, criterion, ntokens):
     eval_model.eval()
     total_loss = 0.0
     # TODO(anj-s): Move this to the benchmark config if we want to benchmark evaluation.
-    bptt = 1
+    bptt = 35
 
     def get_batch(source, i, bptt):
         seq_len = min(bptt, len(source) - 1 - i)

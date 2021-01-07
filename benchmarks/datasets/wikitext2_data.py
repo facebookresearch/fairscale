@@ -1,14 +1,14 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
+import io
 import warnings
 
 import torch
+from torch.utils.data import Dataset
 import torchtext
 from torchtext.data.utils import get_tokenizer
 from torchtext.utils import download_from_url, extract_archive
 from torchtext.vocab import build_vocab_from_iterator
-import io
-from torch.utils.data import Dataset
 
 
 class SyntheticLMDataset(Dataset):
@@ -45,21 +45,20 @@ class SyntheticLMDataset(Dataset):
 
 
 class Wikitext2Data:
-
     def get_real_dataloaders():
         """Return dataloaders for training, testing and validation."""
 
-        url = 'https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip'
+        url = "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip"
         test_filepath, valid_filepath, train_filepath = extract_archive(download_from_url(url))
-        tokenizer = get_tokenizer('basic_english')
-        def data_process(raw_text_iter):
-            data = [torch.tensor([vocab[token] for token in tokenizer(item)],
-                                dtype=torch.long) for item in raw_text_iter]
-            return torch.cat(tuple(filter(lambda t: t.numel() > 0, data)))
-        vocab = build_vocab_from_iterator(map(tokenizer,
-                                            iter(io.open(train_filepath,
-                                                        encoding="utf8"))))
+        tokenizer = get_tokenizer("basic_english")
 
+        def data_process(raw_text_iter):
+            data = [
+                torch.tensor([vocab[token] for token in tokenizer(item)], dtype=torch.long) for item in raw_text_iter
+            ]
+            return torch.cat(tuple(filter(lambda t: t.numel() > 0, data)))
+
+        vocab = build_vocab_from_iterator(map(tokenizer, iter(io.open(train_filepath, encoding="utf8"))))
 
         train_dataset = data_process(iter(io.open(train_filepath, encoding="utf8")))
         valid_dataset = data_process(iter(io.open(valid_filepath, encoding="utf8")))
@@ -82,17 +81,10 @@ class Wikitext2Data:
             return data.to(device)
 
         total_batch_size = 256
-        train_dataloader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=total_batch_size, collate_fn=batchify
-        )
-        valid_dataloader = torch.utils.data.DataLoader(
-            valid_dataset, batch_size=total_batch_size, collate_fn=batchify
-        )
-        test_dataloader = torch.utils.data.DataLoader(
-            test_dataset, batch_size=total_batch_size, collate_fn=batchify
-        )
+        train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=total_batch_size, collate_fn=batchify)
+        valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size=total_batch_size, collate_fn=batchify)
+        test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=total_batch_size, collate_fn=batchify)
         return len(vocab.stoi), train_dataloader, valid_dataloader, test_dataloader
-
 
     def get_raw_real_data(device):
         """Return batched data from wikitext2 dataset for training, validation and testing."""
@@ -113,7 +105,6 @@ class Wikitext2Data:
 
             return ntokens, train_data, val_data, test_data
 
-
     def batchify(data, bsz, text_field, device):
         """Return batched data that is placed on the specified device."""
 
@@ -123,13 +114,10 @@ class Wikitext2Data:
         data = data.view(bsz, -1).t().contiguous()
         return data.to(device)
 
-
     def get_synthetic_dataset():
         return SyntheticLMDataset()
 
-
     def get_synthetic_dataloader(args):
-
         def collate_sentences_lm(samples):
 
             if len(samples) == 0:
@@ -152,11 +140,6 @@ class Wikitext2Data:
 
         lm_dataset = SyntheticLMDataset()
         lm_dataloader = torch.utils.data.DataLoader(
-            lm_dataset, batch_size=args.batch_size, shuffle=True,
-            num_workers=0, collate_fn=collate_sentences_lm)
+            lm_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_sentences_lm
+        )
         return lm_dataloader, lm_dataloader, lm_dataloader
-
-
-    
-
-    
