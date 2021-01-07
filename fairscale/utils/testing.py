@@ -33,6 +33,7 @@ import os
 import random
 import tempfile
 from typing import Any, Callable, Dict, List, Optional, Tuple
+import math
 
 import numpy
 import pytest
@@ -347,3 +348,101 @@ class GPT2(nn.Module):
         h = torch.mean(h, dim=0)  # average pool over sequence
         # return classification logits and generative logits
         return self.clf_head(h), logits
+
+
+class PassthroughModule(torch.nn.Module):
+    def __init__(self, single_input_module: nn.Module) -> None:
+        super().__init__()
+        self.module = single_input_module
+
+    def forward(self, inputs: Tuple[Any, Any]) -> Tuple[Any, Any]:  # type: ignore
+        return (self.module(inputs[0]), inputs[1])
+
+
+class ExpandInputModule(torch.nn.Module):
+    def __init__(self, single_input_module: nn.Module) -> None:
+        super().__init__()
+        self.module = single_input_module
+
+    def forward(self, inputs: Tuple[Any, Any]) -> Tuple[Any, Any]:  # type: ignore
+        return (self.module(inputs[0], inputs[1]), None)
+
+
+class MultiplyModule(torch.nn.Module):
+    # FIXME: this should probably be Functional
+    def __init__(self, factor: float) -> None:
+        super().__init__()
+        self.factor = factor
+
+    def forward(self, x: Any) -> Tuple[Any, Any]:  # type: ignore
+        return x * self.factor
+
+
+# Credits: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+# A vanilla pytorch implementation of the Transformer model, and the corresponding positional encoding module
+class TransformerModel(nn.Module):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+        super().__init__()
+        self.model_type = "Transformer"
+        self.pos_encoder = PositionalEncoding(ninp, dropout)
+        encoder_layers = nn.TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayers)
+        self.encoder = nn.Embedding(ntoken, ninp)
+        self.ninp = ninp
+        self.decoder = nn.Linear(ninp, ntoken)
+
+        self.init_weights()
+
+    def generate_square_subsequent_mask(self, sz: Any) -> Any:
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float("-inf")).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def init_weights(self) -> None:
+        initrange = 0.1
+        self.encoder.weight.data.uniform_(-initrange, initrange)
+        self.decoder.bias.data.zero_()
+        self.decoder.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, src: Any, src_mask: Any) -> None:
+        src = self.encoder(src) * math.sqrt(self.ninp)
+        src = self.pos_encoder(src)
+        output = self.transformer_encoder(src, src_mask)
+        output = self.decoder(output)
+        return output
+
+
+def generate_square_subsequent_mask(sz: Any) -> Any:
+    mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(mask == 0, float("-inf")).masked_fill(mask == 1, float(0.0))
+    return mask
+
+
+def get_sequential_transformer(ntoken, ninp, nhead, nhid, nlayers, dropout) -> nn.Sequential:
+    transformer = TransformerModel(ntoken, ninp, nhead, nhid, nlayers, dropout)  # type: ignore
+
+    return nn.Sequential(
+        PassthroughModule(transformer.encoder),
+        PassthroughModule(MultiplyModule(math.sqrt(ninp))),
+        PassthroughModule(transformer.pos_encoder),
+        ExpandInputModule(transformer.transformer_encoder),
+        PassthroughModule(transformer.decoder),
+    )
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        x = x + self.pe[: x.size(0), :]
+        return self.dropout(x)

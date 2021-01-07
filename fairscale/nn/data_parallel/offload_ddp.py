@@ -222,6 +222,7 @@ class ShardSyncLayer(torch.autograd.Function):
         ctx.n1_shard = n1_shard
         ctx.n2_shard = n2_shard
 
+        # FIXME: handle corner cases / type dependent
         outputs = inputs
 
         return outputs
