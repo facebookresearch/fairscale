@@ -11,16 +11,14 @@ import os
 import pprint
 import time
 
-from benchmark_dataset import BenchmarkLMDataset, collate_sentences_lm
-import datasets
-import models
+from datasets.wikitext2_data import Wikitext2Data
+from models import transformer_lm
 import numpy as np
 import torch
 from torch.distributed import rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
 
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
@@ -29,6 +27,7 @@ from fairscale.nn.pipe import LazyModule, pipe
 from fairscale.optim import GradScaler
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
+
 
 try:
     from fairscale.optim import Adam  # type: ignore
@@ -78,16 +77,17 @@ def get_lm_model(args, device, config):
 
     if args.lazy_construction:
         layers = [
-            LazyModule(lambda: models.EmbeddingLayer(vocab_size, ninp, initrange)),
-            LazyModule(lambda: models.PositionalEncodingLayer(ninp, dropout)),
+            LazyModule(lambda: transformer_lm.EmbeddingLayer(vocab_size, ninp, initrange)),
+            LazyModule(lambda: transformer_lm.PositionalEncodingLayer(ninp, dropout)),
         ]
         for _ in range(ndecoder):
-            layers.append(LazyModule(lambda: models.TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
+            layers.append(LazyModule(lambda: transformer_lm.TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
 
-        layers.append(LazyModule(lambda: models.LinearLayer(ninp, vocab_size, initrange)))
+        layers.append(LazyModule(lambda: transformer_lm.LinearLayer(ninp, vocab_size, initrange)))
         model = layers
     else:
-        model = models.TransformerLMSequntial(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
+        model = transformer_lm.TransformerLMSequential(vocab_size, ninp, nhead, nhid, dropout,
+                                                       initrange, ndecoder).to(device)
 
     return model
 
@@ -209,7 +209,7 @@ def get_fake_dataloader(lm_dataloader_len):
 
 
 def train(data_config, model, benchmark_config, args):
-    lm_dataloader = data_config["data"]
+    lm_dataloader,_,_ = data_config["data"]
     criterion = benchmark_config["criterion"]
     vocab_size = benchmark_config["vocab_size"]
     optimizer = data_config["optimizer"]
@@ -239,23 +239,35 @@ def train(data_config, model, benchmark_config, args):
 
     total_tokens = 0
     total_tokens_per_log_interval = 0
+    bptt = 2
+    def get_batch(source):
+        seq_len = len(source) - 1
+        data = source[0:seq_len]
+        target = source[1:1+seq_len]
+        return data, target
     for i, batch in enumerate(lm_dataloader):
+        if args.use_synthetic_data:
+            source = batch["input"]
+            target = batch["target"]
+        else:
+            source, target = get_batch(batch)
+        
         if args.max_batch and i > args.max_batch:
             break
-        total_tokens += batch["input"].numel()
+        total_tokens += source.numel()
 
         optimizer.zero_grad()
         try:
             if (pipe_group is None or pipe_group.rank() == 0) and not args.ddp_zero:
-                tmp = batch["input"].to(get_device(model, 0))
+                tmp = source.to(get_device(model, 0))
                 output = model(tmp)
             else:
-                output = model(batch["input"])
+                output = model(source)
         except Exception as e:
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
-            target = batch["target"].to(get_device(model, -1))
+            target = target.to(get_device(model, -1))
             output = output.to(target.device)
 
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
@@ -279,7 +291,7 @@ def train(data_config, model, benchmark_config, args):
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
             total_loss += loss.item()
             log_interval = 1
-            total_tokens_per_log_interval += batch["input"].numel()
+            total_tokens_per_log_interval += source.numel()
             if i % log_interval == 0 and i > 0:
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
@@ -300,7 +312,7 @@ def evaluate(eval_model, data_source, criterion, ntokens):
     eval_model.eval()
     total_loss = 0.0
     # TODO(anj-s): Move this to the benchmark config if we want to benchmark evaluation.
-    bptt = 35
+    bptt = 1
 
     def get_batch(source, i, bptt):
         seq_len = min(bptt, len(source) - 1 - i)
@@ -339,18 +351,14 @@ def verify_lm_run(wps):
 
 
 def benchmark_language_model(model_config, model, benchmark_config, args):
-    ntokens, train_data, val_data, test_data = model_config["data"]
-    optimizer = model_config["optimizer"]
-    criterion = benchmark_config["criterion"]
     epoch = 1
-
     print("-" * 110)
     print("| start of epoch {:1d}".format(epoch))
     print("-" * 110)
     start_time = time.time()
-    n_words, loss = train(data_config, model, benchmark_config, args)
+    n_words, loss = train(model_config, model, benchmark_config, args)
     elapsed_time = time.time() - start_time
-    wps = nwords / elapsed_time
+    wps = n_words / elapsed_time
     print("-" * 110)
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
@@ -392,11 +400,7 @@ def get_synthetic_dataloader(args):
     """Returns dataloader for synthetic data."""
 
     if args.model_name == "lm":
-        lm_dataset = BenchmarkLMDataset()
-        lm_dataloader = DataLoader(
-            lm_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_sentences_lm
-        )
-        return lm_dataloader
+        return Wikitext2Data.get_synthetic_dataloader(args)
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
@@ -405,10 +409,11 @@ def get_real_dataloaders(device, config):
     """Returns dataloaders for real data."""
 
     if args.model_name == "lm":
-        data = datasets.get_wikitext2_data(device)
-        ntokens, _, _, _ = data
+        # data = datasets.get_wikitext2_data(device)
+        data = Wikitext2Data.get_real_dataloaders()
+        ntokens, train_dataloader, valid_dataloader, test_dataloader = data
         config["vocab_size"] = ntokens
-        return data
+        return train_dataloader, valid_dataloader, test_dataloader
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
@@ -419,8 +424,8 @@ def create_model_config(args, config=None):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if args.use_synthetic_data:
         model, optimizer = get_model_and_optimizer(args, device, config)
-        dataloader = get_synthetic_dataloader(args)
-        return {"model": model, "optimizer": optimizer, "data": dataloader}
+        data = get_synthetic_dataloader(args)
+        return {"model": model, "optimizer": optimizer, "data": data}
     else:
         data = get_real_dataloaders(device, config)
         model, optimizer = get_model_and_optimizer(args, device, config)
@@ -443,7 +448,7 @@ def create_benchmark_config(model_name):
             "dropout": 0,
             "initrange": 0.1,
             "criterion": nn.CrossEntropyLoss(),
-            "lr": 0.01,  # learning rate
+            "lr": 0.001,  # learning rate
             "scaler": GradScaler(),
             "clip_value": 0.05,
         }
@@ -605,6 +610,7 @@ parser.add_argument(
 parser.add_argument(
     "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
 )
+# TODO(anjs): Fix this flag
 parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data for a sample training run.")
 parser.add_argument(
     # TODO(anj-s): In the process of adding more models and hence the requirement for a flag.
