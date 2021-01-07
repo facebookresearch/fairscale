@@ -69,6 +69,7 @@ class ShardedDataParallel(nn.Module):
         # Communication related attributes
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.world_size = dist.get_world_size(self.process_group)
+        self.world_scaling = 1.0 / self.world_size  # > 0
         self.reference_global_rank = OSS.get_global_rank(self.process_group, 0)  # picking rank 0 as the reference
         self.rank = dist.get_rank(self.process_group)
         self.global_rank = OSS.get_global_rank(self.process_group, self.rank)
@@ -185,7 +186,7 @@ class ShardedDataParallel(nn.Module):
 
                 # Make sure that this is not fired twice
                 self._grad_to_be_reduced[index] = False
-                param.grad /= self.world_size
+                param.grad.mul_(self.world_scaling)
 
                 # Future work includes clearing up the buffer if possible
                 def cleanup() -> None:
