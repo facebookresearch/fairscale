@@ -392,12 +392,11 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
     else:
         optimizer_state_dict = {}
 
-    optimizer_state_dict = optim.utils.broadcast_object(
-        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
-    )
+    optim_state = [optimizer_state_dict]
+    dist.broadcast_object_list(optim_state, src=reference_rank, group=dist.group.WORLD)
 
     # Load the optimizer state dict
-    optimizer.load_state_dict(optimizer_state_dict)
+    optimizer.load_state_dict(optim_state[0])
     dist.destroy_process_group()
 
 
