@@ -11,7 +11,7 @@ import os
 import pprint
 import time
 
-from datasets.wikitext2_data import Wikitext2Data, GoldenData
+from datasets.wikitext2_data import Wikitext2Data 
 from models import transformer_lm
 import numpy as np
 import torch
@@ -24,7 +24,6 @@ from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
 from fairscale.nn.pipe import LazyModule, pipe
-from fairscale.optim import GradScaler
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
 
@@ -208,11 +207,11 @@ def get_fake_dataloader(lm_dataloader_len):
     return FakeDataset()
 
 
-def train(data_config, model, benchmark_config, args):
-    lm_dataloader, _, _ = data_config["data"]
+def train(model_config, model, benchmark_config, args):
+    lm_dataloader, _, _ = model_config["data"]
     criterion = benchmark_config["criterion"]
     vocab_size = benchmark_config["vocab_size"]
-    optimizer = data_config["optimizer"]
+    optimizer = model_config["optimizer"]
 
     model.train()
     log_number_of_parameters(model)
@@ -242,17 +241,16 @@ def train(data_config, model, benchmark_config, args):
     bptt = 2
 
     def get_batch(source):
-        seq_len = len(source) - 1
+        seq_len = len(source)-1
         data = source[0:seq_len]
         target = source[1 : 1 + seq_len]
         return data, target
 
     for i, batch in enumerate(lm_dataloader):
-        if args.use_synthetic_data:
-            source = batch["input"]
-            target = batch["target"]
-        else:
-            source, target = get_batch(batch)
+        source, target = get_batch(batch)
+
+        print("source size ", source.size())
+        print("target size ", target.size())
 
         if args.max_batch and i > args.max_batch:
             break
@@ -407,12 +405,12 @@ def get_synthetic_dataloader(args):
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def get_real_dataloaders(device, config):
+def get_real_dataloaders(args, device, config):
     """Returns dataloaders for real data."""
 
     if args.model_name == "lm":
         # data = datasets.get_wikitext2_data(device)
-        data = Wikitext2Data.get_real_dataloaders()
+        data = Wikitext2Data.get_real_dataloaders(args)
         ntokens, train_dataloader, valid_dataloader, test_dataloader = data
         config["vocab_size"] = ntokens
         return train_dataloader, valid_dataloader, test_dataloader
@@ -429,7 +427,7 @@ def create_model_config(args, config=None):
         data = get_synthetic_dataloader(args)
         return {"model": model, "optimizer": optimizer, "data": data}
     else:
-        data = get_real_dataloaders(device, config)
+        data = get_real_dataloaders(args, device, config)
         model, optimizer = get_model_and_optimizer(args, device, config)
         return {
             "model": model,
@@ -442,7 +440,7 @@ def create_benchmark_config(model_name):
     """Return a dict with configurations required for benchmarking `model_name` model."""
 
     if model_name == "lm":
-        return GoldenData.get_benchmark_config()
+        return transformer_lm.GoldenData.get_benchmark_config()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 

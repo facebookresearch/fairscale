@@ -32,6 +32,7 @@ class SyntheticLMDataset(Dataset):
 
     def __getitem__(self, index):
         length = self.sizes[index]
+
         source = torch.randint(1, self.vocab_size, (length,))
         target = source.clone()
         return {
@@ -45,7 +46,7 @@ class SyntheticLMDataset(Dataset):
 
 
 class Wikitext2Data:
-    def get_real_dataloaders():
+    def get_real_dataloaders(args):
         """Return dataloaders for training, testing and validation."""
 
         url = "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip"
@@ -70,7 +71,7 @@ class Wikitext2Data:
 
         # TODO(anj-s): Batch size needs to be argument that we pass in.
         def batchify(data):
-            batch_size = 32
+            batch_size = args.batch_size
             data = torch.tensor(data)
             # Divide the dataset into bsz parts.
             nbatch = data.size(0) // batch_size
@@ -80,7 +81,8 @@ class Wikitext2Data:
             data = data.view(batch_size, -1).t().contiguous()
             return data.to(device)
 
-        total_batch_size = 256
+        seq_len = 512
+        total_batch_size = seq_len * args.batch_size
         train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=total_batch_size, collate_fn=batchify)
         valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size=total_batch_size, collate_fn=batchify)
         test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=total_batch_size, collate_fn=batchify)
@@ -118,28 +120,29 @@ class Wikitext2Data:
         return SyntheticLMDataset()
 
     def get_synthetic_dataloader(args):
-        def collate_sentences_lm(samples):
+        
+        # TODO(anj-s): We need to pass a device argument if we want this to work
+        # on multiple devices.
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-            if len(samples) == 0:
-                return {}
+        def batchify(data):
+                batch_size = args.batch_size
+                data = torch.tensor(data)
+                # Divide the dataset into bsz parts.
+                nbatch = data.size(0) // batch_size
+                # Trim off any extra elements that wouldn't cleanly fit (remainders).
+                data = data.narrow(0, 0, nbatch * batch_size)
+                # Evenly divide the data across the bsz batches.
+                data = data.view(batch_size, -1).t().contiguous()
+                return data.to(device)
 
-            id = torch.LongTensor([s["id"] for s in samples])
-            src_tokens = torch.stack([s["source"] for s in samples], 0)
-            tgt_tokens = torch.stack([s["target"] for s in samples], 0)
-            ntokens = len(samples) * len(samples[0]["target"])
-            src_lengths = torch.LongTensor([len(samples[0]["source"])] * len(samples))
-
-            batch = {
-                "id": id,
-                "nsentences": len(samples),
-                "ntokens": ntokens,
-                "input": src_tokens,
-                "target": tgt_tokens,
-            }
-            return batch
-
-        lm_dataset = SyntheticLMDataset()
+        # TODO(anj-s): Both seq_len and batch size should be part of the golden config.
+        seq_len = 512
+        total_batch_size = seq_len * args.batch_size
+        # vocab_size is 10000 and length of the real data is 2049990.
+        lm_dataset = torch.randint(1, 10000, (2049990,))
+        
         lm_dataloader = torch.utils.data.DataLoader(
-            lm_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_sentences_lm
+            lm_dataset, batch_size=total_batch_size, shuffle=True, num_workers=0, collate_fn=batchify
         )
         return lm_dataloader, lm_dataloader, lm_dataloader

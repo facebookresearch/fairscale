@@ -4,6 +4,7 @@ import math
 
 import torch
 import torch.nn as nn
+from fairscale.optim import GradScaler
 
 
 # TODO(anj-s): Identify if we need this initialization logic for the below wrapped layers.
@@ -102,6 +103,7 @@ class GoldenData:
             "lr": 0.001,  # learning rate
             "scaler": GradScaler(),
             "clip_value": 0.05,
+            "batch_size": 8,
         }
 
 
@@ -112,4 +114,6 @@ class GoldenData:
             "peak_mem_usage": [4061909504, 4050944, 10427392, 2031824896],
         }
 
+
     def get_golden_synthetic_stats():
+        pass
