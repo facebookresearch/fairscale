@@ -11,7 +11,7 @@ import os
 import pprint
 import time
 
-from datasets.wikitext2_data import Wikitext2Data
+from datasets.wikitext2_data import Wikitext2Data, GoldenData
 from models import transformer_lm
 import numpy as np
 import torch
@@ -85,7 +85,7 @@ def get_lm_model(args, device, config):
         layers.append(LazyModule(lambda: transformer_lm.LinearLayer(ninp, vocab_size, initrange)))
         model = layers
     else:
-        model = transformer_lm.TransformerLMSequential(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(
+        model = transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(
             device
         )
 
@@ -353,7 +353,7 @@ def verify_lm_run(wps):
 
 
 def benchmark_language_model(model_config, model, benchmark_config, args):
-    epoch = 1
+    epoch = benchmark_config["epochs"]
     print("-" * 110)
     print("| start of epoch {:1d}".format(epoch))
     print("-" * 110)
@@ -442,18 +442,7 @@ def create_benchmark_config(model_name):
     """Return a dict with configurations required for benchmarking `model_name` model."""
 
     if model_name == "lm":
-        return {
-            "vocab_size": 10000,
-            "ninp": 2048,  # embedding dimension
-            "nhid": 2048,  # the dimension of the feedforward network model in nn.TransformerEncoder
-            "nhead": 32,  # the number of heads in the multiheadattention models
-            "dropout": 0,
-            "initrange": 0.1,
-            "criterion": nn.CrossEntropyLoss(),
-            "lr": 0.001,  # learning rate
-            "scaler": GradScaler(),
-            "clip_value": 0.05,
-        }
+        return GoldenData.get_benchmark_config()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
@@ -476,7 +465,7 @@ def benchmark_single_process(args):
     del model
     del model_config["model"]
 
-    if args.use_synthetic_data:
+    if args.dry_run:
         train(model_config, pipe_model, benchmark_config, args)
     else:
         benchmark_language_model(model_config, pipe_model, benchmark_config, args)
@@ -612,8 +601,8 @@ parser.add_argument(
 parser.add_argument(
     "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
 )
-# TODO(anjs): Fix this flag
-parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data for a sample training run.")
+parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
+parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
     # TODO(anj-s): In the process of adding more models and hence the requirement for a flag.
     "--model_name",

@@ -72,7 +72,7 @@ class LinearLayer(nn.Linear):
         self.weight.data.uniform_(-initrange, initrange)
 
 
-class TransformerLMSequential(nn.Sequential):
+class TransformerLM(nn.Sequential):
     """A GPT-2 based nn.Sequential language model."""
 
     def __init__(self, ntokens, ninp, nhead, nhid, dropout, initrange, ndecoder):
@@ -84,4 +84,32 @@ class TransformerLMSequential(nn.Sequential):
             layers.append(TransformerDecoderLayer(ninp, nhead, nhid, dropout))
 
         layers.append(LinearLayer(ninp, ntokens, initrange))
-        super(TransformerLMSequential, self).__init__(*layers)
+        super(TransformerLM, self).__init__(*layers)
+
+
+class GoldenData:
+
+    def get_benchmark_config():
+        return {
+            "epochs": 1,
+            "vocab_size": 10000,
+            "ninp": 2048,  # embedding dimension
+            "nhid": 2048,  # the dimension of the feedforward network model in nn.TransformerEncoder
+            "nhead": 32,  # the number of heads in the multiheadattention models
+            "dropout": 0,
+            "initrange": 0.1,
+            "criterion": nn.CrossEntropyLoss(),
+            "lr": 0.001,  # learning rate
+            "scaler": GradScaler(),
+            "clip_value": 0.05,
+        }
+
+
+    def get_golden_real_stats():
+        return{
+            "avg_wps" : 36954.4,
+            "std_dev_wps" : 116.825,
+            "peak_mem_usage": [4061909504, 4050944, 10427392, 2031824896],
+        }
+
+    def get_golden_synthetic_stats():
