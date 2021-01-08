@@ -51,7 +51,7 @@ class OSS(Optimizer):
             optimizer to shard (default: SGD)
         group (group):
             torch.distributed group (default: group.WORLD)
-        bucket_cap (int):
+        broadcast_buffer_size (int):
             the max size of the buffer used to batch the small parameter tensors, in number of elements (default 16M).
     """
 
@@ -65,7 +65,7 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
-        bucket_cap: int = 2 ** 24,
+        broadcast_buffer_size: int = 2 ** 24,
         **default: Any,
     ):
 
@@ -101,7 +101,7 @@ class OSS(Optimizer):
 
         # Get the correct size for the buckets, cannot be bigger than the model
         model_size = sum([p.numel() for p in self.param_to_rank.keys()])
-        self.bucket_size = min(bucket_cap, model_size)
+        self.bucket_size = min(broadcast_buffer_size, model_size)
         logging.info(
             "Bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
                 self.bucket_size / 2 ** 20, model_size / 2 ** 20
