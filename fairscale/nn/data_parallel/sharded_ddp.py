@@ -23,8 +23,7 @@ from fairscale.optim.utils import Workhandle
 
 
 class ShardedDataParallel(nn.Module):
-    """
-    Wrap the model, and reduce the gradients to the right rank during the backward pass.
+    """ Wrap the model, and reduce the gradients to the right rank during the backward pass.
 
     - the partition is given by the sharded optimizer
     - wrap the base model with a model which knows where to reduce each gradient
@@ -46,6 +45,21 @@ class ShardedDataParallel(nn.Module):
             Synchronize the models in between the ranks when starting up. Not needed if each rank has the same seed,
             or the training restarts from a saved state
 
+
+    .. warning:
+        ShardedDDP implements gradient sharding, meaning that each rank only owns a unique shard of the model gradients
+        after the backward pass, in order to save memory and some communication bandwidth.
+
+    .. warning:
+        As a consequence of sharding, in case of gradient clipping, one has to use the `clip_grad_norm` exposed by
+        the `optimizer state sharding wrapper <fairscale.optim.OSS>`
+
+    .. warning:
+        As a consequence of sharding, after loss.backward() (or equivalent) each rank will have `None` in place of some param.grad
+
+    .. warning:
+        As a consequence of sharding, Pytorch and Apex AMP implementations will hang when used in conjunction with `ShardedDDP`.
+        One needs a `shard-aware grad scaler<ShardedGradScaler>`, which is proposed in `fairscale.optim.grad_scaler`, compatible with PytorchAMP.
     """
 
     def __init__(

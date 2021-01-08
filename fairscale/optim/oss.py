@@ -239,7 +239,6 @@ class OSS(Optimizer):
 
         .. warning: This needs to be called on all ranks, since synchronization primitives will be used
 
-        .. warning: Model paralelism -groups other than world- are not yet supported
         """
 
         # Compute the max norm for this shards's worth of gradients
