@@ -51,8 +51,8 @@ class OSS(Optimizer):
             optimizer to shard (default: SGD)
         group (group):
             torch.distributed group (default: group.WORLD)
-        broadcast_buffer_size (int):
-            the size of the buffer used to batch the small parameter tensors (default 128k).
+        bucket_cap (int):
+            the max size of the buffer used to batch the small parameter tensors, in number of elements (default 16M).
     """
 
     #: The optimizer used for a given shard
@@ -65,7 +65,7 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
-        broadcast_buffer_size: int = 2 ** 17,
+        bucket_cap: int = 2 ** 24,
         **default: Any,
     ):
 
@@ -99,11 +99,19 @@ class OSS(Optimizer):
         self._device = list(self.per_device_params.keys())[0]
         self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
 
-        self.bucket_size = broadcast_buffer_size
+        # Get the correct size for the buckets, cannot be bigger than the model
+        model_size = sum([p.numel() for p in self.param_to_rank.keys()])
+        self.bucket_size = min(bucket_cap, model_size)
+        logging.info(
+            "Bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
+                self.bucket_size / 2 ** 20, model_size / 2 ** 20
+            )
+        )
+
+        # Allocate one buffer per rank and per device to group the small parameters
         for device, per_device in self.per_device_params.items():
-            # Allocate one buffer per rank and per device to group the small parameters
             self.buckets[device] = [
-                torch.zeros(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device)
+                torch.zeros(self.bucket_size, dtype=per_device[0][0].dtype, device=device)
                 for _ in range(len(per_device))
             ]
         self.should_bucket_param: List[bool] = []
