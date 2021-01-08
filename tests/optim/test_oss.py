@@ -604,6 +604,21 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
         optimizer.step()
         optimizer.zero_grad()
 
+    # save and reload without taking any steps
+    sharded_optimizer2.consolidate_state_dict()
+    state_dict2 = sharded_optimizer2.state_dict()
+    sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+    sharded_optimizer2.load_state_dict(state_dict2)
+
+    # now take a step and check that parameters are equal
+    # take a step
+    run_grad_step(device, model_oss1, sharded_optimizer1)
+    run_grad_step(device, model_oss2, sharded_optimizer2)
+
+    # check that model parameters are equal
+    for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
+        assert torch.allclose(param1, param2), "parameters of the two identical models have diverged (before any steps)"
+
     # take a step
     run_grad_step(device, model_oss1, sharded_optimizer1)
     run_grad_step(device, model_oss2, sharded_optimizer2)
