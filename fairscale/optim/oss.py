@@ -266,7 +266,7 @@ class OSS(Optimizer):
         if norm_type == inf:
             total_norm = max(p.grad.detach().abs().max().to(self._device) for p in local_params)  # type: ignore
             # all reduce over data parallel and model parallel workers
-            dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX)
+            dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=dist.group.WORLD)
         else:
             local_norm = torch.norm(
                 input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type, dtype=torch.float32).to(self._device) for p in local_params]),  # type: ignore
