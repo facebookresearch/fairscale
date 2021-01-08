@@ -11,7 +11,7 @@
 import copy
 from math import inf
 import tempfile
-from typing import Type
+from typing import Type, cast
 import unittest
 
 import numpy as np
@@ -691,10 +691,12 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                 for p, ddp_p in zip(pg["params"], ddp_pg["params"]):
                     assert torch.allclose(
                         p, ddp_p, atol=1e-3
-                    ), f"Model parameters differ in between Pytorch optim and OSS {p} {ddp_p}"
+                    ), f"Model parameters differ in between Pytorch optim and OSS \n{p} {ddp_p}\nworld size {world_size}"
 
             for b, ddp_b in zip(sharded_ddp_model.buffers(), ddp_model.buffers()):
-                assert torch.allclose(b, ddp_b, atol=1e-3), "Model buffers differ in between Pytorch optim and OSS"
+                assert torch.allclose(
+                    b, ddp_b
+                ), f"Model buffers differ in between Pytorch optim and OSS\nworld size {world_size}"
 
         # The model should be synchronized in between the ranks at construction time, check that
         check_same_model_params()
@@ -715,8 +717,12 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                 sharded_loss.backward()
                 return sharded_loss
 
-            _ = ddp_optimizer.step(closure=closure_ddp)
-            _ = sharded_optimizer.step(closure=closure_sharded)
+            loss_ddp = cast(torch.Tensor, ddp_optimizer.step(closure=closure_ddp))
+            loss_sharded_optim = cast(torch.Tensor, sharded_optimizer.step(closure=closure_sharded))
+
+            assert torch.allclose(
+                loss_ddp, loss_sharded_optim
+            ), f"Losses differ in between Pytorch optim and OSS\nworld size {world_size}"
 
             check_same_model_params()
 
