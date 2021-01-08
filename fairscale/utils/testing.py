@@ -153,7 +153,7 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
         _, filename_rpc = tempfile.mkstemp()
 
         # (lefaudeux) Let mp handle the process joining, join=False and handling context has been unstable in the past
-        mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)
+        mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)  # type: ignore
 
 
 def worker_process(
