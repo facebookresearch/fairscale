@@ -206,7 +206,6 @@ class ShardedDataParallel(nn.Module):
                 # Opportunistically try to empty the queue
                 optimizer._try_consume_work_handle()
 
-
                 # If all the reduce operations have been called,
                 # make sure that all the asynchronous calls have concluded before moving on
                 # and execute the delayed actions (release gradients, unroll the buckets)
