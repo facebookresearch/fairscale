@@ -101,6 +101,8 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
     """
 
     print(f"dist init r={rank}, world={world_size}")
+    os.environ["MASTER_ADDR"] = "localhost"  # compatibility, only required for torch1.5
+    os.environ["MASTER_PORT"] = "10638"  # compatibility, only required for torch1.5
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
     url = "file://" + filename

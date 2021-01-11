@@ -390,9 +390,9 @@ class OSS(Optimizer):
                 global_rank = self.get_global_rank(self.group, rank)
 
                 if _torch_broadcast_object:
-                    replica_state = [0]
-                    dist.broadcast_object_list(replica_state, src=global_rank, group=self.group)
-                    replica_state = replica_state[0]
+                    replica_state_l = [0]
+                    dist.broadcast_object_list(replica_state_l, src=global_rank, group=self.group)
+                    replica_state = replica_state_l[0]
                 else:
                     replica_state = broadcast_object(
                         torch.tensor([0], dtype=torch.uint8, device=self._device),
