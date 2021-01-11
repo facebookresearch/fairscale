@@ -336,8 +336,7 @@ class OSS(Optimizer):
             if rank == self.rank:
                 # Send the state to the reference replica
                 logging.debug(
-                    "Sending the sharded optimizer state to the reference replica from rank %s",
-                    rank,
+                    "Sending the sharded optimizer state to the reference replica from rank %s", rank,
                 )
                 dist.broadcast_object_list([local_cpu_state], src=self.global_rank, group=self.group)
             else:
@@ -525,10 +524,7 @@ class OSS(Optimizer):
 
         i_param = 0
 
-        for (
-            device,
-            device_params,
-        ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
+        for (device, device_params,) in self.per_device_params.items():  # all the params on this device (inc all ranks)
             buckets = self.buckets[device]
             # Bucket and issue all the async calls
             for (src_rank, params), bucket in zip(enumerate(device_params), buckets):
