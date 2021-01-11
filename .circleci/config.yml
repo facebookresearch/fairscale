@@ -43,7 +43,7 @@ install_dep_15: &install_dep_15
       name: Install Dependencies
       command: |
         sudo apt-get install -y libopenmpi-dev
-        pip install --progress-bar off -r requirements-test.txt\
+        pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off torch==1.5.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env

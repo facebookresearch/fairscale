@@ -16,7 +16,7 @@ import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
-from .utils import Bucket, Workhandle, broadcast_object, recursive_copy_to_device
+from .utils import Bucket, Workhandle, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
@@ -26,10 +26,12 @@ else:
     _params_t = Any
 
 try:
-    from torch.distributed import broadcast_object_list
+    from torch.distributed import broadcast_object_list  # noqa
 
     _torch_broadcast_object = True
 except ImportError:
+    from .utils import broadcast_object
+
     _torch_broadcast_object = False
 
 
