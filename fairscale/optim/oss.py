@@ -336,7 +336,8 @@ class OSS(Optimizer):
             if rank == self.rank:
                 # Send the state to the reference replica
                 logging.debug(
-                    "Sending the sharded optimizer state to the reference replica from rank %s", rank,
+                    "Sending the sharded optimizer state to the reference replica from rank %s",
+                    rank,
                 )
                 dist.broadcast_object_list([local_cpu_state], src=self.global_rank, group=self.group)
             else:
@@ -524,7 +525,10 @@ class OSS(Optimizer):
 
         i_param = 0
 
-        for (device, device_params,) in self.per_device_params.items():  # all the params on this device (inc all ranks)
+        for (
+            device,
+            device_params,
+        ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
             buckets = self.buckets[device]
             # Bucket and issue all the async calls
             for (src_rank, params), bucket in zip(enumerate(device_params), buckets):
@@ -554,7 +558,7 @@ class OSS(Optimizer):
         self._consume_work_handles()
 
     def _consume_work_handles(self) -> None:
-        """ Consume all the futures which are tied to this optimizer's buckets.
+        """Consume all the futures which are tied to this optimizer's buckets.
         We start from the first/older ones, since they are the most likely to be ready and non-blocking
         """
 
@@ -565,15 +569,14 @@ class OSS(Optimizer):
                 work_handle.callback()
 
     def _try_consume_work_handle(self) -> None:
-        """ Try to consume the oldest future. This is non blocking, if not ready we'll pass
-        """
+        """Try to consume the oldest future. This is non blocking, if not ready we'll pass"""
         while len(self.work_handles) > 0 and self.work_handles[0].handle.is_completed():
             work_handle = self.work_handles.popleft()
             if work_handle.callback is not None:
                 work_handle.callback()
 
     def _setup_bucket_strategy(self) -> None:
-        """  Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
+        """Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
         (smallest first), the bucket will hold the smallest elements, the remaining ones will be directly sent
         over the wire.
 
@@ -607,6 +610,9 @@ class OSS(Optimizer):
                         offset = offset_next
                     else:
                         self.should_bucket_param.append(False)
+
+                # Resize the bucket to remove lost space in the end
+                self.buckets[device][dst_rank].resize_(offset)
 
         # Determine the max work handles in flight:
         # - all the direct reduce/broadcast
