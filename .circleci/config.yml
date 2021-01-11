@@ -71,6 +71,15 @@ install_dep_17: &install_dep_17
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -m torch.utils.collect_env
 
+install_dep_17_cpu: &install_dep_17_cpu
+  - run:
+      name: Install Dependencies
+      command: |
+        sudo apt-get install -y libopenmpi-dev
+        pip install --progress-bar off -r requirements-test.txt
+        pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
+        python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -m torch.utils.collect_env
 
 install_repo_cpu: &install_repo_cpu
   - run:
@@ -159,7 +168,7 @@ jobs:
           keys:
             - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17
+      - <<: *install_dep_17_cpu
 
       - save_cache:
           paths:
