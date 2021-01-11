@@ -50,7 +50,7 @@ class Wikitext2Data:
         """Return dataloaders for training, testing and validation."""
 
         url = "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip"
-        test_filepath, valid_filepath, train_filepath = extract_archive(download_from_url(url))
+        test_filepath, valid_filepath, train_filepath = extract_archive(download_from_url(url, root="/tmp"))
         tokenizer = get_tokenizer("basic_english")
 
         def data_process(raw_text_iter):

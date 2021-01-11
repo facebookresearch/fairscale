@@ -17,8 +17,8 @@ import numpy as np
 import torch
 from torch.distributed import rpc
 import torch.multiprocessing as mp
-import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim import Adam
 
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
@@ -27,14 +27,15 @@ from fairscale.nn.pipe import LazyModule, pipe
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
 
-try:
-    from fairscale.optim import Adam  # type: ignore
+can_benchmark = True
+# try:
+#     from fairscale.optim import Adam  # type: ignore
 
-    can_benchmark = True
-except ImportError:
-    from torch.optim import Adam  # type: ignore
+#     can_benchmark = True
+# except ImportError:
+#     from torch.optim import Adam  # type: ignore
 
-    can_benchmark = False
+#     can_benchmark = False
 
 
 def init_random_seed(seed: int):
@@ -246,10 +247,6 @@ def train(model_config, model, benchmark_config, args):
 
     for i, batch in enumerate(lm_dataloader):
         source, target = get_batch(batch)
-
-        print("source size ", source.size())
-        print("target size ", target.size())
-
         if args.max_batch and i > args.max_batch:
             break
         total_tokens += source.numel()
@@ -332,23 +329,36 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
-def verify_lm_run(wps):
+def verify_lm_run(wps, golden_config):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
     # Assert that words per second is within 3 standard deviations of the average
-    # of six golden runs
-    assert wps > 36954.4 - (3 * 116.825)
+    # of five golden runs
+    print("Throughput(wps) is {:.2f}.".format(wps))
+    if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
+        raise RuntimeError(
+            "Throughput(wps):{:.2f} is below the golden threshold of an "
+            "average value of {:.2f} and standard dev of {:.2f}.".format(
+                wps, golden_config["avg_wps"], golden_config["std_dev_wps"]
+            )
+        )
 
     for i in range(4):
         print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]))
 
     # Assert that memory usage on each GPU is within 10% of golden run
     # Right-hand-side is golden run bytes * 110%
-    for i, golden_ref in zip(range(4), [4061909504, 4050944, 10427392, 2031824896]):
-        assert torch.cuda.memory_stats(i)["allocated_bytes.all.peak"] < golden_ref * 1.1
+    for i, golden_ref in zip(range(4), golden_config["peak_mem_usage"]):
+        current_device_usage = torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]
+        if not current_device_usage < golden_ref * 1.1:
+            raise RuntimeError(
+                "Peak memory usage for cuda device {:d} is {:d} which"
+                "is less than golden reference value of {:d}".format(i, current_device_usage, golden_ref)
+            )
 
 
 def benchmark_language_model(model_config, model, benchmark_config, args):
+    golden_config = get_golden_config(args.model_name)
     epoch = benchmark_config["epochs"]
     print("-" * 110)
     print("| start of epoch {:1d}".format(epoch))
@@ -361,10 +371,11 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
 
+    print("benchmarking ", can_benchmark, len(model.balance))
     if can_benchmark and len(model.balance) == 4:
 
         if args.model_name == "lm":
-            verify_lm_run(wps)
+            verify_lm_run(wps, golden_config)
         else:
             raise RuntimeError("Unrecognized args.model_name " % args.model_name)
 
@@ -439,6 +450,15 @@ def create_benchmark_config(model_name):
 
     if model_name == "lm":
         return transformer_lm.GoldenData.get_benchmark_config()
+    else:
+        raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
+
+
+def get_golden_config(model_name):
+    """Return a dict with the golden data for throughput and memory usage."""
+
+    if model_name == "lm":
+        return transformer_lm.GoldenData.get_golden_real_stats()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
