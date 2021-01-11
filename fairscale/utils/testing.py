@@ -129,10 +129,6 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
         )
 
     else:
-        # Needed for torch 1.5
-        os.environ["MASTER_ADDR"] = "127.0.0.1"
-        os.environ["MASTER_PORT"] = "10638"
-
         if world_size > 1:
             # TensorPipe is not available in Torch 1.5
             rpc.init_rpc(
@@ -169,12 +165,6 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
 
         # (lefaudeux) Let mp handle the process joining, join=False and handling context has been unstable in the past
         mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)
-
-        try:
-            os.remove(filename)
-            os.remove(filename_rpc)
-        except FileNotFoundError:
-            pass
 
 
 def worker_process(
@@ -252,9 +242,8 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
             if "OMPI_COMM_WORLD_RANK" in os.environ:
                 os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
                 os.environ["WORLD_SIZE"] = os.environ["OMPI_COMM_WORLD_SIZE"]
-                os.environ["MASTER_ADDR"] = "localhost"
-                os.environ["MASTER_PORT"] = "10638"
-                torch.distributed.init_process_group("mpi")
+                _, filename = tempfile.mkstemp()
+                torch.distributed.init_process_group("mpi", init_method=f"file://{filename}")
                 world_size = torch.distributed.get_world_size()
                 destroy_model_parallel()
                 initialize_model_parallel(1, world_size)
