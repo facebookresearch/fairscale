@@ -166,6 +166,7 @@ def worker_process(
 
     if not dist_init(rank, world_size, filename, filename_rpc):
         logging.warning("failed initializing torch distributed")
+        teardown()
         return
 
     kwargs = {}
@@ -237,6 +238,7 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
                 os.environ["MASTER_PORT"] = "10638"
                 torch.distributed.init_process_group("mpi")
                 world_size = torch.distributed.get_world_size()
+                destroy_model_parallel()
                 initialize_model_parallel(1, world_size)
                 torch.cuda.set_device(torch.distributed.get_rank() % torch.cuda.device_count())
                 if world_size in world_sizes:
