@@ -48,6 +48,8 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
     return value
 
 
+# backward compatibility - this is needed for torch 1.5 which does not expose this functionality
+# FIXME: to be dropped alongside torch1.5 support, when time comes
 def broadcast_object(
     obj: Any, src_rank: int, group: object = dist.group.WORLD, dist_device: torch.device = torch.device("cpu")
 ) -> Any:
