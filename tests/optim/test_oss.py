@@ -27,6 +27,15 @@ from fairscale.utils.testing import skip_if_no_cuda, skip_if_single_gpu
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
 
+try:
+    from torch.distributed import broadcast_object_list  # noqa
+
+    _torch_broadcast_object = True
+except ImportError:
+    from fairscale.optim.utils import broadcast_object  # noqa
+
+    _torch_broadcast_object = False
+
 
 def dist_init(rank, world_size, tempfile_name, backend=BACKEND):
     url = "file://" + tempfile_name
@@ -394,10 +403,16 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
         optimizer_state_dict = {}
 
     optim_state = [optimizer_state_dict]
-    dist.broadcast_object_list(optim_state, src=reference_rank, group=dist.group.WORLD)
+    if _torch_broadcast_object:
+        dist.broadcast_object_list(optim_state, src=reference_rank, group=dist.group.WORLD)
+        optimizer_state_dict = optim_state[0]
+    else:
+        optimizer_state_dict = optim.utils.broadcast_object(
+            optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
+        )
 
     # Load the optimizer state dict
-    optimizer.load_state_dict(optim_state[0])
+    optimizer.load_state_dict(optimizer_state_dict)
     dist.destroy_process_group()
 
 
