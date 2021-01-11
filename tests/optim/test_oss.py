@@ -11,6 +11,7 @@
 import copy
 from math import inf
 import tempfile
+from typing import Type, cast
 import unittest
 
 import numpy as np
@@ -392,12 +393,11 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
     else:
         optimizer_state_dict = {}
 
-    optimizer_state_dict = optim.utils.broadcast_object(
-        optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
-    )
+    optim_state = [optimizer_state_dict]
+    dist.broadcast_object_list(optim_state, src=reference_rank, group=dist.group.WORLD)
 
     # Load the optimizer state dict
-    optimizer.load_state_dict(optimizer_state_dict)
+    optimizer.load_state_dict(optim_state[0])
     dist.destroy_process_group()
 
 
@@ -604,6 +604,21 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
         optimizer.step()
         optimizer.zero_grad()
 
+    # save and reload without taking any steps
+    sharded_optimizer2.consolidate_state_dict()
+    state_dict2 = sharded_optimizer2.state_dict()
+    sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+    sharded_optimizer2.load_state_dict(state_dict2)
+
+    # now take a step and check that parameters are equal
+    # take a step
+    run_grad_step(device, model_oss1, sharded_optimizer1)
+    run_grad_step(device, model_oss2, sharded_optimizer2)
+
+    # check that model parameters are equal
+    for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
+        assert torch.allclose(param1, param2), "parameters of the two identical models have diverged (before any steps)"
+
     # take a step
     run_grad_step(device, model_oss1, sharded_optimizer1)
     run_grad_step(device, model_oss2, sharded_optimizer2)
@@ -662,3 +677,80 @@ def test_state_dict_distributed():
     mp.spawn(
         run_state_dict_distributed, args=(world_size, temp_file_name), nprocs=world_size, join=True,
     )
+
+
+def run_ddp_parity(rank, world_size, backend, temp_file_name):
+    url = "file://" + temp_file_name
+    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+
+    device = torch.device("cuda")
+    torch.cuda.set_device(rank)
+    torch.manual_seed(rank)
+    np.random.seed(rank)
+
+    def check_optimizer_equivalence(optimizer: Type[torch.optim.Optimizer]):
+        # Any model works. Add one different buffer per rank
+        model = torch.nn.Sequential(torch.nn.Linear(2, 3), torch.nn.Linear(3, 3), torch.nn.Linear(3, 3),)
+        model.register_buffer("test_buffer", torch.ones((1)) * rank)
+        model.to(device)
+
+        sharded_optimizer = optim.OSS(params=model.parameters(), optim=optimizer, lr=1e-3)
+        sharded_ddp_model = DDP(module=model, device_ids=[rank], broadcast_buffers=True)
+
+        ddp_model_single = copy.deepcopy(model)
+        ddp_optimizer = optimizer(ddp_model_single.parameters(), lr=1e-3)
+        ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True)
+
+        def check_same_model_params():
+            for pg, ddp_pg in zip(sharded_optimizer.param_groups, ddp_optimizer.param_groups):
+                for p, ddp_p in zip(pg["params"], ddp_pg["params"]):
+                    assert torch.allclose(
+                        p, ddp_p, atol=1e-3
+                    ), f"Model parameters differ in between Pytorch optim and OSS \n{p} {ddp_p}\nworld size {world_size}"
+
+            for b, ddp_b in zip(sharded_ddp_model.buffers(), ddp_model.buffers()):
+                assert torch.allclose(
+                    b, ddp_b
+                ), f"Model buffers differ in between Pytorch optim and OSS\nworld size {world_size}"
+
+        # The model should be synchronized in between the ranks at construction time, check that
+        check_same_model_params()
+
+        # The models should stay the same in between the ranks
+        for i in range(20):
+            input_tensor = torch.rand((64, 2)).to(device)
+
+            def closure_ddp(input_tensor=input_tensor):
+                ddp_optimizer.zero_grad()
+                ddp_loss = ddp_model(input_tensor).abs().sum()
+                ddp_loss.backward()
+                return ddp_loss
+
+            def closure_sharded(input_tensor=input_tensor):
+                sharded_optimizer.zero_grad()
+                sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
+                sharded_loss.backward()
+                return sharded_loss
+
+            loss_ddp = cast(torch.Tensor, ddp_optimizer.step(closure=closure_ddp))
+            loss_sharded_optim = cast(torch.Tensor, sharded_optimizer.step(closure=closure_sharded))
+
+            assert torch.allclose(
+                loss_ddp, loss_sharded_optim
+            ), f"Losses differ in between Pytorch optim and OSS\nworld size {world_size}"
+
+            check_same_model_params()
+
+    for opt in [torch.optim.SGD, torch.optim.Adam]:
+        check_optimizer_equivalence(opt)
+
+    dist.destroy_process_group()
+
+
+@skip_if_no_cuda
+@skip_if_single_gpu
+def test_ddp_parity():
+    temp_file_name = tempfile.mkstemp()[1]
+    world_size = torch.cuda.device_count()
+    backend = dist.Backend.NCCL
+    mp.spawn(run_ddp_parity, args=(world_size, backend, temp_file_name), nprocs=world_size, join=True)
