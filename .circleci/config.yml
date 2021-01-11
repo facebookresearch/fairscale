@@ -159,7 +159,7 @@ jobs:
           keys:
             - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17_cpu
+      - <<: *install_dep_17
 
       - save_cache:
           paths:
@@ -279,7 +279,7 @@ jobs:
           keys:
             - cache-key-gpu17-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17_gpu
+      - <<: *install_dep_17
 
       - save_cache:
           paths:
@@ -316,7 +316,7 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17_gpu
+      - <<: *install_dep_17
 
       - save_cache:
           paths:
