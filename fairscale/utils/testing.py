@@ -100,21 +100,26 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
     .. warning: This limits the usecase to all ranks being on the same node
     """
 
+    try:
+        torch.distributed.rpc.shutdown()
+    except Exception:
+        pass
+
     print(f"dist init r={rank}, world={world_size}")
+
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
     url = "file://" + filename
+    url_rpc = "file://" + filename_rpc
 
     if torch_version() >= (1, 6, 0):
         backend = "nccl" if torch.cuda.is_available() else "gloo"
-
         if backend == "nccl" and torch.cuda.device_count() < world_size:
             logging.warning("Requested world size cannot be reached on this machine, not enough GPUs")
             return False
 
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
 
-        url_rpc = "file://" + filename_rpc
         rpc.init_rpc(
             f"Test{rank}",
             rank=rank,
@@ -125,7 +130,13 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
 
     else:
         if world_size > 1:
-            rpc.init_rpc(f"Test{rank}", rank=rank, world_size=world_size)
+            # TensorPipe is not available in Torch 1.5
+            rpc.init_rpc(
+                name=f"Test{rank}",
+                rank=rank,
+                world_size=world_size,
+                rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(init_method=url_rpc),
+            )
         elif torch.cuda.is_available():
             torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size, init_method=url)
         else:
@@ -153,7 +164,7 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
         _, filename_rpc = tempfile.mkstemp()
 
         # (lefaudeux) Let mp handle the process joining, join=False and handling context has been unstable in the past
-        mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)  # type: ignore
+        mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)
 
 
 def worker_process(
@@ -163,6 +174,7 @@ def worker_process(
 
     if not dist_init(rank, world_size, filename, filename_rpc):
         logging.warning("failed initializing torch distributed")
+        teardown()
         return
 
     kwargs = {}
@@ -195,7 +207,8 @@ def teardown() -> None:
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
     try:
-        torch.distributed.rpc.shutdown()
+        # torch 1.5 hangs on shutdown if waiting for all processes
+        torch.distributed.rpc.shutdown(graceful=False)
     except Exception:
         pass
 
@@ -230,10 +243,10 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
             if "OMPI_COMM_WORLD_RANK" in os.environ:
                 os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
                 os.environ["WORLD_SIZE"] = os.environ["OMPI_COMM_WORLD_SIZE"]
-                os.environ["MASTER_ADDR"] = "localhost"
-                os.environ["MASTER_PORT"] = "10638"
-                torch.distributed.init_process_group("mpi")
+                _, filename = tempfile.mkstemp()
+                torch.distributed.init_process_group("mpi", init_method=f"file://{filename}")
                 world_size = torch.distributed.get_world_size()
+                destroy_model_parallel()
                 initialize_model_parallel(1, world_size)
                 torch.cuda.set_device(torch.distributed.get_rank() % torch.cuda.device_count())
                 if world_size in world_sizes:

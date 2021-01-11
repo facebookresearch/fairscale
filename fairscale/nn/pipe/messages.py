@@ -4,11 +4,11 @@
 # LICENSE file in the root directory of this source tree.
 
 from abc import ABC
+from dataclasses import dataclass
 from queue import Empty as QueueEmpty
 from queue import Queue
 from typing import Dict, List, Optional
 
-from dataclasses import dataclass
 import torch
 
 from fairscale.nn.model_parallel import get_pipeline_parallel_group

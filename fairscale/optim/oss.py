@@ -25,6 +25,15 @@ if TYPE_CHECKING:  # pragma: no cover
 else:
     _params_t = Any
 
+try:
+    from torch.distributed import broadcast_object_list  # noqa
+
+    _torch_broadcast_object = True
+except ImportError:
+    from .utils import broadcast_object
+
+    _torch_broadcast_object = False
+
 
 class OSS(Optimizer):
     """Wraps an arbitrary :class:`optim.Optimizer <torch.optim.Optimizer>`
@@ -339,12 +348,27 @@ class OSS(Optimizer):
                 logging.debug(
                     "Sending the sharded optimizer state to the reference replica from rank %s", rank,
                 )
-                dist.broadcast_object_list([local_cpu_state], src=self.global_rank, group=self.group)
+                if _torch_broadcast_object:
+                    # torch native object broadcast
+                    dist.broadcast_object_list([local_cpu_state], src=self.global_rank, group=self.group)
+                else:
+                    # legacy compatibility for old torch versions
+                    broadcast_object(
+                        self.local_state_dict(), src_rank=self.global_rank, group=self.group, dist_device=self._device
+                    )
             else:
                 global_rank = self.get_global_rank(self.group, rank)
 
                 # Discard this tensor/rank, broadcast necessary for syncing and because NCCL does not support gather
-                dist.broadcast_object_list([0], src=global_rank, group=self.group)
+                if _torch_broadcast_object:
+                    dist.broadcast_object_list([0], src=global_rank, group=self.group)
+                else:
+                    broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        src_rank=global_rank,
+                        group=self.group,
+                        dist_device=self._device,
+                    )
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
         """Collect all the state shards, in CPU memory."""
@@ -358,16 +382,35 @@ class OSS(Optimizer):
                 )
 
                 # Sync with other replicas
-                dist.broadcast_object_list([0], src=self.global_rank, group=self.group)
+                if _torch_broadcast_object:
+                    # torch native object broadcast
+                    dist.broadcast_object_list([0], src=self.global_rank, group=self.group)
+                else:
+                    # legacy compatibility for old torch versions
+                    broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        src_rank=self.global_rank,
+                        group=self.group,
+                        dist_device=self._device,
+                    )
             else:
                 # Fetch the optim state from the other replicas
                 global_rank = self.get_global_rank(self.group, rank)
 
-                replica_state = [0]
-                dist.broadcast_object_list(replica_state, src=global_rank, group=self.group)
+                if _torch_broadcast_object:
+                    replica_state_l = [0]
+                    dist.broadcast_object_list(replica_state_l, src=global_rank, group=self.group)
+                    replica_state = replica_state_l[0]
+                else:
+                    replica_state = broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        src_rank=global_rank,
+                        group=self.group,
+                        dist_device=self._device,
+                    )
 
                 all_states.append(
-                    recursive_copy_to_device(replica_state[0], non_blocking=True, device=torch.device("cpu"))
+                    recursive_copy_to_device(replica_state, non_blocking=True, device=torch.device("cpu"))
                 )
 
                 logging.debug("State from rank %s received", rank)
