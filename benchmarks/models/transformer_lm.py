@@ -4,6 +4,7 @@ import math
 
 import torch
 import torch.nn as nn
+
 from fairscale.optim import GradScaler
 
 
@@ -89,7 +90,6 @@ class TransformerLM(nn.Sequential):
 
 
 class GoldenData:
-
     def get_benchmark_config():
         return {
             "epochs": 1,
@@ -106,14 +106,12 @@ class GoldenData:
             "batch_size": 8,
         }
 
-
     def get_golden_real_stats():
-        return{
-            "avg_wps" : 36954.4,
-            "std_dev_wps" : 116.825,
+        return {
+            "avg_wps": 36954.4,
+            "std_dev_wps": 116.825,
             "peak_mem_usage": [4061909504, 4050944, 10427392, 2031824896],
         }
-
 
     def get_golden_synthetic_stats():
         pass

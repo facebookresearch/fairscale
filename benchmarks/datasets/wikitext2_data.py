@@ -120,28 +120,28 @@ class Wikitext2Data:
         return SyntheticLMDataset()
 
     def get_synthetic_dataloader(args):
-        
+
         # TODO(anj-s): We need to pass a device argument if we want this to work
         # on multiple devices.
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         def batchify(data):
-                batch_size = args.batch_size
-                data = torch.tensor(data)
-                # Divide the dataset into bsz parts.
-                nbatch = data.size(0) // batch_size
-                # Trim off any extra elements that wouldn't cleanly fit (remainders).
-                data = data.narrow(0, 0, nbatch * batch_size)
-                # Evenly divide the data across the bsz batches.
-                data = data.view(batch_size, -1).t().contiguous()
-                return data.to(device)
+            batch_size = args.batch_size
+            data = torch.tensor(data)
+            # Divide the dataset into bsz parts.
+            nbatch = data.size(0) // batch_size
+            # Trim off any extra elements that wouldn't cleanly fit (remainders).
+            data = data.narrow(0, 0, nbatch * batch_size)
+            # Evenly divide the data across the bsz batches.
+            data = data.view(batch_size, -1).t().contiguous()
+            return data.to(device)
 
         # TODO(anj-s): Both seq_len and batch size should be part of the golden config.
         seq_len = 512
         total_batch_size = seq_len * args.batch_size
         # vocab_size is 10000 and length of the real data is 2049990.
         lm_dataset = torch.randint(1, 10000, (2049990,))
-        
+
         lm_dataloader = torch.utils.data.DataLoader(
             lm_dataset, batch_size=total_batch_size, shuffle=True, num_workers=0, collate_fn=batchify
         )

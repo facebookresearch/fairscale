@@ -11,7 +11,7 @@ import os
 import pprint
 import time
 
-from datasets.wikitext2_data import Wikitext2Data 
+from datasets.wikitext2_data import Wikitext2Data
 from models import transformer_lm
 import numpy as np
 import torch
@@ -84,9 +84,7 @@ def get_lm_model(args, device, config):
         layers.append(LazyModule(lambda: transformer_lm.LinearLayer(ninp, vocab_size, initrange)))
         model = layers
     else:
-        model = transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(
-            device
-        )
+        model = transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
     return model
 
@@ -241,7 +239,7 @@ def train(model_config, model, benchmark_config, args):
     bptt = 2
 
     def get_batch(source):
-        seq_len = len(source)-1
+        seq_len = len(source) - 1
         data = source[0:seq_len]
         target = source[1 : 1 + seq_len]
         return data, target
