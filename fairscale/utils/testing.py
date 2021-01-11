@@ -116,6 +116,11 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
 
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
 
+        try:
+            torch.distributed.rpc.shutdown()
+        except Exception:
+            pass
+
         os.environ["MASTER_PORT"] = "10639"
         url_rpc = "file://" + filename_rpc
         rpc.init_rpc(
