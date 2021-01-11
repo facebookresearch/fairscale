@@ -16,7 +16,7 @@ import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
-from .utils import Bucket, Workhandle, recursive_copy_to_device
+from .utils import Workhandle, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
@@ -61,7 +61,9 @@ class OSS(Optimizer):
         group (group):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
-            the size of the buffer used to batch the small parameter tensors (default 128k).
+            the max size of the buffer used to batch the small parameter tensors, in number of elements (default 16M).
+            this will not impact the long term memory consumption, but the peak memory can be impacted by the moment
+            when the buffers are allocated and the bucketed params have not yet been relocated to them.
     """
 
     #: The optimizer used for a given shard
@@ -74,7 +76,7 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
-        broadcast_buffer_size: int = 2 ** 17,
+        broadcast_buffer_size: int = 2 ** 24,
         **default: Any,
     ):
 
@@ -106,17 +108,21 @@ class OSS(Optimizer):
 
         # Current default device is set by the parameters allocated to this rank
         self._device = list(self.per_device_params.keys())[0]
-        self.buckets: Dict[torch.device, List[Bucket]] = {}
+        self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
 
-        if torch.cuda.is_available() and self.world_size <= torch.cuda.device_count():
-            broadcast_buffer_size = 0
-            logging.warning("Assuming single node job, bucketing is disabled")
+        # Get the correct size for the buckets, cannot be bigger than the model
+        model_size = sum([p.numel() for p in self.param_to_rank.keys()])
+        self.bucket_size = min(broadcast_buffer_size, model_size)
+        logging.info(
+            "Bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
+                self.bucket_size / 2 ** 20, model_size / 2 ** 20
+            )
+        )
 
-        self.bucket_size = broadcast_buffer_size
+        # Allocate one buffer per rank and per device to group the small parameters
         for device, per_device in self.per_device_params.items():
-            # Allocate one buffer per rank and per device to group the small parameters
             self.buckets[device] = [
-                Bucket(buffer=torch.zeros(broadcast_buffer_size, dtype=per_device[0][0].dtype, device=device))
+                torch.zeros(self.bucket_size, dtype=per_device[0][0].dtype, device=device)
                 for _ in range(len(per_device))
             ]
         self.should_bucket_param: List[bool] = []
@@ -560,56 +566,39 @@ class OSS(Optimizer):
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
 
-        with torch.no_grad():
-            i_param = 0
+        i_param = 0
 
-            for (
-                device,
-                device_params,
-            ) in self.per_device_params.items():  # all the params on this device (inc all ranks)
+        for (device, device_params,) in self.per_device_params.items():  # all the params on this device (inc all ranks)
+            buckets = self.buckets[device]
+            # Bucket and issue all the async calls
+            for (src_rank, params), bucket in zip(enumerate(device_params), buckets):
+                global_src_rank = self.get_global_rank(self.group, src_rank)
 
-                buckets = self.buckets[device]
-
-                # Bucket and issue all the async calls
-                for (src_rank, params), bucket in zip(enumerate(device_params), buckets):
-                    global_src_rank = self.get_global_rank(self.group, src_rank)
-
-                    for param in params:
-                        # Bucket broadcast
-                        if self.bucket_size > 0 and self.should_bucket_param[i_param]:
-                            assert bucket.append(param), "Bucket overflow: max %s - current %s - adding %s" % (
-                                bucket.max_size,
-                                bucket.current_offset,
-                                param.numel(),
+                # Direct broadcasts only
+                for param in params:
+                    if not self.should_bucket_param[i_param]:
+                        self.work_handles.append(
+                            Workhandle(
+                                handle=dist.broadcast(
+                                    tensor=param.data, src=global_src_rank, group=self.group, async_op=True
+                                ),
+                                callback=None,
                             )
+                        )
+                    i_param += 1
 
-                            if bucket.full():
-                                self.work_handles.append(
-                                    Workhandle(
-                                        handle=dist.broadcast(
-                                            tensor=bucket.buffer, src=global_src_rank, group=self.group, async_op=True
-                                        ),
-                                        callback=bucket.unroll,
-                                    )
-                                )
-
-                        # Direct
-                        else:
-                            self.work_handles.append(
-                                Workhandle(
-                                    handle=dist.broadcast(
-                                        tensor=param.data, src=global_src_rank, group=self.group, async_op=True
-                                    ),
-                                    callback=None,
-                                )
-                            )
-
-                        i_param += 1
+                # Bucket broadcasts
+                self.work_handles.append(
+                    Workhandle(
+                        handle=dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True),
+                        callback=None,
+                    )
+                )
 
         self._consume_work_handles()
 
     def _consume_work_handles(self) -> None:
-        """ Consume all the futures which are tied to this optimizer's buckets.
+        """Consume all the futures which are tied to this optimizer's buckets.
         We start from the first/older ones, since they are the most likely to be ready and non-blocking
         """
 
@@ -620,15 +609,14 @@ class OSS(Optimizer):
                 work_handle.callback()
 
     def _try_consume_work_handle(self) -> None:
-        """ Try to consume the oldest future. This is non blocking, if not ready we'll pass
-        """
+        """Try to consume the oldest future. This is non blocking, if not ready we'll pass"""
         while len(self.work_handles) > 0 and self.work_handles[0].handle.is_completed():
             work_handle = self.work_handles.popleft()
             if work_handle.callback is not None:
                 work_handle.callback()
 
     def _setup_bucket_strategy(self) -> None:
-        """  Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
+        """Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
         (smallest first), the bucket will hold the smallest elements, the remaining ones will be directly sent
         over the wire.
 
@@ -647,21 +635,29 @@ class OSS(Optimizer):
                 for param in params:
                     # Criteria to decide whether this parameter is to be bucketed or not:
                     # - enough room in the bucket
-                    if param.requires_grad and (offset + param.numel()) < self.buckets[device][dst_rank].max_size:
+                    if param.requires_grad and (offset + param.numel()) < self.bucket_size:
                         self.should_bucket_param.append(True)
 
                         if offset == 0:
                             # count this bucket, only once
                             self._max_work_handles += 1
 
-                        offset += param.numel()
+                        # This parameter becomes a view of the bucket
+                        offset_next = offset + param.numel()
+
+                        self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.flatten())
+                        param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
+
+                        offset = offset_next
                     else:
                         self.should_bucket_param.append(False)
 
-                # Register the max offset for this buffer, and the reference rank
-                self.buckets[device][dst_rank].max_offset = offset
-                self.buckets[device][dst_rank].global_ref_rank = self.get_global_rank(self.group, dst_rank)
-                self.buckets[device][dst_rank].global_rank = self.global_rank
+                # Resize the bucket to remove lost space in the end
+                self.buckets[device][dst_rank].resize_(offset)
+
+        # Make sure that the memory previously taken by the bucketed parameters is released
+        if self._device.type == "cuda":
+            torch.cuda.empty_cache()
 
         # Determine the max work handles in flight:
         # - all the direct reduce/broadcast
