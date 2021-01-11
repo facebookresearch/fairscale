@@ -601,8 +601,9 @@ class OSS(Optimizer):
                         # This parameter becomes a view of the bucket
                         offset_next = offset + param.numel()
 
-                        self.buckets[device][dst_rank][offset:offset_next] = param.data.flatten()
+                        self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.flatten())
                         param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
+
                         offset = offset_next
                     else:
                         self.should_bucket_param.append(False)
