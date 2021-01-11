@@ -27,9 +27,11 @@ else:
 
 try:
     from torch.distributed import broadcast_object_list
+
     _torch_broadcast_object = True
 except ImportError:
     _torch_broadcast_object = False
+
 
 class OSS(Optimizer):
     """Wraps an arbitrary :class:`optim.Optimizer <torch.optim.Optimizer>`
@@ -353,7 +355,12 @@ class OSS(Optimizer):
                 if _torch_broadcast_object:
                     dist.broadcast_object_list([0], src=global_rank, group=self.group)
                 else:
-                    broadcast_object(torch.tensor([0], dtype=torch.uint8, device=self._device), src_rank=global_rank, group=self.group, dist_device=self._device)
+                    broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        src_rank=global_rank,
+                        group=self.group,
+                        dist_device=self._device,
+                    )
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
         """Collect all the state shards, in CPU memory."""
@@ -372,7 +379,12 @@ class OSS(Optimizer):
                     dist.broadcast_object_list([0], src=self.global_rank, group=self.group)
                 else:
                     # legacy compatibility for old torch versions
-                    broadcast_object(torch.tensor([0], dtype=torch.uint8, device=self._device), src_rank=self.global_rank, group=self.group, dist_device=self._device)
+                    broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        src_rank=self.global_rank,
+                        group=self.group,
+                        dist_device=self._device,
+                    )
             else:
                 # Fetch the optim state from the other replicas
                 global_rank = self.get_global_rank(self.group, rank)
@@ -383,7 +395,10 @@ class OSS(Optimizer):
                     replica_state = replica_state[0]
                 else:
                     replica_state = broadcast_object(
-                        torch.tensor([0], dtype=torch.uint8, device=self._device), src_rank=global_rank, group=self.group, dist_device=self._device
+                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        src_rank=global_rank,
+                        group=self.group,
+                        dist_device=self._device,
                     )
 
                 all_states.append(
