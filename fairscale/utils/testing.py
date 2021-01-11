@@ -106,23 +106,20 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
         pass
 
     print(f"dist init r={rank}, world={world_size}")
-    os.environ["MASTER_ADDR"] = "localhost"  # compatibility, only required for torch1.5
-    os.environ["MASTER_PORT"] = "10638"  # compatibility, only required for torch1.5
+
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
     url = "file://" + filename
+    url_rpc = "file://" + filename_rpc
 
     if torch_version() >= (1, 6, 0):
         backend = "nccl" if torch.cuda.is_available() else "gloo"
-
         if backend == "nccl" and torch.cuda.device_count() < world_size:
             logging.warning("Requested world size cannot be reached on this machine, not enough GPUs")
             return False
 
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
 
-        os.environ["MASTER_PORT"] = "10639"
-        url_rpc = "file://" + filename_rpc
         rpc.init_rpc(
             f"Test{rank}",
             rank=rank,
@@ -132,8 +129,18 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
         )
 
     else:
+        # Needed for torch 1.5
+        os.environ["MASTER_ADDR"] = "127.0.0.1"
+        os.environ["MASTER_PORT"] = "10638"
+
         if world_size > 1:
-            rpc.init_rpc(f"Test{rank}", rank=rank, world_size=world_size)
+            # TensorPipe is not available in Torch 1.5
+            rpc.init_rpc(
+                name=f"Test{rank}",
+                rank=rank,
+                world_size=world_size,
+                rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(init_method=url_rpc),
+            )
         elif torch.cuda.is_available():
             torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size, init_method=url)
         else:
@@ -162,6 +169,12 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
 
         # (lefaudeux) Let mp handle the process joining, join=False and handling context has been unstable in the past
         mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)
+
+        try:
+            os.remove(filename)
+            os.remove(filename_rpc)
+        except FileNotFoundError:
+            pass
 
 
 def worker_process(
