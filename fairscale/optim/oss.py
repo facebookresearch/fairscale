@@ -53,6 +53,8 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
             the max size of the buffer used to batch the small parameter tensors, in number of elements (default 16M).
+            this will not impact the long term memory consumption, but the peak memory can be impacted by the moment
+            when the buffers are allocated and the bucketed params have not yet been relocated to them.
     """
 
     #: The optimizer used for a given shard
@@ -610,6 +612,10 @@ class OSS(Optimizer):
 
                 # Resize the bucket to remove lost space in the end
                 self.buckets[device][dst_rank].resize_(offset)
+
+        # Make sure that the memory previously taken by the bucketed parameters is released
+        if self._device.type == "cuda":
+            torch.cuda.empty_cache()
 
         # Determine the max work handles in flight:
         # - all the direct reduce/broadcast
