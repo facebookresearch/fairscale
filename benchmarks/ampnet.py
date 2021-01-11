@@ -510,8 +510,8 @@ def run_mp_worker(args, available_workers):
 
     balance = generate_balance(get_pipeline_parallel_group().size(), len(model))
     p = pipe.AMPnetPipe(
-        model,
-        balance,
+        module=model,
+        balance=balance,
         style=Pipe.AsyncSchedule,
         chunks=args.chunks,
         worker_map=get_worker_map(),

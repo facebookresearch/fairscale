@@ -62,7 +62,7 @@ class AMPnetPipe(Pipe):
 
         # AMPnet implementation doesn't handle skip_trackers!
 
-        assert self.style is PipelineStyle.AsyncSchedule
+        assert self.pipeline.style is PipelineStyle.AsyncSchedule
         assert self.group
         rank = self.group.rank()
 
@@ -71,10 +71,10 @@ class AMPnetPipe(Pipe):
         ampnet_event_loop = AsyncAMPnetEventLoop(
             partitions,
             self.group,
-            self.transport,
+            self.pipeline.transport,
             min_update_interval,
             weight_prediction,
-            self.checkpoint_stop,
+            self.pipeline.checkpoint_stop,
             self.input_device,
         )
 
