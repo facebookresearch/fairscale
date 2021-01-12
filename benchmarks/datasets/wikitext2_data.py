@@ -81,7 +81,7 @@ class Wikitext2Data:
             data = data.view(batch_size, -1).t().contiguous()
             return data.to(device)
 
-        seq_len = 512
+        seq_len = 32
         total_batch_size = seq_len * args.batch_size
         train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=total_batch_size, collate_fn=batchify)
         valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size=total_batch_size, collate_fn=batchify)
@@ -137,7 +137,7 @@ class Wikitext2Data:
             return data.to(device)
 
         # TODO(anj-s): Both seq_len and batch size should be part of the golden config.
-        seq_len = 512
+        seq_len = 32
         total_batch_size = seq_len * args.batch_size
         # vocab_size is 10000 and length of the real data is 2049990.
         lm_dataset = torch.randint(1, 10000, (2049990,))
