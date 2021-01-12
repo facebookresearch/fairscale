@@ -22,8 +22,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
 from fairscale.optim import AdaScale
-
-skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs are required")
+from fairscale.utils.testing import skip_if_single_gpu
 
 
 def _dist_init(rank, world_size, tempfile_name, backend):

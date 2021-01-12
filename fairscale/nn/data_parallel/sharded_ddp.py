@@ -23,8 +23,7 @@ from fairscale.optim.utils import Workhandle
 
 
 class ShardedDataParallel(nn.Module):
-    """
-    Wrap the model, and reduce the gradients to the right rank during the backward pass.
+    """ Wrap the model, and reduce the gradients to the right rank during the backward pass.
 
     - the partition is given by the sharded optimizer
     - wrap the base model with a model which knows where to reduce each gradient
@@ -46,6 +45,21 @@ class ShardedDataParallel(nn.Module):
             Synchronize the models in between the ranks when starting up. Not needed if each rank has the same seed,
             or the training restarts from a saved state
 
+
+    .. warning:
+        ShardedDDP implements gradient sharding, meaning that each rank only owns a unique shard of the model gradients
+        after the backward pass, in order to save memory and some communication bandwidth.
+
+    .. warning:
+        As a consequence of sharding, in case of gradient clipping, one has to use the `clip_grad_norm` exposed by
+        the `optimizer state sharding wrapper <fairscale.optim.OSS>`
+
+    .. warning:
+        As a consequence of sharding, after loss.backward() (or equivalent) each rank will have `None` in place of some param.grad
+
+    .. warning:
+        As a consequence of sharding, Pytorch and Apex AMP implementations will hang when used in conjunction with `ShardedDDP`.
+        One needs a `shard-aware grad scaler<ShardedGradScaler>`, which is proposed in `fairscale.optim.grad_scaler`, compatible with PytorchAMP.
     """
 
     def __init__(
@@ -68,7 +82,7 @@ class ShardedDataParallel(nn.Module):
 
         # Communication related attributes
         self.process_group = process_group if process_group is not None else dist.group.WORLD
-        self.world_size = dist.get_world_size(self.process_group)
+        self.world_size_scaling = 1.0 / dist.get_world_size(self.process_group)  # > 0
         self.reference_global_rank = OSS.get_global_rank(self.process_group, 0)  # picking rank 0 as the reference
         self.rank = dist.get_rank(self.process_group)
         self.global_rank = OSS.get_global_rank(self.process_group, self.rank)
@@ -185,7 +199,7 @@ class ShardedDataParallel(nn.Module):
 
                 # Make sure that this is not fired twice
                 self._grad_to_be_reduced[index] = False
-                param.grad /= self.world_size
+                param.grad.mul_(self.world_size_scaling)
 
                 # Future work includes clearing up the buffer if possible
                 def cleanup() -> None:

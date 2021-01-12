@@ -13,7 +13,6 @@ import tempfile
 from typing import List
 
 import numpy as np
-import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -22,10 +21,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
-from fairscale.utils.testing import GPT2
-
-skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
+from fairscale.utils.testing import GPT2, skip_if_no_cuda, skip_if_single_gpu
 
 
 def run_one_step(rank, world_size, backend, device, temp_file_name):

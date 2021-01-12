@@ -3,10 +3,10 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any, Callable, List, Optional, Tuple, Union
 
-from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 

@@ -20,8 +20,10 @@ if torch.cuda.is_available():
     devices = ["cpu", "cuda"]
 else:
     devices = ["cpu"]
-
 URL = "file://" + tempfile.mkstemp()[1]
+
+os.environ["MASTER_ADDR"] = "localhost"
+os.environ["MASTER_PORT"] = "29501"  # torch 1.5 compatibility
 
 if "OMPI_COMM_WORLD_SIZE" in os.environ:
     dist.init_process_group(backend=dist.Backend.MPI, init_method=URL)

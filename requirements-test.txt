@@ -6,6 +6,7 @@ mypy == 0.770
 pytest == 5.4.1
 pytest-cov == 2.10.0
 pytest-mpi == 0.4
+pytest-timeout == 1.4.2
 torchtext == 0.6.0
 torch >= 1.5.1
 torchvision >= 0.6.0

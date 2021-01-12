@@ -120,6 +120,8 @@ AdaScale can be used to wrap a SGD optimizer and to be used in DDP (Distributed 
 training or non-DDP with gradient accumulation. The benefit is to re-use the same LR
 schedule from a baseline batch size when effective batch size is bigger.
 
+Note that AdaScale does _not_ help increase per-GPU batch size.
+
 ```python
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR  # or your scheduler
@@ -147,11 +149,12 @@ while not done:
 ```
 
 Primary goal is to allow scaling to bigger batch sizes without losing model accuracy.
+(However, training time might be longer comparing to without AdaScale.)
 
 At a high level, we want ML researchers to:
-  * go parallel more easily (i.e. reuse the same LR schedule)
+  * go parallel more easily (i.e. no need to find new learning rate schedules)
   * not worrying about lossing accuracy
-  * get same (or higher) GPU efficiency (fewer steps, less networking, etc.)
+  * potentially higher GPU efficiency (fewer steps, less networking overhead, etc.)
 
 # Testing
 

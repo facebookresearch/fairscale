@@ -19,12 +19,12 @@
 
 """The Pipe interface."""
 from collections import OrderedDict
+from dataclasses import dataclass, field
 import itertools
 import threading
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union, cast
 import warnings
 
-from dataclasses import dataclass, field
 import torch
 from torch import Tensor, nn
 import torch.autograd
