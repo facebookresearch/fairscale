@@ -243,7 +243,7 @@ def train(model_config, model, benchmark_config, args):
         source, target = get_batch(batch)
         if args.max_batch and i > args.max_batch:
             break
-        
+
         if i > 0:
             total_tokens += source.numel()
 
@@ -298,8 +298,9 @@ def train(model_config, model, benchmark_config, args):
     if epoch_start_time != 0:
         wps = total_tokens / (time.time() - epoch_start_time)
     else:
-        raise RuntimeError("Unable to benchmark on a single batch. Increase the size "
-                           " of the dataset and rerun the benchmark.")
+        raise RuntimeError(
+            "Unable to benchmark on a single batch. Increase the size " " of the dataset and rerun the benchmark."
+        )
 
     return wps, loss.item()
 

@@ -65,10 +65,6 @@ class Wikitext2Data:
         valid_dataset = data_process(iter(io.open(valid_filepath, encoding="utf8")))
         test_dataset = data_process(iter(io.open(test_filepath, encoding="utf8")))
 
-        # TODO(anj-s): We need to pass a device argument if we want this to work
-        # on multiple devices.
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
         # TODO(anj-s): Batch size needs to be argument that we pass in.
         def batchify(data):
             batch_size = args.batch_size
@@ -79,7 +75,7 @@ class Wikitext2Data:
             data = data.narrow(0, 0, nbatch * batch_size)
             # Evenly divide the data across the bsz batches.
             data = data.view(batch_size, -1).t().contiguous()
-            return data.to(device)
+            return data
 
         seq_len = 32
         total_batch_size = seq_len * args.batch_size
@@ -120,11 +116,6 @@ class Wikitext2Data:
         return SyntheticLMDataset()
 
     def get_synthetic_dataloader(args):
-
-        # TODO(anj-s): We need to pass a device argument if we want this to work
-        # on multiple devices.
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
         def batchify(data):
             batch_size = args.batch_size
             data = torch.tensor(data)
@@ -134,7 +125,7 @@ class Wikitext2Data:
             data = data.narrow(0, 0, nbatch * batch_size)
             # Evenly divide the data across the bsz batches.
             data = data.view(batch_size, -1).t().contiguous()
-            return data.to(device)
+            return data
 
         # TODO(anj-s): Both seq_len and batch size should be part of the golden config.
         seq_len = 32
