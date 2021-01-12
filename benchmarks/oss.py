@@ -21,7 +21,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
 from torch.utils.data import BatchSampler, DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
-from torchvision.datasets import MNIST
+from torchvision.datasets import MNIST, FakeData
 from torchvision.transforms import ToTensor
 
 from fairscale.nn.data_parallel import OffloadDataParallelExperimental as OffloadDDPExperimental
@@ -39,15 +39,76 @@ class ReshapeModule(torch.nn.Module):
         return x
 
 
+class ReshapeTokens(torch.nn.Module):
+    def __init__(self, vit):
+        super().__init__()
+        self.patch_embed = vit.patch_embed
+        self.cls_token = vit.cls_token
+
+    def forward(self, x):
+        B = x.shape[0]
+        x = self.patch_embed(x)
+
+        cls_token = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        return torch.cat((cls_token, x), dim=1)
+
+
+class Norm(torch.nn.Module):
+    def __init__(self, vit):
+        super().__init__()
+        self.norm = vit.norm
+
+    def forward(self, x):
+        x = self.norm(x)
+        return x[:, 0]
+
+
+class PosEmbed(torch.nn.Module):
+    def __init__(self, vit):
+        super().__init__()
+        self.pos_embed = vit.pos_embed
+        self.pos_drop = vit.pos_drop
+
+    def forward(self, x):
+        return self.pos_drop(x + self.pos_embed)
+
+
 def dist_init(rank, world_size, backend):
     logging.info(f"Using backend: {backend}")
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 
-def get_problem(rank, world_size, batch_size, device, model_name: str):
+def get_problem(
+    rank, world_size, batch_size, device, model_name: str, unroll_model: bool = False, fake_data: bool = False
+):
     # Select the desired model on the fly
     logging.info(f"Using {model_name} for benchmarking")
-    model = getattr(importlib.import_module("torchvision.models"), model_name)(pretrained=False).to(device)
+    try:
+        model = getattr(importlib.import_module("torchvision.models"), model_name)(pretrained=False)
+    except AttributeError:
+        # Maybe that this model is in TIMM
+        model = getattr(importlib.import_module("timm.models"), model_name)(pretrained=False)
+
+    # Tentatively unroll the model
+    if unroll_model:
+        if "resnet" in model_name:
+            model = torch.nn.Sequential(
+                model.conv1,
+                model.bn1,
+                model.relu,
+                model.maxpool,
+                *model.layer1,
+                *model.layer2,
+                *model.layer3,
+                *model.layer4,
+                model.avgpool,
+                ReshapeModule(),
+                model.fc,
+            )
+        elif "vit" in model_name:
+            model = torch.nn.Sequential(ReshapeTokens(model), PosEmbed(model), *model.blocks, Norm(model), model.head)
+        else:
+            raise RuntimeError("This model cannot be unrolled")
 
     # Data setup, duplicate the grey channels to get pseudo color
     def collate(inputs: List[Any]):
@@ -56,7 +117,11 @@ def get_problem(rank, world_size, batch_size, device, model_name: str):
             "label": torch.tensor([i[1] for i in inputs]).to(device),
         }
 
-    dataset = MNIST(transform=ToTensor(), download=False, root=TEMPDIR)
+    dataset = (
+        FakeData(1000, transform=ToTensor(), image_size=(1, 224, 224))
+        if fake_data
+        else MNIST(transform=ToTensor(), download=False, root=TEMPDIR)
+    )
     sampler: Sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=True)
     dataloader = DataLoader(dataset=dataset, batch_sampler=batch_sampler, collate_fn=collate)
@@ -98,7 +163,15 @@ def train(
         torch.backends.cudnn.benchmark = False
 
     device = torch.device("cpu") if args.cpu else torch.device(rank)
-    model, dataloader, loss_fn = get_problem(rank, args.world_size, args.batch_size, device, args.torchvision_model)
+    model, dataloader, loss_fn = get_problem(
+        rank,
+        args.world_size,
+        args.batch_size,
+        device,
+        args.model,
+        unroll_model=optim_type == OptimType.oss_offload_ddp,
+        fake_data=optim_type == OptimType.oss_offload_ddp,
+    )
 
     # Shard the optimizer, test different methods
     optimizer: Optional[torch.optim.Optimizer] = None
@@ -106,28 +179,12 @@ def train(
     scaler = (TorchGradScaler() if args.optim_type == OptimType.vanilla else ShardedGradScaler()) if args.amp else None
 
     if optim_type == OptimType.oss_sharded_ddp:
+        model = model.to(device)
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
         model = ShardedDDP(model, optimizer)
     elif optim_type == OptimType.oss_offload_ddp:
-        # DEBUG
-        # This method requires a layer-wise seperable model
-        # Unroll the test RestNet101 into ~40 layers
-        model_seq = torch.nn.Sequential(
-            model.conv1,
-            model.bn1,
-            model.relu,
-            model.maxpool,
-            *model.layer1,
-            *model.layer2,
-            *model.layer3,
-            *model.layer4,
-            model.avgpool,
-            ReshapeModule(),
-            model.fc,
-        )
-
         ddp_exp = OffloadDDPExperimental(
-            model_cpu=model_seq,
+            model_cpu=model,
             optimizer=OPTIM,
             optimizer_params={"lr": 1e-4, "momentum": 0.9},
             world_size=args.world_size,
@@ -299,7 +356,7 @@ if __name__ == "__main__":
     parser.add_argument("--gloo", action="store_true", default=False)
     parser.add_argument("--profile", action="store_true", default=False)
     parser.add_argument("--cpu", action="store_true", default=False)
-    parser.add_argument("--torchvision_model", type=str, help="Any torchvision model name (str)", default="resnet101")
+    parser.add_argument("--model", type=str, help="Any torchvision or TIMM model name (str)", default="resnet101")
     parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
     parser.add_argument("--amp", action="store_true", default=False, help="Activate torch AMP")
 
