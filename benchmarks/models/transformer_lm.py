@@ -108,9 +108,9 @@ class GoldenData:
 
     def get_golden_real_stats():
         return {
-            "avg_wps": 3494.952,
-            "std_dev_wps": 19.727,
-            "peak_mem_usage": [2320996352, 1397659648, 1397659648, 2339780096],
+            "avg_wps": 703.778,
+            "std_dev_wps": 5.732,
+            "peak_mem_usage": [2320996352, 1396742144, 1396742144, 2340010496],
         }
 
     def get_golden_synthetic_stats():
