@@ -27,16 +27,6 @@ from fairscale.nn.pipe import LazyModule, pipe
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
 
-can_benchmark = True
-# try:
-#     from fairscale.optim import Adam  # type: ignore
-
-#     can_benchmark = True
-# except ImportError:
-#     from torch.optim import Adam  # type: ignore
-
-#     can_benchmark = False
-
 
 def init_random_seed(seed: int):
 
@@ -216,7 +206,6 @@ def train(model_config, model, benchmark_config, args):
     log_number_of_parameters(model)
 
     total_loss = 0.0
-    start_time = time.time()
     word_counter = 0
 
     optimizer = optimizer(model.parameters())
@@ -238,6 +227,8 @@ def train(model_config, model, benchmark_config, args):
     total_tokens = 0
     total_tokens_per_log_interval = 0
     bptt = 2
+    start_time = time.time()
+    epoch_start_time = 0.0
 
     def get_batch(source):
         seq_len = len(source) - 1
@@ -246,10 +237,15 @@ def train(model_config, model, benchmark_config, args):
         return data, target
 
     for i, batch in enumerate(lm_dataloader):
+        if i == 1:
+            epoch_start_time = time.time()
+
         source, target = get_batch(batch)
         if args.max_batch and i > args.max_batch:
             break
-        total_tokens += source.numel()
+        
+        if i > 0:
+            total_tokens += source.numel()
 
         optimizer.zero_grad()
         try:
@@ -299,7 +295,13 @@ def train(model_config, model, benchmark_config, args):
                 total_loss = 0
                 start_time = time.time()
 
-    return total_tokens, loss.item()
+    if epoch_start_time != 0:
+        wps = total_tokens / (time.time() - epoch_start_time)
+    else:
+        raise RuntimeError("Unable to benchmark on a single batch. Increase the size "
+                           " of the dataset and rerun the benchmark.")
+
+    return wps, loss.item()
 
 
 # TODO(anj-s): Add an option for users to be able to benchmark evaluate.
@@ -364,15 +366,14 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
     print("| start of epoch {:1d}".format(epoch))
     print("-" * 110)
     start_time = time.time()
-    n_words, loss = train(model_config, model, benchmark_config, args)
+    wps, loss = train(model_config, model, benchmark_config, args)
     elapsed_time = time.time() - start_time
-    wps = n_words / elapsed_time
     print("-" * 110)
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
 
-    print("benchmarking ", can_benchmark, len(model.balance))
-    if can_benchmark and len(model.balance) == 4:
+    print("wps ", wps)
+    if len(model.balance) == 4:
 
         if args.model_name == "lm":
             verify_lm_run(wps, golden_config)
