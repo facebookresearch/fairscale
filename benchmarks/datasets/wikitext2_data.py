@@ -47,7 +47,7 @@ class SyntheticLMDataset(Dataset):
 
 class Wikitext2Data:
     def get_real_dataloaders(args):
-        """Return dataloaders for training, testing and validation."""
+        """Return real dataloaders for training, testing and validation."""
 
         url = "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip"
         test_filepath, valid_filepath, train_filepath = extract_archive(download_from_url(url, root="/tmp"))
@@ -116,6 +116,8 @@ class Wikitext2Data:
         return SyntheticLMDataset()
 
     def get_synthetic_dataloader(args):
+        """Return synthetic dataloaders for training, testing and validation."""
+
         def batchify(data):
             batch_size = args.batch_size
             data = torch.tensor(data)
