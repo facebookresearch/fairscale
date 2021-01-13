@@ -92,7 +92,7 @@ class ModelShard(nn.Module):
         self.model_shard.to(offload_device)
         self.cuda_stream = torch.cuda.Stream(
             device=self.device
-        )  # needed to make sure load/offload really run in parallel
+        )  # needed to make sure load/offload really run in parallel with compute
 
         if not self.is_owner:
             # Record all the shapes
@@ -117,22 +117,19 @@ class ModelShard(nn.Module):
     def to_device(self) -> None:
         self.model_shard.to(device=self.device, non_blocking=True)
 
-    def forward_load(self, sync: bool = False, non_blocking: bool = True) -> Optional[List[Any]]:
+    def forward_load(self, non_blocking: bool = True) -> Optional[List[Any]]:
         with torch.cuda.stream(self.cuda_stream):
             # Restore all the parameter buffers
             self.model_shard.to(device=self.device, non_blocking=non_blocking)
 
             # Fetch or broadcast the latest parameters
-            if sync:
-                requests = list(
-                    map(
-                        lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
-                        self.model_shard.parameters(),
-                    ),
-                )
-                return requests if non_blocking else self._sync(requests)
-
-        return None
+            requests = list(
+                map(
+                    lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
+                    self.model_shard.parameters(),
+                ),
+            )
+            return requests if non_blocking else self._sync(requests)
 
     def backward_load(self, non_blocking: bool = True) -> None:
         with torch.cuda.stream(self.cuda_stream):
@@ -227,7 +224,7 @@ class ShardSyncLayer(torch.autograd.Function):
 
         # Start the load of the next shard in line, opportunistically look ahead
         if n2_shard:
-            n2_shard.forward_load(sync=True, non_blocking=True)
+            n2_shard.forward_load(non_blocking=True)
 
         ctx.p2_shard = p2_shard
         ctx.p1_shard = p1_shard
