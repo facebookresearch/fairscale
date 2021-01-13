@@ -304,19 +304,6 @@ class OSS(Optimizer):
         return total_norm
 
     # State dict interfaces
-    def local_state_dict(self) -> dict:
-        """Gets this rank's state_dict.
-
-        Returns:
-            The state of the optimizer as a :class:`dict`.
-            It contains two entries:
-
-            * state - a dict holding current optimization state. Its content
-                differs between optimizer classes.
-            * param_groups - a dict containing all parameter groups
-        """
-        return self.optim.state_dict()
-
     def consolidate_state_dict(self, recipient_rank: int = 0) -> None:
         """Update the consolidated state_dict list, one per rank.
 
@@ -334,91 +321,14 @@ class OSS(Optimizer):
             # Acknowledge broadcasts, and send this rank's shard when needed
             self._broadcast_state_dict()
 
-    def _broadcast_state_dict(self) -> None:
-        """Broadcast this rank's state shard, discard others"""
-
-        # Default to CPU space to gain some memory headroom
-        local_cpu_state = recursive_copy_to_device(
-            self.local_state_dict(), non_blocking=True, device=torch.device("cpu")
-        )
-
-        for rank in range(self.world_size):
-            if rank == self.rank:
-                # Send the state to the reference replica
-                logging.debug(
-                    "Sending the sharded optimizer state to the reference replica from rank %s", rank,
-                )
-                if _torch_broadcast_object:
-                    # torch native object broadcast
-                    dist.broadcast_object_list([local_cpu_state], src=self.global_rank, group=self.group)
-                else:
-                    # legacy compatibility for old torch versions
-                    broadcast_object(
-                        self.local_state_dict(), src_rank=self.global_rank, group=self.group, dist_device=self._device
-                    )
-            else:
-                global_rank = self.get_global_rank(self.group, rank)
-
-                # Discard this tensor/rank, broadcast necessary for syncing and because NCCL does not support gather
-                if _torch_broadcast_object:
-                    dist.broadcast_object_list([0], src=global_rank, group=self.group)
-                else:
-                    broadcast_object(
-                        torch.tensor([0], dtype=torch.uint8, device=self._device),
-                        src_rank=global_rank,
-                        group=self.group,
-                        dist_device=self._device,
-                    )
-
-    def _collect_sharded_states(self) -> List[Dict[str, Any]]:
-        """Collect all the state shards, in CPU memory."""
-        all_states = []
-
-        for rank in range(self.world_size):
-            if rank == self.rank:
-                logging.debug("Saving self state")
-                all_states.append(
-                    recursive_copy_to_device(self.local_state_dict(), non_blocking=True, device=torch.device("cpu"))
-                )
-
-                # Sync with other replicas
-                if _torch_broadcast_object:
-                    # torch native object broadcast
-                    dist.broadcast_object_list([0], src=self.global_rank, group=self.group)
-                else:
-                    # legacy compatibility for old torch versions
-                    broadcast_object(
-                        torch.tensor([0], dtype=torch.uint8, device=self._device),
-                        src_rank=self.global_rank,
-                        group=self.group,
-                        dist_device=self._device,
-                    )
-            else:
-                # Fetch the optim state from the other replicas
-                global_rank = self.get_global_rank(self.group, rank)
-
-                if _torch_broadcast_object:
-                    replica_state_l = [0]
-                    dist.broadcast_object_list(replica_state_l, src=global_rank, group=self.group)
-                    replica_state = replica_state_l[0]
-                else:
-                    replica_state = broadcast_object(
-                        torch.tensor([0], dtype=torch.uint8, device=self._device),
-                        src_rank=global_rank,
-                        group=self.group,
-                        dist_device=self._device,
-                    )
-
-                all_states.append(
-                    recursive_copy_to_device(replica_state, non_blocking=True, device=torch.device("cpu"))
-                )
-
-                logging.debug("State from rank %s received", rank)
-
-        return all_states
-
     def state_dict(self) -> Dict[str, Any]:
-        """Return the last known global optimizer state, which consist of a list of the shards.
+        """Return the last known global optimizer state. The returned state is compatible with Pytorch, in that the
+        sharded properties are not exposed. It contains two entries:
+
+        * state - a dict holding current optimization state. Its content
+            differs between optimizer classes.
+
+        * param_groups - a dict containing all parameter groups
 
         .. warning:
             If the state has not been consolidated, this returns a shard's worth, not the global state.
@@ -431,43 +341,30 @@ class OSS(Optimizer):
         if len(self._all_states) == 0:
             logging.warning("Optimizer state has not been consolidated. Returning the local state")
             logging.warning("Please call `consolidate_state_dict()` beforehand if you meant to save the global state")
-            return self.local_state_dict()
+            return self.optim.state_dict()
 
-        # Flatten the param_groups, flatten the states
-        flat_param_groups: List[Dict[Any, Any]] = []
-        flat_state = {}
-        i_tensor = 0
+        # Flatten the param_groups, flatten the states. Make sure that the indexation expected by PyTorch is respected
+        # - get the pytorch compliant parameter indexing
+        state_dict = super().state_dict()
 
-        for i, s in enumerate(self._all_states):
-            # Each rank owns as many param_groups as the model initially had.
-            # We flatten them here, so that upon loading the partitioning will be done from scratch
-            if len(flat_param_groups) == 0:
-                flat_param_groups = s["param_groups"]
-            else:
-                for fpg, pg in zip(flat_param_groups, s["param_groups"]):
-                    fpg["params"].extend(pg["params"])
+        # - get an id map which links the parameter id to the index in the reference state
+        global_id_map = [{id(p): i for pg in self.param_groups for i, p in enumerate(pg["params"])}]
 
-            # The original states are indexed with respect to the local tensors
-            # we need to take a global index into account
-            for state in s["state"].values():
-                flat_state[i_tensor] = state
-                i_tensor += 1
+        for rank, s in enumerate(self._all_states):
+            # Match the local indexing and the global partition
+            for local_pg, global_pg, rank_map in zip(
+                s["param_groups"], self.partition_parameters()[rank], global_id_map
+            ):
+                # Go through the parameters indexed locally, pick up the global corresponding param
+                local_index_to_param_id = {i_param: id(global_pg["params"][i_param]) for i_param in local_pg["params"]}
 
-        return {
-            "state": flat_state,
-            "param_groups": flat_param_groups,
-        }
+                for local_param_index in local_pg["params"]:
+                    global_index = rank_map[local_index_to_param_id[local_param_index]]
 
-    @staticmethod
-    def rank_local_state_dict(rank: int, state_dict: dict) -> dict:
-        """Returns the local_state_dict for a given rank.
+                    # Update the state
+                    state_dict["state"][global_index] = s["state"][local_param_index]
 
-        Arguments:
-            rank (int): rank to get local_state_dict for
-            state_dict (dict): global state_dict
-        """
-        param_groups = state_dict["param_groups"][state_dict["partition"][rank][0] : state_dict["partition"][rank][1]]
-        return {"state": state_dict["state"][rank], "param_groups": param_groups}
+        return state_dict
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """Restore the global parameter groups as well as the shard.
@@ -476,6 +373,8 @@ class OSS(Optimizer):
             state_dict (dict): optimizer state. Should be an object returned
                 from a call to :meth:`state_dict`
         """
+
+        super().load_state_dict(state_dict)
 
         # Workaround PyTorch bug that casts state (https://github.com/pytorch/pytorch/issues/43706)
         # Copied from https://github.com/pytorch/fairseq/blob/v0.9.0/fairseq/optim/fp16_optimizer.py#L251-L268
@@ -555,6 +454,89 @@ class OSS(Optimizer):
                     global_group[k] = local_group[k]
                 elif k in global_group.keys():
                     local_group[k] = global_group[k]
+
+    def _broadcast_state_dict(self) -> None:
+        """Broadcast this rank's state shard, discard others"""
+
+        # Default to CPU space to gain some memory headroom
+        local_cpu_state = recursive_copy_to_device(
+            self.optim.state_dict(), non_blocking=True, device=torch.device("cpu")
+        )
+
+        for rank in range(self.world_size):
+            if rank == self.rank:
+                # Send the state to the reference replica
+                logging.debug(
+                    "Sending the sharded optimizer state to the reference replica from rank %s", rank,
+                )
+                if _torch_broadcast_object:
+                    # torch native object broadcast
+                    dist.broadcast_object_list([local_cpu_state], src=self.global_rank, group=self.group)
+                else:
+                    # legacy compatibility for old torch versions
+                    broadcast_object(
+                        self.optim.state_dict(), src_rank=self.global_rank, group=self.group, dist_device=self._device
+                    )
+            else:
+                global_rank = self.get_global_rank(self.group, rank)
+
+                # Discard this tensor/rank, broadcast necessary for syncing and because NCCL does not support gather
+                if _torch_broadcast_object:
+                    dist.broadcast_object_list([0], src=global_rank, group=self.group)
+                else:
+                    broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        src_rank=global_rank,
+                        group=self.group,
+                        dist_device=self._device,
+                    )
+
+    def _collect_sharded_states(self) -> List[Dict[str, Any]]:
+        """Collect all the state shards, in CPU memory."""
+        all_states = []
+
+        for rank in range(self.world_size):
+            if rank == self.rank:
+                logging.debug("Saving self state")
+                all_states.append(
+                    recursive_copy_to_device(self.optim.state_dict(), non_blocking=True, device=torch.device("cpu"))
+                )
+
+                # Sync with other replicas
+                if _torch_broadcast_object:
+                    # torch native object broadcast
+                    dist.broadcast_object_list([0], src=self.global_rank, group=self.group)
+                else:
+                    # legacy compatibility for old torch versions
+                    broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        src_rank=self.global_rank,
+                        group=self.group,
+                        dist_device=self._device,
+                    )
+            else:
+                # Fetch the optim state from the other replicas
+                global_rank = self.get_global_rank(self.group, rank)
+
+                if _torch_broadcast_object:
+                    replica_state_l = [0]
+                    dist.broadcast_object_list(replica_state_l, src=global_rank, group=self.group)
+                    replica_state = replica_state_l[0]
+                else:
+                    replica_state = broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        src_rank=global_rank,
+                        group=self.group,
+                        dist_device=self._device,
+                    )
+
+                all_states.append(
+                    recursive_copy_to_device(replica_state, non_blocking=True, device=torch.device("cpu"))
+                )
+
+                logging.debug("State from rank %s received", rank)
+
+        return all_states
 
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
