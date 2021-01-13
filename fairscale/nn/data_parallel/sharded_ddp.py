@@ -162,6 +162,13 @@ class ShardedDataParallel(nn.Module):
             if blocking:
                 _ = list(map(lambda x: x.wait(), work_handles))
 
+    def __getattr__(self, name: str) -> Any:
+        """Forward missing attributes to wrapped module."""
+        try:
+            return super().__getattr__(name)  # defer to nn.Module's logic
+        except AttributeError:
+            return getattr(self.module, name)
+
     @contextlib.contextmanager
     def no_sync(self) -> Generator:
         """A context manager to disable gradient synchronization."""
