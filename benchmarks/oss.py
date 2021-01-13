@@ -170,7 +170,7 @@ def train(
         device,
         args.model,
         unroll_model=optim_type == OptimType.oss_offload_ddp,
-        fake_data=optim_type == OptimType.oss_offload_ddp,
+        fake_data=args.fake_data,
     )
 
     # Shard the optimizer, test different methods
@@ -194,6 +194,7 @@ def train(
         optimizer = ddp_exp.optimizer
         model = ddp_exp
     else:
+        model = model.to(device)
         device_ids = None if args.cpu else [rank]
         model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
         optimizer = (
@@ -359,7 +360,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, help="Any torchvision or TIMM model name (str)", default="resnet101")
     parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
     parser.add_argument("--amp", action="store_true", default=False, help="Activate torch AMP")
-
+    parser.add_argument("--fake_data", action="store_true", default=False, help="Use fake data")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)

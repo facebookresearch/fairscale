@@ -24,15 +24,14 @@ def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
     n = len(modules) // number_shards
 
     # Count the number of parameters per exposed layer, use that as a proxy for memory footprint
-    number_parameters_per_layer = [sum(p.numel() for p in m.parameters()) for m in modules]
-    total_number_params = sum(number_parameters_per_layer)
+    total_number_params = sum([sum(p.numel() for p in m.parameters()) for m in modules])
     number_parameters_per_shard = total_number_params // number_shards
+
+    current_shard = 0
 
     logging.info(
         f"This model has {total_number_params/1e6:.2f}M parameters, aiming for {number_parameters_per_shard/1e6:.2f}M parameters per shard"
     )
-
-    current_shard = 0
 
     for m in modules:
         # Number of parameters in the current shard
@@ -46,6 +45,10 @@ def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
             current_shard += 1
 
         splits[current_shard].append(m)
+
+    for i, split in enumerate(splits):
+        current_shard_params = sum(p.numel() for sm in split for p in sm.parameters())
+        logging.info(f"Shard {i} holds {current_shard_params/1e6:.2f}M parameters")
 
     return splits
 
@@ -81,10 +84,15 @@ class ModelShard(nn.Module):
 
         # Save all the parameter sizes to be able to restore them
         self.device = device
+        torch.cuda.device(self.device)
+
         self.offload_device = offload_device
         self.should_offload_optimizer = offload_optimizer
 
         self.model_shard.to(offload_device)
+        self.cuda_stream = torch.cuda.Stream(
+            device=self.device
+        )  # needed to make sure load/offload really run in parallel
 
         if not self.is_owner:
             # Record all the shapes
@@ -110,40 +118,44 @@ class ModelShard(nn.Module):
         self.model_shard.to(device=self.device, non_blocking=True)
 
     def forward_load(self, sync: bool = False, non_blocking: bool = True) -> Optional[List[Any]]:
-        # Restore all the parameter buffers
-        self.model_shard.to(device=self.device, non_blocking=non_blocking)
+        with torch.cuda.stream(self.cuda_stream):
+            # Restore all the parameter buffers
+            self.model_shard.to(device=self.device, non_blocking=non_blocking)
 
-        # Fetch or broadcast the latest parameters
-        if sync:
-            requests = list(
-                map(
-                    lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
-                    self.model_shard.parameters(),
-                ),
-            )
-            return requests if non_blocking else self._sync(requests)
+            # Fetch or broadcast the latest parameters
+            if sync:
+                requests = list(
+                    map(
+                        lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
+                        self.model_shard.parameters(),
+                    ),
+                )
+                return requests if non_blocking else self._sync(requests)
 
         return None
 
     def backward_load(self, non_blocking: bool = True) -> None:
-        self.model_shard.to(self.device, non_blocking=non_blocking)
+        with torch.cuda.stream(self.cuda_stream):
+            self.model_shard.to(self.device, non_blocking=non_blocking)
 
     def forward_drop(self, non_blocking: bool = True) -> None:
-        for p in self.model_shard.parameters():
-            p.grad = None
-
-        self.model_shard.to(self.offload_device, non_blocking=non_blocking)
-
-    def backward_drop(self, non_blocking: bool = True) -> None:
-        if not self.is_owner:
-            # Gradients have been reduced and can be discarded
+        with torch.cuda.stream(self.cuda_stream):
             for p in self.model_shard.parameters():
                 p.grad = None
 
-        if self.should_offload_optimizer or not self.is_owner:
-            # Either the optimization takes place on the offload device
-            # or this rank does not own this shard
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
+
+    def backward_drop(self, non_blocking: bool = True) -> None:
+        with torch.cuda.stream(self.cuda_stream):
+            if not self.is_owner:
+                # Gradients have been reduced and can be discarded
+                for p in self.model_shard.parameters():
+                    p.grad = None
+
+            if self.should_offload_optimizer or not self.is_owner:
+                # Either the optimization takes place on the offload device
+                # or this rank does not own this shard
+                self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
     def reduce_grads(self, non_blocking: bool) -> Optional[List[Any]]:
         requests = []
