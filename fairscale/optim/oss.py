@@ -9,7 +9,7 @@ import itertools
 from itertools import chain
 import logging
 from math import inf
-from typing import TYPE_CHECKING, Any, Callable, Deque, Dict, List, Optional, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Callable, Deque, Dict, List, Optional, Type, Union
 
 import torch
 import torch.distributed as dist
@@ -431,26 +431,31 @@ class OSS(Optimizer):
         if len(self._all_states) == 0:
             logging.warning("Optimizer state has not been consolidated. Returning the local state")
             logging.warning("Please call `consolidate_state_dict()` beforehand if you meant to save the global state")
-            state_dict = self.local_state_dict()
-            state_dict["local_state_dict"] = True
-            return state_dict
+            return self.local_state_dict()
 
-        # Flatten the param_groups, save the partition which logs the rank <> shard correspondence
-        partition: List[Tuple[int, int]] = []
-        param_groups: List[Dict[Any, Any]] = []
+        # Flatten the param_groups, flatten the states
+        flat_param_groups: List[Dict[Any, Any]] = []
+        flat_state = {}
+        i_tensor = 0
 
-        start = 0
         for i, s in enumerate(self._all_states):
-            param_groups.extend(s["param_groups"])
-            end = start + len(s["param_groups"])
-            partition.append((start, end))
-            start = end
+            # Each rank owns as many param_groups as the model initially had.
+            # We flatten them here, so that upon loading the partitioning will be done from scratch
+            if len(flat_param_groups) == 0:
+                flat_param_groups = s["param_groups"]
+            else:
+                for fpg, pg in zip(flat_param_groups, s["param_groups"]):
+                    fpg["params"].extend(pg["params"])
+
+            # The original states are indexed with respect to the local tensors
+            # we need to take a global index into account
+            for state in s["state"].values():
+                flat_state[i_tensor] = state
+                i_tensor += 1
 
         return {
-            "state": [s["state"] for s in self._all_states],
-            "param_groups": param_groups,
-            "partition": partition,
-            "local_state_dict": False,
+            "state": flat_state,
+            "param_groups": flat_param_groups,
         }
 
     @staticmethod
@@ -464,13 +469,13 @@ class OSS(Optimizer):
         param_groups = state_dict["param_groups"][state_dict["partition"][rank][0] : state_dict["partition"][rank][1]]
         return {"state": state_dict["state"][rank], "param_groups": param_groups}
 
-    def load_local_state_dict(self, state_dict: dict) -> None:
-        """Loads this rank's state_dict.
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        """Restore the global parameter groups as well as the shard.
 
-        .. warning: This is not meant to load the global state dict.
+        Arguments:
+            state_dict (dict): optimizer state. Should be an object returned
+                from a call to :meth:`state_dict`
         """
-
-        self.optim.load_state_dict(state_dict)
 
         # Workaround PyTorch bug that casts state (https://github.com/pytorch/pytorch/issues/43706)
         # Copied from https://github.com/pytorch/fairseq/blob/v0.9.0/fairseq/optim/fp16_optimizer.py#L251-L268
@@ -485,11 +490,11 @@ class OSS(Optimizer):
                 param = id_map[k]
                 self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
 
-        # Restore the global param_groups (the params themselves are already correct)
-        for global_group, local_group in zip(self.param_groups, groups):
-            for k, v in local_group.items():
-                if k != "params":
-                    global_group[k] = v
+        # Update the param_group keys
+        for fpg, pg in zip(saved_groups, self.param_groups):
+            for key in fpg.keys():
+                if key != "params":
+                    pg[key] = fpg[key]
 
         # Force a re-partitioning, in case the model changed with the new state
         self._partition_parameters.clear()
@@ -498,21 +503,6 @@ class OSS(Optimizer):
 
         # Update the bucketing strategy accordingly
         self._setup_bucket_strategy()
-
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
-        """Restore the global parameter groups as well as the shard.
-
-        Arguments:
-            state_dict (dict): optimizer state. Should be an object returned
-                from a call to :meth:`state_dict`
-        """
-
-        # Check whether we got a local or global dict
-        if "local_state_dict" in state_dict and state_dict["local_state_dict"]:
-            self.load_local_state_dict(state_dict)
-        else:
-            # Dispatch this rank's state dictionary to the wrapped shard optimizer
-            self.load_local_state_dict(OSS.rank_local_state_dict(self.rank, state_dict))
 
     def add_param_group(self, param_group: dict) -> None:
         """Add a param group to the :class:`Optimizer` s `param_groups`.

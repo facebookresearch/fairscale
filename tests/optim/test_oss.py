@@ -158,19 +158,6 @@ class TestSingleRank(unittest.TestCase):
         o.step()
         assert x == torch.tensor([0.9], device=DEVICE)
 
-    def test_local_state_dict(self):
-        x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
-        o = optim.OSS([x], lr=0.1)
-        local_state_dict = o.local_state_dict()
-        o = optim.OSS([x], lr=0.01)
-        o.load_local_state_dict(local_state_dict)
-        # We should now be using a lr of 0.1.
-        assert o.optim.param_groups[0]["lr"] == 0.1
-        assert o.param_groups[0]["lr"] == 0.1
-        x.backward()
-        o.step()
-        assert x == torch.tensor([0.9], device=DEVICE)
-
     def test_implicit_local_state_dict(self):
         x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
         o = optim.OSS([x], lr=0.1)
@@ -398,7 +385,7 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
     # - load it again
     if rank == reference_rank:
         optimizer_state_dict = optimizer.state_dict()
-        assert len(optimizer_state_dict["state"]) == world_size
+        assert len(optimizer_state_dict["state"]) == len(list(model.parameters()))
     else:
         optimizer_state_dict = {}
 
