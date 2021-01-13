@@ -19,7 +19,7 @@ import torch.distributed as dist
 from torch.nn import Parameter
 
 from fairscale.optim import OSS
-from fairscale.optim.utils import Workhandle
+from fairscale.optim.utils import Bucket, Workhandle
 
 
 class ShardedDataParallel(nn.Module):
@@ -44,6 +44,9 @@ class ShardedDataParallel(nn.Module):
         sync_models_at_startup (bool):
             Synchronize the models in between the ranks when starting up. Not needed if each rank has the same seed,
             or the training restarts from a saved state
+        reduce_buffer_size (int):
+            the max size of the buffer used to batch the small parameter tensors, in number of elements (default 16M).
+            this will impact the long term memory consumption, because these buckets correspond to parameters which will not be sharded.
 
 
     .. warning:
@@ -69,6 +72,7 @@ class ShardedDataParallel(nn.Module):
         process_group: Any = None,
         broadcast_buffers: bool = True,
         sync_models_at_startup: bool = True,
+        reduce_buffer_size: int = 2 ** 20,
     ):
         super().__init__()
 
@@ -113,6 +117,18 @@ class ShardedDataParallel(nn.Module):
         # - keep track of the grads which have already been reduced
         self._reduced_grads: Dict[OSS, int] = {}
         self._reduced_grads_max = {o: len(o.param_to_rank.values()) for o in self.sharded_optimizers}
+
+        # - setup buckets and tensor views
+        model_size = sum([p.numel() for p in self.module.parameters()])
+        self.buffer_max_size = min(reduce_buffer_size, model_size)
+        logging.info(
+            "ShardedDDP bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
+                self.buffer_max_size / 2 ** 20, model_size / 2 ** 20
+            )
+        )
+        self.buckets: Dict[OSS, Dict[torch.device, List[Bucket]]] = {o: {} for o in self.sharded_optimizers}
+        self.should_bucket_grad: Dict[torch.Tensor, bool] = {}
+        self._setup_bucket_strategy()
         self._clear_counters()
 
         # - setup backward hooks which will be called by Torch's autograd in due time
@@ -187,6 +203,11 @@ class ShardedDataParallel(nn.Module):
         self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
         self._reduced_grads = {o: 0 for o in self.sharded_optimizers}
 
+        for o in self.buckets.keys():
+            for d in self.buckets[o].keys():
+                for bucket in self.buckets[o][d]:
+                    bucket.reset()
+
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
         for optim in self.sharded_optimizers:
@@ -214,21 +235,39 @@ class ShardedDataParallel(nn.Module):
                 self._grad_to_be_reduced[index] = False
                 param.grad.mul_(self.world_size_scaling)
 
-                # Future work includes clearing up the buffer if possible
-                def cleanup() -> None:
-                    if dst_rank != self.global_rank:
-                        param.grad = None
+                if not self.should_bucket_grad[param]:
+                    # Future work includes clearing up the buffer if possible
+                    def cleanup() -> None:
+                        if dst_rank != self.global_rank:
+                            param.grad = None
 
-                # Async reduce for this buffer, log the future
-                optimizer.work_handles.append(
-                    Workhandle(
-                        handle=dist.reduce(
-                            tensor=param.grad.data, dst=dst_rank, group=self.process_group, async_op=True
-                        ),
-                        callback=cleanup,
+                    # Async reduce for this buffer, log the future
+                    optimizer.work_handles.append(
+                        Workhandle(
+                            handle=dist.reduce(
+                                tensor=param.grad.data, dst=dst_rank, group=self.process_group, async_op=True
+                            ),
+                            callback=cleanup,
+                        )
                     )
-                )
-                self._reduced_grads[optimizer] += 1
+                    self._reduced_grads[optimizer] += 1
+                else:
+                    self.buckets[optimizer][param.device][dst_rank].params_checked_in += 1
+
+                    if self.buckets[optimizer][param.device][dst_rank].full():
+                        # Reduce the bucket
+                        optimizer.work_handles.append(
+                            Workhandle(
+                                handle=dist.reduce(
+                                    tensor=self.buckets[optimizer][param.device][dst_rank].buffer,
+                                    dst=dst_rank,
+                                    group=self.process_group,
+                                    async_op=True,
+                                ),
+                                callback=None,
+                            )
+                        )
+                        self._reduced_grads[optimizer] += 1
 
                 # Opportunistically try to empty the queue
                 optimizer._try_consume_work_handle()
@@ -236,6 +275,7 @@ class ShardedDataParallel(nn.Module):
                 # If all the reduce operations have been called,
                 # make sure that all the asynchronous calls have concluded before moving on
                 # and execute the delayed actions (release gradients, unroll the buckets)
+                # FIXME: This is broken with buckets
                 if self._reduced_grads[optimizer] == self._reduced_grads_max[optimizer]:
                     optimizer._consume_work_handles()
 
@@ -296,3 +336,52 @@ class ShardedDataParallel(nn.Module):
                 # device_id logic has not been handled, assume single-process single-device
                 # SyncBatchNorm only supports DDP with single-process single-device anyway'
                 layer._specify_ddp_gpu_num(1)  # type: ignore
+
+    def _setup_bucket_strategy(self) -> None:
+        """Devise a bucketing strategy on a per-rank ownership level. These buckets will not be sharded, since the gradients would be re-allocated during the backward in that case.
+        """
+
+        # - Allocate one buffer per rank and per device to group the small parameters
+        for sharded_optimizer in self.sharded_optimizers:
+            for device, per_device in sharded_optimizer.per_device_params.items():
+                self.buckets[sharded_optimizer][device] = [
+                    Bucket(buffer=torch.zeros(self.buffer_max_size, dtype=per_device[0][0].dtype, device=device))
+                    for _ in per_device
+                ]
+
+        # Devise the bucketing strategy
+        for sharded_optimizer in self.sharded_optimizers:
+            for device, per_rank_params in sharded_optimizer.per_device_params.items():
+                for dst_rank, params in enumerate(per_rank_params):
+                    offset = 0
+
+                    for param in params:
+                        # Criteria to decide whether this parameter is to be bucketed or not:
+                        # - enough room in the bucket
+                        if param.requires_grad and (offset + param.numel()) < self.buffer_max_size:
+                            self.should_bucket_grad[param] = True
+
+                            # This parameter gradients becomes a view of the bucket
+                            offset_next = offset + param.numel()
+
+                            if param.grad is None:
+                                # will be overwritten just below, see next line
+                                param.grad = torch.zeros_like(param)
+
+                            param.grad.data = (
+                                self.buckets[sharded_optimizer][device][dst_rank]
+                                .buffer[offset:offset_next]
+                                .view_as(param.data)
+                            )
+                            offset = offset_next
+
+                            # Update the bucket
+                            self._reduced_grads_max[sharded_optimizer] -= 1  # one less reduce call per bucketed grad
+                            self.buckets[sharded_optimizer][device][dst_rank].max_params_checked_in += 1
+
+                        else:
+                            self.should_bucket_grad[param] = False
+
+                    # Resize the bucket to remove lost space in the end
+                    self.buckets[sharded_optimizer][device][dst_rank].buffer.resize_(offset)
+                    self._reduced_grads_max[sharded_optimizer] += 1  # one reduce call per bucket
