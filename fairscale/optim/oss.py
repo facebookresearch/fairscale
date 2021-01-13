@@ -343,15 +343,17 @@ class OSS(Optimizer):
             logging.warning("Please call `consolidate_state_dict()` beforehand if you meant to save the global state")
             return self.optim.state_dict()
 
-        # Flatten the param_groups, flatten the states. Make sure that the indexation expected by PyTorch is respected
+        # Unify the shard states and the state that pytorch would expect, given the model.
+        # Indexation needs several redirections, since each shard only knows a limited scope of the model
         # - get the pytorch compliant parameter indexing
         state_dict = super().state_dict()
 
         # - get an id map which links the parameter id to the index in the reference state
         global_id_map = [{id(p): i for pg in self.param_groups for i, p in enumerate(pg["params"])}]
 
+        # - go through the per-shard states, which are all indexed locally
         for rank, s in enumerate(self._all_states):
-            # Match the local indexing and the global partition
+            # -- match the local indexing and the global partition, update the corresponding saved state globally
             for local_pg, global_pg, rank_map in zip(
                 s["param_groups"], self.partition_parameters()[rank], global_id_map
             ):
@@ -361,8 +363,9 @@ class OSS(Optimizer):
                 for local_param_index in local_pg["params"]:
                     global_index = rank_map[local_index_to_param_id[local_param_index]]
 
-                    # Update the state
-                    state_dict["state"][global_index] = s["state"][local_param_index]
+                    # Update the state, if any
+                    if local_param_index in s["state"].keys():
+                        state_dict["state"][global_index] = s["state"][local_param_index]
 
         return state_dict
 
@@ -376,9 +379,9 @@ class OSS(Optimizer):
 
         super().load_state_dict(state_dict)
 
-        # Workaround PyTorch bug that casts state (https://github.com/pytorch/pytorch/issues/43706)
-        # Copied from https://github.com/pytorch/fairseq/blob/v0.9.0/fairseq/optim/fp16_optimizer.py#L251-L268
-        groups = self.optim.param_groups
+        # Set the sharded optimizer state.
+        # Keep the original type (not respected by PyTorch which casts to the model type)
+        groups = self.param_groups  # match with the non-sharded param groups
         saved_groups = state_dict["param_groups"]
         id_map = {
             old_id: p
@@ -387,7 +390,11 @@ class OSS(Optimizer):
         for k, v in state_dict["state"].items():
             if k in id_map:
                 param = id_map[k]
-                self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
+
+                # Only add this state to the sharded optimizer if it owns this param
+                for pg in self.optim.param_groups:
+                    if id(param) in [id(p) for p in pg["params"]]:
+                        self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
 
         # Update the param_group keys
         for fpg, pg in zip(saved_groups, self.param_groups):
@@ -397,14 +404,6 @@ class OSS(Optimizer):
 
         # Sync with the optimizer param groups
         self._sync_param_groups(local_to_global=False)
-
-        # Force a re-partitioning, in case the model changed with the new state
-        self._partition_parameters.clear()
-        self._per_device_params.clear()
-        self._param_rank.clear()
-
-        # Update the bucketing strategy accordingly
-        self._setup_bucket_strategy()
 
     def add_param_group(self, param_group: dict) -> None:
         """Add a param group to the :class:`Optimizer` s `param_groups`.

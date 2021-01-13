@@ -11,7 +11,7 @@
 import copy
 from math import inf
 import tempfile
-from typing import Type, cast
+from typing import Any, Type, cast
 import unittest
 
 import numpy as np
@@ -40,6 +40,19 @@ except ImportError:
 def dist_init(rank, world_size, tempfile_name, backend=BACKEND):
     url = "file://" + tempfile_name
     dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+
+
+def sync_object_ranks(something_to_sync: Any, reference_rank: int, device: torch.device) -> Any:
+    if _torch_broadcast_object:
+        package = [something_to_sync]
+        dist.broadcast_object_list(package, src=reference_rank, group=dist.group.WORLD)
+        package_sync = package[0]
+    else:
+        package_sync = optim.utils.broadcast_object(
+            something_to_sync, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
+        )
+
+    return package_sync
 
 
 class TestSingleRank(unittest.TestCase):
@@ -389,14 +402,8 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
     else:
         optimizer_state_dict = {}
 
-    optim_state = [optimizer_state_dict]
-    if _torch_broadcast_object:
-        dist.broadcast_object_list(optim_state, src=reference_rank, group=dist.group.WORLD)
-        optimizer_state_dict = optim_state[0]
-    else:
-        optimizer_state_dict = optim.utils.broadcast_object(
-            optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
-        )
+    # distribute to the other ranks
+    optimizer_state_dict = sync_object_ranks(optimizer_state_dict, reference_rank, device)
 
     # Load the optimizer state dict
     optimizer.load_state_dict(optimizer_state_dict)
@@ -450,15 +457,6 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
         optimizer_state_dict = optimizer.state_dict()
     else:
         optimizer_state_dict = {}
-
-    optim_state = [optimizer_state_dict]
-    if _torch_broadcast_object:
-        dist.broadcast_object_list(optim_state, src=reference_rank, group=dist.group.WORLD)
-        optimizer_state_dict = optim_state[0]
-    else:
-        optimizer_state_dict = optim.utils.broadcast_object(
-            optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
-        )
 
     # Run two steps, log the loss
     _ = optimizer.step(closure=closure)
@@ -645,10 +643,12 @@ def test_gradient_clipping():
 
 def run_state_dict_distributed(rank, world_size, tempfile_name):
     dist_init(rank, world_size, tempfile_name, backend="gloo")
+    reference_rank = 0
+
     device = torch.device(rank)
     torch.manual_seed(rank)  # make sure that the different rank get different data
 
-    # Run a dummy step so that the optimizer state dict exists
+    # Setup two problems in parallel, we'll make sure that the second track (with save/load) follows the first one(untouched)
     batch, input_width, hidden, target_width = 3, 20, 10, 5
     target = torch.rand((batch, target_width), device=device)
     inputs = torch.rand((batch, input_width), device=device)
@@ -666,47 +666,41 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     sharded_optimizer1 = optim.OSS(model_oss1.parameters(), lr=0.1, momentum=0.99)
     model_oss2 = DDP(module=model_oss2, device_ids=[rank],)
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+    loss_fn = torch.nn.L1Loss().to(device)
 
-    def run_grad_step(device, model, optimizer):
-        loss_fn = torch.nn.L1Loss()
-        loss_fn.to(device)
-
+    def run_grad_step(model, optimizer):
         model.zero_grad()
-
         outputs = model(inputs)
 
         loss = loss_fn(outputs, target)
         loss.backward()
 
         optimizer.step()
-        optimizer.zero_grad()
+
+    def check_equal_models(message: str):
+        # check that model parameters are equal
+        for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
+            assert torch.allclose(param1, param2), message
 
     # save and reload without taking any steps
-    sharded_optimizer2.consolidate_state_dict()
-    state_dict2 = sharded_optimizer2.state_dict()
-    sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+    sharded_optimizer2.consolidate_state_dict(recipient_rank=reference_rank)
+    state_dict2 = sharded_optimizer2.state_dict() if rank == reference_rank else {}
+    state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+
+    # re-create a new optimizer from scratch with absurd values, load the previous state
+    sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=9999.0)  # no momentum on purpose
     sharded_optimizer2.load_state_dict(state_dict2)
+    check_equal_models("parameters of the two identical models have diverged (before any steps)")
 
     # now take a step and check that parameters are equal
-    # take a step
-    run_grad_step(device, model_oss1, sharded_optimizer1)
-    run_grad_step(device, model_oss2, sharded_optimizer2)
+    run_grad_step(model_oss1, sharded_optimizer1)
+    run_grad_step(model_oss2, sharded_optimizer2)
+    check_equal_models("parameters of the two identical models have diverged (after stepping)")
 
-    # check that model parameters are equal
-    for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
-        assert torch.allclose(param1, param2), "parameters of the two identical models have diverged (before any steps)"
-
-    # take a step
-    run_grad_step(device, model_oss1, sharded_optimizer1)
-    run_grad_step(device, model_oss2, sharded_optimizer2)
-
-    # check that model parameters are equal
-    for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
-        assert torch.allclose(param1, param2), "parameters of the two identical models have diverged (before saving)"
-
-    # save the state dict for one model only
-    sharded_optimizer2.consolidate_state_dict()
-    state_dict2 = sharded_optimizer2.state_dict()
+    # save the state dict for one model only, then distribute to the other ranks
+    sharded_optimizer2.consolidate_state_dict(recipient_rank=reference_rank)  # all ranks
+    state_dict2 = sharded_optimizer2.state_dict() if rank == reference_rank else {}
+    state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
 
     # Check that the pulled state and the .param_groups attribute are in sync
     for replica in range(len(state_dict2["param_groups"])):
@@ -715,26 +709,22 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
                 assert state_dict2["param_groups"][replica][k] == sharded_optimizer2.param_groups[0][k]
 
     # take a step
-    run_grad_step(device, model_oss1, sharded_optimizer1)
-    run_grad_step(device, model_oss2, sharded_optimizer2)
+    run_grad_step(model_oss1, sharded_optimizer1)
+    run_grad_step(model_oss2, sharded_optimizer2)
+    check_equal_models("parameters of the two identical models have diverged (after consolidating)")
 
-    # check that saving did not cause a change in the parameters
-    for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
-        assert torch.allclose(
-            param1, param2
-        ), "parameters of the two identical models have diverged (after consolidating)"
-
-    # save again
-    sharded_optimizer2.consolidate_state_dict()
-    state_dict2 = sharded_optimizer2.state_dict()
+    # save again for one rank, then distribute to the others
+    sharded_optimizer2.consolidate_state_dict(recipient_rank=reference_rank)  # all ranks
+    state_dict2 = sharded_optimizer2.state_dict() if rank == reference_rank else {}
+    state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
 
     # reload the state_dict
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
     sharded_optimizer2.load_state_dict(state_dict2)
 
     # take a step
-    run_grad_step(device, model_oss1, sharded_optimizer1)
-    run_grad_step(device, model_oss2, sharded_optimizer2)
+    run_grad_step(model_oss1, sharded_optimizer1)
+    run_grad_step(model_oss2, sharded_optimizer2)
 
     # check that reloading a saved state dict does not change the parameters
     for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
