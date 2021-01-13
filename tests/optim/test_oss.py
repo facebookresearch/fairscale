@@ -416,6 +416,81 @@ def test_collect_shards():
     )
 
 
+def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
+    dist_init(rank, world_size, tempfile_name)
+    device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
+
+    # Run a dummy step so that the optimizer state dict exists
+    batch, input_width, hidden, target_width = 3, 3, 3, 5
+    target = torch.rand((batch, target_width), device=device)
+    inputs = torch.rand((batch, input_width), device=device)
+
+    model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
+    model.to(device)
+
+    loss_fn = torch.nn.L1Loss()
+    loss_fn.to(device)
+
+    optimizer = optim.OSS(model.parameters(), optim=torch.optim.RMSprop, lr=0.1)
+
+    def closure():
+        optimizer.zero_grad()
+        output = model(inputs)
+        loss = loss_fn(output, target)
+        loss.backward()
+        return loss
+
+    _ = optimizer.step(closure=closure)
+
+    # Update the optimizer state on the reference rank
+    optimizer.consolidate_state_dict(recipient_rank=reference_rank)
+
+    # Fetch the state on the reference rank, broadcast to the other ones
+    if rank == reference_rank:
+        optimizer_state_dict = optimizer.state_dict()
+    else:
+        optimizer_state_dict = {}
+
+    optim_state = [optimizer_state_dict]
+    if _torch_broadcast_object:
+        dist.broadcast_object_list(optim_state, src=reference_rank, group=dist.group.WORLD)
+        optimizer_state_dict = optim_state[0]
+    else:
+        optimizer_state_dict = optim.utils.broadcast_object(
+            optimizer_state_dict, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
+        )
+
+    # Run two steps, log the loss
+    _ = optimizer.step(closure=closure)
+    reference_loss = optimizer.step(closure=closure)
+
+    # Load the optimizer state dict, rewind the state two steps back
+    optimizer.load_state_dict(optimizer_state_dict)
+
+    # Run two new steps, log the loss again and check that we get the same
+    _ = optimizer.step(closure=closure)
+    test_loss = optimizer.step(closure=closure)
+
+    assert torch.allclose(reference_loss, test_loss)
+
+    dist.destroy_process_group()
+
+
+def test_reproducibility():
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+
+    if torch.cuda.is_available() and torch.cuda.device_count() < world_size:
+        # Bail out if not enough devices
+        return
+
+    reference_rank = 0
+
+    mp.spawn(
+        run_test_collect_shards, args=(world_size, reference_rank, temp_file_name), nprocs=world_size, join=True,
+    )
+
+
 def run_test_multiple_groups(rank, world_size, tempfile_name):
     # Only work with the even ranks, to check that the global_rank indexing is properly used
     dist_init(rank=rank, world_size=world_size, tempfile_name=tempfile_name, backend="gloo")

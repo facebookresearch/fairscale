@@ -496,6 +496,9 @@ class OSS(Optimizer):
                 if key != "params":
                     pg[key] = fpg[key]
 
+        # Sync with the optimizer param groups
+        self._sync_param_groups(local_to_global=False)
+
         # Force a re-partitioning, in case the model changed with the new state
         self._partition_parameters.clear()
         self._per_device_params.clear()
