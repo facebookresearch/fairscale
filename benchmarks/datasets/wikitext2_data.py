@@ -11,40 +11,6 @@ from torchtext.utils import download_from_url, extract_archive
 from torchtext.vocab import build_vocab_from_iterator
 
 
-class SyntheticLMDataset(Dataset):
-    """
-    Dataset to benchmark a translation like seq2seq task.
-    Args:
-        vocab_size (int, optional): size of the vocabulary (default 10000).
-        max_source_positions (int, optional): max number of tokens in the
-            source sentence (default: 1024).
-        total_samples (int, optional): the total number of rows in the
-            dataset (default: 10000).
-    """
-
-    def __init__(
-        self, vocab_size=10000, max_source_positions=1024, total_samples=10000,
-    ):
-        self.vocab_size = vocab_size
-        self.max_source_positions = max_source_positions
-        self.total_samples = total_samples
-        self.sizes = [self.max_source_positions] * self.total_samples
-
-    def __getitem__(self, index):
-        length = self.sizes[index]
-
-        source = torch.randint(1, self.vocab_size, (length,))
-        target = source.clone()
-        return {
-            "id": index,
-            "source": source,
-            "target": target,
-        }
-
-    def __len__(self):
-        return self.total_samples
-
-
 class Wikitext2Data:
     def get_real_dataloaders(args):
         """Return real dataloaders for training, testing and validation."""
@@ -112,8 +78,6 @@ class Wikitext2Data:
         data = data.view(bsz, -1).t().contiguous()
         return data.to(device)
 
-    def get_synthetic_dataset():
-        return SyntheticLMDataset()
 
     def get_synthetic_dataloader(args):
         """Return synthetic dataloaders for training, testing and validation."""
