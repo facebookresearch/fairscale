@@ -104,6 +104,7 @@ class GoldenData:
             "scaler": GradScaler(),
             "clip_value": 0.05,
             "batch_size": 8,
+            "seq_len": 32,
         }
 
     def get_golden_real_stats():
