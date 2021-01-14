@@ -420,7 +420,6 @@ def get_real_dataloaders(args, device, config):
     """Returns dataloaders for real data."""
 
     if args.model_name == "lm":
-        # data = datasets.get_wikitext2_data(device)
         data = Wikitext2Data.get_real_dataloaders(args)
         ntokens, train_dataloader, valid_dataloader, test_dataloader = data
         config["vocab_size"] = ntokens
