@@ -380,6 +380,19 @@ class OSS(Optimizer):
                 from a call to :meth:`state_dict`
         """
 
+        # Prune the state_dict from the states which this rank does not own, then normal base load
+        global_id_map = {i: p for pg in self.param_groups for i, p in enumerate(pg["params"])}
+
+        other_state = []
+        for i_param in state_dict["state"].keys():
+            # Check that this rank owns this param, if not remove from the state
+            param = global_id_map[i_param]
+            if self.param_to_rank[param] != self.rank:
+                other_state.append(i_param)
+
+        for other_parameter in other_state:
+            state_dict["state"].pop(other_parameter)
+
         super().load_state_dict(state_dict)
 
         # Set the sharded optimizer state.
