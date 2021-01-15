@@ -43,9 +43,10 @@ install_dep_15: &install_dep_15
       name: Install Dependencies
       command: |
         sudo apt-get install -y libopenmpi-dev
+        pip install --progress-bar off torch==1.5.1+cu101 torchvision==0.6.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
-        pip install --progress-bar off torch==1.5.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "5"], "wrong torch version"'
         python -m torch.utils.collect_env
 
 install_dep_16: &install_dep_16
@@ -53,10 +54,11 @@ install_dep_16: &install_dep_16
       name: Install Dependencies
       command: |
         sudo apt-get install -y libopenmpi-dev
+        pip install --progress-bar off torch==1.6.0+cu101 torchvision==0.7.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
-        pip install --progress-bar off torch==1.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "6"], "wrong torch version"'
         python -m torch.utils.collect_env
 
 
@@ -65,20 +67,11 @@ install_dep_17: &install_dep_17
       name: Install Dependencies
       command: |
         sudo apt-get install -y libopenmpi-dev
-        pip install --progress-bar off -r requirements-test.txt
-        pip install --progress-bar off torch==1.7.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
-        pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
-        python -c 'import torch; print("Torch version:", torch.__version__)'
-        python -m torch.utils.collect_env
-
-install_dep_17_cpu: &install_dep_17_cpu
-  - run:
-      name: Install Dependencies
-      command: |
-        sudo apt-get install -y libopenmpi-dev
+        pip install --progress-bar off  torch==1.7.0+cu101 torchvision==0.8.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "7"], "wrong torch version"'
         python -m torch.utils.collect_env
 
 install_repo_cpu: &install_repo_cpu
@@ -168,7 +161,7 @@ jobs:
           keys:
             - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17_cpu
+      - <<: *install_dep_17
 
       - save_cache:
           paths:
