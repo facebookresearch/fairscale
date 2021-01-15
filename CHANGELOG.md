@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [next rel] - TBD
+### Added
+- Pytorch compatibility for OSS checkpoints
+- Elastic checkpoints for OSS, world size can vary in between save and loads
+- Tensor views for OSS bucketing, reduced CPU use
 
 ## [0.1.4] - 2021-01-07
 ### Fixed
