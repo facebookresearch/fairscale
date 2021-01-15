@@ -358,7 +358,10 @@ class OSS(Optimizer):
                 s["param_groups"], self.partition_parameters()[rank], global_id_map
             ):
                 # Go through the parameters indexed locally, pick up the global corresponding param
-                local_index_to_param_id = {i_param: id(global_pg["params"][i_param]) for i_param in local_pg["params"]}
+                # NOTE: Contents of the state_dict changes in between torch1.5 and torch1.6+
+                local_index_to_param_id = {
+                    i_param: id(global_pg["params"][i]) for i, i_param in enumerate(local_pg["params"])
+                }
 
                 for local_param_index in local_pg["params"]:
                     global_index = rank_map[local_index_to_param_id[local_param_index]]
@@ -381,12 +384,10 @@ class OSS(Optimizer):
 
         # Set the sharded optimizer state.
         # Keep the original type (not respected by PyTorch which casts to the model type)
-        groups = self.param_groups  # match with the non-sharded param groups
-        saved_groups = state_dict["param_groups"]
-        id_map = {
-            old_id: p
-            for old_id, p in zip(chain(*(g["params"] for g in saved_groups)), chain(*(g["params"] for g in groups)))
-        }
+        # - map the parameter index in the state dict with the current paramters
+        id_map = {old_id: p for old_id, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
+
+        # - go through the state dict and update the corresponding optimizer states
         for k, v in state_dict["state"].items():
             if k in id_map:
                 param = id_map[k]
@@ -397,7 +398,7 @@ class OSS(Optimizer):
                         self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
 
         # Update the param_group keys
-        for fpg, pg in zip(saved_groups, self.param_groups):
+        for fpg, pg in zip(state_dict["param_groups"], self.param_groups):
             for key in fpg.keys():
                 if key != "params":
                     pg[key] = fpg[key]
