@@ -336,6 +336,8 @@ def test_random_attributes():
     ddp_model = ShardedDataParallel(model, optimizer)
 
     assert hasattr(ddp_model, "banana")
+    assert not hasattr(ddp_model, "orange")
+
     dist.destroy_process_group()
 
 
