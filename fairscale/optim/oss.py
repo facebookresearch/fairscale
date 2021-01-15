@@ -406,55 +406,6 @@ class OSS(Optimizer):
         # Sync with the optimizer param groups
         self._sync_param_groups(local_to_global=False)
 
-    def add_param_group(self, param_group: dict) -> None:
-        """Add a param group to the :class:`Optimizer` s `param_groups`.
-
-        This can be useful when fine tuning a pre-trained network as frozen layers can be made
-        trainable and added to the :class:`Optimizer` as training progresses.
-
-        Arguments:
-            param_group (dict): Specifies what Tensors should be optimized along with group
-            specific optimization options
-
-        .. warning: This handles updating the shards on all partitions, but needs to be called on all ranks.
-        """
-
-        super().add_param_group(param_group)
-        if not self.in_super_constructor:
-            # Force a re-partitioning
-            self._partition_parameters.clear()
-            self._per_device_params.clear()
-            self._param_rank.clear()
-
-            param_groups = self.partition_parameters()[self.rank]
-            if len(param_groups) == len(self.optim.param_groups) + 1:
-                self.optim.add_param_group(param_groups[-1])
-
-            # Update the bucketing strategy accordingly
-            self._setup_bucket_strategy()
-
-    @staticmethod
-    def get_global_rank(group: Any, rank: int) -> int:
-        if group is dist.group.WORLD:
-            return rank
-        else:
-            global_rank = dist.distributed_c10d._get_global_rank(group, rank)
-        return global_rank
-
-    def _sync_param_groups(self, local_to_global: bool = False) -> None:
-        """Sync learning rate and other optimizer attributes (needed to support schedulers).
-        If the global param groups have been altered, and we want to make sure that the
-        wrapped optimizer uses the up to date version.
-        Conversely if the wrapped optimizer has new keys, we expose them through the global param groups"""
-
-        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
-            # Sync everything but the parameters
-            for k in filter(lambda x: x != "params", local_group.keys()):
-                if local_to_global:
-                    global_group[k] = local_group[k]
-                elif k in global_group.keys():
-                    local_group[k] = global_group[k]
-
     def _broadcast_state_dict(self) -> None:
         """Broadcast this rank's state shard, discard others"""
 
@@ -537,6 +488,55 @@ class OSS(Optimizer):
                 logging.debug("State from rank %s received", rank)
 
         return all_states
+
+    def add_param_group(self, param_group: dict) -> None:
+        """Add a param group to the :class:`Optimizer` s `param_groups`.
+
+        This can be useful when fine tuning a pre-trained network as frozen layers can be made
+        trainable and added to the :class:`Optimizer` as training progresses.
+
+        Arguments:
+            param_group (dict): Specifies what Tensors should be optimized along with group
+            specific optimization options
+
+        .. warning: This handles updating the shards on all partitions, but needs to be called on all ranks.
+        """
+
+        super().add_param_group(param_group)
+        if not self.in_super_constructor:
+            # Force a re-partitioning
+            self._partition_parameters.clear()
+            self._per_device_params.clear()
+            self._param_rank.clear()
+
+            param_groups = self.partition_parameters()[self.rank]
+            if len(param_groups) == len(self.optim.param_groups) + 1:
+                self.optim.add_param_group(param_groups[-1])
+
+            # Update the bucketing strategy accordingly
+            self._setup_bucket_strategy()
+
+    @staticmethod
+    def get_global_rank(group: Any, rank: int) -> int:
+        if group is dist.group.WORLD:
+            return rank
+        else:
+            global_rank = dist.distributed_c10d._get_global_rank(group, rank)
+        return global_rank
+
+    def _sync_param_groups(self, local_to_global: bool = False) -> None:
+        """Sync learning rate and other optimizer attributes (needed to support schedulers).
+        If the global param groups have been altered, and we want to make sure that the
+        wrapped optimizer uses the up to date version.
+        Conversely if the wrapped optimizer has new keys, we expose them through the global param groups"""
+
+        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
+            # Sync everything but the parameters
+            for k in filter(lambda x: x != "params", local_group.keys()):
+                if local_to_global:
+                    global_group[k] = local_group[k]
+                elif k in global_group.keys():
+                    local_group[k] = global_group[k]
 
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
