@@ -780,11 +780,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                     b, ddp_b
                 ), f"Model buffers differ in between Pytorch optim and OSS\nworld size {world_size}"
 
-        # The model should be synchronized in between the ranks at construction time, check that
-        check_same_model_params()
-
-        # The models should stay the same in between the ranks
-        for i in range(20):
+        def check_step():
             input_tensor = torch.rand((64, 2)).to(device)
 
             def closure_ddp(input_tensor=input_tensor):
@@ -806,7 +802,28 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                 loss_ddp, loss_sharded_optim
             ), f"Losses differ in between Pytorch optim and OSS\nworld size {world_size}"
 
+        # The model should be synchronized in between the ranks at construction time, check that
+        check_same_model_params()
+
+        # The models should stay the same in between ddp and sharded optimizer
+        for i in range(20):
+            check_step()
             check_same_model_params()
+
+        # Check that the checkpoints are compatible
+        # - get states
+        ddp_state_dict = ddp_optimizer.state_dict()
+        sharded_optimizer.consolidate_state_dict()
+        sharded_optim_state_dict = sharded_optimizer.state_dict()
+        sharded_optim_state_dict = sync_object_ranks(sharded_optim_state_dict, 0, device)
+
+        # - cross load the states
+        ddp_optimizer.load_state_dict(sharded_optim_state_dict)  # mixup on purpose !
+        sharded_optimizer.load_state_dict(ddp_state_dict)
+
+        # - run one step and check that the models are still the same
+        check_step()
+        check_same_model_params()
 
     for opt in [torch.optim.SGD, torch.optim.Adam]:
         check_optimizer_equivalence(opt)
