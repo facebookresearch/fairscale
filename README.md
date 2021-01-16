@@ -158,7 +158,7 @@ At a high level, we want ML researchers to:
 
 # Testing
 
-We use circleci to test on PyTorch versions 1.5.1, 1.6.0 and 1.7.0 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
+We use circleci to test on PyTorch versions 1.5.1, 1.6.0 and 1.7.1 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
 ## Contributors
 
