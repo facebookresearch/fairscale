@@ -11,7 +11,9 @@ import os
 import pprint
 import time
 
-from datasets.wikitext2_data import Wikitext2Data
+from datasets.wikitext2_data import get_real_dataloaders as get_real_wikitext2_dataloaders
+from datasets.wikitext2_data import get_synthetic_dataloaders as get_synthetic_wikitext2_dataloaders
+from golden_configs import lm_wikitext2
 from models import transformer_lm
 import numpy as np
 import torch
@@ -411,7 +413,11 @@ def get_synthetic_dataloader(args, benchmark_config):
     """Returns dataloader for synthetic data."""
 
     if args.model_name == "lm":
+<<<<<<< HEAD
         return Wikitext2Data.get_synthetic_dataloader(args, benchmark_config)
+=======
+        return get_synthetic_wikitext2_dataloaders(args)
+>>>>>>> pipe_benchmarks_refactor_3
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
@@ -420,7 +426,11 @@ def get_real_dataloaders(args, device, benchmark_config):
     """Returns dataloaders for real data."""
 
     if args.model_name == "lm":
+<<<<<<< HEAD
         data = Wikitext2Data.get_real_dataloaders(args, benchmark_config)
+=======
+        data = get_real_wikitext2_dataloaders(args)
+>>>>>>> pipe_benchmarks_refactor_3
         ntokens, train_dataloader, valid_dataloader, test_dataloader = data
         benchmark_config["vocab_size"] = ntokens
         return train_dataloader, valid_dataloader, test_dataloader
@@ -450,7 +460,7 @@ def create_benchmark_config(model_name):
     """Return a dict with configurations required for benchmarking `model_name` model."""
 
     if model_name == "lm":
-        return transformer_lm.GoldenData.get_benchmark_config()
+        return lm_wikitext2.get_benchmark_config()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
@@ -459,7 +469,7 @@ def get_golden_config(model_name):
     """Return a dict with the golden data for throughput and memory usage."""
 
     if model_name == "lm":
-        return transformer_lm.GoldenData.get_golden_real_stats()
+        return lm_wikitext2.get_golden_real_stats()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
