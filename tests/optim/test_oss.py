@@ -735,11 +735,11 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
 
 @skip_if_no_cuda
 def test_state_dict_distributed():
-    world_size = 8
+    world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
     if torch.cuda.is_available():
-        world_size = min(world_size, torch.cuda.device_count())
+        world_size = max(world_size, torch.cuda.device_count())
 
     mp.spawn(
         run_state_dict_distributed, args=(world_size, temp_file_name), nprocs=world_size, join=True,

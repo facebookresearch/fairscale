@@ -384,11 +384,11 @@ class OSS(Optimizer):
         global_id_map = {i: p for pg in self.param_groups for i, p in enumerate(pg["params"])}
 
         other_state = []
-        for i_param, key in enumerate(state_dict["state"].keys()):
+        for i_param in state_dict["state"].keys():
             # Check that this rank owns this param, if not remove from the state
             param = global_id_map[i_param]
             if self.param_to_rank[param] != self.rank:
-                other_state.append(key)
+                other_state.append(i_param)
 
         for other_parameter in other_state:
             state_dict["state"].pop(other_parameter)
