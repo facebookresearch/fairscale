@@ -20,6 +20,10 @@ def _batchify(data, batch_size):
     return data
 
 
+def _get_total_batch_size(benchmark_config):
+    return benchmark_config["seq_len"] * benchmark_config["batch_size"]
+
+
 def get_real_dataloaders(args, benchmark_config):
     """Return real dataloaders for training, testing and validation."""
 
@@ -41,7 +45,7 @@ def get_real_dataloaders(args, benchmark_config):
         batch_size = args.batch_size
         return _batchify(data, batch_size)
 
-    total_batch_size = benchmark_config["seq_len"] * benchmark_config["batch_size"]
+    total_batch_size = _get_total_batch_size(benchmark_config)
     train_dataloader = DataLoader(train_dataset, batch_size=total_batch_size, collate_fn=batchify)
     valid_dataloader = DataLoader(valid_dataset, batch_size=total_batch_size, collate_fn=batchify)
     test_dataloader = DataLoader(test_dataset, batch_size=total_batch_size, collate_fn=batchify)
@@ -55,7 +59,7 @@ def get_synthetic_dataloaders(args, benchmark_config):
         batch_size = args.batch_size
         return _batchify(data, batch_size)
 
-    total_batch_size = benchmark_config["seq_len"] * benchmark_config["batch_size"]
+    total_batch_size = total_batch_size = _get_total_batch_size(benchmark_config)
     # vocab_size is 10000 and length of the real data is 2049990.
     lm_dataset = torch.randint(1, 10000, (2049990,))
 

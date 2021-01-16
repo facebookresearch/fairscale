@@ -409,7 +409,7 @@ def generate_balance(num_devices, num_layers):
     return balance
 
 
-def get_synthetic_dataloader(args, benchmark_config):
+def get_synthetic_dataloaders(args, benchmark_config):
     """Returns dataloader for synthetic data."""
 
     if args.model_name == "lm":
@@ -434,18 +434,19 @@ def create_model_config(args, benchmark_config=None):
     """Return a dict with the given model, dataset and optimizer."""
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
     if args.use_synthetic_data:
-        model, optimizer = get_model_and_optimizer(args, device, benchmark_config)
-        data = get_synthetic_dataloader(args, benchmark_config)
-        return {"model": model, "optimizer": optimizer, "data": data}
+        dataloader_fn = get_synthetic_dataloaders
     else:
-        data = get_real_dataloaders(args, device, benchmark_config)
-        model, optimizer = get_model_and_optimizer(args, device, benchmark_config)
-        return {
-            "model": model,
-            "optimizer": optimizer,
-            "data": data,
-        }
+        dataloader_fn = get_real_dataloaders
+
+    data = dataloader_fn(args, device, benchmark_config)
+    model, optimizer = get_model_and_optimizer(args, device, benchmark_config)
+    return {
+        "model": model,
+        "optimizer": optimizer,
+        "data": data,
+    }
 
 
 def create_benchmark_config(model_name):
