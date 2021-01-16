@@ -12,6 +12,16 @@ from torchtext.utils import download_from_url, extract_archive
 from torchtext.vocab import build_vocab_from_iterator
 
 
+def _batchify(data, batch_size):
+        data = torch.tensor(data)
+        # Divide the dataset into bsz parts.
+        nbatch = data.size(0) // batch_size
+        # Trim off any extra elements that wouldn't cleanly fit (remainders).
+        data = data.narrow(0, 0, nbatch * batch_size)
+        # Evenly divide the data across the bsz batches.
+        data = data.view(batch_size, -1).t().contiguous()
+        return data
+
 
 def get_real_dataloaders(args):
     """Return real dataloaders for training, testing and validation."""
@@ -32,18 +42,11 @@ def get_real_dataloaders(args):
     valid_dataset = data_process(iter(io.open(valid_filepath, encoding="utf8")))
     test_dataset = data_process(iter(io.open(test_filepath, encoding="utf8")))
 
-    # TODO(anj-s): Batch size needs to be argument that we pass in.
     def batchify(data):
         batch_size = args.batch_size
-        data = torch.tensor(data)
-        # Divide the dataset into bsz parts.
-        nbatch = data.size(0) // batch_size
-        # Trim off any extra elements that wouldn't cleanly fit (remainders).
-        data = data.narrow(0, 0, nbatch * batch_size)
-        # Evenly divide the data across the bsz batches.
-        data = data.view(batch_size, -1).t().contiguous()
-        return data
+        return _batchify(data, batch_size)
 
+    # TODO(anj-s): Both seq_len and batch size should be part of the golden config.
     seq_len = 32
     total_batch_size = seq_len * args.batch_size
     train_dataloader = DataLoader(train_dataset, batch_size=total_batch_size, collate_fn=batchify)
@@ -52,19 +55,12 @@ def get_real_dataloaders(args):
     return len(vocab.stoi), train_dataloader, valid_dataloader, test_dataloader
 
 
-def get_synthetic_dataloader(args):
+def get_synthetic_dataloaders(args):
     """Return synthetic dataloaders for training, testing and validation."""
 
     def batchify(data):
         batch_size = args.batch_size
-        data = torch.tensor(data)
-        # Divide the dataset into bsz parts.
-        nbatch = data.size(0) // batch_size
-        # Trim off any extra elements that wouldn't cleanly fit (remainders).
-        data = data.narrow(0, 0, nbatch * batch_size)
-        # Evenly divide the data across the bsz batches.
-        data = data.view(batch_size, -1).t().contiguous()
-        return data
+        return _batchify(data, batch_size)
 
     # TODO(anj-s): Both seq_len and batch size should be part of the golden config.
     seq_len = 32
