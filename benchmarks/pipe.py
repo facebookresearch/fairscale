@@ -413,11 +413,7 @@ def get_synthetic_dataloader(args, benchmark_config):
     """Returns dataloader for synthetic data."""
 
     if args.model_name == "lm":
-<<<<<<< HEAD
-        return Wikitext2Data.get_synthetic_dataloader(args, benchmark_config)
-=======
-        return get_synthetic_wikitext2_dataloaders(args)
->>>>>>> pipe_benchmarks_refactor_3
+        return get_synthetic_wikitext2_dataloaders(args, benchmark_config)
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
@@ -426,11 +422,7 @@ def get_real_dataloaders(args, device, benchmark_config):
     """Returns dataloaders for real data."""
 
     if args.model_name == "lm":
-<<<<<<< HEAD
-        data = Wikitext2Data.get_real_dataloaders(args, benchmark_config)
-=======
-        data = get_real_wikitext2_dataloaders(args)
->>>>>>> pipe_benchmarks_refactor_3
+        data = get_real_wikitext2_dataloaders(args, benchmark_config)
         ntokens, train_dataloader, valid_dataloader, test_dataloader = data
         benchmark_config["vocab_size"] = ntokens
         return train_dataloader, valid_dataloader, test_dataloader
