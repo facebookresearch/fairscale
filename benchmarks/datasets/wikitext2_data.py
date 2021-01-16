@@ -20,7 +20,7 @@ def _batchify(data, batch_size):
     return data
 
 
-def get_real_dataloaders(args):
+def get_real_dataloaders(args, benchmark_config):
     """Return real dataloaders for training, testing and validation."""
 
     url = "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip"
@@ -41,25 +41,21 @@ def get_real_dataloaders(args):
         batch_size = args.batch_size
         return _batchify(data, batch_size)
 
-    # TODO(anj-s): Both seq_len and batch size should be part of the golden config.
-    seq_len = 32
-    total_batch_size = seq_len * args.batch_size
+    total_batch_size = benchmark_config["seq_len"] * benchmark_config["batch_size"]
     train_dataloader = DataLoader(train_dataset, batch_size=total_batch_size, collate_fn=batchify)
     valid_dataloader = DataLoader(valid_dataset, batch_size=total_batch_size, collate_fn=batchify)
     test_dataloader = DataLoader(test_dataset, batch_size=total_batch_size, collate_fn=batchify)
     return len(vocab.stoi), train_dataloader, valid_dataloader, test_dataloader
 
 
-def get_synthetic_dataloaders(args):
+def get_synthetic_dataloaders(args, benchmark_config):
     """Return synthetic dataloaders for training, testing and validation."""
 
     def batchify(data):
         batch_size = args.batch_size
         return _batchify(data, batch_size)
 
-    # TODO(anj-s): Both seq_len and batch size should be part of the golden config.
-    seq_len = 32
-    total_batch_size = seq_len * args.batch_size
+    total_batch_size = benchmark_config["seq_len"] * benchmark_config["batch_size"]
     # vocab_size is 10000 and length of the real data is 2049990.
     lm_dataset = torch.randint(1, 10000, (2049990,))
 
