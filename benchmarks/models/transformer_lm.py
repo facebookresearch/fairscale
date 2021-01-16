@@ -85,4 +85,3 @@ class TransformerLM(nn.Sequential):
 
         layers.append(LinearLayer(ninp, ntokens, initrange))
         super(TransformerLM, self).__init__(*layers)
-

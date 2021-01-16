@@ -1,26 +1,23 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 import io
-import warnings
 
 import torch
-from torch.utils.data import Dataset
-import torchtext
-from torchtext.data.utils import get_tokenizer
 from torch.utils.data import DataLoader
+from torchtext.data.utils import get_tokenizer
 from torchtext.utils import download_from_url, extract_archive
 from torchtext.vocab import build_vocab_from_iterator
 
 
 def _batchify(data, batch_size):
-        data = torch.tensor(data)
-        # Divide the dataset into bsz parts.
-        nbatch = data.size(0) // batch_size
-        # Trim off any extra elements that wouldn't cleanly fit (remainders).
-        data = data.narrow(0, 0, nbatch * batch_size)
-        # Evenly divide the data across the bsz batches.
-        data = data.view(batch_size, -1).t().contiguous()
-        return data
+    data = torch.tensor(data)
+    # Divide the dataset into bsz parts.
+    nbatch = data.size(0) // batch_size
+    # Trim off any extra elements that wouldn't cleanly fit (remainders).
+    data = data.narrow(0, 0, nbatch * batch_size)
+    # Evenly divide the data across the bsz batches.
+    data = data.view(batch_size, -1).t().contiguous()
+    return data
 
 
 def get_real_dataloaders(args):
@@ -31,9 +28,7 @@ def get_real_dataloaders(args):
     tokenizer = get_tokenizer("basic_english")
 
     def data_process(raw_text_iter):
-        data = [
-            torch.tensor([vocab[token] for token in tokenizer(item)], dtype=torch.long) for item in raw_text_iter
-        ]
+        data = [torch.tensor([vocab[token] for token in tokenizer(item)], dtype=torch.long) for item in raw_text_iter]
         return torch.cat(tuple(filter(lambda t: t.numel() > 0, data)))
 
     vocab = build_vocab_from_iterator(map(tokenizer, iter(io.open(train_filepath, encoding="utf8"))))
