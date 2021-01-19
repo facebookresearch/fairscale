@@ -116,7 +116,7 @@ def make_logger(rank: int, verbose: bool = True) -> logging.Logger:
     """
     logger = logging.getLogger(__name__)
     if logger not in HANDLER_AND_LEVEL_SET:
-    # if not getattr(logger, "handler_and_level_set", None):
+        # if not getattr(logger, "handler_and_level_set", None):
         console = logging.StreamHandler(stream=sys.stdout)
         format_str = "{}".format(rank)
         format_str += ": %(levelname)s -- %(threadName)s -- %(message)s"

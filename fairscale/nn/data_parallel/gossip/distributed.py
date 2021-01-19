@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 import threading
-from typing import List, Optional, cast, Dict, Any, Callable, Iterable, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union, cast
 
 import torch
 from torch.autograd import Variable
@@ -371,7 +371,9 @@ class GossipDataParallel(Module):
         # intra-node parameter sync
         params = cast(List[torch.Tensor], list(self.module.parameters()))
         communication_op = functools.partial(
-            dist.broadcast, src=(cast(int, self.dist_config["rank"]) * self.nprocs_per_node), group=self.local_node_group,
+            dist.broadcast,
+            src=(cast(int, self.dist_config["rank"]) * self.nprocs_per_node),
+            group=self.local_node_group,
         )
         communicate(params, communication_op)
         self.logger.debug("Intra-node param sync complete")
@@ -499,7 +501,9 @@ class GossipDataParallel(Module):
     def create_event_recorder(self, event_name: str) -> EventRecorder:
         return create_event_recorder(event_name, dummy=not self.profile_mode)
 
-    def fp16_fp32_iterator(self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor]) -> Iterable[Tuple[torch.Tensor, torch.Tensor]]:
+    def fp16_fp32_iterator(
+        self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor]
+    ) -> Iterable[Tuple[torch.Tensor, torch.Tensor]]:
         """Iterator for those fp16 parameters which have a fp32 copy"""
         if hasattr(optimizer, "_amp_stash") and hasattr(optimizer._amp_stash, "fp16_groups"):  # type: ignore
             for p_fp16_group, p_fp32_group in zip(
@@ -514,7 +518,9 @@ class GossipDataParallel(Module):
                 yield p.view(-1), fp32_params[offset : offset + numel]
                 offset += numel
 
-    def perform_additional_optimizer_actions(self, optimizer: torch.optim.Optimizer, fp32_params=Optional[torch.Tensor]) -> None:
+    def perform_additional_optimizer_actions(
+        self, optimizer: torch.optim.Optimizer, fp32_params=Optional[torch.Tensor]
+    ) -> None:
         """Perform additional steps needed for SGP/LocalSGD/SlowMo"""
         # Done here in case the global momentum buffers has not been initialized by the caller.
         # In an ideal implementation, this would be called by the caller. We do it here instead of
@@ -694,7 +700,12 @@ class GossipDataParallel(Module):
 
     @staticmethod
     def _gossip_into_receive_buffer(
-        send_buffer: List[torch.Tensor], gossiper: Gossiper, receive_buffer: List[torch.Tensor], gossip_ps_weight: torch.Tensor, gossip_lock: threading.Lock, dist_config: Dict[Any, Any],
+        send_buffer: List[torch.Tensor],
+        gossiper: Gossiper,
+        receive_buffer: List[torch.Tensor],
+        gossip_ps_weight: torch.Tensor,
+        gossip_lock: threading.Lock,
+        dist_config: Dict[Any, Any],
     ):
         # flatten parameters before sending
         out_msg = flatten_tensors(send_buffer)
@@ -808,7 +819,9 @@ class GossipDataParallel(Module):
         self.portion_start = rank * self.world_portion_length
         self.portion_end = min((rank + 1) * self.world_portion_length, total_elements)
 
-        self.old_params = cast(torch.Tensor, torch.empty(self.world_portion_length).type(params_dtype)).to(params_device).detach()
+        self.old_params = (
+            cast(torch.Tensor, torch.empty(self.world_portion_length).type(params_dtype)).to(params_device).detach()
+        )
 
         # copy params to old_params to initialize old_params
         offset = 0
