@@ -286,18 +286,6 @@ class GossipDataParallel(Module):
 
         self.logger.debug("Initialization of GossipDataParallel complete")
 
-    def update_gossiper(self, attr, val):
-        self.logger.debug("waiting for gossip lock")
-        with self.gossip_lock:
-            self.logger.debug("gossip lock received")
-            for gossiper in self.dist_config["gossipers"].values():
-                if val == getattr(gossiper, attr):
-                    self.logger.debug("nothing to update")
-                    return
-                # update attr
-                self.logger.debug("setting gossiper %s to %s", attr, val)
-                setattr(gossiper, attr, val)
-
     def state_dict(self, finish_gossip=True):
         # If user is saving the model, complete the gossip to avoid losing
         # the information which has been sent by a peer. If _query_gossip_queue
