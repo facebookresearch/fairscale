@@ -149,18 +149,20 @@ class ShardedDataParallel(nn.Module):
         """
         logging.warning("This is not useful anymore, gradients have been reduced automatically with the backward pass")
 
+    @torch.no_grad()
     def sync_buffers(self, blocking: bool = False) -> None:
         """
         Sync all the param buffers in between ranks (including for instance batch norm statistics).
         """
-        with torch.no_grad():
-            work_handles = [
-                dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True)
-                for buffer in self.module.buffers(recurse=True)
-            ]
 
-            if blocking:
-                _ = list(map(lambda x: x.wait(), work_handles))
+        work_handles = [
+            dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True)
+            for buffer in self.module.buffers(recurse=True)
+        ]
+
+        if blocking:
+            # Only wait for the last coms, they're inlined on the same CUDA stream
+            work_handles[-1].wait()
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -177,6 +179,7 @@ class ShardedDataParallel(nn.Module):
         yield
         self.should_accumulate_grads = old_should_accumulate_grads
 
+    @torch.no_grad()
     def _clear_counters(self) -> None:
         """Reset all the grad reduce and call counters"""
         self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
@@ -199,6 +202,7 @@ class ShardedDataParallel(nn.Module):
         Either way a delayed action is necessary and is passed as a callback.
         """
 
+        @torch.no_grad()
         def reduce(*_: Any) -> None:
             # Skip gradient reduction, do not alter status flags
             if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
@@ -262,17 +266,18 @@ class ShardedDataParallel(nn.Module):
                         grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank, sharded_optimizer))
                         self._grad_accs.append(grad_acc)  # keep this function in scope
 
+    @torch.no_grad()
     def _sync_params_and_buffers(self) -> None:
         """
         Sync the complete model states in between the ranks
         """
-        with torch.no_grad():
-            work_handles = [
-                dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
-                for t in self.module.state_dict().values()
-            ]
+        work_handles = [
+            dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
+            for t in self.module.state_dict().values()
+        ]
 
-            _ = list(map(lambda x: x.wait(), work_handles))
+        # Only wait for the last handle, they're inlined in the same CUDA stream
+        work_handles[-1].wait()
 
     def _passing_sync_batchnorm_handle(self, module: nn.Module) -> None:
         """

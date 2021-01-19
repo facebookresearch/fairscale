@@ -534,6 +534,7 @@ class OSS(Optimizer):
             global_rank = dist.distributed_c10d._get_global_rank(group, rank)
         return global_rank
 
+    @torch.no_grad()
     def _sync_param_groups(self, local_to_global: bool = False) -> None:
         """Sync learning rate and other optimizer attributes (needed to support schedulers).
         If the global param groups have been altered, and we want to make sure that the
@@ -548,10 +549,12 @@ class OSS(Optimizer):
                 elif k in global_group.keys():
                     local_group[k] = global_group[k]
 
+    @torch.no_grad()
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
 
         i_param = 0
+        work_handles = []
 
         for (device, device_params,) in self.per_device_params.items():  # all the params on this device (inc all ranks)
             buckets = self.buckets[device]
@@ -562,25 +565,17 @@ class OSS(Optimizer):
                 # Direct broadcasts only
                 for param in params:
                     if not self.should_bucket_param[i_param]:
-                        self.work_handles.append(
-                            Workhandle(
-                                handle=dist.broadcast(
-                                    tensor=param.data, src=global_src_rank, group=self.group, async_op=True
-                                ),
-                                callback=None,
-                            )
+                        work_handles.append(
+                            dist.broadcast(tensor=param.data, src=global_src_rank, group=self.group, async_op=True)
                         )
                     i_param += 1
 
                 # Bucket broadcasts
-                self.work_handles.append(
-                    Workhandle(
-                        handle=dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True),
-                        callback=None,
-                    )
-                )
+                work_handles.append(dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True))
 
-        self._consume_work_handles()
+        # Only check on the last handle, they're all inlined on the same CUDA stream
+        if len(work_handles) > 0:
+            work_handles[-1].wait()
 
     def _consume_work_handles(self) -> None:
         """Consume all the futures which are tied to this optimizer's buckets.
