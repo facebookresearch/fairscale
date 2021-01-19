@@ -191,7 +191,9 @@ def run_test_add_param_group(rank, world_size, tempfile_name):
     # Test with all parameters trainable to begin with
     def all_trainable():
         params = []
-        for size in [4, 5, 2, 6, 4]:
+        sizes = [9, 7, 5, 3]
+        sizes_world = sizes * world_size
+        for size in sizes_world[:-1]:
             params.append(torch.rand(size, 1))
 
         # Make sure that the params are trainable, enforces size-based partitioning
@@ -204,8 +206,9 @@ def run_test_add_param_group(rank, world_size, tempfile_name):
         o.add_param_group({"params": [torch.rand(3, 1)]})
 
         assert len(o.param_groups) == 2
-        # Verify that added group is added to the correct partition making all have 8 elements.
-        assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == 8
+
+        # Verify that added group is added to the correct partition making all have the same number of elements
+        assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == sum(sizes)
         assert len(o.optim.param_groups) == 2
 
     # Test a pathological config with a first big non-trainable param
@@ -233,9 +236,10 @@ def run_test_add_param_group(rank, world_size, tempfile_name):
 
 
 def test_add_param_group():
-    world_size = 3
+    world_size = 4
     if not torch.cuda.is_available() or torch.cuda.device_count() < world_size:
-        pytest.skip("Not enough GPUs for NCCL-based test")
+        world_size = min(world_size, torch.cuda.device_count())
+
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(run_test_add_param_group, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
@@ -591,10 +595,11 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     target = torch.rand((batch, target_width), device=device)
     inputs = torch.rand((batch, input_width), device=device)
 
-    model_oss1 = torch.nn.Sequential(
-        torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden), torch.nn.Linear(hidden, target_width),
-    ).to(device)
+    model_oss1 = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden),).to(device)
+    head_oss1 = torch.nn.Linear(hidden, target_width).to(device)
+
     model_oss2 = copy.deepcopy(model_oss1)
+    head_oss2 = copy.deepcopy(head_oss1)
 
     # For this test the gradients are (all) reduced in the same way in between the torch reference and fairscale.
     # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
@@ -602,16 +607,19 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     # to keep the comparison apples-to-apples DDP is used in both cases
     model_oss1 = DDP(module=model_oss1, device_ids=[rank],)
     sharded_optimizer1 = optim.OSS(model_oss1.parameters(), lr=0.1, momentum=0.99)
+    sharded_optimizer1.add_param_group({"params": head_oss1.parameters()})
+
     model_oss2 = DDP(module=model_oss2, device_ids=[rank],)
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+    sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
 
-    def run_grad_step(device, model, optimizer):
+    def run_grad_step(device, model, head, optimizer):
         loss_fn = torch.nn.L1Loss()
         loss_fn.to(device)
 
         model.zero_grad()
 
-        outputs = model(inputs)
+        outputs = head(model(inputs))
 
         loss = loss_fn(outputs, target)
         loss.backward()
@@ -622,21 +630,23 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     # save and reload without taking any steps
     sharded_optimizer2.consolidate_state_dict()
     state_dict2 = sharded_optimizer2.state_dict()
+
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+    sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
     sharded_optimizer2.load_state_dict(state_dict2)
 
     # now take a step and check that parameters are equal
     # take a step
-    run_grad_step(device, model_oss1, sharded_optimizer1)
-    run_grad_step(device, model_oss2, sharded_optimizer2)
+    run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
+    run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
 
     # check that model parameters are equal
     for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
         assert torch.allclose(param1, param2), "parameters of the two identical models have diverged (before any steps)"
 
     # take a step
-    run_grad_step(device, model_oss1, sharded_optimizer1)
-    run_grad_step(device, model_oss2, sharded_optimizer2)
+    run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
+    run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
 
     # check that model parameters are equal
     for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
@@ -653,8 +663,8 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
                 assert state_dict2["param_groups"][replica][k] == sharded_optimizer2.param_groups[0][k]
 
     # take a step
-    run_grad_step(device, model_oss1, sharded_optimizer1)
-    run_grad_step(device, model_oss2, sharded_optimizer2)
+    run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
+    run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
 
     # check that saving did not cause a change in the parameters
     for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
@@ -668,11 +678,12 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
 
     # reload the state_dict
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+    sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
     sharded_optimizer2.load_state_dict(state_dict2)
 
     # take a step
-    run_grad_step(device, model_oss1, sharded_optimizer1)
-    run_grad_step(device, model_oss2, sharded_optimizer2)
+    run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
+    run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
 
     # check that reloading a saved state dict does not change the parameters
     for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
