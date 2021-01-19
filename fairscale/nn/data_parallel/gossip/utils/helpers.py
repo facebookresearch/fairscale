@@ -13,12 +13,15 @@ import collections
 import logging
 import math
 import sys
+from typing import Dict, List, Protocol, Set
 
 import torch
 import torch.distributed as dist
 
+# Might need to install typing_extensions separately for Python 3.7 and below
 
-def flatten_tensors(tensors):
+
+def flatten_tensors(tensors: List[torch.Tensor]) -> torch.Tensor:
     """
     Flatten dense tensors into a contiguous 1D buffer. Assume tensors are of
     same dense type.
@@ -36,7 +39,7 @@ def flatten_tensors(tensors):
     return flat
 
 
-def unflatten_tensors(flat, tensors):
+def unflatten_tensors(flat: torch.Tensor, tensors: List[torch.Tensor]) -> List[torch.Tensor]:
     """
     View a flat buffer using the sizes of tensors. Assume that tensors are of
     same dense type, and that flat is given by flatten_dense_tensors.
@@ -54,10 +57,10 @@ def unflatten_tensors(flat, tensors):
         numel = tensor.numel()
         outputs.append(flat.narrow(0, offset, numel).view_as(tensor))
         offset += numel
-    return tuple(outputs)
+    return outputs
 
 
-def group_by_dtype(tensors):
+def group_by_dtype(tensors: List[torch.Tensor]) -> Dict[torch.dtype, List[torch.Tensor]]:
     """
     Returns a dict mapping from the tensor dtype to a list containing all
     tensors of that dtype.
@@ -70,7 +73,12 @@ def group_by_dtype(tensors):
     return tensors_by_dtype
 
 
-def communicate(tensors, communication_op, logger=None):
+class CommunicationOp(Protocol):
+    def __call__(self, tensor: torch.Tensor) -> None:
+        ...
+
+
+def communicate(tensors: List[torch.Tensor], communication_op: CommunicationOp, logger: logging.Logger = None) -> None:
     """
     Communicate a list of tensors.
     Arguments:
@@ -94,7 +102,10 @@ def communicate(tensors, communication_op, logger=None):
             logger.debug("Unflatten completed")
 
 
-def make_logger(rank, verbose=True):
+HANDLER_AND_LEVEL_SET: Set[logging.Logger] = set()
+
+# TODO: need to deprecate this function
+def make_logger(rank: int, verbose: bool = True) -> logging.Logger:
     """
     Return a logger for writing to stdout;
     Arguments:
@@ -104,23 +115,24 @@ def make_logger(rank, verbose=True):
         Python logger
     """
     logger = logging.getLogger(__name__)
-    if not getattr(logger, "handler_set", None):
+    if logger not in HANDLER_AND_LEVEL_SET:
+    # if not getattr(logger, "handler_and_level_set", None):
         console = logging.StreamHandler(stream=sys.stdout)
         format_str = "{}".format(rank)
         format_str += ": %(levelname)s -- %(threadName)s -- %(message)s"
         console.setFormatter(logging.Formatter(format_str))
         logger.addHandler(console)  # prints to console
-        logger.handler_set = True
-    if not getattr(logger, "level_set", None):
         if verbose:
             logger.setLevel(logging.DEBUG)
         else:
             logger.setLevel(logging.INFO)
-        logger.level_set = True
+        HANDLER_AND_LEVEL_SET.add(logger)
+        # logger.handler_and_level_set = True
     return logger
 
 
-def is_power_of(N, k):
+# TODO: deprecate this
+def is_power_of(N: int, k: int) -> bool:
     """
     Returns True if N is a power of k
     """
@@ -134,7 +146,7 @@ def is_power_of(N, k):
     return k ** int(round(math.log(N, k))) == N
 
 
-def create_process_group(ranks):
+def create_process_group(ranks: List[int]) -> torch.distributed.ProcessGroup:
     """
     Creates and lazy intializes a new process group. Assumes init_process_group
     has already been called.

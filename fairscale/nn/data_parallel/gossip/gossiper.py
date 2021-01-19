@@ -12,6 +12,9 @@ Gossipers
               and recv from multiple peers at each ieration)
 """
 
+import logging
+from typing import Iterator, List, Optional, Tuple, cast
+
 import torch
 import torch.distributed as dist
 
@@ -31,8 +34,15 @@ class Gossiper(object):
     """ Generic gossip averaging object for multi-peer communication """
 
     def __init__(
-        self, msg, graph, device=None, mixing=None, logger=None, rank=None, world_size=None,
-    ):
+        self,
+        msg: torch.Tensor,
+        graph: GraphManager,
+        device: Optional[torch.device] = None,
+        mixing: MixingManager = None,
+        logger: logging.Logger = None,
+        rank: Optional[int] = None,
+        world_size: Optional[int] = None,
+    ) -> None:
         """
         Initialize generic averaging class designed for multi-peer comms
 
@@ -46,9 +56,9 @@ class Gossiper(object):
         self.logger = logger
         if rank is None or world_size is None:
             assert dist.is_initialized()
-            # for now p2p communication only supported withed tcp and mpi
-            assert dist._backend != dist_backend.GLOO
-            assert dist._backend != dist_backend.NCCL
+            # for now p2p communication only supported with tcp and mpi
+            assert dist.get_backend() != dist_backend.GLOO
+            assert dist.get_backend() != dist_backend.NCCL
             rank = dist.get_rank()
             world_size = dist.get_world_size()
 
@@ -74,9 +84,9 @@ class Gossiper(object):
 
         # msg buffers used during send/recv
         self.device = device if device is not None else msg.device
-        self.out_msg_buffer = []
+        self.out_msg_buffer: List[Tuple[dist.Work, torch.Tensor]] = []
         self.in_msg_buffer = msg.clone().detach_().to(self.device)
-        self._ps_weight = torch.ones(1).detach_().to(self.device).type(msg.dtype)
+        self._ps_weight: torch.Tensor = torch.ones(1, dtype=msg.dtype).detach_().to(self.device)
         # not using regular comms ==> need to communicate ps-weight
         if not self.regular:
             self.in_msg_buffer = torch.cat([self.in_msg_buffer, self.ps_weight])
@@ -89,22 +99,22 @@ class Gossiper(object):
         self.placeholder = self.in_msg_buffer.clone()
 
     @property
-    def ps_weight(self):
+    def ps_weight(self) -> torch.Tensor:
         return self._ps_weight
 
     @ps_weight.setter
-    def ps_weight(self, v):
+    def ps_weight(self, v: torch.Tensor) -> None:
         self._ps_weight.data[0] = v
 
     @property
-    def peers_per_itr(self):
+    def peers_per_itr(self) -> int:
         return self._graph_manager.peers_per_itr
 
     @peers_per_itr.setter
-    def peers_per_itr(self, v):
+    def peers_per_itr(self, v: int) -> None:
         self._graph_manager.peers_per_itr = v
 
-    def refresh_peers_(self, rotate=None):
+    def refresh_peers_(self, rotate: Optional[bool] = None) -> None:
         """ Update in- and out-peers """
         if rotate is None:
             rotate = True if self._graph_manager.is_dynamic_graph() else False
@@ -112,22 +122,24 @@ class Gossiper(object):
         assert not (rotate and not self._graph_manager.is_dynamic_graph())
         self.out_edges, self.in_edges = self._graph_manager.get_edges(rotate)
 
-    def refresh_mixing_weights_(self, residual_adjusted=False):
+    def refresh_mixing_weights_(self, residual_adjusted: bool = False) -> None:
         """ Update mixing-matrix weights """
         self.mixing_weights = self._mixing_manager.get_mixing_weights(residual_adjusted)
 
-    def mix_out_msg_(self, out_msg, ps_weight, residual=False):
+    def mix_out_msg_(
+        self, out_msg: torch.Tensor, ps_weight: torch.Tensor, residual: bool = False
+    ) -> Iterator[torch.Tensor]:
         """ Returns a generator mixing messages on the fly """
         self.refresh_mixing_weights_(residual)
         self.ps_weight = ps_weight
 
         # check whether or not we need to communicate ps_weight
         if not self.regular:
-            out_msg = torch.cat([out_msg, self.ps_weight.type(out_msg.dtype)])
+            out_msg = torch.cat([out_msg, cast(torch.Tensor, self.ps_weight.type(out_msg.dtype))])
 
         # first return 'loopback msg to self'
         if not residual:
-            yield out_msg.mul(self.mixing_weights["lo"].type(out_msg.dtype))
+            yield out_msg.mul(self.mixing_weights["lo"].type(out_msg.dtype))  # type: ignore
 
         # check whether or not we need to create a buffer for each out-msg
         if self._mixing_manager.is_uniform():
@@ -138,9 +150,9 @@ class Gossiper(object):
         else:
             for out_edge in self.out_edges:
                 weight = self.mixing_weights[out_edge.dest]
-                yield out_msg.mul(weight.type(out_msg.dtype))
+                yield out_msg.mul(weight.type(out_msg.dtype))  # type: ignore
 
-    def clean_msg_buffers_(self):
+    def clean_msg_buffers_(self) -> None:
         """ Clean outgoing message buffer """
         msgs = []
         while len(self.out_msg_buffer) > 0:
@@ -151,7 +163,7 @@ class Gossiper(object):
             msg = msgs.pop()
             msg.set_()
 
-    def parse_in_msg_buffer(self, residual=False):
+    def parse_in_msg_buffer(self, residual: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """ Parse in-msg buffer and return msg and ps-weight separately """
         msg = self.in_msg_buffer
         if not self.regular:
@@ -160,9 +172,11 @@ class Gossiper(object):
             if residual:
                 return msg, self.ps_weight * self.peers_per_itr_device
             else:
-                return msg, torch.ones(1, device=self.device).type(msg.dtype)
+                return msg, torch.ones(1, dtype=msg.dtype, device=self.device)
 
-    def mix(self):
+    def mix(
+        self, out_msg: torch.Tensor, ps_weight: torch.Tensor, residual: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """ Single gossip step """
         raise NotImplementedError
 
@@ -170,7 +184,9 @@ class Gossiper(object):
 class PushSum(Gossiper):
     """ 1-peer Push-Sum consensus averaging module """
 
-    def mix(self, out_msg, ps_weight, residual=False):
+    def mix(
+        self, out_msg: torch.Tensor, ps_weight: torch.Tensor, residual: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """ Consensus averaging step """
         # out_msg must be on the correct device
         assert out_msg.device.type == self.device.type
@@ -204,7 +220,7 @@ class PushSum(Gossiper):
                 dist.broadcast(
                     tensor=self.placeholder, src=in_edge.src, group=in_edge.process_group,
                 )
-                self.in_msg_buffer.add_(self.placeholder)
+                self.in_msg_buffer.add_(self.placeholder)  # type: ignore
 
         self.refresh_peers_()
         self.clean_msg_buffers_()
@@ -214,7 +230,9 @@ class PushSum(Gossiper):
 class PushPull(Gossiper):
     """ Doubly-stochastic consensus averaging module """
 
-    def mix(self, out_msg, ps_weight, residual=False):
+    def mix(
+        self, out_msg: torch.Tensor, ps_weight: torch.Tensor, residual: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # out_msg must be on the correct device
         assert out_msg.device.type == self.device.type
         if self.logger is not None:
@@ -259,9 +277,8 @@ class PushPull(Gossiper):
                         tensor=self.placeholder, src=in_edge.src, group=in_edge.process_group,
                     )
                     dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
-                self.in_msg_buffer.add_(self.placeholder)
+                self.in_msg_buffer.add_(self.placeholder)  # type: ignore
 
         self.refresh_peers_()
         self.clean_msg_buffers_()
         return self.parse_in_msg_buffer(residual)
-

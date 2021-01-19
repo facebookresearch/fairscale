@@ -10,42 +10,48 @@ Benchmarking utils for timing cuda executions
 """
 
 import collections
+import statistics
+from typing import ClassVar, Dict, List, Optional
 
-import numpy as np
 import torch
 
 
-def create_and_record_event():
+def create_and_record_event() -> torch.cuda.Event:
     event = torch.cuda.Event(enable_timing=True)
     event.record()
     return event
 
 
-def create_event_recorder(event_name, dummy=False):
+class EventRecorder(object):
+    def stop(self) -> None:
+        pass
+
+
+def create_event_recorder(event_name: str, dummy: bool = False) -> EventRecorder:
     if not dummy:
         return CudaEventRecorder(event_name)
     return DummyCudaEventRecorder()
 
 
-class CudaEventRecorder(object):
+class CudaEventRecorder(EventRecorder):
     """ Allows recording cuda events in an easy manner """
 
-    event_recorders = collections.defaultdict(list)
-    all_event_recorders = collections.defaultdict(list)
+    event_recorders: ClassVar[Dict[str, List["CudaEventRecorder"]]] = collections.defaultdict(list)
+    all_event_recorders: ClassVar[Dict[str, List["CudaEventRecorder"]]] = collections.defaultdict(list)
 
-    def __init__(self, event_name):
+    def __init__(self, event_name: str) -> None:
         self.event_name = event_name
         self.start_event = create_and_record_event()
-        self.end_event = None
+        self.end_event: Optional[torch.cuda.Event] = None
 
         # Adding it to global tracker
         CudaEventRecorder.event_recorders[event_name].append(self)
         CudaEventRecorder.all_event_recorders[event_name].append(self)
 
-    def stop(self):
+    def stop(self) -> None:
         self.end_event = create_and_record_event()
 
-    def find_time_elapsed(self):
+    def find_time_elapsed(self) -> float:
         if self.end_event is None:
             raise Exception(f"stopEvent was not called for event with name {self.event_name}")
 
@@ -53,11 +59,11 @@ class CudaEventRecorder(object):
         return self.start_event.elapsed_time(self.end_event)
 
     @classmethod
-    def reset(cls):
+    def reset(cls) -> None:
         cls.event_recorders = collections.defaultdict(list)
 
     @classmethod
-    def get_common_timings(cls, event_recorders, description):
+    def get_common_timings(cls, event_recorders: Dict[str, List["CudaEventRecorder"]], description: str) -> str:
         all_timings_str = f"{description}:\n"
 
         # Iterating over different types of events, eg., forward, backward
@@ -69,20 +75,19 @@ class CudaEventRecorder(object):
                 time_taken_list.append(event_recorder.find_time_elapsed())
 
             all_timings_str += ("{}: Time taken: avg: {}, std: {}, count: " "{}\n").format(
-                event_name, np.mean(time_taken_list), np.std(time_taken_list), len(time_taken_list),
+                event_name, statistics.mean(time_taken_list), statistics.pstdev(time_taken_list), len(time_taken_list),
             )
 
         return all_timings_str
 
     @classmethod
-    def get_timings(cls):
+    def get_timings(cls) -> str:
         return cls.get_common_timings(cls.event_recorders, "Timings since last reset")
 
     @classmethod
-    def get_all_timings(cls):
+    def get_all_timings(cls) -> str:
         return cls.get_common_timings(cls.all_event_recorders, "All timings")
 
 
-class DummyCudaEventRecorder(object):
-    def stop(self):
-        pass
+class DummyCudaEventRecorder(EventRecorder):
+    pass

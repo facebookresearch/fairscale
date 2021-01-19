@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 import threading
+from typing import List, Optional, cast, Dict, Any, Callable, Iterable, Tuple, Union
 
 import torch
 from torch.autograd import Variable
@@ -30,11 +31,12 @@ from torch.nn.parallel.scatter_gather import gather, scatter_kwargs
 if dist.is_available():
     from torch.distributed.distributed_c10d import _get_default_group
 
-from .gossiper import PushPull, PushSum
+from .gossiper import Gossiper, PushPull, PushSum
+from .graph_manager import GraphManager
 from .graph_manager import NPeerDynamicDirectedExponentialGraph as NPDDEGraph
-from .mixing_manager import UniformMixing
+from .mixing_manager import MixingManager, UniformMixing
 from .utils import MultiProcessAdapter, communicate, flatten_tensors, group_by_dtype, make_logger, unflatten_tensors
-from .utils.cuda_metering import create_event_recorder
+from .utils.cuda_metering import EventRecorder, create_event_recorder
 
 HEARTBEAT_TIMEOUT = 300  # maximum time to wait for message (seconds)
 
@@ -44,34 +46,34 @@ class GossipDataParallel(Module):
 
     def __init__(
         self,
-        module,
-        device_ids=None,
-        output_device=None,
-        broadcast_buffers=True,
-        rank=None,
-        world_size=None,
-        graph=None,
-        mixing=None,
-        comm_device=None,
-        push_sum=True,
-        overlap=False,
-        synch_freq=0,
-        verbose=False,
-        profile_mode=False,
-        use_streams=True,
-        nprocs_per_node=1,
-        global_group=None,
-        master_group=None,
-        local_node_group=None,
-        slowmo=True,
-        slowmo_lr=1.0,
-        slowmo_momentum=0.5,
-        slowmo_frequency=48,
-        slowmo_sgp_average_params=False,
-        slowmo_world_size=32,
-        localsgd=False,
-        localsgd_frequency=48,
-    ):
+        module: torch.nn.Module,
+        device_ids: Optional[List[int]] = None,
+        output_device: Optional[int] = None,
+        broadcast_buffers: bool = True,
+        rank: Optional[int] = None,
+        world_size: Optional[int] = None,
+        graph: Optional[GraphManager] = None,
+        mixing: Optional[MixingManager] = None,
+        comm_device: Optional[torch.device] = None,
+        push_sum: bool = True,
+        overlap: bool = False,
+        synch_freq: int = 0,
+        verbose: bool = False,
+        profile_mode: bool = False,
+        use_streams: bool = True,
+        nprocs_per_node: int = 1,
+        global_group: Optional[torch.distributed.ProcessGroup] = None,
+        master_group: Optional[torch.distributed.ProcessGroup] = None,
+        local_node_group: Optional[torch.distributed.ProcessGroup] = None,
+        slowmo: bool = True,
+        slowmo_lr: float = 1.0,
+        slowmo_momentum: float = 0.5,
+        slowmo_frequency: int = 48,
+        slowmo_sgp_average_params: bool = False,
+        slowmo_world_size: int = 32,
+        localsgd: bool = False,
+        localsgd_frequency: int = 48,
+    ) -> None:
         super(GossipDataParallel, self).__init__()
 
         # NCCL_BLOCKING_WAIT causes issues with using multiple process groups
@@ -98,7 +100,7 @@ class GossipDataParallel(Module):
         # Only create an adapter if debug logging is enabled to avoid additional overhead
         if self.logger.isEnabledFor(logging.DEBUG):
             # Set custom adapter on top of logger
-            self.logger = MultiProcessAdapter(self.logger, {"process_num": self.process_rank})
+            self.logger = cast(logging.Logger, MultiProcessAdapter(self.logger, {"process_num": self.process_rank}))
 
         # TODO: move initialization of process groups to a helper function
         if global_group is None:
@@ -178,7 +180,7 @@ class GossipDataParallel(Module):
         }
         self.profile_mode = profile_mode
         self.num_updates = 0
-        self.portion_start = None
+        self.portion_start: Optional[int] = None
 
         self.slowmo = False if slowmo_lr == 1 and slowmo_momentum == 0 else slowmo
 
@@ -191,7 +193,7 @@ class GossipDataParallel(Module):
         self.slowmo_sgp_average_params = slowmo_sgp_average_params
         self.localsgd = localsgd
         self.localsgd_frequency = localsgd_frequency
-        self.ef1 = None
+        self.ef1: Optional[List[torch.Tensor]] = None
         self.global_momentum_buffers_initialized = False
 
         self.sgp = not self.localsgd
@@ -226,18 +228,18 @@ class GossipDataParallel(Module):
             self.asynch = synch_freq > 0
 
             # push-sum weight=1.0 ==> distributed averaging
-            self.ps_weight = torch.ones(1, device=comm_device).type(first_param_dtype)
+            self.ps_weight = cast(torch.Tensor, torch.ones(1, device=comm_device).type(first_param_dtype))
             self.is_ps_numerator = False
             self.gossip_enable = True
             self.gossiping = False
             self.params_mixed = True
-            self.gossip_ps_factor = torch.zeros(1, device=comm_device).type(first_param_dtype)
+            self.gossip_ps_factor = cast(torch.Tensor, torch.zeros(1, device=comm_device).type(first_param_dtype))
             self.gossip_ps_weight = self.ps_weight.clone()
             self.gossip_params = []
             self.gossip_device_buffer = []
             for p in module.parameters():
-                cp = p.clone().detach_()
-                cp = cp.cpu().pin_memory() if self.__cpu_comm else cp.cuda()
+                cp = cast(torch.nn.Parameter, p.clone().detach_())
+                cp = cast(torch.nn.Parameter, cp.cpu().pin_memory() if self.__cpu_comm else cp.cuda())
                 self.gossip_params.append(cp)
                 self.gossip_device_buffer.append(cp)
 
@@ -246,7 +248,7 @@ class GossipDataParallel(Module):
             self.gossip_flag = threading.Event()
             self.train_flag = threading.Event()
 
-            if self.dist_config["comm_device"].type != "cpu" and use_streams:
+            if cast(torch.device, self.dist_config["comm_device"]).type != "cpu" and use_streams:
                 self.gossip_stream = torch.cuda.Stream()
             else:
                 self.gossip_stream = torch.cuda.current_stream()
@@ -277,7 +279,7 @@ class GossipDataParallel(Module):
             self.gossip_flag.clear()
 
             # lazy mixing avoids additional bias/de-bias steps
-            self.lazy_mixing = not self.asynch and self.dist_config["mixing"].is_regular()
+            self.lazy_mixing = not self.asynch and cast(MixingManager, self.dist_config["mixing"]).is_regular()
             self.lazy_ps_factor = self.gossip_ps_factor.clone()
             self.logger.debug("lazy mixing: %r", self.lazy_mixing)
 
@@ -286,6 +288,7 @@ class GossipDataParallel(Module):
 
         self.logger.debug("Initialization of GossipDataParallel complete")
 
+    # Not anntotating temporarily. Function definition is broken
     def state_dict(self, finish_gossip=True):
         # If user is saving the model, complete the gossip to avoid losing
         # the information which has been sent by a peer. If _query_gossip_queue
@@ -304,7 +307,8 @@ class GossipDataParallel(Module):
             }
         return state_dict
 
-    def load_state_dict(self, load_dict):
+    # Not anntotating temporarily. Function definition is different from superclass
+    def load_state_dict(self):
         if self.sgp:
             state_dict = load_dict["state_dict"]
             super(GossipDataParallel, self).load_state_dict(state_dict)
@@ -313,44 +317,45 @@ class GossipDataParallel(Module):
         else:
             super(GossipDataParallel, self).load_state_dict(load_dict)
 
-    def forward(self, *inputs, **kwargs):
+    def forward(self, *inputs: Any, **kwargs: Any) -> Union[torch.Tensor, List[torch.Tensor]]:
         """ Forward pass performed in parallel across all devices on node """
         # scatter inputs onto devices
-        inputs, kwargs = self.scatter(inputs, kwargs, self.device_ids)
+        inputs, kwargs = self.scatter(inputs, kwargs, self.device_ids)  # type: ignore
         self._sync_buffers()
         if len(self.device_ids) > 1:
             self._sync_params()
             outputs = self.parallel_apply(self._module_copies[: len(inputs)], inputs, kwargs)
             return self.gather(outputs, self.output_device)
         else:
-            return self.module(*inputs[0], **kwargs[0])
+            return self.module(*inputs[0], **kwargs[0])  # type: ignore
 
-    def scatter(self, inputs, kwargs, device_ids):
+    def scatter(self, inputs, kwargs, device_ids) -> Tuple[Union[torch.Tensor, List[torch.Tensor]], Any]:
         return scatter_kwargs(inputs, kwargs, device_ids, dim=0)
 
-    def parallel_apply(self, replicas, inputs, kwargs):
+    def parallel_apply(self, replicas, inputs, kwargs) -> List[torch.Tensor]:
         return parallel_apply(replicas, inputs, kwargs, self.device_ids[: len(replicas)])
 
-    def gather(self, outputs, output_device):
+    def gather(self, outputs, output_device) -> List[torch.Tensor]:
         return gather(outputs, output_device, dim=0)
 
-    def _sync_params(self):
+    def _sync_params(self) -> None:
         if len(self.device_ids) > 1:
             self._sync_params_single_process()
         if self.nprocs_per_node > 1:
             self._sync_params_multiprocess()
 
-    def _sync_params_single_process(self):
+    def _sync_params_single_process(self) -> None:
         """ Synchronize parameters across devices (intra-node) """
         if self.device_ids and len(self.device_ids) > 1:
             # intra-node parameter sync
             params = list(self.module.parameters())
+            # TODO: deprecate this full method
             result = broadcast_coalesced(params, self.device_ids, self.broadcast_bucket_size)
             for tensors, module in zip(result[1:], self._module_copies[1:]):
                 for tensor, param in zip(tensors, module.parameters()):
                     param.data.set_(tensor)
 
-    def _sync_params_multiprocess(self):
+    def _sync_params_multiprocess(self) -> None:
         """ Synchronize parameters across devices (intra-node) """
         if self.nprocs_per_node <= 1:
             self.logger.warning(
@@ -364,14 +369,14 @@ class GossipDataParallel(Module):
             return
 
         # intra-node parameter sync
-        params = list(self.module.parameters())
+        params = cast(List[torch.Tensor], list(self.module.parameters()))
         communication_op = functools.partial(
-            dist.broadcast, src=(self.dist_config["rank"] * self.nprocs_per_node), group=self.local_node_group,
+            dist.broadcast, src=(cast(int, self.dist_config["rank"]) * self.nprocs_per_node), group=self.local_node_group,
         )
         communicate(params, communication_op)
         self.logger.debug("Intra-node param sync complete")
 
-    def _sync_buffers(self):
+    def _sync_buffers(self) -> None:
         """ Made to make it same as the new DDP implementation. """
         """ Synchronize buffers across devices (intra-node) """
         # module buffer sync
@@ -391,53 +396,55 @@ class GossipDataParallel(Module):
                         buffer.set_(tensor)
         self.logger.debug("Intra-node buffer sync complete")
 
-    def _distributed_broadcast_coalesced(self, tensors, buffer_size):
+    def _distributed_broadcast_coalesced(self, tensors: List[torch.Tensor], buffer_size: int) -> None:
         dist._broadcast_coalesced(self.process_group, tensors, buffer_size)
 
-    def ps_numerator(self):
+    def ps_numerator(self) -> None:
         """ Convert model params to ps-numerator """
         if not self.is_ps_numerator:
             ps_weight = self.ps_weight
             if not self.lazy_mixing:
                 with torch.no_grad():
                     for p in self.module.parameters():
-                        p.mul_(ps_weight.type(p.dtype))
+                        p.mul_(cast(torch.Tensor, ps_weight.type(p.dtype)))
             self.is_ps_numerator = True
 
-    def unbias(self):
+    def unbias(self) -> None:
         """ Convert moel params to de-biased estimate """
         if self.is_ps_numerator:
             ps_weight = self.ps_weight
             if not self.lazy_mixing:
                 with torch.no_grad():
                     for p in self.module.parameters():
-                        p.div_(ps_weight.type(p.dtype))
+                        p.div_(cast(torch.Tensor, ps_weight.type(p.dtype)))  # type: ignore
             self.is_ps_numerator = False
 
-    def train(self, mode=True):
+    def train(self, mode: bool = True) -> "GossipDataParallel":
         super(GossipDataParallel, self).train(mode)
         if self.sgp:
             self.gossip_enable = True
         for module in self._module_copies[1:]:
             module.train(mode)
+        return self
 
-    def eval(self):
+    def eval(self) -> "GossipDataParallel":
         super(GossipDataParallel, self).eval()
         if self.sgp:
             self.gossip_enable = False
         for module in self._module_copies[1:]:
-            module.eval()
+            return_value = module.eval()
         if self.sgp:
             self._query_gossip_queue(non_blocking=self.asynch)
+        return self
 
-    def block(self):
+    def block(self) -> None:
         self.logger.debug("blocking")
         dist.barrier()
 
-    def _query_gossip_queue(self, non_blocking=False):
+    def _query_gossip_queue(self, non_blocking: bool = False) -> bool:
         """ Check gossip-queue for push-sum residuals and update model """
         if not self.gossip_enable:
-            return
+            return False
 
         self.logger.debug("querying gossip queue")
 
@@ -475,9 +482,9 @@ class GossipDataParallel(Module):
                 self.ps_weight *= self.lazy_ps_factor
             with torch.no_grad():
                 for p, r in zip(self.module.parameters(), self.gossip_device_buffer):
-                    p.add_(r)
+                    p.add_(r)  # type: ignore
                     if self.lazy_mixing:
-                        p.mul_(self.lazy_ps_factor.type(p.dtype))
+                        p.mul_(cast(torch.Tensor, self.lazy_ps_factor.type(p.dtype)))
 
             # update flags
             self.logger.debug("updated ps-weight %f", self.ps_weight)
@@ -487,14 +494,16 @@ class GossipDataParallel(Module):
             self.gossiping = False
             return True
 
-    def create_event_recorder(self, event_name):
+        return False
+
+    def create_event_recorder(self, event_name: str) -> EventRecorder:
         return create_event_recorder(event_name, dummy=not self.profile_mode)
 
-    def fp16_fp32_iterator(self, optimizer, fp32_params):
+    def fp16_fp32_iterator(self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor]) -> Iterable[Tuple[torch.Tensor, torch.Tensor]]:
         """Iterator for those fp16 parameters which have a fp32 copy"""
-        if hasattr(optimizer, "_amp_stash") and hasattr(optimizer._amp_stash, "fp16_groups"):
+        if hasattr(optimizer, "_amp_stash") and hasattr(optimizer._amp_stash, "fp16_groups"):  # type: ignore
             for p_fp16_group, p_fp32_group in zip(
-                optimizer._amp_stash.fp16_groups, optimizer._amp_stash.fp32_from_fp16_groups,
+                optimizer._amp_stash.fp16_groups, optimizer._amp_stash.fp32_from_fp16_groups,  # type: ignore
             ):
                 for p_fp16, p_fp32 in zip(p_fp16_group, p_fp32_group):
                     yield p_fp16, p_fp32
@@ -505,7 +514,7 @@ class GossipDataParallel(Module):
                 yield p.view(-1), fp32_params[offset : offset + numel]
                 offset += numel
 
-    def perform_additional_optimizer_actions(self, optimizer, fp32_params=None):
+    def perform_additional_optimizer_actions(self, optimizer: torch.optim.Optimizer, fp32_params=Optional[torch.Tensor]) -> None:
         """Perform additional steps needed for SGP/LocalSGD/SlowMo"""
         # Done here in case the global momentum buffers has not been initialized by the caller.
         # In an ideal implementation, this would be called by the caller. We do it here instead of
@@ -583,10 +592,10 @@ class GossipDataParallel(Module):
         localsgd_rec = self.create_event_recorder("Localsgd communication time")
         if allreduce_params:
             communication_op = functools.partial(dist.all_reduce, group=self.master_group)
-            params = list(self.parameters())
+            params = cast(List[torch.Tensor], list(self.parameters()))
             with torch.no_grad():
                 for p in params:
-                    p.div_(self.dist_config["world_size"])
+                    p.div_(cast(int, self.dist_config["world_size"]))
             self.logger.debug("Params normalized before localsgd step")
 
             # Commenting this out as it may cause an overhead. Can be uncommented if needed
@@ -629,6 +638,7 @@ class GossipDataParallel(Module):
                 for idx, (p_fp16, p_fp32) in enumerate(fp16_fp32_list):
                     p_fp16.copy_(p_fp32)
 
+                    assert self.ef1 is not None
                     if self.sgp and self.overlap:
                         self.ef1[idx].copy_(p_fp32 - p_fp16.float())
         ef_copy_rec.stop()
@@ -636,7 +646,7 @@ class GossipDataParallel(Module):
 
         self.num_updates += 1
 
-    def transfer_params(self, mix=True):
+    def transfer_params(self, mix: bool = True) -> bool:
         """ Transfers COPY of model parameters to gossip queue """
         if not self.gossip_enable or self.process_rank % self.nprocs_per_node != 0:
             return False
@@ -663,7 +673,7 @@ class GossipDataParallel(Module):
         with torch.no_grad():
             for p, gossip_device_buffer_elem in zip(self.module.parameters(), self.gossip_device_buffer):
                 if mix:
-                    p.mul_(self.gossip_ps_factor.type(p.dtype))
+                    p.mul_(cast(torch.Tensor, self.gossip_ps_factor.type(p.dtype)))
                 gossip_device_buffer_elem.copy_(p)
         # --
         # buffer to gossip-thread copy (potentially slow, but asynchronous)
@@ -684,7 +694,7 @@ class GossipDataParallel(Module):
 
     @staticmethod
     def _gossip_into_receive_buffer(
-        send_buffer, gossiper, receive_buffer, gossip_ps_weight, gossip_lock, dist_config,
+        send_buffer: List[torch.Tensor], gossiper: Gossiper, receive_buffer: List[torch.Tensor], gossip_ps_weight: torch.Tensor, gossip_lock: threading.Lock, dist_config: Dict[Any, Any],
     ):
         # flatten parameters before sending
         out_msg = flatten_tensors(send_buffer)
@@ -707,32 +717,32 @@ class GossipDataParallel(Module):
     @staticmethod
     def _gossip_target(
         dist_config,
-        gossip_flag,
-        train_flag,
-        gossip_lock,
-        gossip_params,
-        gossip_device_buffer,
-        gossip_ps_weight,
-        gossip_ps_factor,
-        gossip_stream,
-    ):
+        gossip_flag: threading.Event,
+        train_flag: threading.Event,
+        gossip_lock: threading.Lock,
+        gossip_params: List[torch.Tensor],
+        gossip_device_buffer: List[torch.Tensor],
+        gossip_ps_weight: torch.Tensor,
+        gossip_ps_factor: torch.Tensor,
+        gossip_stream: torch.cuda.Stream,
+    ) -> None:
         """ Gossip thread, which performs push-sum on model params """
-        logger = make_logger(dist_config["rank"], dist_config["verbose"])
+        logger = make_logger(cast(int, dist_config["rank"]), cast(bool, dist_config["verbose"]))
 
         gossip_params_by_dtype = group_by_dtype(gossip_params)
         gossip_device_buffer_by_dtype = group_by_dtype(gossip_device_buffer)
 
         gossipers = {}
         # init gossip instance
-        gossiper_class = PushSum if dist_config["push_sum"] else PushPull
+        gossiper_class = PushSum if cast(bool, dist_config["push_sum"]) else PushPull
         for dtype in gossip_params_by_dtype:
             gossipers[dtype] = gossiper_class(
                 flatten_tensors(gossip_params_by_dtype[dtype]),
-                device=dist_config["comm_device"],
-                graph=dist_config["graph"],
-                mixing=dist_config["mixing"],
-                rank=dist_config["process_rank"],
-                world_size=dist_config["world_size"],
+                device=cast(torch.device, dist_config["comm_device"]),
+                graph=cast(GraphManager, dist_config["graph"]),
+                mixing=cast(MixingManager, dist_config["mixing"]),
+                rank=cast(int, dist_config["process_rank"]),
+                world_size=cast(int, dist_config["world_size"]),
                 logger=logger,
             )
 
@@ -769,7 +779,7 @@ class GossipDataParallel(Module):
                 train_flag.clear()
                 gossip_flag.set()
 
-    def init_global_momentum_buffers(self, optimizer):
+    def init_global_momentum_buffers(self, optimizer: torch.optim.Optimizer) -> None:
         if not self.slowmo:
             return
 
@@ -798,7 +808,7 @@ class GossipDataParallel(Module):
         self.portion_start = rank * self.world_portion_length
         self.portion_end = min((rank + 1) * self.world_portion_length, total_elements)
 
-        self.old_params = torch.empty(self.world_portion_length).type(params_dtype).to(params_device).detach()
+        self.old_params = cast(torch.Tensor, torch.empty(self.world_portion_length).type(params_dtype)).to(params_device).detach()
 
         # copy params to old_params to initialize old_params
         offset = 0
@@ -828,9 +838,9 @@ class GossipDataParallel(Module):
 
         self.global_momentum_buffer = torch.zeros_like(self.old_params).detach()
 
-    def distributed_comm(self, optimizer, mode):
+    def distributed_comm(self, optimizer: torch.optim.Optimizer, mode: str) -> None:
         offset = 0
-        slowmo_comm_lists = [[] for _ in range(self.slowmo_world_size)]
+        slowmo_comm_lists: List[List[torch.Tensor]] = [[] for _ in range(self.slowmo_world_size)]
         with torch.no_grad():
             for group in optimizer.param_groups:
                 # aggregate different parts of p in required node
@@ -863,7 +873,7 @@ class GossipDataParallel(Module):
                     communication_op = functools.partial(dist.broadcast, src=slowmo_rank)
                 communicate(slowmo_comm_list, communication_op)
 
-    def global_momentum_step(self, optimizer):
+    def global_momentum_step(self, optimizer: torch.optim.Optimizer) -> None:
         if not self.slowmo:
             return
 
@@ -878,7 +888,9 @@ class GossipDataParallel(Module):
 
         self.distributed_comm(optimizer, mode="scatter")
 
-    def perform_local_optimization(self, optimizer):
+    def perform_local_optimization(self, optimizer: torch.optim.Optimizer) -> None:
+        assert self.portion_start is not None
+
         with torch.no_grad():
             offset = 0
             for group in optimizer.param_groups:
@@ -906,12 +918,12 @@ class GossipDataParallel(Module):
                         current_p_gmb.mul_(self.slowmo_momentum).sub_(current_p, alpha=1 / group["lr"]).add_(
                             current_p_old, alpha=1 / group["lr"]
                         )
-                        current_p_old.add_(current_p_gmb, alpha=-group["lr"] * self.slowmo_lr)
+                        current_p_old.add_(current_p_gmb, alpha=-group["lr"] * self.slowmo_lr)  # type: ignore
                         current_p.copy_(current_p_old)
 
                     offset += numel
 
-    def __register_hooks(self):
+    def __register_hooks(self) -> None:
         """
         Registers push-sum de-bias/bias hooks in pre-forward/post-backward
         passes in all leaf modules
@@ -919,15 +931,15 @@ class GossipDataParallel(Module):
         self.register_forward_pre_hook(self.__make_forward_pre_hook())
         self.register_backward_hook(self.__make_backward_hook())
 
-    def __make_backward_hook(self):
+    def __make_backward_hook(self) -> Callable[..., None]:
         self.logger.debug("making backward hook")
 
-        def hook(*unused):
+        def hook(*unused: Any) -> None:
             # reduce gradients across devices on a single machine
             if len(self.device_ids) > 1:
 
                 # collect gradients from all copies
-                all_grads = [[] for _ in range(len(self._module_copies))]
+                all_grads: List[List[torch.Tensor]] = [[] for _ in range(len(self._module_copies))]
                 for dev_idx, module in enumerate(self._module_copies):
                     for p in module.parameters():
                         if not p.requires_grad or p.grad is None:
@@ -935,6 +947,7 @@ class GossipDataParallel(Module):
                         all_grads[dev_idx].append(p.grad)
 
                 # reduce grads
+                # TODO: deprecate this entire method as well
                 reduced_grads = reduce_add_coalesced(all_grads, self.output_device, self.nccl_reduce_bucket_size)
 
                 # update grads with reduced grads
@@ -975,10 +988,10 @@ class GossipDataParallel(Module):
 
         return queue_hook
 
-    def __make_forward_pre_hook(self):
+    def __make_forward_pre_hook(self) -> Callable[..., None]:
         self.logger.debug("making forward pre-hook")
 
-        def hook(*unused):
+        def hook(*unused: Any) -> None:
             """ Query gossip queue and de-bias during forward pass """
             # gossip during training (not inference)
             if self.sgp:

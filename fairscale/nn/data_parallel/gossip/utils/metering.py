@@ -10,6 +10,7 @@ Benchmarking utils for timing code snippets
 """
 
 
+# TODO: deprecate this
 class Meter(object):
     """ Computes and stores the average, variance, and current value """
 

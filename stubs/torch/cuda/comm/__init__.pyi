@@ -18,4 +18,16 @@ def gather(tensors: Iterable[Tensor],
            destination: Optional[int] = None,
            ) -> Tensor: ...
 
+
+def broadcast_coalesced(tensors: Iterable[Tensor],
+           devices: Iterable[int],
+           buffer_size: int = 10485760,
+           ) -> Tuple[Tensor, ...]: ...
+
+
+def reduce_add_coalesced(inputs: Iterable[Iterable[Tensor]],
+           destination: Optional[int] = None,
+           buffer_size: int = 10485760,
+           ) -> Tuple[Tensor, ...]: ...
+
 #END
