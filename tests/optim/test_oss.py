@@ -649,14 +649,16 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     torch.manual_seed(rank)  # make sure that the different rank get different data
 
     # Setup two problems in parallel, we'll make sure that the second track (with save/load) follows the first one(untouched)
+    # We split the model in two to test the multiple param groups support
     batch, input_width, hidden, target_width = 3, 20, 10, 5
     target = torch.rand((batch, target_width), device=device)
     inputs = torch.rand((batch, input_width), device=device)
 
-    model_oss1 = torch.nn.Sequential(
-        torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden), torch.nn.Linear(hidden, target_width),
-    ).to(device)
+    model_oss1 = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden),).to(device)
+    head_oss1 = torch.nn.Linear(hidden, target_width).to(device)
+
     model_oss2 = copy.deepcopy(model_oss1)
+    head_oss2 = copy.deepcopy(head_oss1)
 
     # For this test the gradients are (all) reduced in the same way in between the torch reference and fairscale.
     # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
@@ -664,13 +666,18 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     # to keep the comparison apples-to-apples DDP is used in both cases
     model_oss1 = DDP(module=model_oss1, device_ids=[rank],)
     sharded_optimizer1 = optim.OSS(model_oss1.parameters(), lr=0.1, momentum=0.99)
+    sharded_optimizer1.add_param_group({"params": head_oss1.parameters()})
+
     model_oss2 = DDP(module=model_oss2, device_ids=[rank],)
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+    sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
+
     loss_fn = torch.nn.L1Loss().to(device)
 
-    def run_grad_step(model, optimizer):
+    def run_grad_step(model, head, optimizer):
         model.zero_grad()
         outputs = model(inputs)
+        outputs = head(outputs)
 
         loss = loss_fn(outputs, target)
         loss.backward()
@@ -693,8 +700,8 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     check_equal_models("parameters of the two identical models have diverged (before any steps)")
 
     # now take a step and check that parameters are equal
-    run_grad_step(model_oss1, sharded_optimizer1)
-    run_grad_step(model_oss2, sharded_optimizer2)
+    run_grad_step(model_oss1, head_oss1, sharded_optimizer1)
+    run_grad_step(model_oss2, head_oss2, sharded_optimizer2)
     check_equal_models("parameters of the two identical models have diverged (after stepping)")
 
     # save the state dict for one model only, then distribute to the other ranks

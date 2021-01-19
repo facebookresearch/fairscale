@@ -381,7 +381,7 @@ class OSS(Optimizer):
         """
 
         # Prune the state_dict from the states which this rank does not own, then normal base load
-        global_id_map = {i: p for pg in self.param_groups for i, p in enumerate(pg["params"])}
+        global_id_map = [{id(p): i for i, p in enumerate(pg["params"])} for pg in self.param_groups]
 
         other_state = []
         for i_param in state_dict["state"].keys():
@@ -633,9 +633,11 @@ class OSS(Optimizer):
                         # This parameter becomes a view of the bucket
                         offset_next = offset + param.numel()
 
-                        self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.flatten())
-                        param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
-
+                        try:
+                            self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.clone().flatten())
+                            param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
+                        except RuntimeError:
+                            pass
                         offset = offset_next
                     else:
                         self.should_bucket_param.append(False)
