@@ -71,11 +71,12 @@ def validate_benchmark(measurements, args, check_regression):
     golden_data = oss_mnist.get_golden_real_stats()
 
     max_memory = -1.0
+    rank = dist.get_rank()
     if not args.cpu:
         # TODO(anj-s): Check if we need to synchronize before we caculate total training time.
         torch.cuda.synchronize(rank)
         max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
-        logging.info(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
+        logging.info(f"[{rank}] : Peak memory {max_memory:.1f}MiB")
 
     measurements.sort()
     median = measurements[len(measurements) // 2]
@@ -87,9 +88,9 @@ def validate_benchmark(measurements, args, check_regression):
     # TODO(anj-s): Is there value in logging this on every rank? Won't this be the same value (more or less)?
     # We should ideally calculate the above median and mad values only when we are checking for regression.
     # Ideally we can move the check_regression check to the train function and only call this function when it is true.
-    logging.info(f"[{dist.get_rank()}] : Median speed: {median:.2f} +/- {mad:.2f}")
+    logging.info(f"[{rank}] : Median speed: {median:.2f} +/- {mad:.2f}")
 
-    if check_regression and dist.get_rank() == 0:
+    if check_regression and rank == 0:
         assert (median + 3.0 * mad) > golden_data["reference_speed"], "Speed regression detected"
         assert max_memory < 1.05 * golden_data["reference_memory"], "Memory use regression detected"
         assert abs(cast(float, final_loss) - golden_data["reference_loss"]) < 1e-3, "Loss regression detected"
