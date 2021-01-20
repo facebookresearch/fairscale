@@ -335,12 +335,7 @@ class OSS(Optimizer):
         state_dict = super().state_dict()
 
         # - get an id map which links the parameter id to the index in the reference state
-        global_id_map = {}
-        i = 0
-        for pg in self.param_groups:
-            for p in pg["params"]:
-                global_id_map[id(p)] = i
-                i += 1
+        global_id_map = {id(p): i for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
 
         # - go through the per-shard states, which are all indexed locally
         for rank, s in enumerate(self._all_states):
@@ -369,9 +364,12 @@ class OSS(Optimizer):
                 from a call to :meth:`state_dict`
         """
 
-        # Prune the state_dict from the states which this rank does not own, then normal base load
-        global_id_map = [{id(p): i for i, p in enumerate(pg["params"])} for pg in self.param_groups]
+        # Param index to param map
+        global_id_map = {i: p for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
 
+        # FIXME: torch1.5 indexes the state dict with param(id)
+
+        # Prune the state_dict from the states which this rank does not own, then normal base load
         other_state = []
         for i_param in state_dict["state"].keys():
             # Check that this rank owns this param, if not remove from the state
@@ -386,13 +384,11 @@ class OSS(Optimizer):
 
         # Set the sharded optimizer state.
         # Keep the original type (not respected by PyTorch which casts to the model type)
-        # - map the parameter index in the state dict with the current paramters
-        id_map = {old_id: p for old_id, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
-
         # - go through the state dict and update the corresponding optimizer states
+        #
         for k, v in state_dict["state"].items():
-            if k in id_map:
-                param = id_map[k]
+            if k in global_id_map:
+                param = global_id_map[k]
 
                 # Only add this state to the sharded optimizer if it owns this param
                 for pg in self.optim.param_groups:

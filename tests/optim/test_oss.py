@@ -26,6 +26,7 @@ from fairscale.utils.testing import skip_if_no_cuda, skip_if_single_gpu
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
+RECIPIENT_RANK = 1
 
 try:
     from torch.distributed import broadcast_object_list  # noqa
@@ -174,15 +175,8 @@ class TestSingleRank(unittest.TestCase):
     def test_implicit_local_state_dict(self):
         x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
         o = optim.OSS([x], lr=0.1)
-        local_state_dict = o.state_dict()
-        o = optim.OSS([x], lr=0.01)
-        o.load_state_dict(local_state_dict)
-        # We should now be using a lr of 0.1.
-        assert o.optim.param_groups[0]["lr"] == 0.1
-        assert o.param_groups[0]["lr"] == 0.1
-        x.backward()
-        o.step()
-        assert x == torch.tensor([0.9], device=DEVICE)
+        with pytest.raises(RuntimeError):
+            _ = o.state_dict()
 
 
 def run_test_add_param_group(rank, world_size, tempfile_name):
@@ -647,7 +641,6 @@ def test_gradient_clipping():
 
 def run_state_dict_distributed(rank, world_size, tempfile_name):
     dist_init(rank, world_size, tempfile_name, backend="gloo")
-    RECIPIENT = 1
 
     device = torch.device(rank)
     torch.manual_seed(rank)  # make sure that the different rank get different data
@@ -687,9 +680,9 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
             assert torch.allclose(param1, param2), message
 
     # pull the current state, broadcast it to all ranks
-    sharded_optimizer2.consolidate_state_dict(recipient_rank=RECIPIENT)  # all ranks
-    state_dict2 = sharded_optimizer2.state_dict() if rank == RECIPIENT else {}
-    state_dict2 = sync_object_ranks(state_dict2, RECIPIENT, device)
+    sharded_optimizer2.consolidate_state_dict(recipient_rank=RECIPIENT_RANK)  # all ranks
+    state_dict2 = sharded_optimizer2.state_dict() if rank == RECIPIENT_RANK else {}
+    state_dict2 = sync_object_ranks(state_dict2, RECIPIENT_RANK, device)
 
     # re-create a new optimizer from scratch with absurd values, load the previous state
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=1e6, momentum=0.0001)
@@ -703,9 +696,9 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     check_equal_models("parameters of the two identical models have diverged (after stepping)")
 
     # save the state dict for one model only, then distribute to the other ranks
-    sharded_optimizer2.consolidate_state_dict(recipient_rank=RECIPIENT)  # all ranks
-    state_dict2 = sharded_optimizer2.state_dict() if rank == RECIPIENT else {}
-    state_dict2 = sync_object_ranks(state_dict2, RECIPIENT, device)
+    sharded_optimizer2.consolidate_state_dict(recipient_rank=RECIPIENT_RANK)  # all ranks
+    state_dict2 = sharded_optimizer2.state_dict() if rank == RECIPIENT_RANK else {}
+    state_dict2 = sync_object_ranks(state_dict2, RECIPIENT_RANK, device)
 
     # Check that the pulled state and the .param_groups attribute are in sync
     for replica in range(len(state_dict2["param_groups"])):
@@ -719,9 +712,9 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     check_equal_models("parameters of the two identical models have diverged (after consolidating)")
 
     # save again for one rank, then distribute to the others
-    sharded_optimizer2.consolidate_state_dict(recipient_rank=RECIPIENT)  # all ranks
-    state_dict2 = sharded_optimizer2.state_dict() if rank == RECIPIENT else {}
-    state_dict2 = sync_object_ranks(state_dict2, RECIPIENT, device)
+    sharded_optimizer2.consolidate_state_dict(recipient_rank=RECIPIENT_RANK)  # all ranks
+    state_dict2 = sharded_optimizer2.state_dict() if rank == RECIPIENT_RANK else {}
+    state_dict2 = sync_object_ranks(state_dict2, RECIPIENT_RANK, device)
 
     # reload the state_dict
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
@@ -816,9 +809,9 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         # Check that the checkpoints are compatible
         # - get states
         ddp_state_dict = ddp_optimizer.state_dict()
-        sharded_optimizer.consolidate_state_dict()
-        sharded_optim_state_dict = sharded_optimizer.state_dict()
-        sharded_optim_state_dict = sync_object_ranks(sharded_optim_state_dict, 0, device)
+        sharded_optimizer.consolidate_state_dict(recipient_rank=RECIPIENT_RANK)
+        sharded_optim_state_dict = sharded_optimizer.state_dict() if rank == RECIPIENT_RANK else {}
+        sharded_optim_state_dict = sync_object_ranks(sharded_optim_state_dict, RECIPIENT_RANK, device)
 
         # - cross load the states
         ddp_optimizer.load_state_dict(sharded_optim_state_dict)  # mixup on purpose !
