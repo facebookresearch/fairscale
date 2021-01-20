@@ -647,7 +647,7 @@ def test_gradient_clipping():
 
 def run_state_dict_distributed(rank, world_size, tempfile_name):
     dist_init(rank, world_size, tempfile_name, backend="gloo")
-    reference_rank = 0
+    RECIPIENT = 1
 
     device = torch.device(rank)
     torch.manual_seed(rank)  # make sure that the different rank get different data
@@ -658,7 +658,7 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     target = torch.rand((batch, target_width), device=device)
     inputs = torch.rand((batch, input_width), device=device)
 
-    model_oss1 = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden),).to(device)
+    model_oss1 = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden)).to(device)
     head_oss1 = torch.nn.Linear(hidden, target_width).to(device)
 
     model_oss2 = copy.deepcopy(model_oss1)
@@ -682,7 +682,17 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
         model.zero_grad()
         outputs = head(model(inputs))
 
+    def check_equal_models(message: str):
+        for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
+            assert torch.allclose(param1, param2), message
+
+    # pull the current state, broadcast it to all ranks
+    sharded_optimizer2.consolidate_state_dict(recipient_rank=RECIPIENT)  # all ranks
+    state_dict2 = sharded_optimizer2.state_dict() if rank == RECIPIENT else {}
+    state_dict2 = sync_object_ranks(state_dict2, RECIPIENT, device)
+
     # re-create a new optimizer from scratch with absurd values, load the previous state
+    sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=1e6, momentum=0.0001)
     sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
     sharded_optimizer2.load_state_dict(state_dict2)
     check_equal_models("parameters of the two identical models have diverged (before any steps)")
@@ -693,9 +703,9 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     check_equal_models("parameters of the two identical models have diverged (after stepping)")
 
     # save the state dict for one model only, then distribute to the other ranks
-    sharded_optimizer2.consolidate_state_dict(recipient_rank=reference_rank)  # all ranks
-    state_dict2 = sharded_optimizer2.state_dict() if rank == reference_rank else {}
-    state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+    sharded_optimizer2.consolidate_state_dict(recipient_rank=RECIPIENT)  # all ranks
+    state_dict2 = sharded_optimizer2.state_dict() if rank == RECIPIENT else {}
+    state_dict2 = sync_object_ranks(state_dict2, RECIPIENT, device)
 
     # Check that the pulled state and the .param_groups attribute are in sync
     for replica in range(len(state_dict2["param_groups"])):
@@ -709,9 +719,9 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     check_equal_models("parameters of the two identical models have diverged (after consolidating)")
 
     # save again for one rank, then distribute to the others
-    sharded_optimizer2.consolidate_state_dict(recipient_rank=reference_rank)  # all ranks
-    state_dict2 = sharded_optimizer2.state_dict() if rank == reference_rank else {}
-    state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+    sharded_optimizer2.consolidate_state_dict(recipient_rank=RECIPIENT)  # all ranks
+    state_dict2 = sharded_optimizer2.state_dict() if rank == RECIPIENT else {}
+    state_dict2 = sync_object_ranks(state_dict2, RECIPIENT, device)
 
     # reload the state_dict
     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
@@ -719,8 +729,8 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     sharded_optimizer2.load_state_dict(state_dict2)
 
     # take a step
-    run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
-    run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
+    run_grad_step(model_oss1, head_oss1, sharded_optimizer1)
+    run_grad_step(model_oss2, head_oss2, sharded_optimizer2)
     check_equal_models("parameters of the two identical models have diverged (after reloading)")
 
     dist.destroy_process_group()
