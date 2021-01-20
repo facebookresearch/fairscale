@@ -90,7 +90,7 @@ def torch_version() -> Tuple[int, ...]:
     return tuple(int(n) for n in numbering)
 
 
-def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "") -> bool:
+def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "", filename_mpi: str = "") -> bool:
     """
     Initialize torch distributed, based on a temporary file shared across ranks, which makes it possible for unrelated
     tests to be run concurrently.
@@ -142,6 +142,11 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
         else:
             return False
 
+    if "OMPI_COMM_WORLD_RANK" in os.environ:
+        os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
+        os.environ["WORLD_SIZE"] = os.environ["OMPI_COMM_WORLD_SIZE"]
+        torch.distributed.init_process_group("mpi", init_method=f"file://{filename_mpi}")
+
     if torch.cuda.is_available() and torch.cuda.device_count():
         torch.cuda.set_device(rank % torch.cuda.device_count())
 
@@ -162,17 +167,27 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
     for world_size in world_sizes:
         _, filename = tempfile.mkstemp()
         _, filename_rpc = tempfile.mkstemp()
+        _, filename_mpi = tempfile.mkstemp()
 
         # (lefaudeux) Let mp handle the process joining, join=False and handling context has been unstable in the past
-        mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)
+        mp.spawn(
+            test_func, args=(world_size, filename, filename_rpc, filename_mpi, *args), nprocs=world_size, join=True
+        )
 
 
 def worker_process(
-    rank: int, world_size: int, filename: str, filename_rpc: str, func: Callable, args: Any, error_queue: Any
+    rank: int,
+    world_size: int,
+    filename: str,
+    filename_rpc: str,
+    filename_mpi: str,
+    func: Callable,
+    args: Any,
+    error_queue: Any,
 ) -> None:
     """Main function for unit tests launced with torch_spawn"""
 
-    if not dist_init(rank, world_size, filename, filename_rpc):
+    if not dist_init(rank, world_size, filename, filename_rpc, filename_mpi):
         logging.warning("failed initializing torch distributed")
         teardown()
         return
@@ -241,10 +256,6 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
 
             error_queue = multiprocessing.get_context("spawn").SimpleQueue()
             if "OMPI_COMM_WORLD_RANK" in os.environ:
-                os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
-                os.environ["WORLD_SIZE"] = os.environ["OMPI_COMM_WORLD_SIZE"]
-                _, filename = tempfile.mkstemp()
-                torch.distributed.init_process_group("mpi", init_method=f"file://{filename}")
                 world_size = torch.distributed.get_world_size()
                 destroy_model_parallel()
                 initialize_model_parallel(1, world_size)
