@@ -17,25 +17,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The Pipe interface."""
-from collections import OrderedDict
-import itertools
-import threading
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union, cast
-import warnings
+"""The AMPnetPipe interface."""
 
-from dataclasses import dataclass, field
-import torch
-from torch import Tensor, nn
-import torch.autograd
-import torch.cuda
+from torch import nn
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
 
-from fairscale.nn.pipe import Pipe 
-from .ampnet import AsyncAMPnetEventLoop
-
+from fairscale.nn.pipe import Pipe
 from fairscale.nn.pipe.types import PipelineStyle
+
+from .ampnet import AsyncAMPnetEventLoop
 
 __all__ = ["AMPnetPipe"]
 
@@ -44,7 +35,7 @@ MOVING_DENIED = TypeError("denied to move parameters and buffers, because Pipe s
 
 
 class AMPnetPipe(Pipe):
-    def __init__(self, **kwargs)-> None:
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
 
     def interleave(
@@ -55,26 +46,28 @@ class AMPnetPipe(Pipe):
         vocab_size: int,
         weight_prediction: bool = False,
     ) -> None:
-#        self.pipeline.run_ampnet(lm_dataloader, criterion, optimizer, vocab_size, weight_prediction)  # type: ignore
+        #        self.pipeline.run_ampnet(lm_dataloader, criterion, optimizer, vocab_size, weight_prediction)  # type: ignore
 
         partitions = self.mp_partitions
         n = len(partitions)
 
         # AMPnet implementation doesn't handle skip_trackers!
 
-        assert self.pipeline.style is PipelineStyle.AsyncSchedule
+        assert self.pipeline.style is PipelineStyle.AsyncSchedule  # type: ignore
         assert self.group
         rank = self.group.rank()
 
         min_update_interval = 10
 
+        transport = self.pipeline.transport  # type: ignore
+        checkpoint_stop = self.pipeline.checkpoint_stop  # type: ignore
         ampnet_event_loop = AsyncAMPnetEventLoop(
             partitions,
             self.group,
-            self.pipeline.transport,
+            transport,
             min_update_interval,
             weight_prediction,
-            self.pipeline.checkpoint_stop,
+            checkpoint_stop,
             self.input_device,
         )
 
@@ -84,4 +77,3 @@ class AMPnetPipe(Pipe):
             ampnet_event_loop.event_loop_tail_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
         else:
             ampnet_event_loop.event_loop_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
-

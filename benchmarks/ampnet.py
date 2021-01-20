@@ -17,11 +17,11 @@ from torch.utils.data import DataLoader
 import torchtext
 from torchtext.data.utils import get_tokenizer
 
+from experimental.nn.ampnet_pipe import pipe
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
 from fairscale.nn.pipe import LazyModule
-from experimental.nn.pipe import pipe
 from fairscale.optim import GradScaler
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map

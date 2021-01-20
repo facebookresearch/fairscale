@@ -15,12 +15,22 @@ from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
 
 from fairscale.nn.model_parallel import get_pipeline_parallel_ranks
-
-from fairscale.nn.pipe.async_schedule import AsyncMessageBody, AsyncMessageType, AsyncRecvOperator, Location, ModuleWrapper
+from fairscale.nn.pipe.async_schedule import (
+    AsyncMessageBody,
+    AsyncMessageType,
+    AsyncRecvOperator,
+    Location,
+    ModuleWrapper,
+)
 from fairscale.nn.pipe.checkpoint import Checkpointing
 from fairscale.nn.pipe.messages import Transport
 from fairscale.nn.pipe.microbatch import Batch
-from fairscale.nn.pipe.types import EVENT_LOOP_ACTIVATIONS_QUEUE, EVENT_LOOP_GRADIENTS_QUEUE, PipeMessage, TensorOrTensors
+from fairscale.nn.pipe.types import (
+    EVENT_LOOP_ACTIVATIONS_QUEUE,
+    EVENT_LOOP_GRADIENTS_QUEUE,
+    PipeMessage,
+    TensorOrTensors,
+)
 from fairscale.nn.pipe.worker import Task
 
 
