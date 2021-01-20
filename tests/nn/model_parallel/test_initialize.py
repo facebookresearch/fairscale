@@ -26,8 +26,8 @@ from fairscale.nn.model_parallel import initialize as mpu
 from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
 
 
-def run_test_initialize_model_parallel(rank, model_parallel_size, filename, filename_rpc, filename_mpi):
-    dist_init(rank, model_parallel_size, filename, filename_rpc, filename_mpi)
+def run_test_initialize_model_parallel(rank, model_parallel_size, filename, filename_rpc):
+    dist_init(rank, model_parallel_size, filename, filename_rpc)
 
     if torch.distributed.get_rank() == 0:
         print("> testing initialize_model_parallel with size {} ...".format(model_parallel_size))
@@ -63,8 +63,8 @@ def run_test_initialize_model_parallel(rank, model_parallel_size, filename, file
         print(">> passed the test :-)")
 
 
-def run_test_get_model_parallel_src_rank(rank, model_parallel_size_, filename, filename_rpc, filename_mpi):
-    dist_init(rank, model_parallel_size_, filename, filename_rpc, filename_mpi)
+def run_test_get_model_parallel_src_rank(rank, model_parallel_size_, filename, filename_rpc):
+    dist_init(rank, model_parallel_size_, filename, filename_rpc)
 
     if torch.distributed.get_rank() == 0:
         print("> testing get_model_parallel_src_rank with size {} ...".format(model_parallel_size_))
