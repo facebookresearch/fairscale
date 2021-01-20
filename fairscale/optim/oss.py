@@ -109,25 +109,10 @@ class OSS(Optimizer):
         # Current default device is set by the parameters allocated to this rank
         self._device = list(self.per_device_params.keys())[0]
         self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
+        self.buffer_max_size = broadcast_buffer_size
 
-        # Get the correct size for the buckets, cannot be bigger than the model
-        model_size = sum([p.numel() for p in self.param_to_rank.keys()])
-        self.bucket_size = min(broadcast_buffer_size, model_size)
-        logging.info(
-            "Bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
-                self.bucket_size / 2 ** 20, model_size / 2 ** 20
-            )
-        )
-
-        # Allocate one buffer per rank and per device to group the small parameters
-        for device, per_device in self.per_device_params.items():
-            self.buckets[device] = [
-                torch.zeros(self.bucket_size, dtype=per_device[0][0].dtype, device=device)
-                for _ in range(len(per_device))
-            ]
         self.should_bucket_param: List[bool] = []
         self.work_handles: Deque[Workhandle] = deque()
-        self._max_work_handles = -1
         self._setup_bucket_strategy()
 
     # Partition helpers
@@ -624,10 +609,24 @@ class OSS(Optimizer):
         network requests have been issued.
         """
 
-        # Determine the max work handles in flight:
-        # - count all the buckets on the fly
-        self._max_work_handles = 0
+        # (re) allocate the buckets
+        #  - Get the correct size for the buckets, cannot be bigger than the model
+        model_size = sum([p.numel() for p in self.param_to_rank.keys()])
+        self.bucket_size = min(self.buffer_max_size, model_size)
+        logging.info(
+            "Bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
+                self.bucket_size / 2 ** 20, model_size / 2 ** 20
+            )
+        )
 
+        # - Allocate one buffer per rank and per device to group the small parameters
+        for device, per_device in self.per_device_params.items():
+            self.buckets[device] = [
+                torch.zeros(self.bucket_size, dtype=per_device[0][0].dtype, device=device)
+                for _ in range(len(per_device))
+            ]
+
+        # Devise the bucketing strategy
         for device, per_rank_params in self.per_device_params.items():
             for dst_rank, params in enumerate(per_rank_params):
                 offset = 0
@@ -637,10 +636,6 @@ class OSS(Optimizer):
                     # - enough room in the bucket
                     if param.requires_grad and (offset + param.numel()) < self.bucket_size:
                         self.should_bucket_param.append(True)
-
-                        if offset == 0:
-                            # count this bucket, only once
-                            self._max_work_handles += 1
 
                         # This parameter becomes a view of the bucket
                         offset_next = offset + param.numel()
@@ -654,11 +649,3 @@ class OSS(Optimizer):
 
                 # Resize the bucket to remove lost space in the end
                 self.buckets[device][dst_rank].resize_(offset)
-
-        # Make sure that the memory previously taken by the bucketed parameters is released
-        if self._device.type == "cuda":
-            torch.cuda.empty_cache()
-
-        # Determine the max work handles in flight:
-        # - all the direct reduce/broadcast
-        self._max_work_handles += sum(not value for value in self.should_bucket_param)
