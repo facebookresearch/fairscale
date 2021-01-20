@@ -27,8 +27,8 @@ from fairscale.nn.model_parallel.random import get_cuda_rng_tracker, model_paral
 from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
 
 
-def run_test_set_cuda_rng_state(rank, model_parallel_size, filename, filename_rpc):
-    dist_init(rank, model_parallel_size, filename, filename_rpc)
+def run_test_set_cuda_rng_state(rank, model_parallel_size, filename, filename_rpc, filename_mpi):
+    dist_init(rank, model_parallel_size, filename, filename_rpc, filename_mpi)
 
     if torch.distributed.get_rank() == 0:
         print("> testing set_rng_state with size {} ...".format(model_parallel_size))
@@ -96,8 +96,8 @@ def run_test_set_cuda_rng_state(rank, model_parallel_size, filename, filename_rp
         print(">> passed the test :-)")
 
 
-def run_test_cuda_rng_tracker(rank, model_parallel_size, filename, filename_rpc):
-    dist_init(rank, model_parallel_size, filename, filename_rpc)
+def run_test_cuda_rng_tracker(rank, model_parallel_size, filename, filename_rpc, filename_mpi):
+    dist_init(rank, model_parallel_size, filename, filename_rpc, filename_mpi)
 
     if torch.distributed.get_rank() == 0:
         print("> testing cuda rng tracker with size {} ...".format(model_parallel_size))
@@ -172,8 +172,8 @@ def run_test_cuda_rng_tracker(rank, model_parallel_size, filename, filename_rpc)
         print(">> passed the test :-)")
 
 
-def run_test_model_parallel_cuda_manual_seed(rank, model_parallel_size, filename, filename_rpc):
-    dist_init(rank, model_parallel_size, filename, filename_rpc)
+def run_test_model_parallel_cuda_manual_seed(rank, model_parallel_size, filename, filename_rpc, filename_mpi):
+    dist_init(rank, model_parallel_size, filename, filename_rpc, filename_mpi)
 
     if torch.distributed.get_rank() == 0:
         print("> testing model parallel cuda manual seed with size {} ...".format(model_parallel_size))
