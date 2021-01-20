@@ -324,9 +324,10 @@ class OSS(Optimizer):
         """
 
         if len(self._all_states) == 0:
-            logging.warning("Optimizer state has not been consolidated. Returning the local state")
-            logging.warning("Please call `consolidate_state_dict()` beforehand if you meant to save the global state")
-            return self.optim.state_dict()
+            raise RuntimeError(
+                "Optimizer state has not been consolidated on this rank. \
+                Please call `consolidate_state_dict()` on all ranks beforehand if you meant to save the global state"
+            )
 
         # Unify the shard states and the state that pytorch would expect, given the model.
         # Indexation needs several redirections, since each shard only knows a limited scope of the model
