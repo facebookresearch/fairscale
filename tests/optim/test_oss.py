@@ -682,20 +682,7 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
         model.zero_grad()
         outputs = head(model(inputs))
 
-        optimizer.step()
-
-    def check_equal_models(message: str):
-        # check that model parameters are equal
-        for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
-            assert torch.allclose(param1, param2), message
-
-    # save and reload without taking any steps
-    sharded_optimizer2.consolidate_state_dict(recipient_rank=reference_rank)
-    state_dict2 = sharded_optimizer2.state_dict() if rank == reference_rank else {}
-    state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
-
     # re-create a new optimizer from scratch with absurd values, load the previous state
-    sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=9999.0)  # no momentum on purpose
     sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
     sharded_optimizer2.load_state_dict(state_dict2)
     check_equal_models("parameters of the two identical models have diverged (before any steps)")
@@ -717,8 +704,8 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
                 assert state_dict2["param_groups"][replica][k] == sharded_optimizer2.param_groups[0][k]
 
     # take a step
-    run_grad_step(model_oss1, sharded_optimizer1)
-    run_grad_step(model_oss2, sharded_optimizer2)
+    run_grad_step(model_oss1, head_oss1, sharded_optimizer1)
+    run_grad_step(model_oss2, head_oss2, sharded_optimizer2)
     check_equal_models("parameters of the two identical models have diverged (after consolidating)")
 
     # save again for one rank, then distribute to the others
@@ -734,7 +721,7 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     # take a step
     run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
     run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
-    assert torch.allclose(param1, param2), "parameters of the two identical models have diverged (after reloading)"
+    check_equal_models("parameters of the two identical models have diverged (after reloading)")
 
     dist.destroy_process_group()
 
