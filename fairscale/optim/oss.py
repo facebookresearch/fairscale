@@ -335,14 +335,17 @@ class OSS(Optimizer):
         state_dict = super().state_dict()
 
         # - get an id map which links the parameter id to the index in the reference state
-        global_id_map = [{id(p): i for pg in self.param_groups for i, p in enumerate(pg["params"])}]
+        global_id_map = {}
+        i = 0
+        for pg in self.param_groups:
+            for p in pg["params"]:
+                global_id_map[id(p)] = i
+                i += 1
 
         # - go through the per-shard states, which are all indexed locally
         for rank, s in enumerate(self._all_states):
             # -- match the local indexing and the global partition, update the corresponding saved state globally
-            for local_pg, global_pg, rank_map in zip(
-                s["param_groups"], self.partition_parameters()[rank], global_id_map
-            ):
+            for local_pg, global_pg in zip(s["param_groups"], self.partition_parameters()[rank]):
                 # Go through the parameters indexed locally, pick up the global corresponding param
                 # NOTE: Contents of the state_dict changes in between torch1.5 and torch1.6+
                 local_index_to_param_id = {
@@ -350,7 +353,7 @@ class OSS(Optimizer):
                 }
 
                 for local_param_index in local_pg["params"]:
-                    global_index = rank_map[local_index_to_param_id[local_param_index]]
+                    global_index = global_id_map[local_index_to_param_id[local_param_index]]
 
                     # Update the state, if any
                     if local_param_index in s["state"].keys():
