@@ -153,7 +153,7 @@ class TestFlattenParams(unittest.TestCase):
         flat_module = FlattenParamsWrapper(flat_module)
         ref_output = self._get_output(flat_module)
 
-        flat_state_dict = flat_module.state_dict(unflatten_params=False)
+        flat_state_dict = flat_module.flat_state_dict()
 
         new_module = self._get_shared_params_transformer(seed=1234)
         new_module = FlattenParamsWrapper(new_module)

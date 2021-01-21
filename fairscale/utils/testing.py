@@ -366,7 +366,7 @@ class GPT2(nn.Module):
         return self.clf_head(h), logits
 
 
-def objects_are_equal(a, b, raise_exception=False) -> bool:
+def objects_are_equal(a: Any, b: Any, raise_exception: bool = False) -> bool:
     """
     Test that two objects are equal. Tensors are compared to ensure matching
     size, dtype, device and values.
