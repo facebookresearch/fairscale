@@ -129,7 +129,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
         slowmo_model = GossipDataParallel(
             copy.deepcopy(model).to(devices[0]),
             device_ids=device_ids,
-            localsgd=True,
             comm_device=devices[0],
             rank=self.rank,
             world_size=self.world_size,
@@ -314,7 +313,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
             model = GossipDataParallel(
                 LargeNet().to(devices[0]),
                 device_ids=device_ids,
-                localsgd=True,
                 comm_device=devices[0],
                 rank=self.rank,
                 world_size=self.world_size,
@@ -356,7 +354,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_1(
-            devices, int_devices, {"localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},
+            devices, int_devices, {"localsgd": True, "localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},
         )
 
     @requires_nccl()
@@ -365,7 +363,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_1(
-            devices, devices, {"localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},
+            devices, devices, {"localsgd": True, "localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},
         )
 
     @requires_nccl()
@@ -377,6 +375,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
             devices,
             int_devices,
             {
+                "localsgd": True,
                 "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in GossipDataParallel in the one node case
                 "nprocs_per_node": 2,
                 "slowmo": False,
@@ -399,6 +398,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
     #         devices,
     #         device_ids,
     #         {
+    #             "localsgd": True,
     #             "localsgd_frequency": 1,
     #             "rank": self.rank,
     #             "world_size": self.world_size,
@@ -411,25 +411,60 @@ class GossipDataParallelTest(MultiProcessTestCase):
 
     @requires_nccl()
     @skip_if_not_multigpu
-    def test_slowmo_freq_1(self):
+    def test_localsgd_slowmo_freq_1(self):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_1(
             devices,
             int_devices,
-            {"localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo_momentum": 0.5, "slowmo_frequency": 1},
+            {
+                "localsgd": True,
+                "localsgd_frequency": 1,
+                "nprocs_per_node": 1,
+                "slowmo_momentum": 0.5,
+                "slowmo_frequency": 1,
+            },
             model_optimizer_momentum=0.5,
         )
 
     @requires_nccl()
     @skip_if_not_multigpu
-    def test_slowmo(self):
+    def test_sgp_slowmo_freq_1(self):
+        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
+        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
+        self._test_slowmo_with_slowmo_freq_1(
+            devices,
+            int_devices,
+            {"localsgd": False, "nprocs_per_node": 1, "slowmo_momentum": 0.5, "slowmo_frequency": 1,},
+            model_optimizer_momentum=0.5,
+        )
+
+    @requires_nccl()
+    @skip_if_not_multigpu
+    def test_localsgd_slowmo(self):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_ge_2(
             devices,
             int_devices,
-            {"localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo_momentum": 0.5, "slowmo_frequency": 2},
+            {
+                "localsgd": True,
+                "localsgd_frequency": 1,
+                "nprocs_per_node": 1,
+                "slowmo_momentum": 0.5,
+                "slowmo_frequency": 2,
+            },
+        )
+
+    @requires_nccl()
+    @skip_if_not_multigpu
+    def test_sgp_slowmo(self):
+        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
+        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
+        self._test_slowmo_with_slowmo_freq_ge_2(
+            devices,
+            int_devices,
+            {"localsgd": False, "nprocs_per_node": 1, "slowmo_momentum": 0.5, "slowmo_frequency": 2,},
         )
 
     @requires_nccl()
@@ -441,6 +476,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
             devices,
             int_devices,
             {
+                "localsgd": True,
                 "localsgd_frequency": 1,
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
@@ -455,7 +491,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_localsgd_with_freq_ge_2(
-            devices, int_devices, {"localsgd_frequency": 2, "nprocs_per_node": 1, "slowmo": False},
+            devices, int_devices, {"localsgd": True, "localsgd_frequency": 2, "nprocs_per_node": 1, "slowmo": False},
         )
 
     @requires_nccl()
@@ -474,6 +510,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
             devices,
             int_devices,
             {
+                "localsgd": True,
                 "localsgd_frequency": 1,
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
@@ -516,6 +553,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
             devices,
             int_devices,
             {
+                "localsgd": True,
                 "localsgd_frequency": 100,  # This is so that localsgd does not occur
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
