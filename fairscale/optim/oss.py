@@ -306,6 +306,21 @@ class OSS(Optimizer):
             # Acknowledge broadcasts, and send this rank's shard when needed
             self._broadcast_state_dict()
 
+    def local_state_dict(self) -> dict:
+        """ .. deprecated:: 0.1.5
+
+        Gets this rank's state_dict.
+        Returns:
+            The state of the optimizer as a :class:`dict`.
+            It contains two entries:
+            * state - a dict holding current optimization state. Its content
+                differs between optimizer classes.
+            * param_groups - a dict containing all parameter groups
+
+        .. warning: This does not represent the optimizer state dict, only a shard.
+        """
+        return self.optim.state_dict()
+
     def state_dict(self) -> Dict[str, Any]:
         """Return the last known global optimizer state. The returned state is compatible with Pytorch, in that the
         sharded properties are not exposed. It contains two entries:
@@ -338,6 +353,7 @@ class OSS(Optimizer):
         global_id_map = {id(p): i for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
 
         # - go through the per-shard states, which are all indexed locally
+        unordered_state = {}
         for rank, s in enumerate(self._all_states):
             # -- match the local indexing and the global partition, update the corresponding saved state globally
             for local_pg, global_pg in zip(s["param_groups"], self.partition_parameters()[rank]):
@@ -348,11 +364,14 @@ class OSS(Optimizer):
                 }
 
                 for local_param_index in local_pg["params"]:
-                    global_index = global_id_map[local_index_to_param_id[local_param_index]]
-
                     # Update the state, if any
                     if local_param_index in s["state"].keys():
-                        state_dict["state"][global_index] = s["state"][local_param_index]
+                        unordered_state[local_index_to_param_id[local_param_index]] = s["state"][local_param_index]
+
+        # - save the states in the expected order, meaning the one from the param_groups
+        for i, param in enumerate(chain(*(g["params"] for g in self.param_groups))):
+            if id(param) in unordered_state.keys():
+                state_dict["state"][i] = unordered_state[id(param)]
 
         return state_dict
 
@@ -368,6 +387,7 @@ class OSS(Optimizer):
         global_id_map = {i: p for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
 
         # FIXME: torch1.5 indexes the state dict with param(id)
+        print("Loading ", state_dict["state"].keys())
 
         # Prune the state_dict from the states which this rank does not own, then normal base load
         other_state = []
@@ -628,11 +648,8 @@ class OSS(Optimizer):
                         # This parameter becomes a view of the bucket
                         offset_next = offset + param.numel()
 
-                        try:
-                            self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.clone().flatten())
-                            param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
-                        except RuntimeError:
-                            pass
+                        self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.clone().flatten())
+                        param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
                         offset = offset_next
                     else:
                         self.should_bucket_param.append(False)

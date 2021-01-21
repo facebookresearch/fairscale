@@ -339,7 +339,10 @@ def test_step_with_closure():
 def run_test_sharding(rank, world_size, tempfile_name):
     dist_init(rank, world_size, tempfile_name)
     params = []
-    for size in [5, 4, 2, 6, 4, 3]:
+    sizes = [9, 7, 5, 3]
+    sizes_world = sizes * world_size
+
+    for size in sizes_world:
         params.append(torch.rand(size, 1))
 
     # Make sure that the params are trainable, enforces size-based partitioning
@@ -347,17 +350,17 @@ def run_test_sharding(rank, world_size, tempfile_name):
         p.requires_grad = True
 
     o = optim.OSS(params, lr=0.1)
-    assert sum([x.numel() for x in o.optim.param_groups[0]["params"]]) == 8
+    assert sum([x.numel() for x in o.optim.param_groups[0]["params"]]) == sum(sizes)
 
     dist.destroy_process_group()
 
 
 def test_sharding():
-    world_size = 3
-    if not torch.cuda.is_available() or torch.cuda.device_count() < world_size:
-        pytest.skip("Not enough GPUs for NCCL-based test")
-    temp_file_name = tempfile.mkstemp()[1]
+    world_size = 4
+    if torch.cuda.is_available():
+        world_size = min(world_size, torch.cuda.device_count())
 
+    _, temp_file_name = tempfile.mkstemp()
     mp.spawn(run_test_sharding, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
 
@@ -757,11 +760,17 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         model.register_buffer("test_buffer", torch.ones((1)) * rank)
         model.to(device)
 
-        sharded_optimizer = optim.OSS(params=model.parameters(), optim=optimizer, lr=1e-3)
+        optimizer_settings = {"lr": 1e-3}
+        if isinstance(optim, torch.optim.SGD):
+            optimizer_settings["momentum"] = 0.9
+
+        sharded_optimizer = optim.OSS(
+            params=model.parameters(), optim=optimizer, group=None, broadcast_buffer_size=2 ** 10, **optimizer_settings
+        )
         sharded_ddp_model = DDP(module=model, device_ids=[rank], broadcast_buffers=True)
 
         ddp_model_single = copy.deepcopy(model)
-        ddp_optimizer = optimizer(ddp_model_single.parameters(), lr=1e-3)
+        ddp_optimizer = optimizer(ddp_model_single.parameters(), **optimizer_settings)  # type: ignore
         ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True)
 
         def check_same_model_params():
@@ -814,6 +823,11 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         sharded_optim_state_dict = sync_object_ranks(sharded_optim_state_dict, RECIPIENT_RANK, device)
 
         # - cross load the states
+        print(rank, "DDP state dict ", ddp_state_dict["state"].keys())
+        print(rank, "DDP param groups ", ddp_state_dict["param_groups"][0]["params"])
+        print(rank, "ShardedDDP state dict ", sharded_optim_state_dict["state"].keys())
+        print(rank, "ShardedDDP param groups ", sharded_optim_state_dict["param_groups"][0]["params"])
+
         ddp_optimizer.load_state_dict(sharded_optim_state_dict)  # mixup on purpose !
         sharded_optimizer.load_state_dict(ddp_state_dict)
 
@@ -824,6 +838,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     for opt in [torch.optim.SGD, torch.optim.Adam]:
         check_optimizer_equivalence(opt)
 
+    # exit(-1)
     dist.destroy_process_group()
 
 
