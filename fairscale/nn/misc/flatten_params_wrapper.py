@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, List, Optional, OrderedDict, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -127,7 +127,7 @@ class FlattenParamsWrapper(nn.Module):
         except AttributeError:
             return getattr(self.module, name)  # fallback to wrapped module
 
-    def state_dict(self, prefix: str = "", keep_vars: bool = False) -> OrderedDict[str, Tensor]:  # type: ignore
+    def state_dict(self, prefix: str = "", keep_vars: bool = False) -> "OrderedDict[str, Tensor]":  # type: ignore
         """Return an unflattened state_dict."""
         with self.unflatten_params():
             return self.module.state_dict(prefix=prefix, keep_vars=keep_vars)
