@@ -228,12 +228,12 @@ class GossipDataParallel(Module):
             self.asynch = synch_freq > 0
 
             # push-sum weight=1.0 ==> distributed averaging
-            self.ps_weight = cast(torch.Tensor, torch.ones(1, device=comm_device).type(first_param_dtype))
+            self.ps_weight = torch.ones(1, device=comm_device, dtype=first_param_dtype)
             self.is_ps_numerator = False
             self.gossip_enable = True
             self.gossiping = False
             self.params_mixed = True
-            self.gossip_ps_factor = cast(torch.Tensor, torch.zeros(1, device=comm_device).type(first_param_dtype))
+            self.gossip_ps_factor = torch.zeros(1, device=comm_device, dtype=first_param_dtype)
             self.gossip_ps_weight = self.ps_weight.clone()
             self.gossip_params = []
             self.gossip_device_buffer = []
@@ -819,9 +819,7 @@ class GossipDataParallel(Module):
         self.portion_start = rank * self.world_portion_length
         self.portion_end = min((rank + 1) * self.world_portion_length, total_elements)
 
-        self.old_params = (
-            cast(torch.Tensor, torch.empty(self.world_portion_length).type(params_dtype)).to(params_device).detach()
-        )
+        self.old_params = torch.empty(self.world_portion_length, dtype=params_dtype).to(params_device).detach()
 
         # copy params to old_params to initialize old_params
         offset = 0
