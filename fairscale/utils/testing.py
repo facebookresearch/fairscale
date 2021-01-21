@@ -53,6 +53,8 @@ skip_if_single_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 2, reason="multiple GPUs required"
 )
 
+_, filename_mpi = tempfile.mkstemp()
+
 
 class IdentityLayer(torch.nn.Module):
     def __init__(self, size: int, scale: float = 1.0) -> None:
@@ -241,10 +243,12 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
 
             error_queue = multiprocessing.get_context("spawn").SimpleQueue()
             if "OMPI_COMM_WORLD_RANK" in os.environ:
+                global filename_mpi
+
                 os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
                 os.environ["WORLD_SIZE"] = os.environ["OMPI_COMM_WORLD_SIZE"]
-                _, filename = tempfile.mkstemp()
-                torch.distributed.init_process_group("mpi", init_method=f"file://{filename}")
+                torch.distributed.init_process_group("mpi", init_method=f"file://{filename_mpi}")
+
                 world_size = torch.distributed.get_world_size()
                 destroy_model_parallel()
                 initialize_model_parallel(1, world_size)
