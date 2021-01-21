@@ -554,7 +554,7 @@ class OSS(Optimizer):
         """Helper function to broadcast all the parameters from a given device"""
 
         i_param = 0
-        work_handles = []
+        last_work_handle = None  # Work handles are consumed within this scope, no callback
 
         for (device, device_params,) in self.per_device_params.items():  # all the params on this device (inc all ranks)
             buckets = self.buckets[device]
@@ -565,17 +565,18 @@ class OSS(Optimizer):
                 # Direct broadcasts only
                 for param in params:
                     if not self.should_bucket_param[i_param]:
-                        work_handles.append(
-                            dist.broadcast(tensor=param.data, src=global_src_rank, group=self.group, async_op=True)
+                        last_work_handle = dist.broadcast(
+                            tensor=param.data, src=global_src_rank, group=self.group, async_op=True
                         )
+
                     i_param += 1
 
                 # Bucket broadcasts
-                work_handles.append(dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True))
+                last_work_handle = dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True)
 
         # Only check on the last handle, they're all inlined on the same CUDA stream
-        if len(work_handles) > 0:
-            work_handles[-1].wait()
+        if last_work_handle:
+            last_work_handle.wait()
 
     def _consume_work_handles(self) -> None:
         """Consume all the futures which are tied to this optimizer's buckets.

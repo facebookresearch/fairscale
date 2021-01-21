@@ -155,14 +155,16 @@ class ShardedDataParallel(nn.Module):
         Sync all the param buffers in between ranks (including for instance batch norm statistics).
         """
 
-        work_handles = [
-            dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True)
-            for buffer in self.module.buffers(recurse=True)
-        ]
+        last_work_handle = None
 
-        if blocking:
+        for buffer in self.module.buffers(recurse=True):
+            last_work_handle = dist.broadcast(
+                buffer.data, self.reference_global_rank, self.process_group, async_op=True
+            )
+
+        if blocking and last_work_handle:
             # Only wait for the last coms, they're inlined on the same CUDA stream
-            work_handles[-1].wait()
+            last_work_handle.wait()
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -271,13 +273,17 @@ class ShardedDataParallel(nn.Module):
         """
         Sync the complete model states in between the ranks
         """
-        work_handles = [
-            dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
-            for t in self.module.state_dict().values()
-        ]
+
+        last_work_handle = None
+
+        for t in self.module.state_dict().values():
+            last_work_handle = dist.broadcast(
+                t, src=self.reference_global_rank, group=self.process_group, async_op=True
+            )
 
         # Only wait for the last handle, they're inlined in the same CUDA stream
-        work_handles[-1].wait()
+        if last_work_handle:
+            last_work_handle.wait()
 
     def _passing_sync_batchnorm_handle(self, module: nn.Module) -> None:
         """
