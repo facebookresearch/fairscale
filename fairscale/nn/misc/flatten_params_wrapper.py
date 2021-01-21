@@ -6,8 +6,8 @@ from contextlib import contextmanager
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import torch
-import torch.nn as nn
 from torch import Tensor
+import torch.nn as nn
 
 
 class FlattenParamsWrapper(nn.Module):
@@ -28,9 +28,7 @@ class FlattenParamsWrapper(nn.Module):
             appearing in the given list (default: flatten all parameters)
     """
 
-    def __init__(
-        self, module: nn.Module, param_list: Optional[List[nn.Parameter]] = None
-    ):
+    def __init__(self, module: nn.Module, param_list: Optional[List[nn.Parameter]] = None):
         super().__init__()
         self.module = module
 
@@ -74,9 +72,7 @@ class FlattenParamsWrapper(nn.Module):
                         param_shapes.append(p.size())
         del shared_param_memo
 
-        assert (
-            len(set(p.dtype for p in params)) <= 1
-        ), "expects all parameters in module to have same dtype"
+        assert len(set(p.dtype for p in params)) <= 1, "expects all parameters in module to have same dtype"
 
         # store the info for unflatten
         self._param_infos = tuple(param_infos)
@@ -97,12 +93,7 @@ class FlattenParamsWrapper(nn.Module):
             delattr(m, n)
 
     def _get_param_views(self) -> Generator:
-        return (
-            t.view(s)
-            for (t, s) in zip(
-                self.flat_param.split(self._param_numels), self._param_shapes
-            )
-        )
+        return (t.view(s) for (t, s) in zip(self.flat_param.split(self._param_numels), self._param_shapes))
 
     def _unflatten_params(self) -> None:
         ps = self._get_param_views()
@@ -137,9 +128,7 @@ class FlattenParamsWrapper(nn.Module):
         except AttributeError:
             return getattr(self.module, name)  # fallback to wrapped module
 
-    def state_dict(
-        self, prefix: str = "", keep_vars: bool = False,
-    ) -> OrderedDict[str, Tensor]:
+    def state_dict(self, prefix: str = "", keep_vars: bool = False) -> OrderedDict[str, Tensor]:  # type: ignore   # mypy does not handle overloads well on all pythons
         """Return an unflattened state_dict."""
         with self.unflatten_params():
             return self.module.state_dict(prefix=prefix, keep_vars=keep_vars)
@@ -148,9 +137,7 @@ class FlattenParamsWrapper(nn.Module):
         """Return the flattened state_dict."""
         return super().state_dict(*args, **kwargs)
 
-    def load_state_dict(
-        self, state_dict: Dict[str, Any], *args: Any, **kwargs: Any
-    ) -> None:
+    def load_state_dict(self, state_dict: Dict[str, Any], *args: Any, **kwargs: Any) -> None:
         if "flat_param" in state_dict:
             super().load_state_dict(state_dict, strict=True)
         else:
