@@ -148,7 +148,7 @@ def is_power_of(N: int, k: int) -> bool:
 
 def create_process_group(ranks: List[int]) -> torch.distributed.ProcessGroup:
     """
-    Creates and lazy intializes a new process group. Assumes init_process_group
+    Creates and intializes a new process group. Assumes init_process_group
     has already been called.
     Arguments:
         ranks (list<int>): ranks corresponding to the processes which should
@@ -156,11 +156,15 @@ def create_process_group(ranks: List[int]) -> torch.distributed.ProcessGroup:
     Returns:
         new process group
     """
-    initializer_tensor = torch.Tensor([1])
-    if torch.cuda.is_available():
-        initializer_tensor = initializer_tensor.cuda()
-    new_group = dist.new_group(ranks)
-    dist.all_reduce(initializer_tensor, group=new_group)
+    new_group = dist.new_group(ranks=ranks)
+    init_tensor_fp32, init_tensor_fp16 = torch.zeros(1), torch.zeros(1).half()
+
+    for init_tensor in [init_tensor_fp32, init_tensor_fp16]:
+        if torch.cuda.is_available():
+            init_tensor = init_tensor.cuda()
+        if dist.get_rank() in ranks:
+            dist.all_reduce(init_tensor, group=new_group)
+        torch.cuda.synchronize()
     return new_group
 
 
