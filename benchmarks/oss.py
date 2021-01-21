@@ -10,6 +10,7 @@ import tempfile
 import time
 from typing import Any, List, Optional, cast
 
+from golden_configs import oss_mnist
 import numpy as np
 import torch
 import torch.autograd.profiler as profiler
@@ -26,7 +27,6 @@ from torchvision.transforms import ToTensor
 from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
-from golden_configs import oss_mnist
 
 OPTIM = torch.optim.RMSprop
 TEMPDIR = tempfile.gettempdir()
@@ -193,7 +193,7 @@ def train(
                         )
                     )
                 return loss
-            
+
             def run_closure(closure, scaler, optimizer):
                 if scaler is not None:
                     final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
@@ -314,9 +314,7 @@ if __name__ == "__main__":
     if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark OSS with DDP")
         mp.spawn(
-            train, args=(args, BACKEND, OptimType.oss_ddp, args.check_regression), 
-            nprocs=args.world_size,
-            join=True,
+            train, args=(args, BACKEND, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,
         )
 
     if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
@@ -324,7 +322,11 @@ if __name__ == "__main__":
         mp.spawn(
             train,
             args=(
-                args, BACKEND, OptimType.oss_sharded_ddp, False),  # FIXME: @lefaudeux - SDP should give the same results
+                args,
+                BACKEND,
+                OptimType.oss_sharded_ddp,
+                False,
+            ),  # FIXME: @lefaudeux - SDP should give the same results
             nprocs=args.world_size,
             join=True,
         )
