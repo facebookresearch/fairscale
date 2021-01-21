@@ -514,7 +514,7 @@ def run_mp_worker(args, available_workers):
         print(f"running all at once")
         pipe_model.pipeline.all_at_once = True
 
-    if args.use_synthetic_data:
+    if args.dry_run:
         train(model_config, pipe_model, benchmark_config, args)
     else:
         benchmark_language_model(model_config, pipe_model, benchmark_config, args)
