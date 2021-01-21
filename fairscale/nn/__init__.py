@@ -4,7 +4,15 @@
 # LICENSE file in the root directory of this source tree.
 
 from .data_parallel import ShardedDataParallel
+from .misc import FlattenParamsWrapper
 from .moe import MOELayer, Top2Gate
 from .pipe import LazyModule, Pipe, PipeRPCWrapper
 
-__all__ = ["Pipe", "PipeRPCWrapper", "Top2Gate", "LazyModule", "ShardedDataParallel"]
+__all__ = [
+    "FlattenParamsWrapper",
+    "LazyModule",
+    "Pipe",
+    "PipeRPCWrapper",
+    "ShardedDataParallel",
+    "Top2Gate",
+]
