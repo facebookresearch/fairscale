@@ -501,7 +501,8 @@ class GossipDataParallelTest(MultiProcessTestCase):
             # Just setting a number below to match what I found here. This test needs to be revised
             self.assertLess(extra_memory_used_by_localsgd / model_memory_usage, 0.3)
         except ZeroDivisionError:
-            print("Skipping flaky test due to 0 memory error")
+            if self.rank == 0:
+                print("Skipping flaky test due to 0 memory error")
 
     @requires_nccl()
     @skip_if_not_multigpu
@@ -532,7 +533,8 @@ class GossipDataParallelTest(MultiProcessTestCase):
             # Just setting a number below to match what I found here. This test needs to be revised
             self.assertAlmostEqual(extra_memory_used_by_slowmo / model_memory_usage, 1.0, places=1)
         except ZeroDivisionError:
-            print("Skipping flaky test due to 0 memory error")
+            if self.rank == 0:
+                print("Skipping flaky test due to 0 memory error")
 
 
 if __name__ == "__main__":
