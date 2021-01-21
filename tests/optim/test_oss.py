@@ -823,11 +823,6 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         sharded_optim_state_dict = sync_object_ranks(sharded_optim_state_dict, RECIPIENT_RANK, device)
 
         # - cross load the states
-        print(rank, "DDP state dict ", ddp_state_dict["state"].keys())
-        print(rank, "DDP param groups ", ddp_state_dict["param_groups"][0]["params"])
-        print(rank, "ShardedDDP state dict ", sharded_optim_state_dict["state"].keys())
-        print(rank, "ShardedDDP param groups ", sharded_optim_state_dict["param_groups"][0]["params"])
-
         ddp_optimizer.load_state_dict(sharded_optim_state_dict)  # mixup on purpose !
         sharded_optimizer.load_state_dict(ddp_state_dict)
 
@@ -838,7 +833,6 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     for opt in [torch.optim.SGD, torch.optim.Adam]:
         check_optimizer_equivalence(opt)
 
-    # exit(-1)
     dist.destroy_process_group()
 
 

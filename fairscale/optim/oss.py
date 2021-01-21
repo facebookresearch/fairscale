@@ -390,23 +390,28 @@ class OSS(Optimizer):
         print("Loading ", state_dict["state"].keys())
 
         # Prune the state_dict from the states which this rank does not own, then normal base load
+        # NOTE: PyTorch 1.5 does not index linearly but with the id(params) at saving time
+        # we work around that here by using the fact that the params are ordered as in the param_groups
         other_state = []
-        for i_param in state_dict["state"].keys():
+        for i_param, key in enumerate(state_dict["state"].keys()):
             # Check that this rank owns this param, if not remove from the state
             param = global_id_map[i_param]
             if self.param_to_rank[param] != self.rank:
-                other_state.append(i_param)
+                other_state.append(key)
 
+        # Keep the state in place in order not to break the following enumerations, but wipe the contents
         for other_parameter in other_state:
-            state_dict["state"].pop(other_parameter)
+            state_dict["state"][other_parameter] = None
 
         super().load_state_dict(state_dict)
 
         # Set the sharded optimizer state.
         # Keep the original type (not respected by PyTorch which casts to the model type)
         # - go through the state dict and update the corresponding optimizer states
-        #
-        for k, v in state_dict["state"].items():
+
+        # NOTE: PyTorch 1.5 does not index linearly but with the id(params) at saving time
+        # we work around that here by using the fact that the params are ordered as in the param_groups
+        for k, (_, v) in enumerate(state_dict["state"].items()):
             if k in global_id_map:
                 param = global_id_map[k]
 
