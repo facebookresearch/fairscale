@@ -20,6 +20,7 @@ def get_benchmark_config():
         "scaler": GradScaler(),
         "clip_value": 0.05,
         "batch_size": 8,
+        "seq_len": 32,
     }
 
 

@@ -409,43 +409,44 @@ def generate_balance(num_devices, num_layers):
     return balance
 
 
-def get_synthetic_dataloader(args):
+def get_synthetic_dataloaders(args, benchmark_config):
     """Returns dataloader for synthetic data."""
 
     if args.model_name == "lm":
-        return get_synthetic_wikitext2_dataloaders(args)
+        return get_synthetic_wikitext2_dataloaders(args, benchmark_config)
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def get_real_dataloaders(args, device, config):
+def get_real_dataloaders(args, device, benchmark_config):
     """Returns dataloaders for real data."""
 
     if args.model_name == "lm":
-        data = get_real_wikitext2_dataloaders(args)
+        data = get_real_wikitext2_dataloaders(args, benchmark_config)
         ntokens, train_dataloader, valid_dataloader, test_dataloader = data
-        config["vocab_size"] = ntokens
+        benchmark_config["vocab_size"] = ntokens
         return train_dataloader, valid_dataloader, test_dataloader
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def create_model_config(args, config=None):
+def create_model_config(args, benchmark_config=None):
     """Return a dict with the given model, dataset and optimizer."""
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
     if args.use_synthetic_data:
-        model, optimizer = get_model_and_optimizer(args, device, config)
-        data = get_synthetic_dataloader(args)
-        return {"model": model, "optimizer": optimizer, "data": data}
+        dataloader_fn = get_synthetic_dataloaders
     else:
-        data = get_real_dataloaders(args, device, config)
-        model, optimizer = get_model_and_optimizer(args, device, config)
-        return {
-            "model": model,
-            "optimizer": optimizer,
-            "data": data,
-        }
+        dataloader_fn = get_real_dataloaders
+
+    data = dataloader_fn(args, device, benchmark_config)
+    model, optimizer = get_model_and_optimizer(args, device, benchmark_config)
+    return {
+        "model": model,
+        "optimizer": optimizer,
+        "data": data,
+    }
 
 
 def create_benchmark_config(model_name):
@@ -474,7 +475,7 @@ def benchmark_single_process(args):
     init_random_seed(0)
 
     benchmark_config = create_benchmark_config(args.model_name)
-    model_config = create_model_config(args, config=benchmark_config)
+    model_config = create_model_config(args, benchmark_config=benchmark_config)
     model = model_config["model"]
 
     balance = generate_balance(min(num_devices, 4), len(model))
