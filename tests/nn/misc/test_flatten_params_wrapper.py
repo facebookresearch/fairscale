@@ -10,6 +10,7 @@ Test FlattenParamsWrapper
 import unittest
 
 import torch
+
 from fairscale.nn import FlattenParamsWrapper
 from fairscale.utils.testing import objects_are_equal
 
@@ -18,11 +19,7 @@ class TestFlattenParams(unittest.TestCase):
     def _get_transformer(self, seed=0):
         torch.manual_seed(seed)  # keep everything deterministic
         module = torch.nn.Transformer(
-            d_model=32,
-            num_encoder_layers=2,
-            num_decoder_layers=2,
-            dim_feedforward=128,
-            dropout=0.1,
+            d_model=32, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=128, dropout=0.1,
         )
         module.register_buffer("dummy_buffer", torch.tensor(1.0))
         return module
@@ -70,10 +67,7 @@ class TestFlattenParams(unittest.TestCase):
         module = self._get_transformer()
         num_params = sum(p.numel() for p in module.parameters())
 
-        params_to_flatten = (
-            list(module.encoder.layers[1].parameters())
-            + list(module.decoder.layers[0].parameters())
-        )
+        params_to_flatten = list(module.encoder.layers[1].parameters()) + list(module.decoder.layers[0].parameters())
         num_params_to_flatten = sum(p.numel() for p in params_to_flatten)
 
         module = FlattenParamsWrapper(module, param_list=params_to_flatten)
@@ -92,9 +86,7 @@ class TestFlattenParams(unittest.TestCase):
         orig_dtype = params_to_flatten[0].dtype
         new_dtype = torch.float32 if orig_dtype == torch.float16 else torch.float16
         assert module.flat_param.dtype == orig_dtype
-        assert all(
-            p.dtype == orig_dtype for p in module.encoder.layers[0].parameters()
-        )
+        assert all(p.dtype == orig_dtype for p in module.encoder.layers[0].parameters())
         module = module.to(dtype=new_dtype)
         assert module.flat_param.dtype == new_dtype
         assert all(p.dtype == new_dtype for p in module.encoder.layers[0].parameters())
