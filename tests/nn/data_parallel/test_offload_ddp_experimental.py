@@ -22,10 +22,6 @@ skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda
 skip_if_single_gpu = pytest.mark.skipif(torch.cuda.device_count() < 2, reason="multiple GPUs required")
 
 
-def test_on_cpu():
-    run_test(backend=dist.Backend.GLOO, device=torch.device("cpu"), world_size=4)
-
-
 @skip_if_no_cuda
 @skip_if_single_gpu
 def test_on_gpu():
