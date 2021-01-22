@@ -28,12 +28,12 @@ within the different feature sets and relative imports.
 import functools
 import inspect
 import logging
+import math
 import multiprocessing
 import os
 import random
 import tempfile
 from typing import Any, Callable, Dict, List, Optional, Tuple
-import math
 
 import numpy
 import pytest
@@ -54,6 +54,8 @@ skip_if_single_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 2, reason="multiple GPUs required"
 )
 
+_, filename_mpi = tempfile.mkstemp()
+
 
 class IdentityLayer(torch.nn.Module):
     def __init__(self, size: int, scale: float = 1.0) -> None:
@@ -65,7 +67,7 @@ class IdentityLayer(torch.nn.Module):
 
 
 def set_random_seed(seed: int) -> None:
-    """Set random seed for reproducability."""
+    """Set random seed for reproducibility."""
     random.seed(seed)
     numpy.random.seed(seed)
     torch.manual_seed(seed)
@@ -101,21 +103,26 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
     .. warning: This limits the usecase to all ranks being on the same node
     """
 
+    try:
+        torch.distributed.rpc.shutdown()
+    except Exception:
+        pass
+
     print(f"dist init r={rank}, world={world_size}")
+
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["RANK"] = str(rank)
     url = "file://" + filename
+    url_rpc = "file://" + filename_rpc
 
     if torch_version() >= (1, 6, 0):
         backend = "nccl" if torch.cuda.is_available() else "gloo"
-
         if backend == "nccl" and torch.cuda.device_count() < world_size:
             logging.warning("Requested world size cannot be reached on this machine, not enough GPUs")
             return False
 
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
 
-        url_rpc = "file://" + filename_rpc
         rpc.init_rpc(
             f"Test{rank}",
             rank=rank,
@@ -126,7 +133,13 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
 
     else:
         if world_size > 1:
-            rpc.init_rpc(f"Test{rank}", rank=rank, world_size=world_size)
+            # TensorPipe is not available in Torch 1.5
+            rpc.init_rpc(
+                name=f"Test{rank}",
+                rank=rank,
+                world_size=world_size,
+                rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(init_method=url_rpc),
+            )
         elif torch.cuda.is_available():
             torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size, init_method=url)
         else:
@@ -154,7 +167,7 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
         _, filename_rpc = tempfile.mkstemp()
 
         # (lefaudeux) Let mp handle the process joining, join=False and handling context has been unstable in the past
-        mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)  # type: ignore
+        mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)
 
 
 def worker_process(
@@ -164,6 +177,7 @@ def worker_process(
 
     if not dist_init(rank, world_size, filename, filename_rpc):
         logging.warning("failed initializing torch distributed")
+        teardown()
         return
 
     kwargs = {}
@@ -196,7 +210,8 @@ def teardown() -> None:
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
     try:
-        torch.distributed.rpc.shutdown()
+        # torch 1.5 hangs on shutdown if waiting for all processes
+        torch.distributed.rpc.shutdown(graceful=False)
     except Exception:
         pass
 
@@ -229,12 +244,14 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
 
             error_queue = multiprocessing.get_context("spawn").SimpleQueue()
             if "OMPI_COMM_WORLD_RANK" in os.environ:
+                global filename_mpi
+
                 os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
                 os.environ["WORLD_SIZE"] = os.environ["OMPI_COMM_WORLD_SIZE"]
-                os.environ["MASTER_ADDR"] = "localhost"
-                os.environ["MASTER_PORT"] = "10638"
-                torch.distributed.init_process_group("mpi")
+                torch.distributed.init_process_group("mpi", init_method=f"file://{filename_mpi}")
+
                 world_size = torch.distributed.get_world_size()
+                destroy_model_parallel()
                 initialize_model_parallel(1, world_size)
                 torch.cuda.set_device(torch.distributed.get_rank() % torch.cuda.device_count())
                 if world_size in world_sizes:
@@ -381,12 +398,12 @@ class MultiplyModule(torch.nn.Module):
 # Credits: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
 # A vanilla pytorch implementation of the Transformer model, and the corresponding positional encoding module
 class TransformerModel(nn.Module):
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):  # type: ignore
         super().__init__()
         self.model_type = "Transformer"
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         encoder_layers = nn.TransformerEncoderLayer(ninp, nhead, nhid, dropout)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayers)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayers)  # type: ignore
         self.encoder = nn.Embedding(ntoken, ninp)
         self.ninp = ninp
         self.decoder = nn.Linear(ninp, ntoken)
@@ -404,7 +421,7 @@ class TransformerModel(nn.Module):
         self.decoder.bias.data.zero_()
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
-    def forward(self, src: Any, src_mask: Any) -> None:
+    def forward(self, src: Any, src_mask: Any) -> None:  # type: ignore
         src = self.encoder(src) * math.sqrt(self.ninp)
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, src_mask)
@@ -418,7 +435,7 @@ def generate_square_subsequent_mask(sz: Any) -> Any:
     return mask
 
 
-def get_sequential_transformer(ntoken, ninp, nhead, nhid, nlayers, dropout) -> nn.Sequential:
+def get_sequential_transformer(ntoken, ninp, nhead, nhid, nlayers, dropout) -> nn.Sequential:  # type: ignore
     transformer = TransformerModel(ntoken, ninp, nhead, nhid, nlayers, dropout)  # type: ignore
 
     return nn.Sequential(
@@ -431,7 +448,7 @@ def get_sequential_transformer(ntoken, ninp, nhead, nhid, nlayers, dropout) -> n
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model: int, dropout=0.1, max_len=5000):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -443,6 +460,40 @@ class PositionalEncoding(nn.Module):
         pe = pe.unsqueeze(0).transpose(0, 1)
         self.register_buffer("pe", pe)
 
-    def forward(self, x):
-        x = x + self.pe[: x.size(0), :]
+    def forward(self, x: Any) -> Any:  # type: ignore
+        x = x + self.pe[: x.size(0), :]  # type: ignore
         return self.dropout(x)
+
+
+def objects_are_equal(a: Any, b: Any, raise_exception: bool = False) -> bool:
+    """
+    Test that two objects are equal. Tensors are compared to ensure matching
+    size, dtype, device and values.
+    """
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, dict):
+        if set(a.keys()) != set(b.keys()):
+            return False
+        for k in a.keys():
+            if not objects_are_equal(a[k], b[k], raise_exception):
+                return False
+        return True
+    elif isinstance(a, (list, tuple, set)):
+        if len(a) != len(b):
+            return False
+        return all(objects_are_equal(x, y, raise_exception) for x, y in zip(a, b))
+    elif torch.is_tensor(a):
+        try:
+            torch.testing.assert_allclose(a, b)
+            # assert_allclose doesn't strictly test shape, dtype and device
+            shape_dtype_device_match = a.size() == b.size() and a.dtype == b.dtype and a.device == b.device
+            assert shape_dtype_device_match
+            return True
+        except AssertionError as e:
+            if raise_exception:
+                raise e
+            else:
+                return False
+    else:
+        return a == b

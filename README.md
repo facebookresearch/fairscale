@@ -120,6 +120,8 @@ AdaScale can be used to wrap a SGD optimizer and to be used in DDP (Distributed 
 training or non-DDP with gradient accumulation. The benefit is to re-use the same LR
 schedule from a baseline batch size when effective batch size is bigger.
 
+Note that AdaScale does _not_ help increase per-GPU batch size.
+
 ```python
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR  # or your scheduler
@@ -147,15 +149,16 @@ while not done:
 ```
 
 Primary goal is to allow scaling to bigger batch sizes without losing model accuracy.
+(However, training time might be longer comparing to without AdaScale.)
 
 At a high level, we want ML researchers to:
-  * go parallel more easily (i.e. reuse the same LR schedule)
+  * go parallel more easily (i.e. no need to find new learning rate schedules)
   * not worrying about lossing accuracy
-  * get same (or higher) GPU efficiency (fewer steps, less networking, etc.)
+  * potentially higher GPU efficiency (fewer steps, less networking overhead, etc.)
 
 # Testing
 
-We use circleci to test on PyTorch versions 1.5.1, 1.6.0 and 1.7.0 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
+We use circleci to test on PyTorch versions 1.5.1, 1.6.0 and 1.7.1 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
 ## Contributors
 
@@ -170,6 +173,8 @@ fairscale.nn.pipe is forked from [torchgpipe](https://github.com/kakaobrain/torc
 fairscale.nn.model_parallel is forked from [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), Copyright 2020, NVIDIA CORPORATION, licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
 
 fairscale.optim.adascale is forked from [AdaptDL](https://github.com/petuum/adaptdl), Copyright 2020, Petuum, Inc., licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
+
+fairscale.nn.misc.flatten_params_wrapper is forked from [PyTorch-Reparam-Module](https://github.com/SsnL/PyTorch-Reparam-Module), Copyright 2018, Tongzhou Wang, licensed under [MIT License](https://github.com/SsnL/PyTorch-Reparam-Module/blob/master/LICENSE).
 
 ## References
 

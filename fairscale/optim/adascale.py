@@ -47,10 +47,13 @@ class AdaScale(Optimizer):
     distributed and large batch size training. Can be used in combination with
     ``torch.nn.parallel.DistributedDataParallel`` and ``torch.optim.SGD``.
 
-    Subclass `Optimizer` so that `torch.optim.lr_scheduler` can work. In other words,
-    AdaScale is intended to be a complete wrapper of an torch Optimizer.
-
     .. _AdaScale: https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Supplemental.pdf
+
+    This class subclasses `Optimizer` so that `torch.optim.lr_scheduler` can
+    work with it. In other words, AdaScale is intended to be a complete wrapper of an
+    torch Optimizer.
+
+    Note that, AdaScale does _not_ help increase per-GPU batch size.
 
     There are several ways to integrate AdaScale with your training loop.
     We show two examples below.
@@ -554,11 +557,10 @@ class AdaScale(Optimizer):
         `set_scale` needs to be called to update the scale as well.
 
         TODO (min): need a way of determine how much to increase the step size?
-
         TODO (min): have both `set_scale` and `set_num_gradients_to_accumulate`
-        is hard to use and easy to make mistake. I think it is better
-        to specific a specify a `base_scale`. But more discussion is
-        needed here.
+                    is hard to use and easy to make mistake. I think it is better
+                    to specific a specify a `base_scale`. But more discussion is
+                    needed here.
 
         Args:
             num_gradients_to_accumulate (int):

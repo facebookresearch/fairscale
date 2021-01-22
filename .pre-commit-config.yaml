@@ -31,7 +31,6 @@ repos:
     rev: v2.1.0
     hooks:
     -   id: seed-isort-config
-        language_version: python3.6
 
 -   repo: https://github.com/pycqa/isort
     rev: 5.6.4
