@@ -4,6 +4,7 @@ import argparse
 import logging
 import math
 import os
+import sys
 import time
 import warnings
 
@@ -20,10 +21,9 @@ from torchtext.data.utils import get_tokenizer
 from experimental.nn.ampnet_pipe import pipe
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
-from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
+from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import LazyModule
 from fairscale.optim import GradScaler
-from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
 
 try:
@@ -92,8 +92,6 @@ class TransformerDecoderLayer(nn.TransformerEncoderLayer):
     def forward(self, src):
         global iteration_count
         iteration_count += 1
-        # if iteration_count == 196:
-        #    dump_cuda_tensors()
 
         if self.src_mask is None or self.src_mask.size(0) != len(src):
             device = src.device
@@ -218,10 +216,10 @@ def make_model(args, device, ntokens):
     lr = 0.01  # learning rate
 
     def make_adam(model):
-        if args.ddp_zero:
-            return OSS(params=model.parameters(), optim=Adam, group=get_data_parallel_group(), lr=lr)
-        else:
-            return Adam(model.parameters(), lr=lr)
+        #        if args.ddp_zero:
+        #            return OSS(params=model.parameters(), optim=Adam, group=get_data_parallel_group(), lr=lr)
+        #        else:
+        return Adam(model.parameters(), lr=lr)
 
     def make_custom_sgd(model):
         return MySGD(model.parameters(), lr=lr)
@@ -232,37 +230,6 @@ def make_model(args, device, ntokens):
     return model, criterion, optimizer, scaler
 
 
-def get_tensors_by_size_bucket():
-    from collections import defaultdict
-    import gc
-
-    size_buckets = defaultdict(int)
-    for obj in gc.get_objects():
-        if not isinstance(obj, torch.Tensor):
-            continue
-        if obj.device.type == "cuda":
-            size_buckets[(*obj.size(),) + (obj.element_size(),)] += 1
-
-    return size_buckets
-
-
-def dump_size_buckets(size_buckets, prefix=""):
-    from functools import reduce
-    import operator
-
-    total = 0
-    for key, value in size_buckets.items():
-        this = reduce(operator.mul, key) * value
-        total += this
-        print(prefix + f"{key} : {value}, {this}")
-
-    print(prefix + f"total = {total}")
-
-
-last_size_buckets = None
-once = True
-
-
 def safe_rank():
     try:
         return torch.distributed.get_rank()
@@ -270,48 +237,43 @@ def safe_rank():
         return 0
 
 
-def check_size_buckets():
-    global last_size_buckets
-    global once
-    size_buckets = get_tensors_by_size_bucket()
-    if last_size_buckets is not None:
-        if size_buckets != last_size_buckets:
-            print(f"difference is oustanding tensors: {safe-rank()}")
-            dump_size_buckets(last_size_buckets, "old: ")
-            dump_size_buckets(size_buckets, "new: ")
-        if once:
-            print(f"dumping buckets for: {safe_rank()}")
-            dump_size_buckets(last_size_buckets, "old: ")
-            dump_size_buckets(size_buckets, "new: ")
-            once = False
-    else:
-        print(f"size buckets none on {safe_rank()}")
-    last_size_buckets = size_buckets
+class AMPnetDelegate(object):
+    def __init__(self, vocab_size, iteration_per_batch=1000):
+        self.cur_epoch = 0
+        self.cur_iteration = 0
+        self.iteration_per_batch = iteration_per_batch
+        self.vocab_size = vocab_size
+        self.word_counter = 0
+        self.start_time = time.time()
+        self.log_interval = 1
+        self.total_loss = 0
 
+    def transform_input(self, cur_batch):
+        return cur_batch["input"]
 
-def dump_cuda_tensors():
-    print(f"dumping cuda tensors...")
-    from functools import reduce
-    import gc
-    import operator
+    def transform_target(self, cur_batch):
+        return cur_batch["target"].view(-1)
 
-    for obj in gc.get_objects():
-        if not isinstance(obj, torch.Tensor):
-            continue
-        if obj.device.type == "cuda":
-            size_buckets[(*obj.size(),) + (obj.element_size(),)] += 1
+    def log_loss(self, cur_batch, loss, count):
+        self.word_counter += cur_batch["ntokens"]
+        if count % self.log_interval == 0 and count > 0:
+            self.total_loss += loss.item()
+            cur_loss = self.total_loss / self.log_interval
+            elapsed = time.time() - self.start_time
+            print(
+                "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
+                    count, self.word_counter / elapsed, cur_loss, math.exp(cur_loss)
+                )
+            )
+            self.word_counter = 0
+            self.total_loss = 0
+            self.start_time = time.time()
 
-    print(f"outstanding cuda tensors:")
-    total = 0
-    for key, value in size_buckets.items():
-        this = reduce(operator.mul, key) * value
-        total += this
-        print(f"{key} : {value}, {this}")
-    print(f"total size = {total}")
+    def transform_output_before_loss(self, output_tensor):
+        return output_tensor.view(-1, self.vocab_size)
 
-    import pprint
-
-    pprint.pprint(torch.cuda.memory_stats())
+    def check_and_save_weights(self, num_gradients):
+        pass
 
 
 def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
@@ -339,19 +301,9 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
     start_time = time.time()
     word_counter = 0
 
-    """
-    if args.ddp_zero:
-        model = DDP(
-            model,
-            device_ids=[torch.cuda.current_device()],
-            process_group=get_data_parallel_group(),
-            find_unused_parameters=False,
-        )
-    """
-
     optimizer = optimizer(model)
-
-    model.interleave(lm_dataloader, criterion, optimizer, vocab_size)
+    transform_and_log = AMPnetDelegate(vocab_size)
+    model.interleave(lm_dataloader, criterion, optimizer, transform_and_log, args.min_update_interval)
     if model.group.rank() == model.group.size() - 1:
         print("Done with an epoch")
 
@@ -404,24 +356,6 @@ def benchmark_language_model(train_data, val_data, test_data, model, criterion, 
         )
     )
     print("=" * 110)
-
-    if can_benchmark and len(model.balance) == 4:
-        # Assert that words per second is within 3 standard deviations of the average
-        # of six golden runs
-        assert wps > 36954.4 - (3 * 116.825)
-
-        print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
-        print("Peak allocated bytes on cuda:1: {:1d}".format(torch.cuda.memory_stats(1)["allocated_bytes.all.peak"]))
-        print("Peak allocated bytes on cuda:2: {:1d}".format(torch.cuda.memory_stats(2)["allocated_bytes.all.peak"]))
-        print("Peak allocated bytes on cuda:3: {:1d}".format(torch.cuda.memory_stats(3)["allocated_bytes.all.peak"]))
-
-        # Assert that memory usage on each GPU is within 10% of golden run
-        # Right-hand-side is golden run bytes * 110%
-        assert torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] < 4061909504 * 1.1
-        assert torch.cuda.memory_stats(1)["allocated_bytes.all.peak"] < 4050944 * 1.1
-        assert torch.cuda.memory_stats(2)["allocated_bytes.all.peak"] < 10427392 * 1.1
-        assert torch.cuda.memory_stats(3)["allocated_bytes.all.peak"] < 2031824896 * 1.1
-        print("No regression detected")
 
 
 def generate_balance_weighted(num_devices, num_layers, fraction=0.5):
@@ -477,31 +411,6 @@ def make_model_and_data(args, device, new_data: bool = True):
         }
 
 
-def bench_single_process(args):
-    num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
-    assert num_devices > 0
-    init_random_seed(0)
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-    new_data = True
-
-    blob = make_model_and_data(args, None, new_data=new_data)
-    model = blob["model"]
-
-    balance = generate_balance(min(num_devices, 4), len(model))
-    p = pipe.Pipe(
-        model, balance, chunks=args.chunks, pipelined_backward=args.pipelined_backward, checkpoint=args.checkpoint
-    )
-    del model
-    del blob["model"]
-
-    if new_data:
-        train(blob["data"], p, blob["criterion"], blob["optimizer"], blob["vocab_size"], args)
-    else:
-        ntokens, train_data, val_data, test_data = blob["data"]
-        benchmark_language_model(train_data, val_data, test_data, p, criterion, optimizer, ntokens, args)
-
-
 def run_mp_worker(args, available_workers):
     new_data = True
 
@@ -516,15 +425,11 @@ def run_mp_worker(args, available_workers):
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
-        pipelined_backward=args.pipelined_backward,
+        pipelined_backward=False,
         checkpoint=args.checkpoint,
-        # loss_fn=blob["criterion"],
     )
     if torch.cuda.is_available():
         p = p.cuda()
-    if args.all_at_once and p.pipeline:
-        print(f"running all at once")
-        p.pipeline.all_at_once = True
 
     if new_data:
         train(blob["data"], p, blob["criterion"], blob["optimizer"], blob["vocab_size"], args)
@@ -596,10 +501,7 @@ def bench_mpi(args):
 
     backends = {"model_parallel_backend": "nccl", "pipeline_backend": "mpi", "ddp_backend": "nccl"}
 
-    if args.ddp_zero:
-        initialize_model_parallel(1, 4, **backends)
-    else:
-        initialize_model_parallel(1, world_size, **backends)
+    initialize_model_parallel(1, world_size, **backends)
     init_random_seed(0)
 
     run_mp_worker(args, world_size)
@@ -616,31 +518,31 @@ parser.add_argument("--host", "-o", type=str, default="localhost", help="hostnam
 parser.add_argument("--no-mpi", action="store_true", default=False, help="disable mpi")
 parser.add_argument("--chunks", type=int, default=1, help="number of microbatches per batch")
 parser.add_argument("--batch-size", type=int, default=8, help="size of a batch")
-parser.add_argument("--all-at-once", action="store_true", default=False, help="do backward pass on whole batch at once")
 parser.add_argument("--max-batch", type=int, default=4, help="Max number of batches")
 parser.add_argument("--socket-name", type=str, default=None, help="socket ifname for gloo/tp")
 parser.add_argument("--num-decoder-layers", type=int, default=10, help="Number of decoder layers in the model")
-parser.add_argument("--ddp-zero", action="store_true", default=False, help="enable ddp")
 parser.add_argument(
     "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
 )
 parser.add_argument(
     "--checkpoint", default="never", choices=["always", "except_last", "never"], help="Checkpointing strategy for pipe"
 )
-parser.add_argument(
-    "--pipelined-backward", dest="pipelined_backward", action="store_true", help="Pipelined backward pass"
-)
-parser.add_argument(
-    "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
-)
-parser.set_defaults(pipelined_backward=True)
+parser.add_argument("--min-update-interval", type=int, default=1, help="min update interval for ampnet")
+
+"""
+To run the script,
+   1. please build a suitable version of OpenMPI with a cuda-enabled UCX backend.
+   2. For running on 2 gpus:
+   <open-mpi-installed-dir>/bin/mpirun --host localhost:8 -np 2 --map-by node --mca pml ucx -x UCX_TLS=rc,sm,cuda_ipc,cuda_copy -x PYTHONPATH=$PWD -x PATH=$PATH -x LD_LIBRARY_PATH=$LD_LIBRARY_PATH -x UCX_RNDV_SCHEME=put_zcopy -x UCX_MEMTYPE_CACHE=n python3 benchmarks/experimental_ampnet.py --num-decoder-layers=8 --host localhost --batch-size 4
+"""
 
 if __name__ == "__main__":
     args = parser.parse_args()
     # bench_multi_process(args, all_at_once=True)
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
-        print(f"Running benchmark with args: {args}")
-        bench_single_process(args)
+        print(f"Can't run benchmark")
+        sys.exit(1)
+
     else:
         if os.environ["OMPI_COMM_WORLD_RANK"] == "0":
             print(f"Running benchmark with args: {args}")

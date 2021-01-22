@@ -3,9 +3,8 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-import math
 import time
-from typing import Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import torch
 from torch import nn
@@ -84,6 +83,9 @@ class AsyncAMPnetEventLoop:
         self.checkpoint_stop = checkpoint_stop
         self.input_device = input_device
 
+    def perform_optimizer_step(self, optimizer, num_gradients):
+        return (optimizer is not None) and ((num_gradients % self.min_update_interval == 0) or self.weight_prediction)
+
     def async_send_inner(self, batch: Batch, index: int) -> Tuple[Batch, PipeMessage]:
         task = create_task_without_skip_trackers(
             self.checkpoint_stop, index, self.group.rank(), batch, self.partitions[0].module,
@@ -141,7 +143,7 @@ class AsyncAMPnetEventLoop:
         return batch
 
     def event_loop_head_across_minibatches(
-        self, lm_dataloader: DataLoader, criterion: nn.Module, optimizer: Optimizer, vocab_size: int
+        self, lm_dataloader: DataLoader, criterion: nn.Module, optimizer: Optimizer, transform_logger_object: Any
     ) -> None:
         # handles one epoch
 
@@ -156,7 +158,7 @@ class AsyncAMPnetEventLoop:
         while True:
             try:
                 cur_batch = next(lm_iter)
-                reqd_input = cur_batch["input"].to(self.input_device)
+                reqd_input = transform_logger_object.transform_input(cur_batch).to(self.input_device)
                 batch = Batch(reqd_input, count)
                 if self.weight_prediction:
                     optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)  # type: ignore
@@ -173,7 +175,7 @@ class AsyncAMPnetEventLoop:
             try:
                 # 1 forward pass
                 cur_batch = next(lm_iter)
-                reqd_input = cur_batch["input"].to(self.input_device)
+                reqd_input = transform_logger_object.transform_input(cur_batch).to(self.input_device)
                 batch = Batch(reqd_input, count)
                 if self.weight_prediction:
                     optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)  # type: ignore
@@ -192,9 +194,10 @@ class AsyncAMPnetEventLoop:
                 self.transport.send_message(forward_message, sync=True)
 
                 num_gradients += 1
-                if (optimizer is not None and num_gradients % self.min_update_interval == 0) or self.weight_prediction:
+                if self.perform_optimizer_step(optimizer, num_gradients):
                     optimizer.step()
                     optimizer.zero_grad()
+                    transform_logger_object.check_and_save_weights(num_gradients)
 
             except StopIteration:
                 break
@@ -210,12 +213,13 @@ class AsyncAMPnetEventLoop:
             self.async_grad_inner(message, activations)
             num_gradients += 1
 
-            if (optimizer is not None and num_gradients % self.min_update_interval == 0) or self.weight_prediction:
+            if self.perform_optimizer_step(optimizer, num_gradients):
                 optimizer.step()
                 optimizer.zero_grad()
+                transform_logger_object.check_and_save_weights(num_gradients)
 
     def event_loop_tail_across_minibatches(
-        self, lm_dataloader: DataLoader, criterion: nn.Module, optimizer: Optimizer, vocab_size: int
+        self, lm_dataloader: DataLoader, criterion: nn.Module, optimizer: Optimizer, transform_logger_object: Any
     ) -> None:
         # handles one epoch
 
@@ -236,7 +240,7 @@ class AsyncAMPnetEventLoop:
             try:
                 start_time = time.time()
                 microbatch_index, cur_batch = next(lm_iter)
-                reqd_target = cur_batch["target"].to(self.input_device)
+                reqd_target = transform_logger_object.transform_target(cur_batch).to(self.input_device)
 
                 # one forward
                 message = self.transport.recv_message_header(EVENT_LOOP_ACTIVATIONS_QUEUE)
@@ -256,35 +260,18 @@ class AsyncAMPnetEventLoop:
                 if self.weight_prediction:
                     optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)  # type: ignore
 
-                if vocab_size == 0:
-                    loss = criterion(output.tensor.view(-1), reqd_target.view(-1))
-                else:
-                    op = output.tensor.view(-1, vocab_size)
-                    rt = reqd_target.view(-1)
-                    loss = criterion(op, rt)  # for LM usecase
-
+                output_tensor = transform_logger_object.transform_output_before_loss(output.tensor)
+                loss = criterion(output_tensor, reqd_target)
                 loss.backward()
                 count += 1
                 num_gradients += 1
 
-                if (optimizer is not None and num_gradients % self.min_update_interval == 0) or self.weight_prediction:
+                if self.perform_optimizer_step(optimizer, num_gradients):
                     optimizer.step()
                     optimizer.zero_grad()
+                    transform_logger_object.check_and_save_weights(num_gradients)
 
-                if vocab_size != 0:  # for real use-case
-                    word_counter += cur_batch["ntokens"]
-                    if count % log_interval == 0 and count > 0:
-                        total_loss += loss.item()
-                        cur_loss = total_loss / log_interval
-                        elapsed = time.time() - start_time
-                        print(
-                            "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
-                                count, word_counter / elapsed, cur_loss, math.exp(cur_loss)
-                            )
-                        )
-                        word_counter = 0
-                        total_loss = 0
-                        start_time = time.time()
+                transform_logger_object.log_loss(cur_batch, loss, count)
                 del loss
                 del activations[args.microbatch_index]
             except StopIteration:
@@ -305,7 +292,7 @@ class AsyncAMPnetEventLoop:
         self.async_grad_inner(message, activations)
 
     def event_loop_across_minibatches(
-        self, lm_dataloader: DataLoader, criterion: nn.Module, optimizer: Optimizer, vocab_size: int
+        self, lm_dataloader: DataLoader, criterion: nn.Module, optimizer: Optimizer, transform_logger_object: Any
     ) -> None:
         activations: Dict[int, Batch] = dict()
         num_microbatch = len(lm_dataloader)
@@ -339,9 +326,10 @@ class AsyncAMPnetEventLoop:
                 optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)  # type: ignore
             self.event_loop_trunk_backward_helper(activations)
             num_gradients += 1
-            if (optimizer is not None and num_gradients % self.min_update_interval == 0) or self.weight_prediction:
+            if self.perform_optimizer_step(optimizer, num_gradients):
                 optimizer.step()
                 optimizer.zero_grad()
+                transform_logger_object.check_and_save_weights(num_gradients)
 
             self.transport.send_message(message, sync=True)
 
@@ -352,6 +340,7 @@ class AsyncAMPnetEventLoop:
                 optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)  # type: ignore
             self.event_loop_trunk_backward_helper(activations)
             num_gradients += 1
-            if (optimizer is not None and num_gradients % self.min_update_interval == 0) or self.weight_prediction:
+            if self.perform_optimizer_step(optimizer, num_gradients):
                 optimizer.step()
                 optimizer.zero_grad()
+                transform_logger_object.check_and_save_weights(num_gradients)

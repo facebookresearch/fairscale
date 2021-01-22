@@ -19,6 +19,8 @@
 
 """The AMPnetPipe interface."""
 
+from typing import Any
+
 from torch import nn
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
@@ -35,6 +37,12 @@ MOVING_DENIED = TypeError("denied to move parameters and buffers, because Pipe s
 
 
 class AMPnetPipe(Pipe):
+    """
+        AMPnetPipe is the asynchronous version of the Pipe implementation
+        which avoids the bubble issue, by using stale weights and gradients.
+        The implementation closely follows the paper: https://arxiv.org/abs/1705.09786
+    """
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
 
@@ -43,10 +51,10 @@ class AMPnetPipe(Pipe):
         lm_dataloader: DataLoader,
         criterion: nn.Module,
         optimizer: Optimizer,
-        vocab_size: int,
+        transform_logger_object: Any,
+        min_update_interval: int = 1,
         weight_prediction: bool = False,
     ) -> None:
-        #        self.pipeline.run_ampnet(lm_dataloader, criterion, optimizer, vocab_size, weight_prediction)  # type: ignore
 
         partitions = self.mp_partitions
         n = len(partitions)
@@ -56,8 +64,6 @@ class AMPnetPipe(Pipe):
         assert self.pipeline.style is PipelineStyle.AsyncSchedule  # type: ignore
         assert self.group
         rank = self.group.rank()
-
-        min_update_interval = 10
 
         transport = self.pipeline.transport  # type: ignore
         checkpoint_stop = self.pipeline.checkpoint_stop  # type: ignore
@@ -72,8 +78,14 @@ class AMPnetPipe(Pipe):
         )
 
         if rank == 0:
-            ampnet_event_loop.event_loop_head_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
+            ampnet_event_loop.event_loop_head_across_minibatches(
+                lm_dataloader, criterion, optimizer, transform_logger_object
+            )
         elif self.final_stage:
-            ampnet_event_loop.event_loop_tail_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
+            ampnet_event_loop.event_loop_tail_across_minibatches(
+                lm_dataloader, criterion, optimizer, transform_logger_object
+            )
         else:
-            ampnet_event_loop.event_loop_across_minibatches(lm_dataloader, criterion, optimizer, vocab_size)
+            ampnet_event_loop.event_loop_across_minibatches(
+                lm_dataloader, criterion, optimizer, transform_logger_object
+            )
