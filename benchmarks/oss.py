@@ -98,9 +98,7 @@ def validate_benchmark(measurements, args, check_regression):
     abs_diff.sort()
     mad = abs_diff[len(measurements) // 2] if args.epochs > 2 else -1
 
-    # TODO(anj-s): Is there value in logging this on every rank? Won't this be the same value (more or less)?
-    # We should ideally calculate the above median and mad values only when we are checking for regression.
-    # Ideally we can move the check_regression check to the train function and only call this function when it is true.
+    # TODO(anj-s): Add a debug flag to perform the above calculation only when required.
     logging.info(f"[{rank}] : Median speed: {median:.2f} +/- {mad:.2f}")
 
     if check_regression and rank == 0:
