@@ -66,7 +66,7 @@ class IdentityLayer(torch.nn.Module):
 
 
 def set_random_seed(seed: int) -> None:
-    """Set random seed for reproducability."""
+    """Set random seed for reproducibility."""
     random.seed(seed)
     numpy.random.seed(seed)
     torch.manual_seed(seed)
@@ -366,7 +366,7 @@ class GPT2(nn.Module):
         return self.clf_head(h), logits
 
 
-def objects_are_equal(a, b, raise_exception=False) -> bool:
+def objects_are_equal(a: Any, b: Any, raise_exception: bool = False) -> bool:
     """
     Test that two objects are equal. Tensors are compared to ensure matching
     size, dtype, device and values.
@@ -388,9 +388,7 @@ def objects_are_equal(a, b, raise_exception=False) -> bool:
         try:
             torch.testing.assert_allclose(a, b)
             # assert_allclose doesn't strictly test shape, dtype and device
-            shape_dtype_device_match = (
-                a.size() == b.size() and a.dtype == b.dtype and a.device == b.device
-            )
+            shape_dtype_device_match = a.size() == b.size() and a.dtype == b.dtype and a.device == b.device
             assert shape_dtype_device_match
             return True
         except AssertionError as e:
@@ -400,4 +398,3 @@ def objects_are_equal(a, b, raise_exception=False) -> bool:
                 return False
     else:
         return a == b
-

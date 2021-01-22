@@ -12,3 +12,4 @@ torch >= 1.5.1
 torchvision >= 0.6.0
 # NOTE(msb) not a dependency but needed by torch
 numpy == 1.17.4
+timm == 0.3.4
