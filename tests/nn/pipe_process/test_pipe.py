@@ -946,7 +946,6 @@ def test_instantiate_partition():
 
     def check_partitions(model, balance, expected_order, expected_ranks):
         """Check the instantiated model matches expectation of order and rank
-
         model: a list of modules or an nn.Sequential
         balance: the balance argument to Pipe
         expected_order: the index of modules in `model` in the order they will
