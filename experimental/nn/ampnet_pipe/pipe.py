@@ -39,7 +39,7 @@ class AMPnetPipe(MultiProcessPipe):
         weight_prediction: bool = False,
     ) -> None:
 
-        partitions = self.mp_partitions
+        partitions = self.partitions
         n = len(partitions)
 
         # AMPnet implementation doesn't handle skip_trackers!
