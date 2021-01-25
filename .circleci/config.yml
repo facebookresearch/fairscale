@@ -10,9 +10,19 @@ version: 2
 # -------------------------------------------------------------------------------------
 # Environments to run the jobs in
 # -------------------------------------------------------------------------------------
-cpu: &cpu
+cpu_py37: &cpu_py37
   docker:
     - image: circleci/python:3.7
+  resource_class: medium
+
+cpu_py38: &cpu_py38
+  docker:
+    - image: circleci/python:3.8
+  resource_class: medium
+
+cpu_py39: &cpu_py39
+  docker:
+    - image: circleci/python:3.9
   resource_class: medium
 
 gpu: &gpu
@@ -61,7 +71,6 @@ install_dep_160: &install_dep_160
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "6"], "wrong torch version"'
         python -m torch.utils.collect_env
 
-
 install_dep_171: &install_dep_171
   - run:
       name: Install Dependencies
@@ -89,6 +98,32 @@ install_repo_gpu: &install_repo_gpu
         export CUDA_HOME=/usr/local/cuda-10.1
         pip install -e .
 
+
+run_isort: &run_isort
+   - run:
+       name: Run Linter (isort)
+       command: |
+         isort . --check
+
+run_black: &run_black
+   - run:
+       name: Run Linter (black)
+       command: |
+         black --check .
+
+run_mypy: &run_mypy
+   - run:
+       name: Run type-checking (mypy)
+       command: |
+         mypy --ignore-missing-imports --scripts-are-modules --pretty .
+
+run_flake8: &run_flake8
+  - run:
+      name: Run Linter (flake8)
+      command: |
+        flake8 --show-source --statistics
+
+
 run_coverage: &run_coverage
   - run:
       name: Run Unit Tests With Coverage
@@ -109,11 +144,6 @@ run_mpi_unittests: &run_mpi_unittests
       command: |
         mpirun -n 4 python -m pytest -p torch_pg.pytest --only-mpi --junitxml=test-results/junit.xml --verbose tests/nn/moe
 
-run_flake8: &run_flake8
-  - run:
-      name: Run Linter (flake8)
-      command: |
-        flake8 --show-source --statistics
 
 run_pipe_benchmark: &run_pipe_benchmark
   - run:
@@ -135,20 +165,30 @@ run_oss_gloo: &run_oss_gloo
         python benchmarks/oss.py --gloo --optim_type oss_ddp --epochs 2
         python benchmarks/oss.py --gloo --optim_type oss_sharded_ddp --epochs 2
 
-
 run_oss_amp: &run_oss_amp
-- run:
-    name: Run OSS with Torch AMP
-    command: |
-      python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp
+   - run:
+       name: Run OSS with Torch AMP
+       command: |
+         python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp
+
+
+run_doc_build: &run_doc_build
+   - run:
+       name: Testing doc build
+       command: |
+         cd docs
+         pip install --progress-bar off -r requirements.txt
+         make help
+         make singlehtml | tee make.out
+         ! tail make.out | grep -q warning
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
 # -------------------------------------------------------------------------------------
 
 jobs:
-  cpu_tests:
-    <<: *cpu
+  cpu_tests_py37:
+    <<: *cpu_py37
 
     working_directory: ~/fairscale
 
@@ -159,40 +199,100 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-cpu-py37-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_171
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-py37-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_cpu
 
-      - run:
-          name: Run Linter (isort)
-          command: |
-            isort . --check
-
-      - run:
-          name: Run Linter (black)
-          command: |
-            black --check .
-
-      - run:
-          name: Run type-checking (mypy)
-          command: |
-            mypy --ignore-missing-imports --scripts-are-modules --pretty .
-
+      - <<: *run_isort
+      - <<: *run_black
+      - <<: *run_mypy
       - <<: *run_flake8
-
       - <<: *run_unittests
-
       - <<: *run_mpi_unittests
+      - <<: *run_doc_build
 
       - store_test_results:
           path: test-results
+
+  cpu_tests_py38:
+    <<: *cpu_py38
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-cpu-py38-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_dep_171
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-cpu-py38-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_repo_cpu
+
+      - <<: *run_isort
+      - <<: *run_black
+      - <<: *run_mypy
+      - <<: *run_flake8
+      - <<: *run_unittests
+      - <<: *run_mpi_unittests
+      - <<: *run_doc_build
+
+      - store_test_results:
+          path: test-results
+
+  cpu_tests_py39:
+    <<: *cpu_py39
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-cpu-py39-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_dep_171
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-cpu-py39-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_repo_cpu
+
+      - <<: *run_isort
+      - <<: *run_black
+      - <<: *run_mypy
+      - <<: *run_flake8
+      # FIXME: py39 still not stable for us, example:
+      # https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1349/workflows/534aae41-e01d-404e-bfc1-fdc58566c39c/jobs/5952
+      # - <<: *run_unittests
+      # example:
+      # https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1350/workflows/26ebd69e-777e-491a-ae12-da3154ef80f9/jobs/5953
+      # - <<: *run_mpi_unittests
+      - <<: *run_doc_build
+
+      - store_test_results:
+          path: test-results
+
 
   gpu_tests_151:
     <<: *gpu
@@ -342,7 +442,9 @@ workflows:
   version: 2
   build:
     jobs:
-      - cpu_tests
+      - cpu_tests_py37
+      - cpu_tests_py38
+      - cpu_tests_py39
       - gpu_tests_151
       - gpu_tests_160
       - gpu_tests_171
