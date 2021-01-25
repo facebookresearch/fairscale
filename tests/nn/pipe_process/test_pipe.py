@@ -31,8 +31,10 @@ from fairscale.nn.model_parallel.initialize import (
     get_pipeline_parallel_group,
     initialize_model_parallel,
 )
-from fairscale.nn.pipe import LazyModule, Pipe
+from fairscale.nn.pipe import LazyModule, MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, set_random_seed, torch_spawn, torch_version
+
+Pipe = MultiProcessPipe
 
 
 @torch_spawn([2])

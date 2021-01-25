@@ -22,8 +22,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from fairscale.nn.pipe import Pipe
+from fairscale.nn.pipe import MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
+
+Pipe = MultiProcessPipe
 
 
 @torch_spawn([2])

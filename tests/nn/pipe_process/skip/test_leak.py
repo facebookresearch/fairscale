@@ -23,10 +23,12 @@ import pytest
 import torch
 from torch import nn
 
-from fairscale.nn.pipe import Pipe, is_checkpointing, is_recomputing
+from fairscale.nn.pipe import MultiProcessPipe, is_checkpointing, is_recomputing
 from fairscale.nn.pipe.skip import pop, skippable, stash
 from fairscale.nn.pipe.skip.tracker import current_skip_tracker
 from fairscale.utils.testing import get_worker_map, torch_spawn
+
+Pipe = MultiProcessPipe
 
 
 @skippable(stash=["skip"])

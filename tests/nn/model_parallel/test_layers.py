@@ -31,8 +31,10 @@ from torch.nn.parameter import Parameter
 
 from fairscale.nn.model_parallel import initialize as mpu
 from fairscale.nn.model_parallel import layers
-from fairscale.nn.pipe import Pipe
+from fairscale.nn.pipe import MultiProcessPipe
 from fairscale.utils.testing import dist_init, get_world_sizes, set_random_seed, spawn_for_all_world_sizes, torch_spawn
+
+Pipe = MultiProcessPipe
 
 
 def run_test_parallel_embedding(rank, model_parallel_size, filename, filename_rpc):
