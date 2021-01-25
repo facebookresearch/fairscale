@@ -60,7 +60,7 @@ You can then define any optimizer and loss function
     
 
 
-Finally, to run the model and compute the loss function, make sure that outputs and target are on the same device
+Finally, to run the model and compute the loss function, make sure that outputs and target are on the same device.
 
 .. code-block:: default   
 
@@ -77,4 +77,4 @@ Finally, to run the model and compute the loss function, make sure that outputs 
 
 
 
-run the example `here <../../../examples/tutorial_pipe.py>`_. 
+You can find a complete example `here <../../../examples/tutorial_pipe.py>`_. 
