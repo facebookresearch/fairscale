@@ -371,7 +371,6 @@ def test_ddp_sync_batch_norm():
     )
 
 
-@skip_if_py39
 def run_test_two_optimizers(rank, world_size, backend, device, temp_file_name):
     url = "file://" + temp_file_name
     dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
@@ -415,6 +414,7 @@ def run_test_two_optimizers(rank, world_size, backend, device, temp_file_name):
     dist.destroy_process_group()
 
 
+@skip_if_py39
 def test_two_optimizers():
     # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
     world_size = 2
