@@ -194,6 +194,16 @@ run_oss_amp: &run_oss_amp
        command: |
          python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp
 
+
+run_doc_build: &run_doc_build
+   - run:
+       name: Testing doc build is good
+       command: |
+         cd docs
+         pip install --progress-bar off -r requirements.txt
+         make help
+         make singlehtml
+
 # -------------------------------------------------------------------------------------
 # Jobs to run
 # -------------------------------------------------------------------------------------
@@ -228,6 +238,7 @@ jobs:
       - <<: *run_flake8
       - <<: *run_unittests
       - <<: *run_mpi_unittests
+      - <<: *run_doc_build
 
       - store_test_results:
           path: test-results
