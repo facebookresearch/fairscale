@@ -21,7 +21,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
-from fairscale.utils.testing import GPT2, skip_if_no_cuda, skip_if_py39, skip_if_single_gpu
+from fairscale.utils.testing import GPT2, skip_if_no_cuda, skip_if_single_gpu
 
 
 def run_one_step(rank, world_size, backend, device, temp_file_name):
@@ -112,7 +112,6 @@ def run_test(backend, device, world_size=2):
     mp.spawn(run_one_step, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
 
 
-@skip_if_py39
 def test_step_on_cpu():
     run_test(backend=dist.Backend.GLOO, device=torch.device("cpu"), world_size=4)
 
@@ -298,7 +297,6 @@ def run_test_two_inputs(rank, world_size, backend, device, temp_file_name):
     dist.destroy_process_group()
 
 
-@skip_if_py39
 def test_inputs():
     # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
     world_size = 2
@@ -414,7 +412,6 @@ def run_test_two_optimizers(rank, world_size, backend, device, temp_file_name):
     dist.destroy_process_group()
 
 
-@skip_if_py39
 def test_two_optimizers():
     # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
     world_size = 2
