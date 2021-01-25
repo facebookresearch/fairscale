@@ -21,8 +21,10 @@ import pytest
 import torch
 from torch import nn
 
-from fairscale.nn import Pipe
+from fairscale.nn.pipe import MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, set_random_seed, torch_spawn
+
+Pipe = MultiProcessPipe
 
 
 @torch_spawn([2])

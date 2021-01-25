@@ -23,10 +23,12 @@ import pytest
 import torch
 from torch import nn
 
-from fairscale.nn.pipe import LazyModule, Pipe
+from fairscale.nn.pipe import LazyModule, MultiProcessPipe
 from fairscale.nn.pipe.skip import pop, skippable, stash
 from fairscale.nn.pipe.skip.portal import PortalBlue, PortalCopy, PortalOrange
 from fairscale.utils.testing import get_worker_map, torch_spawn
+
+Pipe = MultiProcessPipe
 
 
 @torch_spawn([3])
