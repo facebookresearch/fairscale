@@ -31,6 +31,7 @@ import logging
 import multiprocessing
 import os
 import random
+import sys
 import tempfile
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -44,6 +45,10 @@ import torch.nn as nn
 
 from fairscale.nn.model_parallel import destroy_model_parallel, initialize_model_parallel
 from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
+
+skip_if_py39 = pytest.mark.skipif(
+    sys.version_info.major == 3 and sys.version_info.minor == 9, reason="doesn't work with py39"
+)
 
 skip_if_no_cuda = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 1, reason="CUDA required"
