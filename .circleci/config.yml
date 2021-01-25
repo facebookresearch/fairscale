@@ -282,8 +282,10 @@ jobs:
       - <<: *run_black
       - <<: *run_mypy
       - <<: *run_flake8
-      - <<: *run_unittests
-      - <<: *run_mpi_unittests
+      # FIXME: py39 still not stable for us, example:
+      # https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1349/workflows/534aae41-e01d-404e-bfc1-fdc58566c39c/jobs/5952
+      # - <<: *run_unittests
+      # - <<: *run_mpi_unittests
       - <<: *run_doc_build
 
       - store_test_results:
