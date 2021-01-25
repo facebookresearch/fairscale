@@ -285,6 +285,8 @@ jobs:
       # FIXME: py39 still not stable for us, example:
       # https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1349/workflows/534aae41-e01d-404e-bfc1-fdc58566c39c/jobs/5952
       # - <<: *run_unittests
+      # example:
+      # https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1350/workflows/26ebd69e-777e-491a-ae12-da3154ef80f9/jobs/5953
       # - <<: *run_mpi_unittests
       - <<: *run_doc_build
 
