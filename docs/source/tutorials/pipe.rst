@@ -77,4 +77,4 @@ Finally, to run the model and compute the loss function, make sure that outputs 
 
 
 
-You can find a complete example `here <../../../examples/tutorial_pipe.py>`_. 
+You can find a complete example under the examples folder in the fairscale repo.
