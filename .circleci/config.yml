@@ -203,7 +203,7 @@ run_doc_build: &run_doc_build
          pip install --progress-bar off -r requirements.txt
          make help
          make singlehtml | tee make.out
-         tail make.out | ! grep -q warning
+         ! tail make.out | grep -q warning
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
