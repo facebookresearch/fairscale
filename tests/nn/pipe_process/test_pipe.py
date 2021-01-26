@@ -129,9 +129,7 @@ def public_attrs(pipeline_style):
         checkpoint=MyString("always"),
     )
 
-    print(f"balance = {pipe.devices}")
     assert pipe.balance == [1]
-    assert pipe.devices is None
     assert pipe.chunks == 42
     assert isinstance(pipe.chunks, int)
     assert pipe.checkpoint == "always"
@@ -423,7 +421,7 @@ def no_grad(pipeline_style):
         nonlocal latent
         latent = output
 
-    partition = model.mp_partitions[0]
+    partition = model.partitions[0]
     partition.module.register_forward_hook(hook)
 
     with torch.no_grad():
@@ -689,9 +687,9 @@ def partitions(pipeline_style):
     model = nn.Sequential(a, b)
     model = Pipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map())
 
-    assert isinstance(model.mp_partitions, list)
+    assert isinstance(model.partitions, list)
     assert len(model) == 1
-    assert isinstance(model.mp_partitions[0].module, nn.Sequential)
+    assert isinstance(model.partitions[0].module, nn.Sequential)
 
     if model.group.rank() == 0:
         assert "0.0.weight" in model.state_dict()
@@ -933,7 +931,7 @@ def reuse_lazy():
 
 def test_instantiate_partition():
     from fairscale.nn.pipe.async_schedule import Location
-    from fairscale.nn.pipe.pipe import instantiate_partition
+    from fairscale.nn.pipe.mppipe import instantiate_partition
 
     class FakeGroup:
         def __init__(self, rank, size):
