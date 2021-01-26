@@ -1,6 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 import io
+import tempfile
 
 import torch
 from torch.utils.data import DataLoader
@@ -24,7 +25,8 @@ def get_real_dataloaders(args):
     """Return real dataloaders for training, testing and validation."""
 
     url = "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip"
-    test_filepath, valid_filepath, train_filepath = extract_archive(download_from_url(url, root="/tmp"))
+    tmpdir = tempfile.TemporaryDirectory()
+    test_filepath, valid_filepath, train_filepath = extract_archive(download_from_url(url, root=tmpdir.name))
     tokenizer = get_tokenizer("basic_english")
 
     def data_process(raw_text_iter):

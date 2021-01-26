@@ -18,6 +18,7 @@ from models import transformer_lm
 import numpy as np
 import torch
 from torch.distributed import rpc
+import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
@@ -28,6 +29,10 @@ from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_
 from fairscale.nn.pipe import LazyModule, pipe
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
+
+
+MPI_PORT = 29500
+RPC_PORT = 29501
 
 
 def init_random_seed(seed: int):
@@ -64,7 +69,7 @@ def get_lm_model(args, device, config):
     dropout = config["dropout"]
     vocab_size = config["vocab_size"]
     nhid = config["nhid"]
-    ndecoder = args.num_decoder_layers
+    ndecoder = config["num_decoder_layers"]
 
     if args.lazy_construction:
         layers = [
@@ -288,11 +293,12 @@ def train(model_config, model, benchmark_config, args):
             if i % log_interval == 0 and i > 0:
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
-                print(
-                    "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
-                        i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
+                if not args.multiprocess or dist.get_rank() == 1:
+                    print(
+                        "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
+                            i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
+                        )
                     )
-                )
                 total_tokens_per_log_interval = 0
                 total_loss = 0
                 start_time = time.time()
@@ -303,8 +309,10 @@ def train(model_config, model, benchmark_config, args):
         raise RuntimeError(
             "Unable to benchmark on a single batch. Increase the size " " of the dataset and rerun the benchmark."
         )
-
-    return wps, loss.item()
+    if not args.multiprocess or dist.get_rank() == 1:
+        return wps, loss.item()
+    else:
+        return 0., 0.
 
 
 # TODO(anj-s): Add an option for users to be able to benchmark evaluate.
@@ -375,8 +383,13 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
 
-    print("wps ", wps)
-    if len(model.balance) == 4:
+    print("wps ", wps, torch.distributed.get_rank())
+    if torch.distributed.get_rank() == 0:
+        for i in range(torch.cuda.device_count()):
+            print("Peak allocated bytes on cuda: {:1d}".format(torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]))
+
+    # if (not args.multiprocess or dist.get_rank == dist.get_world_size()-1) and len(model.balance) == 4:
+    if not args.multiprocess and len(model.balance) == 4:
 
         if args.model_name == "lm":
             verify_lm_run(wps, golden_config)
@@ -469,6 +482,10 @@ def get_golden_config(model_name):
 def benchmark_single_process(args):
     """Benchmark a given model using a single process and multiple devices."""
 
+    init_method_pgroup = "tcp://localhost:{}".format(MPI_PORT)
+    torch.distributed.init_process_group(backend="gloo", rank=0, world_size=1,
+                                         init_method=init_method_pgroup)
+
     num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
     init_random_seed(0)
@@ -532,63 +549,24 @@ def run_worker(rank, world_size, args):
     torch.distributed.destroy_process_group()
 
 
-def bench_multi_process(args, all_at_once=False):
-    if args.local_world_size != 0:
-        world_size = args.local_world_size
-    else:
-        world_size = min(torch.cuda.device_count(), 2)
-    mp.spawn(run_worker, args=(world_size, args), nprocs=world_size, join=True)
+def benchmark_multiprocess(rank, world_size, args):
 
+    init_method_pgroup = "tcp://localhost:{}".format(MPI_PORT)
+    torch.distributed.init_process_group(backend="gloo", rank=rank, world_size=world_size,
+                                         init_method=init_method_pgroup)
 
-best_device_map = {
-    0: "mlx5_0:1",
-    1: "mlx5_0:1",
-    2: "mlx5_1:1",
-    3: "mlx5_1:1",
-    4: "mlx5_2:1",
-    5: "mlx5_2:1",
-    6: "mlx5_3:1",
-    7: "mlx5_3:1",
-}
-
-
-def bench_mpi(args):
-    guess_rank = int(os.environ["OMPI_COMM_WORLD_RANK"])
-    world_size = int(os.environ["OMPI_COMM_WORLD_SIZE"])
-    local_rank = int(os.environ["OMPI_COMM_WORLD_LOCAL_RANK"])
-    os.environ["UCX_NET_DEVICES"] = best_device_map[local_rank]
-
-    os.environ["MASTER_ADDR"] = args.host
-    os.environ["MASTER_PORT"] = "10638"
-    if args.socket_name:
-        os.environ["GLOO_SOCKET_IFNAME"] = args.socket_name
-        os.environ["TP_SOCKET_IFNAME"] = args.socket_name
-
-    torch.distributed.init_process_group(backend="gloo", rank=guess_rank, world_size=world_size)
-
-    os.environ["MASTER_ADDR"] = args.host
-    os.environ["MASTER_PORT"] = "10639"
-    init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
-    rank = torch.distributed.get_rank()
-    world_size = torch.distributed.get_world_size()
-    torch.cuda.set_device(local_rank % torch.cuda.device_count())
+    torch.cuda.set_device(rank % torch.cuda.device_count())
 
     rpc.init_rpc(
         f"Test{rank}",
         rank=rank,
         world_size=world_size,
         backend=rpc.BackendType.PROCESS_GROUP,
-        rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(rpc_timeout=20, init_method=init_method),
+        rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(rpc_timeout=20,
+        init_method="tcp://localhost:{}".format(RPC_PORT)),
     )
-
-    backends = {"model_parallel_backend": "nccl", "pipeline_backend": "mpi", "ddp_backend": "nccl"}
-
-    if args.ddp_zero:
-        initialize_model_parallel(1, 4, **backends)
-    else:
-        initialize_model_parallel(1, world_size, **backends)
+    initialize_model_parallel(1, world_size)
     init_random_seed(0)
-
     run_mp_worker(args, world_size)
 
     rpc.shutdown()
@@ -596,17 +574,12 @@ def bench_mpi(args):
 
 
 parser = argparse.ArgumentParser(description="benchmark")
-parser.add_argument("--local-world-size", "-l", type=int, default=0, help="local world size")
-parser.add_argument("--world-size", "-w", type=int, default=0, help="world size")
-parser.add_argument("--rank-base", "-r", type=int, help="rank base", default=0)
+parser.add_argument("--multiprocess", action="store_true", help="Runs single process benchmarks.")
 parser.add_argument("--host", "-o", type=str, default="localhost", help="hostname")
-parser.add_argument("--no-mpi", action="store_true", default=False, help="disable mpi")
 parser.add_argument("--chunks", type=int, default=1, help="number of microbatches per batch")
 parser.add_argument("--batch-size", type=int, default=8, help="size of a batch")
 parser.add_argument("--all-at-once", action="store_true", default=False, help="do backward pass on whole batch at once")
 parser.add_argument("--max-batch", type=int, default=4, help="Max number of batches")
-parser.add_argument("--socket-name", type=str, default=None, help="socket ifname for gloo/tp")
-parser.add_argument("--num-decoder-layers", type=int, default=10, help="Number of decoder layers in the model")
 parser.add_argument("--ddp-zero", action="store_true", default=False, help="enable ddp")
 parser.add_argument(
     "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
@@ -615,11 +588,11 @@ parser.add_argument(
     "--checkpoint", default="never", choices=["always", "except_last", "never"], help="Checkpointing strategy for pipe"
 )
 parser.add_argument(
-    "--pipelined-backward", dest="pipelined_backward", action="store_true", help="Pipelined backward pass"
+    "--pipelined-backward", action="store_true", help="Pipelined backward pass"
 )
-parser.add_argument(
-    "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
-)
+# parser.add_argument(
+#     "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
+# )
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
@@ -628,15 +601,13 @@ parser.add_argument(
     default="lm",
     help="Language Model(LM) used to benchmark nn.pipe.",
 )
-parser.set_defaults(pipelined_backward=True)
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    # TODO(anj-s): Add support for multiprocess benchmarking.
-    if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
-        print(f"Running benchmark with args: {args}")
+    if not args.multiprocess:
+        print(f"Running single process benchmark with args: {args}")
         benchmark_single_process(args)
     else:
-        if os.environ["OMPI_COMM_WORLD_RANK"] == "0":
-            print(f"Running benchmark with args: {args}")
-        bench_mpi(args)
+        world_size = min(torch.cuda.device_count(), 2)
+        print(f"Running multiprocess benchmark with args: {args}")
+        mp.spawn(benchmark_multiprocess, args=(world_size, args), nprocs=world_size, join=True)
