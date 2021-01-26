@@ -17,7 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The Pipe interface."""
+"""The MultiProcessPipe interface."""
 from collections import OrderedDict
 from dataclasses import dataclass, field
 import itertools
@@ -561,7 +561,7 @@ class MultiProcessPipe(Module):
             yield from partition.module
 
     def forward(self, input: TensorOrTensors, *, event=None) -> TensorOrTensors:  # type: ignore
-        """:class:`Pipe` is a fairly transparent module wrapper. It doesn't
+        """:class:`MultiProcessPipe` is a fairly transparent module wrapper. It doesn't
         modify the input and output signature of the underlying module. But
         there's type restriction. Input and output have to be a
         :class:`~torch.Tensor` or a tuple of tensors. This restriction is

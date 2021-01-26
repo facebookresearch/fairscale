@@ -16,7 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The pipeline parallelism of Pipe."""
+"""The multiprocess pipeline parallelism of Pipe."""
 import logging
 import os
 from queue import Empty as QueueEmpty
@@ -168,7 +168,7 @@ def create_task(
 
 
 class MultiProcessPipeline:
-    """The pipeline parallelism for Pipe."""
+    """The multiprocess pipeline parallelism for Pipe."""
 
     def __init__(
         self,

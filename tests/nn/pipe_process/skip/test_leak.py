@@ -28,8 +28,6 @@ from fairscale.nn.pipe.skip import pop, skippable, stash
 from fairscale.nn.pipe.skip.tracker import current_skip_tracker
 from fairscale.utils.testing import get_worker_map, torch_spawn
 
-Pipe = MultiProcessPipe
-
 
 @skippable(stash=["skip"])
 class Stash(nn.Module):
@@ -48,7 +46,7 @@ class Pop(nn.Module):
 @torch_spawn([2])
 @pytest.mark.parametrize("train", [True, False], ids=["train", "eval"])
 @pytest.mark.parametrize("checkpoint", ["always", "except_last", "never"])
-@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
+@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" in os.environ, reason="broken on mpi")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 def delete_portal_tensor(train, checkpoint, pipeline_style):
@@ -62,7 +60,7 @@ def delete_portal_tensor(train, checkpoint, pipeline_style):
     # | 3,blue,2 |--| 2,orange,1 |--| 1,orange,0 |--| 1,blue,0 |
     # +----------+  +------------+  +------------+  +----------+
 
-    if pipeline_style == Pipe.AsyncSchedule:
+    if pipeline_style == MultiProcessPipe.AsyncSchedule:
         pytest.skip("Skip tensors NYI for AsyncSchedule")
 
     def portal_tensor_life_is(tensor_life, skip_tracker=None):
@@ -116,7 +114,7 @@ def delete_portal_tensor(train, checkpoint, pipeline_style):
             return self.F.apply(input)
 
     model = nn.Sequential(NoPortalTensorAtBackward(), stash_, pop_)
-    model = Pipe(
+    model = MultiProcessPipe(
         model, balance=[2, 1], style=pipeline_style, worker_map=get_worker_map(), chunks=2, checkpoint=checkpoint,
     )
 
