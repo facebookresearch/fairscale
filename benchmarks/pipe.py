@@ -157,7 +157,7 @@ def dump_cuda_tensors():
 def log_number_of_parameters(model):
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
-    if model.group:
+    if hasattr(model, "group"):
         total = torch.Tensor([num_params])
         if torch.cuda.is_available():
             total = total.cuda()
