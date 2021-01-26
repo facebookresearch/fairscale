@@ -382,13 +382,11 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
     print("-" * 110)
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
+    if dist.get_rank() == 1:
+        print("Throughput(wps) is {:.2f}.".format(wps))
+        for i in range(2):
+            print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]))
 
-    print("wps ", wps, torch.distributed.get_rank())
-    if torch.distributed.get_rank() == 0:
-        for i in range(torch.cuda.device_count()):
-            print("Peak allocated bytes on cuda: {:1d}".format(torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]))
-
-    # if (not args.multiprocess or dist.get_rank == dist.get_world_size()-1) and len(model.balance) == 4:
     if not args.multiprocess and len(model.balance) == 4:
 
         if args.model_name == "lm":
@@ -513,11 +511,12 @@ def run_mp_worker(args, available_workers):
     model_config = create_model_config(args, config=benchmark_config)
     model = model_config["model"]
 
-    balance = generate_balance_weighted(get_pipeline_parallel_group().size(), len(model), 0.8)
+    print("get_pipeline_parallel_group().size() ", get_pipeline_parallel_group().size())
+    balance = generate_balance(get_pipeline_parallel_group().size(), len(model))
     pipe_model = pipe.Pipe(
         model,
         balance,
-        style=Pipe.AsyncSchedule,
+        style=Pipe.MultiProcess,
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
@@ -590,9 +589,6 @@ parser.add_argument(
 parser.add_argument(
     "--pipelined-backward", action="store_true", help="Pipelined backward pass"
 )
-# parser.add_argument(
-#     "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
-# )
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
