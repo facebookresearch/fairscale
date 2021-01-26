@@ -40,6 +40,8 @@ def _test_basic_func(rank, world_size, tempfile_name, test_case, oss, model=None
     model.to("cuda")
     model = DDP(model, device_ids=[rank])
     if oss:
+        # For now, we can only wrap AdaScale over OSS. If we do it the other way around,
+        # AdaScale needs to take different parameter types, i.e. the parameter list, etc.
         optim = AdaScale(OSS(model.parameters(), SGD, lr=0.1))
     else:
         optim = AdaScale(SGD(model.parameters(), lr=0.1))
