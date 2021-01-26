@@ -45,8 +45,9 @@ class ShardedDataParallel(nn.Module):
             Synchronize the models in between the ranks when starting up. Not needed if each rank has the same seed,
             or the training restarts from a saved state
         reduce_buffer_size (int):
-            the max size of the buffer used to batch the small parameter tensors, in number of elements (default 16M).
+            the max size of the buffer used to batch the small parameter tensors, in number of elements (default 8M).
             this will impact the long term memory consumption, because these buckets correspond to parameters which will not be sharded.
+            Note that single-node jobs (world-size <=8) will bypass this setting due to the very fast inter-gpu communication in that case.
 
 
     .. warning:
@@ -72,7 +73,7 @@ class ShardedDataParallel(nn.Module):
         process_group: Any = None,
         broadcast_buffers: bool = True,
         sync_models_at_startup: bool = True,
-        reduce_buffer_size: int = 2 ** 20,
+        reduce_buffer_size: int = 2 ** 23,
     ):
         super().__init__()
 
@@ -120,12 +121,18 @@ class ShardedDataParallel(nn.Module):
 
         # - setup buckets and tensor views
         model_size = sum([p.numel() for p in self.module.parameters()])
+        if dist.get_world_size(self.process_group) <= 8:
+            logging.info("ShardedDDP assuming single-node configuration, bypassing reduce buckets")
+            reduce_buffer_size = 0
+
         self.buffer_max_size = min(reduce_buffer_size, model_size)
         logging.info(
             "ShardedDDP bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
                 self.buffer_max_size / 2 ** 20, model_size / 2 ** 20
             )
         )
+        self.use_buckets = self.buffer_max_size > 0
+
         self.buckets: Dict[OSS, Dict[torch.device, List[Bucket]]] = {o: {} for o in self.sharded_optimizers}
         self.should_bucket_grad: Dict[torch.Tensor, bool] = {}
         self._setup_bucket_strategy()
@@ -235,7 +242,7 @@ class ShardedDataParallel(nn.Module):
                 self._grad_to_be_reduced[index] = False
                 param.grad.mul_(self.world_size_scaling)
 
-                if not self.should_bucket_grad[param]:
+                if not self.use_buckets or not self.should_bucket_grad[param]:
                     # Future work includes clearing up the buffer if possible
                     def cleanup() -> None:
                         if dst_rank != self.global_rank:
@@ -275,7 +282,6 @@ class ShardedDataParallel(nn.Module):
                 # If all the reduce operations have been called,
                 # make sure that all the asynchronous calls have concluded before moving on
                 # and execute the delayed actions (release gradients, unroll the buckets)
-                # FIXME: This is broken with buckets
                 if self._reduced_grads[optimizer] == self._reduced_grads_max[optimizer]:
                     optimizer._consume_work_handles()
 
@@ -340,6 +346,9 @@ class ShardedDataParallel(nn.Module):
     def _setup_bucket_strategy(self) -> None:
         """Devise a bucketing strategy on a per-rank ownership level. These buckets will not be sharded, since the gradients would be re-allocated during the backward in that case.
         """
+
+        if not self.use_buckets:
+            return
 
         # - Allocate one buffer per rank and per device to group the small parameters
         for sharded_optimizer in self.sharded_optimizers:
