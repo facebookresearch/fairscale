@@ -212,7 +212,7 @@ def train(model_config, model, benchmark_config, args):
 
     optimizer = optimizer(model.parameters())
 
-    pipe_group = model.group
+    pipe_group = model.group if hasattr(model, "group") else None
 
     if args.ddp_zero:
         model = DDP(
