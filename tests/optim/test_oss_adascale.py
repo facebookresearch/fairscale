@@ -91,7 +91,7 @@ def test_basic(test_case):
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
-    mp.spawn(_test_basic_func, args=(world_size, temp_file_name, test_case), nprocs=world_size, join=True)
+    mp.spawn(_test_basic_func, args=(world_size, temp_file_name, test_case, True), nprocs=world_size, join=True)
 
 
 @skip_if_single_gpu
