@@ -210,7 +210,7 @@ def teardown() -> None:
         torch.distributed.destroy_process_group()
     try:
         # torch 1.5 hangs on shutdown if waiting for all processes
-        torch.distributed.rpc.shutdown(graceful=False)
+        torch.distributed.rpc.shutdown()
     except Exception:
         pass
 
