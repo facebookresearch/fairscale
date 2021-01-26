@@ -327,6 +327,9 @@ class OSS(Optimizer):
             self.local_state_dict(), non_blocking=True, device=torch.device("cpu")
         )
 
+        # Tensor cannot be really empty, even if its size is meaningless
+        dummy_sync_tensor = torch.tensor([1], device=self._device)
+
         for rank in range(self.world_size):
             if rank == self.rank:
                 # Send the state to the reference replica
@@ -346,10 +349,10 @@ class OSS(Optimizer):
 
                 # Discard this tensor/rank, broadcast necessary for syncing and because NCCL does not support gather
                 if _torch_broadcast_object:
-                    dist.broadcast_object_list([0], src=global_rank, group=self.group)
+                    dist.broadcast_object_list([dummy_sync_tensor], src=global_rank, group=self.group)
                 else:
                     broadcast_object(
-                        torch.tensor([0], dtype=torch.uint8, device=self._device),
+                        torch.tensor([dummy_sync_tensor], dtype=torch.uint8, device=self._device),
                         src_rank=global_rank,
                         group=self.group,
                         dist_device=self._device,
