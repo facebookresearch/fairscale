@@ -19,7 +19,7 @@
 
 """A Pipe implementation in PyTorch."""
 from .checkpoint import is_checkpointing, is_recomputing
-from .mppipe import LazyModule, MultiProcessPipe
+from .multiprocess_pipe import LazyModule, MultiProcessPipe
 from .pipe import Pipe
 from .rpc import PipeRPCWrapper
 

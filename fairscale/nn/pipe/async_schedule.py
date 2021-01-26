@@ -191,7 +191,7 @@ class AsyncEventLoop:
         """Actually run the forward pass for a given module, and send the result
         to the next stage in the pipeline if needed."""
         assert self.group
-        from .mppipeline import create_task
+        from .multiprocess_pipeline import create_task
 
         task = create_task(
             PipelineStyle.AsyncSchedule,

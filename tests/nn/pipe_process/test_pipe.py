@@ -931,7 +931,7 @@ def reuse_lazy():
 
 def test_instantiate_partition():
     from fairscale.nn.pipe.async_schedule import Location
-    from fairscale.nn.pipe.mppipe import instantiate_partition
+    from fairscale.nn.pipe.multiprocess_pipe import instantiate_partition
 
     class FakeGroup:
         def __init__(self, rank, size):

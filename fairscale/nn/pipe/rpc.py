@@ -13,7 +13,7 @@ from torch.distributed.distributed_c10d import _get_global_rank
 
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 
-from .mppipe import MultiProcessPipe
+from .multiprocess_pipe import MultiProcessPipe
 from .types import EVENT_LOOP_QUEUE, PipeMessage, TensorOrTensors
 
 DEFAULT_MAX_SOURCE_POSITIONS = 1024

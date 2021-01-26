@@ -35,7 +35,7 @@ from fairscale.nn.model_parallel import get_model_parallel_world_size, get_pipel
 from . import microbatch
 from .async_schedule import Invocation, Location, ModuleWrapper
 from .batchnorm import DeferredBatchNorm
-from .mppipeline import MultiProcessPipeline
+from .multiprocess_pipeline import MultiProcessPipeline
 from .skip.layout import SkipLayout, inspect_skip_layout
 from .skip.skippable import Skippable, verify_skippables
 from .types import LazyModule, PipelineStyle
