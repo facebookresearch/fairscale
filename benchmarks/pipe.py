@@ -227,7 +227,7 @@ def train(model_config, model, benchmark_config, args):
 
     # TODO(anj-s): Avoid sending fake data to all replicas except the first and last one.
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
-        lm_dataloader = get_fake_dataloader(len(lm_dataloader), args)
+        lm_dataloader = get_synthetic_dataloaders(args, benchmark_config)
 
     total_tokens = 0
     total_tokens_per_log_interval = 0
@@ -510,20 +510,12 @@ def run_mp_worker(args, available_workers):
     model_config = create_model_config(args, config=benchmark_config)
     model = model_config["model"]
 
-<<<<<<< HEAD
     print("get_pipeline_parallel_group().size() ", get_pipeline_parallel_group().size())
     balance = generate_balance(get_pipeline_parallel_group().size(), len(model))
-    pipe_model = pipe.Pipe(
-        model,
-        balance,
-        style=Pipe.MultiProcess,
-=======
-    balance = generate_balance_weighted(get_pipeline_parallel_group().size(), len(model), 0.8)
     pipe_model = MultiProcessPipe(
         model,
         balance,
-        style=MultiProcessPipe.AsyncSchedule,
->>>>>>> master
+        style=Pipe.MultiProcess,
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
