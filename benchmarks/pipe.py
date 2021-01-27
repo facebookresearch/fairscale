@@ -384,8 +384,7 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
     print("-" * 110)
     if dist.get_rank() == 1:
         print("Throughput(wps) is {:.2f}.".format(wps))
-        for i in range(2):
-            print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]))
+    print("Peak allocated bytes on cuda:{}: {:1d}".format(dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]))
 
     if not args.multiprocess and len(model.balance) == 4:
 
