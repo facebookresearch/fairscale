@@ -604,6 +604,6 @@ if __name__ == "__main__":
         print(f"Running single process benchmark with args: {args}")
         benchmark_single_process(args)
     else:
-        world_size = min(torch.cuda.device_count(), 2)
+        world_size = max(torch.cuda.device_count(), 1)
         print(f"Running multiprocess benchmark with args: {args}")
         mp.spawn(benchmark_multiprocess, args=(world_size, args), nprocs=world_size, join=True)
