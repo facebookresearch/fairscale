@@ -7,7 +7,6 @@ import gc
 import logging
 import math
 import operator
-import os
 import pprint
 import time
 
@@ -17,8 +16,8 @@ from golden_configs import lm_wikitext2
 from models import transformer_lm
 import numpy as np
 import torch
-from torch.distributed import rpc
 import torch.distributed as dist
+from torch.distributed import rpc
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
@@ -29,7 +28,6 @@ from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_
 from fairscale.nn.pipe import LazyModule, pipe
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
-
 
 MPI_PORT = 29500
 RPC_PORT = 29501
@@ -312,7 +310,7 @@ def train(model_config, model, benchmark_config, args):
     if not args.multiprocess or dist.get_rank() == 1:
         return wps, loss.item()
     else:
-        return 0., 0.
+        return 0.0, 0.0
 
 
 # TODO(anj-s): Add an option for users to be able to benchmark evaluate.
@@ -384,7 +382,11 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
     print("-" * 110)
     if dist.get_rank() == 1:
         print("Throughput(wps) is {:.2f}.".format(wps))
-    print("Peak allocated bytes on cuda:{}: {:1d}".format(dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]))
+    print(
+        "Peak allocated bytes on cuda:{}: {:1d}".format(
+            dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]
+        )
+    )
 
     if not args.multiprocess and len(model.balance) == 4:
 
@@ -480,8 +482,7 @@ def benchmark_single_process(args):
     """Benchmark a given model using a single process and multiple devices."""
 
     init_method_pgroup = "tcp://localhost:{}".format(MPI_PORT)
-    torch.distributed.init_process_group(backend="gloo", rank=0, world_size=1,
-                                         init_method=init_method_pgroup)
+    torch.distributed.init_process_group(backend="gloo", rank=0, world_size=1, init_method=init_method_pgroup)
 
     num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
@@ -550,8 +551,9 @@ def run_worker(rank, world_size, args):
 def benchmark_multiprocess(rank, world_size, args):
 
     init_method_pgroup = "tcp://localhost:{}".format(MPI_PORT)
-    torch.distributed.init_process_group(backend="gloo", rank=rank, world_size=world_size,
-                                         init_method=init_method_pgroup)
+    torch.distributed.init_process_group(
+        backend="gloo", rank=rank, world_size=world_size, init_method=init_method_pgroup
+    )
 
     torch.cuda.set_device(rank % torch.cuda.device_count())
 
@@ -560,8 +562,9 @@ def benchmark_multiprocess(rank, world_size, args):
         rank=rank,
         world_size=world_size,
         backend=rpc.BackendType.PROCESS_GROUP,
-        rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(rpc_timeout=20,
-        init_method="tcp://localhost:{}".format(RPC_PORT)),
+        rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(
+            rpc_timeout=20, init_method="tcp://localhost:{}".format(RPC_PORT)
+        ),
     )
     initialize_model_parallel(1, world_size)
     init_random_seed(0)
@@ -585,9 +588,7 @@ parser.add_argument(
 parser.add_argument(
     "--checkpoint", default="never", choices=["always", "except_last", "never"], help="Checkpointing strategy for pipe"
 )
-parser.add_argument(
-    "--pipelined-backward", action="store_true", help="Pipelined backward pass"
-)
+parser.add_argument("--pipelined-backward", action="store_true", help="Pipelined backward pass")
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
