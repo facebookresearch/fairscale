@@ -300,13 +300,12 @@ class OSS(Optimizer):
     def local_state_dict(self) -> dict:
         """ .. deprecated:: 0.1.5
 
-        Gets this rank's state_dict.
-        Returns:
-            The state of the optimizer as a :class:`dict`.
-            It contains two entries:
-            * state - a dict holding current optimization state. Its content
-                differs between optimizer classes.
-            * param_groups - a dict containing all parameter groups
+        Returns this rank's state_dict as a :class:`dict` which contains two entries:
+
+        * state - a dict holding current optimization state. Its content
+            differs between optimizer classes.
+
+        * param_groups - a dict containing all parameter groups
 
         .. warning: This does not represent the optimizer state dict, only a shard.
         """
