@@ -202,7 +202,7 @@ class Pipe(Module):
             ``'except_last'``, or ``'never'`` (default: ``'except_last'``)
         deferred_batch_norm (bool):
             whether to use deferred BatchNorm moving statistics (default:
-            :data:`False`, see :ref:`Deferred Batch Normalization` for more
+            :data:`False`, see :class:`Deferred Batch Normalization <DeferredBatchNorm>` for more
             details)
 
     Raises:
@@ -339,15 +339,15 @@ class Pipe(Module):
         raise MOVING_DENIED
 
     def to(self, *args: Any, **kwargs: Any) -> "Pipe":
-        # Deny these usages:
-        #
-        # - to(device[, dtype, non_blocking])
-        # - to(tensor[, non_blocking])
-        #
-        # But allow this:
-        #
-        # - to(dtype[, non_blocking])
-        #
+        """ Deny these usages:
+
+         - to(device[, dtype, non_blocking])
+         - to(tensor[, non_blocking])
+
+         But allow this:
+
+         - to(dtype[, non_blocking])"""
+
         if "device" in kwargs or "tensor" in kwargs:
             raise MOVING_DENIED
 
