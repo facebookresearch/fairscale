@@ -19,29 +19,21 @@
 
 """The Pipe interface."""
 from collections import OrderedDict
-from dataclasses import dataclass, field
-import itertools
-import threading
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union, cast
-import warnings
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union, cast
 
 import torch
 from torch import Tensor, nn
 import torch.autograd
 import torch.cuda
 
-from fairscale.nn.model_parallel import get_model_parallel_world_size, get_pipeline_parallel_group
-
 from . import microbatch
-from .async_schedule import Invocation, Location, ModuleWrapper
 from .batchnorm import DeferredBatchNorm
 from .pipeline import Pipeline
-from .skip.layout import SkipLayout, inspect_skip_layout
-from .skip.skippable import Skippable, verify_skippables
+from .skip.layout import inspect_skip_layout
+from .skip.skippable import verify_skippables
 from .stream import AbstractStream, new_stream
-from .types import LazyModule, PipelineStyle
 
-__all__ = ["Pipe", "LazyModule"]
+__all__ = ["Pipe"]
 
 
 Device = Union[torch.device, int, str]
@@ -49,8 +41,6 @@ Devices = Union[Iterable[Device], List[Device]]
 
 Tensors = Tuple[Tensor, ...]
 TensorOrTensors = Union[Tensor, Tensors]
-
-ListOfLazyModules = List[LazyModule]
 
 if TYPE_CHECKING:
     Module = nn.Module[TensorOrTensors]
@@ -79,34 +69,17 @@ naive automatic balancing:
 """
 
 
-# FIXME(tom) make this a valid way to call
-def verify_list_of_callable(module: Union[nn.Sequential, list]) -> None:
-    for layer in module:
-        if isinstance(layer, nn.Module):
-            pass
-        elif isinstance(layer, LazyModule):
-            pass
-        else:
-            raise TypeError(f"layer {type(layer)} must be nn.Module or LazyModule to be partitioned")
+def verify_module(module: nn.Sequential) -> None:
+    if not isinstance(module, nn.Sequential):
+        raise TypeError("module must be nn.Sequential to be partitioned")
 
-
-def verify_module(module: Union[nn.Sequential, ListOfLazyModules]) -> None:
-    if isinstance(module, Iterable) and not isinstance(module, nn.Sequential):
-        verify_list_of_callable(module)
-    else:
-        if not isinstance(module, nn.Sequential):
-            raise TypeError("module must be nn.Sequential to be partitioned")
-
-        named_children = list(module.named_children())
-        if len(named_children) != len(module):
-            raise ValueError("module with duplicate children is not supported")
+    named_children = list(module.named_children())
+    if len(named_children) != len(module):
+        raise ValueError("module with duplicate children is not supported")
 
 
 def verify_splitting(
-    module: nn.Sequential,
-    partitions: List[nn.Sequential],
-    balance: Iterable[int],
-    devices: Optional[List[torch.device]],
+    module: nn.Sequential, partitions: List[nn.Sequential], balance: Iterable[int], devices: List[torch.device]
 ) -> None:
     num_parameters = len(list(module.parameters()))
     num_child_parameters = sum(len(list(child.parameters())) for child in module.children())
@@ -117,7 +90,7 @@ def verify_splitting(
         for j in range(i + 1, len(partitions)):
             parti = partitions[i]
             partj = partitions[j]
-            if devices and devices[i] == devices[j]:
+            if devices[i] == devices[j]:
                 continue
             for p in parti.parameters():
                 for q in partj.parameters():
@@ -129,159 +102,9 @@ class BalanceError(ValueError):
     pass
 
 
-def check_balance(module: Any, balance: Iterable[int], filter_unique: bool = False) -> None:
-
-    if filter_unique:
-        module_len = len(set(map(id, module)))
-    else:
-        module_len = len(module)
-
-    if module_len != sum(balance):
-        raise BalanceError(
-            f"module and sum of balance have different length (module: {len(module)}, sum of balance: {sum(balance)})"
-        )
-
-    if any(x <= 0 for x in balance):
-        raise BalanceError(f"all balance numbers must be positive integer (balance: {balance})")
-
-
-@dataclass
-class PartitionInfo:
-    location: Location
-    modules: "OrderedDict[str, nn.Module]"
-    invocations: List[Invocation] = field(default_factory=list)
-
-    def __len__(self) -> int:
-        return len(self.modules)
-
-
-def instantiate_partition(
-    module: Union[nn.Sequential, ListOfLazyModules],
-    balance: Iterable[int],
-    group: torch.distributed.ProcessGroup,
-    style: PipelineStyle,
-) -> List[ModuleWrapper]:
-    balance = list(balance)
-    check_balance(module, balance, True)
-
-    layers: NamedModules = OrderedDict()
-
-    def maybe_realize(layer: Any) -> nn.Module:
-        if isinstance(layer, nn.Module):
-            return layer
-        elif callable(layer):
-            return layer()
-        else:
-            raise TypeError(f"layer must be nn.Module or callable, is {type(layer)}")
-
-    def iterate_module(module: Union[nn.Sequential, list]) -> Iterable[Tuple[Any, nn.Module]]:
-        if isinstance(module, nn.Sequential):
-            yield from module.named_children()
-        else:
-            yield from ((str(k), v) for k, v in enumerate(module))
-
-    if style == PipelineStyle.AsyncSchedule:
-        module_ids = list(map(id, module))
-        index_of_first_use = [module_ids.index(x) for x in module_ids]
-        locations: List[Location] = []
-        module_iter = enumerate(iterate_module(module))
-
-        partitions: List[List[PartitionInfo]] = []
-        for bi, b in enumerate(balance):
-            modules_for_rank: List[PartitionInfo] = []
-            current_module: OrderedDict[str, nn.Module] = OrderedDict()
-
-            def current_location() -> Location:
-                return Location(bi, len(modules_for_rank))
-
-            def append_module(mod: "OrderedDict[str, nn.Module]") -> None:
-                modules_for_rank.append(PartitionInfo(current_location(), mod))
-
-            while sum(map(len, modules_for_rank)) + len(current_module) < b:
-                module_index, (name, layer) = next(module_iter)
-
-                if index_of_first_use[module_index] != module_index:
-                    # Subsequent reuse of a module
-                    locations.append(locations[index_of_first_use[module_index]])
-                    continue
-
-                is_reused = index_of_first_use.count(index_of_first_use[module_index]) > 1
-
-                if is_reused and len(current_module) > 0:
-                    append_module(current_module)
-                    current_module = OrderedDict()
-
-                current_module[str(name)] = layer
-                locations.append(current_location())
-
-                if is_reused:
-                    append_module(current_module)
-                    current_module = OrderedDict()
-
-            if len(current_module) > 0:
-                append_module(current_module)
-
-            partitions.append(modules_for_rank)
-
-        filtered_locations: List[Optional[Location]] = [loc for loc, _ in itertools.groupby(locations)]
-        filtered_locations.append(None)
-
-        for i in range(len(filtered_locations) - 1):
-            loc = filtered_locations[i]
-            assert loc
-            if i == 0:
-                inv = Invocation(i, loc, None, filtered_locations[i + 1])
-            else:
-                inv = Invocation(i, loc, filtered_locations[i - 1], filtered_locations[i + 1])
-
-            partitions[loc.stage][loc.index].invocations.append(inv)
-
-        invocations = enumerate(iterate_module(module))
-
-        partition = partitions[group.rank()]
-        result: List[ModuleWrapper] = []
-        for partition_info in partition:
-            wrapper = ModuleWrapper(
-                nn.Sequential(OrderedDict((k, maybe_realize(m)) for k, m in partition_info.modules.items())),
-                partition_info.location,
-                partition_info.invocations,
-            )
-
-            if not isinstance(module, nn.Sequential):
-                for layer in wrapper.module:
-                    if isinstance(layer, Skippable):
-                        raise ValueError("Can't use Skippable layers with multi-process pipe and lazy construction")
-
-            result.append(wrapper)
-
-        return result
-
-    j = 0
-
-    for name, layer in iterate_module(module):
-        layers[name] = layer
-
-        if len(layers) == balance[j]:
-            if j == group.rank():
-                for key in layers:
-                    layers[key] = maybe_realize(layers[key])
-                if not isinstance(module, nn.Sequential):
-                    for layer in layers.values():
-                        if isinstance(layer, Skippable):
-                            raise ValueError("Can't use Skippable layers with multi-process pipe and lazy construction")
-
-                return [ModuleWrapper(nn.Sequential(layers), Location(j, 0))]
-
-            # Prepare for the next partition.
-            layers.clear()
-            j += 1
-
-    raise ValueError("Souldn't get here, more ranks than partitions")
-
-
 def split_module(
-    module: nn.Sequential, balance: Iterable[int], devices: Optional[List[torch.device]],
-) -> Tuple[List[nn.Sequential], List[int], Optional[List[torch.device]]]:
+    module: nn.Sequential, balance: Iterable[int], devices: List[torch.device],
+) -> Tuple[List[nn.Sequential], List[int], List[torch.device]]:
     """Splits a module into multiple partitions.
 
     Returns:
@@ -300,11 +123,18 @@ def split_module(
     """
     balance = list(balance)
 
-    check_balance(module, balance)
+    if len(module) != sum(balance):
+        raise BalanceError(
+            "module and sum of balance have different length "
+            f"(module: {len(module)}, sum of balance: {sum(balance)})"
+        )
 
-    if devices and len(balance) > len(devices):
+    if any(x <= 0 for x in balance):
+        raise BalanceError(f"all balance numbers must be positive integer (balance: {balance})")
+
+    if len(balance) > len(devices):
         raise IndexError(
-            f"too few devices to hold given partitions (devices: {len(devices)}, partitions: {len(balance)})"
+            "too few devices to hold given partitions " f"(devices: {len(devices)}, partitions: {len(balance)})"
         )
 
     j = 0
@@ -318,9 +148,8 @@ def split_module(
             # Group buffered layers as a partition.
             partition = nn.Sequential(layers)
 
-            if devices:
-                device = devices[j]
-                partition.to(device)
+            device = devices[j]
+            partition.to(device)
 
             partitions.append(partition)
 
@@ -329,13 +158,12 @@ def split_module(
             j += 1
 
     partitions = cast(List[nn.Sequential], nn.ModuleList(partitions))
-    if devices:
-        del devices[j:]
+    del devices[j:]
 
     return partitions, balance, devices
 
 
-MOVING_DENIED = TypeError("denied to move parameters and buffers, because Pipe should manage device placement")
+MOVING_DENIED = TypeError("denied to move parameters and buffers, " "because Pipe should manage device placement")
 
 
 class Pipe(Module):
@@ -365,23 +193,8 @@ class Pipe(Module):
             list of number of layers in each partition
 
     Keyword Args:
-        style (PipelineStyle):
-            whether to use a single process for all pipeline stages or to assign
-            one stage per process
         devices (iterable of devices):
             devices to use (default: all CUDA devices)
-        group (ProcessGroup):
-            specific to `style=MultiProcess`, the process group that all
-            pipeline stages are a member of. Defaults to
-            `get_pipeline_parallel_group()`
-        worker_map (Dict[int, str]):
-            a map from worker name (the first argument to
-            `torch.distributed.rpc.init_rpc`) to global rank (i.e.
-            `torch.distributed.get_rank()`) needed in order for pipeline stages
-            to communicate with each other
-        input_device (device):
-            the device on which tensors should be located before being passed to
-            the first module in a given pipeline stage
         chunks (int):
             number of micro-batches (default: ``1``)
         checkpoint (str):
@@ -389,18 +202,8 @@ class Pipe(Module):
             ``'except_last'``, or ``'never'`` (default: ``'except_last'``)
         deferred_batch_norm (bool):
             whether to use deferred BatchNorm moving statistics (default:
-            :data:`False`, see :class:`DeferredBatchNorm` for more
+            :data:`False`, see :ref:`Deferred Batch Normalization` for more
             details)
-        pipelined_backward (bool, optional):
-            if True, call torch.autograd.backward once per microbatch on the
-            backward pass (instead of once for the whole batch). This works
-            around a potential deadlock in pytorch when using tensor parallelism
-            at the same time. Defaults to `True` if
-            `get_model_parallel_world_size() > 1`
-            (default: `None`)
-        retain_graph (bool):
-            The value passed to `torch.autograd.backwards(..., retain_graph=<value>)
-            (default: = `True`)
 
     Raises:
         TypeError:
@@ -411,10 +214,6 @@ class Pipe(Module):
             the number of devices is fewer than the number of partitions.
 
     """
-
-    SingleProcess: PipelineStyle = PipelineStyle.SingleProcess
-    MultiProcess: PipelineStyle = PipelineStyle.MultiProcess
-    AsyncSchedule: PipelineStyle = PipelineStyle.AsyncSchedule
 
     #: The number of layers in each partition.
     balance: List[int] = []
@@ -435,7 +234,7 @@ class Pipe(Module):
     #:         output = pipe(input)
     #:         loss = F.cross_entropy(output, target)
     #:
-    devices: Optional[List[torch.device]] = None
+    devices: List[torch.device] = []
 
     #: The number of micro-batches.
     chunks: int = 1
@@ -446,20 +245,13 @@ class Pipe(Module):
 
     def __init__(
         self,
-        module: Union[nn.Sequential, ListOfLazyModules],
+        module: nn.Sequential,
         balance: Optional[Iterable[int]] = None,
         *,
-        style: PipelineStyle = PipelineStyle.SingleProcess,
         devices: Optional[Devices] = None,
-        group: Optional[torch.distributed.ProcessGroup] = None,
-        worker_map: Optional[Dict[int, str]] = None,
-        input_device: Union[None, int, str, torch.device] = None,
         chunks: int = chunks,
         checkpoint: str = checkpoint,
         deferred_batch_norm: bool = False,
-        pipelined_backward: bool = None,
-        retain_graph: bool = False,
-        loss_fn: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
 
@@ -477,145 +269,50 @@ class Pipe(Module):
 
         # Verify if the underlying skippable modules satisfy integrity. The
         # integrity can be verified before forward() because it is static.
-        if isinstance(module, nn.Sequential):
-            verify_skippables(module)
+        verify_skippables(module)
 
         self.chunks = chunks
         self.checkpoint = checkpoint
-        self.pipelined_backward = pipelined_backward
-        self.retain_graph = retain_graph
-        self.pipeline: Optional[Pipeline]
-        self.loss_fn = loss_fn
-        self.lock = threading.Lock()
 
-        self.group = group
-        self.worker_map = worker_map
-        self.input_device = input_device
+        if deferred_batch_norm:
+            module = DeferredBatchNorm.convert_deferred_batch_norm(module, chunks)
+
+        if devices is None:
+            devices = range(torch.cuda.device_count())
+        devices = [torch.device(d) for d in devices]
+        devices = cast(List[torch.device], devices)
+
+        try:
+            self.partitions, self.balance, self.devices = split_module(module, balance, devices)
+        except BalanceError as exc:
+            raise ValueError(recommend_auto_balance(str(exc)))
+
+        verify_splitting(module, self.partitions, self.balance, self.devices)
 
         self._copy_streams: List[List[AbstractStream]] = []
+        self._skip_layout = inspect_skip_layout(self.partitions)
+
+        # Separate CUDA streams for copy.
+        copy_streams = self._ensure_copy_streams()
 
         # The micro-batch index where the checkpointing stops.
         checkpoint_stop = {"always": self.chunks, "except_last": self.chunks - 1, "never": 0}[self.checkpoint]
 
-        if style is PipelineStyle.SingleProcess:
-            module = cast(nn.Sequential, module)
-            if deferred_batch_norm:
-                module = DeferredBatchNorm.convert_deferred_batch_norm(module, chunks)
-
-            if input_device is not None:
-                raise ValueError("'input_device' argument only applies to 'PipelineStyle.MultiProcess'")
-
-            if devices is None:
-                devices = range(torch.cuda.device_count())
-
-            devices = [torch.device(d) for d in devices]
-            devices = cast(List[torch.device], devices)
-
-            try:
-                self.partitions, self.balance, self.devices = split_module(module, balance, devices)
-            except BalanceError as exc:
-                raise ValueError(recommend_auto_balance(str(exc)))
-            verify_splitting(module, self.partitions, self.balance, self.devices)
-
-            self._skip_layout = inspect_skip_layout(self.partitions)
-
-            # Separate CUDA streams for copy.
-            copy_streams = self._ensure_copy_streams()
-            if self.pipelined_backward is None:
-                self.pipelined_backward = False
-            self.pipeline = Pipeline(
-                self.partitions, self.devices, copy_streams, self._skip_layout, checkpoint_stop, style=style,
-            )
-
-        elif style in [PipelineStyle.MultiProcess, PipelineStyle.AsyncSchedule]:
-
-            if self.group is None:
-                self.group = get_pipeline_parallel_group()
-            assert self.group
-
-            if devices is not None:
-                raise ValueError("'devices' argument only applies to 'PipelineStyle.SingleProcess'")
-
-            self.balance = list(balance)
-
-            if self.group.size() < len(self.balance):
-                raise IndexError(
-                    f"too few ranks to hold given partitions (ranks: {self.group.size()}, partitions:"
-                    f" {len(self.balance)})"
-                )
-            try:
-                rank = self.group.rank()
-                if rank >= len(self.balance):
-                    warnings.warn("More ranks than partitions, some ranks unused")
-                    self.mp_partitions: List[ModuleWrapper] = []
-                else:
-                    self.mp_partitions = instantiate_partition(module, balance, self.group, style)
-                    if deferred_batch_norm:
-                        for part in self.mp_partitions:
-                            part.module = DeferredBatchNorm.convert_deferred_batch_norm(part.module, chunks)
-                    for name, part in enumerate(self.mp_partitions):
-                        self.add_module(str(name), part.module)
-                self.devices = None
-                if isinstance(module, nn.Sequential):
-                    local_partitions, _, _ = split_module(module, balance, None)
-                    self._skip_layout = inspect_skip_layout(local_partitions)
-                else:
-                    self._skip_layout = SkipLayout(len(module), {})  # FIXME(tom)
-
-            except BalanceError as exc:
-                raise ValueError(recommend_auto_balance(str(exc)))
-
-            rank = self.group.rank()
-            if rank >= len(self.balance):
-                self.pipeline = None
-                self.final_stage = False
-            else:
-                self.final_stage = rank == len(self.balance) - 1
-                assert loss_fn is None or self.final_stage
-
-                self.pipeline = Pipeline(
-                    cast(List[nn.Sequential], self.mp_partitions),
-                    None,
-                    None,
-                    self._skip_layout,
-                    checkpoint_stop,
-                    style=style,
-                    group=self.group,
-                    worker_map=self.worker_map,
-                    input_device=self.input_device,
-                    final_stage=self.final_stage,
-                )
-                del module
-            if self.pipelined_backward is None:
-                if get_model_parallel_world_size() > 1:
-                    self.pipelined_backward = True
-                else:
-                    self.pipelined_backward = False
+        self.pipeline = Pipeline(self.partitions, self.devices, copy_streams, self._skip_layout, checkpoint_stop)
 
     def __len__(self) -> int:
         """Counts the length of the underlying sequential module."""
-        if hasattr(self, "partitions"):
-            return sum(len(p) for p in self.partitions)
-        else:
-            return sum(len(p) for p in self.mp_partitions)
+        return sum(len(p) for p in self.partitions)
 
     def __getitem__(self, index: int) -> nn.Module:
         """Gets a layer in the underlying sequential module."""
-        partitions: List[Any]
-        if hasattr(self, "partitions"):
-            partitions = self.partitions
-        else:
-            partitions = self.mp_partitions
-
+        partitions = self.partitions
         if index < 0:
             partitions = partitions[::-1]
 
         for partition in partitions:
             try:
-                if isinstance(partition, ModuleWrapper):
-                    return partition.module[index]
-                else:
-                    return partition[index]
+                return partition[index]
             except IndexError:
                 pass
 
@@ -630,47 +327,35 @@ class Pipe(Module):
 
     def __iter__(self) -> Iterable[nn.Module]:
         """Iterates over children of the underlying sequential module."""
-        if hasattr(self, "partitions"):
-            for partition in self.partitions:
-                yield from partition
-        else:
-            for mp_partition in self.mp_partitions:
-                yield from mp_partition.module
+        for partition in self.partitions:
+            yield from partition
 
     # Pipe should manage the device of each partition.
     # Deny cuda(), cpu(), and to() with device, by TypeError.
     def cuda(self, device: Optional[Device] = None) -> "Pipe":
-        if self.devices:
-            raise MOVING_DENIED
-        if device:
-            return super().cuda(device=device)
-        else:
-            return super().cuda()
+        raise MOVING_DENIED
 
     def cpu(self) -> "Pipe":
-        if self.devices:
-            raise MOVING_DENIED
-        return super().cpu()
+        raise MOVING_DENIED
 
     def to(self, *args: Any, **kwargs: Any) -> "Pipe":
-        """Restrict .to() options.
+        # Deny these usages:
+        #
+        # - to(device[, dtype, non_blocking])
+        # - to(tensor[, non_blocking])
+        #
+        # But allow this:
+        #
+        # - to(dtype[, non_blocking])
+        #
+        if "device" in kwargs or "tensor" in kwargs:
+            raise MOVING_DENIED
 
-        Deny these usages:
-         - to(device[, dtype, non_blocking])
-         - to(tensor[, non_blocking])
-
-         But allow this:
-         - to(dtype[, non_blocking])
-        """
-        if self.devices:
-            if "device" in kwargs or "tensor" in kwargs:
+        if args:
+            if isinstance(args[0], (torch.device, int, str)):
                 raise MOVING_DENIED
-
-            if args:
-                if isinstance(args[0], (torch.device, int, str)):
-                    raise MOVING_DENIED
-                if torch.is_tensor(args[0]):
-                    raise MOVING_DENIED
+            if torch.is_tensor(args[0]):
+                raise MOVING_DENIED
 
         return super().to(*args, **kwargs)
 
@@ -683,13 +368,12 @@ class Pipe(Module):
 
         """
         if not self._copy_streams:
-            assert self.devices is not None
             for device in self.devices:
                 self._copy_streams.append([new_stream(device) for _ in range(self.chunks)])
 
         return self._copy_streams
 
-    def forward(self, input: TensorOrTensors, *, event=None) -> TensorOrTensors:  # type: ignore
+    def forward(self, input: TensorOrTensors) -> TensorOrTensors:  # type: ignore
         """:class:`Pipe` is a fairly transparent module wrapper. It doesn't
         modify the input and output signature of the underlying module. But
         there's type restriction. Input and output have to be a
@@ -708,82 +392,16 @@ class Pipe(Module):
         """
         microbatch.check(input)
 
-        if not self.group and not self.devices:
+        if not self.devices:
             # Empty sequential module is not illegal.
-            return input
-
-        if not self.pipeline:
-            # No pipeline is not illegal, more ranks than partitions
             return input
 
         # Divide a mini-batch into micro-batches.
         batches = microbatch.scatter(input, self.chunks)
 
         # Run pipeline parallelism.
-        with self.lock:
-            self.pipeline.run(self.training, batches, event)
+        self.pipeline.run(batches)
 
-            if self.group and not self.final_stage:
-                # Don't merge micro-batches to avoid unnecessary edges in autograd
-                # graph
-                # FIXME(tom) should figure out a proper type here
-                return batches  # type: ignore
-            else:
-                # Merge the micro-batches into one mini-batch.
-                if self.pipelined_backward:
-                    with torch.no_grad():
-                        output = microbatch.gather(batches)
-
-                    from .phony import get_phony
-
-                    phony = get_phony(
-                        torch.device(torch.cuda.current_device() if torch.cuda.is_available() else "cpu"),
-                        requires_grad=True,
-                    )
-                    output = PipelinedBackwardPass.apply(output, batches, phony, True)  # self.retain_graph)
-                else:
-                    output = microbatch.gather(batches)
-
-            return output
-
-    def back_helper(self, output: List[microbatch.Batch]) -> None:
-        if self.final_stage:
-            raise ValueError("back_helper should only be called on non-final stages")
-
-        if self.pipeline:
-            self.pipeline.back_helper(list(reversed(output)))
-
-
-class PipelinedBackwardPass(torch.autograd.Function):
-    @staticmethod
-    # type: ignore
-    def forward(ctx, input: TensorOrTensors, batches, phony, retain_graph) -> TensorOrTensors:
-        ctx.batches = batches
-        ctx.retain_graph = retain_graph
-        return input
-
-    @staticmethod
-    # type: ignore
-    def backward(ctx, *grads) -> Tuple:
-        with torch.no_grad():
-            grad_batches = microbatch.scatter(grads, len(ctx.batches))
-        for grad, batch in reversed(list(zip(grad_batches, ctx.batches))):
-            for t in batch:
-                t.retain_grad()
-            torch.autograd.backward(batch.tensor_or_tensors, grad_tensors=(*grad,), retain_graph=ctx.retain_graph)
-
-        with torch.no_grad():
-            if ctx.batches[0].atomic:
-                tensors = tuple(b.tensor.grad for b in ctx.batches)
-                output: TensorOrTensors = torch.cat(tensors)
-            else:
-                rotated = [[t.grad for t in b.tensors] for b in ctx.batches]
-                output_buf = []
-
-                for tensors in zip(*rotated):
-                    output_buf.append(torch.cat(tensors))
-
-                output = tuple(output_buf)
-            del ctx.batches
-
-        return (output, None, None, None)
+        # Merge the micro-batches into one mini-batch.
+        output = microbatch.gather(batches)
+        return output
