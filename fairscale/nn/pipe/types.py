@@ -24,7 +24,6 @@ Tensors = Tuple[Tensor, ...]
 TensorOrTensors = Union[Tensor, Tensors]
 
 InputDevice = Union[None, int, str, torch.device]
-Schedule = List[Tuple[int, int]]
 
 
 class LazyModule:

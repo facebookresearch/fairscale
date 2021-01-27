@@ -23,7 +23,7 @@ from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader, Dataset
 
 from experimental.nn.ampnet_pipe.pipe import AMPnetPipe
-from fairscale.nn.pipe import Pipe
+from fairscale.nn.pipe import MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
@@ -87,7 +87,7 @@ def async_event_loop_interleave_simple():
     pipe = AMPnetPipe(
         module=model,
         balance=[2, 2],
-        style=Pipe.AsyncSchedule,
+        style=MultiProcessPipe.AsyncSchedule,
         worker_map=get_worker_map(),
         chunks=10,
         checkpoint="never",
@@ -105,7 +105,7 @@ def async_event_loop_interleave_hard():
     pipe = AMPnetPipe(
         module=model,
         balance=[1, 1, 1, 1],
-        style=Pipe.AsyncSchedule,
+        style=MultiProcessPipe.AsyncSchedule,
         worker_map=get_worker_map(),
         chunks=10,
         checkpoint="never",

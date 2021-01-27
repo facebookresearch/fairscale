@@ -10,6 +10,7 @@ import tempfile
 import time
 from typing import Any, List, Optional, cast
 
+from golden_configs import oss_mnist
 import numpy as np
 import torch
 import torch.autograd.profiler as profiler
@@ -77,6 +78,37 @@ class OptimType(str, Enum):
     everyone = "everyone"
 
 
+def validate_benchmark(measurements, args, check_regression):
+    """Validate the measurments against the golden benchmark config."""
+
+    golden_data = oss_mnist.get_golden_real_stats()
+
+    max_memory = -1.0
+    rank = dist.get_rank()
+    if not args.cpu:
+        # TODO(anj-s): Check if we need to synchronize before we caculate total training time.
+        torch.cuda.synchronize(rank)
+        max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
+        logging.info(f"[{rank}] : Peak memory {max_memory:.1f}MiB")
+
+    measurements.sort()
+    median = measurements[len(measurements) // 2]
+    # Compute the median and median of absolute differences img per second.
+    abs_diff = list(map(lambda x: abs(x - median), measurements))
+    abs_diff.sort()
+    mad = abs_diff[len(measurements) // 2] if args.epochs > 2 else -1
+
+    # TODO(anj-s): Add a debug flag to perform the above calculation only when required.
+    logging.info(f"[{rank}] : Median speed: {median:.2f} +/- {mad:.2f}")
+
+    if check_regression and rank == 0:
+        assert (median + 3.0 * mad) > golden_data["reference_speed"], "Speed regression detected"
+        assert max_memory < 1.05 * golden_data["reference_memory"], "Memory use regression detected"
+        assert abs(cast(float, final_loss) - golden_data["reference_loss"]) < 1e-3, "Loss regression detected"
+
+        logging.info("[Regression Test] VALID")
+
+
 def train(
     rank: int,
     args: argparse.Namespace,
@@ -142,7 +174,7 @@ def train(
         for batch in dataloader:
             if not args.cpu:
                 torch.cuda.synchronize(rank)
-            batch__start = time.monotonic()
+            batch_start = time.monotonic()
 
             def closure(data=batch, grad_scaler=None):
                 model.zero_grad()
@@ -173,27 +205,26 @@ def train(
                     )
                 return loss
 
+            def run_closure(closure, scaler, optimizer):
+                if scaler is not None:
+                    final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
+                    scaler.step(optimizer)
+                    scaler.update()
+                    return final_loss
+                else:
+                    return optimizer.step(closure)
+
             if need_profiling and not args.cpu:
                 logging.info("Profiling the run")
                 with profiler.profile(use_cuda=True, record_shapes=True, profile_memory=True) as prof:  # type: ignore
                     with profiler.record_function("batch"):
-                        if scaler is not None:
-                            final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
-                            scaler.step(optimizer)
-                            scaler.update()
-                        else:
-                            final_loss = optimizer.step(closure)
+                        final_loss = run_closure(closure, scaler, optimizer)
 
                 prof.export_chrome_trace(f"{optim_type}_trace_rank_{rank}.json")
                 need_profiling = False  # only profile once
 
             else:
-                if scaler is not None:
-                    final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    final_loss = optimizer.step(closure)
+                final_loss = run_closure(closure, scaler, optimizer)
 
             if args.debug and rank == 0:
                 logging.debug("buffer: {}".format(next(model.buffers()).norm().item()))
@@ -210,7 +241,7 @@ def train(
                 torch.cuda.synchronize(rank)
 
             batch_end = time.monotonic()
-            epoch_runtime += batch_end - batch__start
+            epoch_runtime += batch_end - batch_start
 
         if optim_type == OptimType.oss_ddp or optim_type == OptimType.oss_sharded_ddp:
             # Check the checkpointing in the case of the OSS optimizer
@@ -225,32 +256,11 @@ def train(
         if dist.get_rank() == 0:
             logging.info(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss:.3f}")
 
-    max_memory = -1.0
-    if not args.cpu:
-        torch.cuda.synchronize(rank)
-        max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
-        logging.info(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
-
     training_stop = time.monotonic()
     img_per_sec = n_items / (training_stop - training_start) * args.epochs
     logging.info(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec inc. checkpoint")
 
-    # Compute the median and median of absolute differences img per second
-    measurements.sort()
-    median = measurements[len(measurements) // 2]
-
-    abs_diff = list(map(lambda x: abs(x - median), measurements))
-    abs_diff.sort()
-    mad = abs_diff[len(measurements) // 2] if args.epochs > 2 else -1
-
-    logging.info(f"[{dist.get_rank()}] : Median speed: {median:.2f} +/- {mad:.2f}")
-
-    if check_regression and dist.get_rank() == 0:
-        assert (median + 3.0 * mad) > args.reference_speed, "Speed regression detected"
-        assert max_memory < 1.05 * args.reference_memory, "Memory use regression detected"
-        assert abs(cast(float, final_loss) - args.reference_loss) < 1e-3, "Loss regression detected"
-
-        logging.info("[Regression Test] VALID")
+    validate_benchmark(measurements, args, check_regression)
 
     dist.destroy_process_group()  # type: ignore
 
