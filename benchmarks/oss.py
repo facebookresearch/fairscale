@@ -10,6 +10,7 @@ import tempfile
 import time
 from typing import Any, List, Optional, cast
 
+from golden_configs import oss_mnist
 import numpy as np
 import torch
 import torch.autograd.profiler as profiler
@@ -21,7 +22,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import BatchSampler, DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.datasets import MNIST
-from torchvision.transforms import ToTensor
+from torchvision.transforms import Compose, Resize, ToTensor
 
 from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 from fairscale.optim import OSS
@@ -39,7 +40,11 @@ def dist_init(rank, world_size, backend):
 def get_problem(rank, world_size, batch_size, device, model_name: str):
     # Select the desired model on the fly
     logging.info(f"Using {model_name} for benchmarking")
-    model = getattr(importlib.import_module("torchvision.models"), model_name)(pretrained=False).to(device)
+
+    try:
+        model = getattr(importlib.import_module("torchvision.models"), model_name)(pretrained=False).to(device)
+    except AttributeError:
+        model = getattr(importlib.import_module("timm.models"), model_name)(pretrained=False).to(device)
 
     # Data setup, duplicate the grey channels to get pseudo color
     def collate(inputs: List[Any]):
@@ -48,7 +53,16 @@ def get_problem(rank, world_size, batch_size, device, model_name: str):
             "label": torch.tensor([i[1] for i in inputs]).to(device),
         }
 
-    dataset = MNIST(transform=ToTensor(), download=False, root=TEMPDIR)
+    # Transforms
+    transforms = []
+    if model_name.startswith("vit"):
+        # ViT models are fixed size. Add a ad-hoc transform to resize the pictures accordingly
+        pic_size = int(model_name.split("_")[-1])
+        transforms.append(Resize(pic_size))
+
+    transforms.append(ToTensor())
+
+    dataset = MNIST(transform=Compose(transforms), download=False, root=TEMPDIR)
     sampler: Sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     batch_sampler = BatchSampler(sampler, batch_size, drop_last=True)
     dataloader = DataLoader(dataset=dataset, batch_sampler=batch_sampler, collate_fn=collate)
@@ -62,6 +76,37 @@ class OptimType(str, Enum):
     oss_ddp = "oss_ddp"
     oss_sharded_ddp = "oss_sharded_ddp"
     everyone = "everyone"
+
+
+def validate_benchmark(measurements, args, check_regression):
+    """Validate the measurments against the golden benchmark config."""
+
+    golden_data = oss_mnist.get_golden_real_stats()
+
+    max_memory = -1.0
+    rank = dist.get_rank()
+    if not args.cpu:
+        # TODO(anj-s): Check if we need to synchronize before we caculate total training time.
+        torch.cuda.synchronize(rank)
+        max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
+        logging.info(f"[{rank}] : Peak memory {max_memory:.1f}MiB")
+
+    measurements.sort()
+    median = measurements[len(measurements) // 2]
+    # Compute the median and median of absolute differences img per second.
+    abs_diff = list(map(lambda x: abs(x - median), measurements))
+    abs_diff.sort()
+    mad = abs_diff[len(measurements) // 2] if args.epochs > 2 else -1
+
+    # TODO(anj-s): Add a debug flag to perform the above calculation only when required.
+    logging.info(f"[{rank}] : Median speed: {median:.2f} +/- {mad:.2f}")
+
+    if check_regression and rank == 0:
+        assert (median + 3.0 * mad) > golden_data["reference_speed"], "Speed regression detected"
+        assert max_memory < 1.05 * golden_data["reference_memory"], "Memory use regression detected"
+        assert abs(cast(float, final_loss) - golden_data["reference_loss"]) < 1e-3, "Loss regression detected"
+
+        logging.info("[Regression Test] VALID")
 
 
 def train(
@@ -88,7 +133,7 @@ def train(
         torch.backends.cudnn.benchmark = False
 
     device = torch.device("cpu") if args.cpu else torch.device(rank)
-    model, dataloader, loss_fn = get_problem(rank, args.world_size, args.batch_size, device, args.torchvision_model)
+    model, dataloader, loss_fn = get_problem(rank, args.world_size, args.batch_size, device, args.model)
 
     # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
@@ -129,7 +174,7 @@ def train(
         for batch in dataloader:
             if not args.cpu:
                 torch.cuda.synchronize(rank)
-            batch__start = time.monotonic()
+            batch_start = time.monotonic()
 
             def closure(data=batch, grad_scaler=None):
                 model.zero_grad()
@@ -160,27 +205,26 @@ def train(
                     )
                 return loss
 
+            def run_closure(closure, scaler, optimizer):
+                if scaler is not None:
+                    final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
+                    scaler.step(optimizer)
+                    scaler.update()
+                    return final_loss
+                else:
+                    return optimizer.step(closure)
+
             if need_profiling and not args.cpu:
                 logging.info("Profiling the run")
                 with profiler.profile(use_cuda=True, record_shapes=True, profile_memory=True) as prof:  # type: ignore
                     with profiler.record_function("batch"):
-                        if scaler is not None:
-                            final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
-                            scaler.step(optimizer)
-                            scaler.update()
-                        else:
-                            final_loss = optimizer.step(closure)
+                        final_loss = run_closure(closure, scaler, optimizer)
 
                 prof.export_chrome_trace(f"{optim_type}_trace_rank_{rank}.json")
                 need_profiling = False  # only profile once
 
             else:
-                if scaler is not None:
-                    final_loss = closure(grad_scaler=scaler)  # AMP scaler.step does not support closures
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    final_loss = optimizer.step(closure)
+                final_loss = run_closure(closure, scaler, optimizer)
 
             if args.debug and rank == 0:
                 logging.debug("buffer: {}".format(next(model.buffers()).norm().item()))
@@ -197,7 +241,7 @@ def train(
                 torch.cuda.synchronize(rank)
 
             batch_end = time.monotonic()
-            epoch_runtime += batch_end - batch__start
+            epoch_runtime += batch_end - batch_start
 
         if optim_type == OptimType.oss_ddp or optim_type == OptimType.oss_sharded_ddp:
             # Check the checkpointing in the case of the OSS optimizer
@@ -212,32 +256,11 @@ def train(
         if dist.get_rank() == 0:
             logging.info(f"Epoch {epoch} - processed {measurements[-1]:.2f} img per sec. Loss {final_loss:.3f}")
 
-    max_memory = -1.0
-    if not args.cpu:
-        torch.cuda.synchronize(rank)
-        max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
-        logging.info(f"[{dist.get_rank()}] : Peak memory {max_memory:.1f}MiB")
-
     training_stop = time.monotonic()
     img_per_sec = n_items / (training_stop - training_start) * args.epochs
     logging.info(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec inc. checkpoint")
 
-    # Compute the median and median of absolute differences img per second
-    measurements.sort()
-    median = measurements[len(measurements) // 2]
-
-    abs_diff = list(map(lambda x: abs(x - median), measurements))
-    abs_diff.sort()
-    mad = abs_diff[len(measurements) // 2] if args.epochs > 2 else -1
-
-    logging.info(f"[{dist.get_rank()}] : Median speed: {median:.2f} +/- {mad:.2f}")
-
-    if check_regression and dist.get_rank() == 0:
-        assert (median + 3.0 * mad) > args.reference_speed, "Speed regression detected"
-        assert max_memory < 1.05 * args.reference_memory, "Memory use regression detected"
-        assert abs(cast(float, final_loss) - args.reference_loss) < 1e-3, "Loss regression detected"
-
-        logging.info("[Regression Test] VALID")
+    validate_benchmark(measurements, args, check_regression)
 
     dist.destroy_process_group()  # type: ignore
 
@@ -259,7 +282,7 @@ if __name__ == "__main__":
     parser.add_argument("--gloo", action="store_true", default=False)
     parser.add_argument("--profile", action="store_true", default=False)
     parser.add_argument("--cpu", action="store_true", default=False)
-    parser.add_argument("--torchvision_model", type=str, help="Any torchvision model name (str)", default="resnet101")
+    parser.add_argument("--model", type=str, help="Any torchvision or timm model name (str)", default="resnet101")
     parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
     parser.add_argument("--amp", action="store_true", default=False, help="Activate torch AMP")
 
@@ -293,8 +316,8 @@ if __name__ == "__main__":
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark vanilla optimizer")
         mp.spawn(
-            train,
-            args=(args, BACKEND, OptimType.vanilla, False,),  # no regression check
+            train,  # type: ignore
+            args=(args, BACKEND, OptimType.vanilla, False),  # no regression check
             nprocs=args.world_size,
             join=True,
         )
@@ -302,13 +325,13 @@ if __name__ == "__main__":
     if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark OSS with DDP")
         mp.spawn(
-            train, args=(args, BACKEND, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,
+            train, args=(args, BACKEND, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,  # type: ignore
         )
 
     if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark OSS with ShardedDDP")
         mp.spawn(
-            train,
+            train,  # type: ignore
             args=(
                 args,
                 BACKEND,
