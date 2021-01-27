@@ -10,7 +10,6 @@ from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.pipe import MultiProcessPipe
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-RANK = 0  # example
 
 
 def run(rank, world_size):
@@ -25,7 +24,7 @@ def run(rank, world_size):
     data, target = getData()[0]
     loss_fn = getLossFun()
 
-    device = torch.device("cuda", RANK) if DEVICE == "cuda" else torch.device("cpu")
+    device = torch.device("cuda", rank) if DEVICE == "cuda" else torch.device("cpu")
 
     model = MultiProcessPipe(
         model,
@@ -55,6 +54,7 @@ def run(rank, world_size):
         model.back_helper(outputs)
 
     print(f"Finished Training Step on {rank}")
+    dist.rpc.shutdown()
 
     del model
 
