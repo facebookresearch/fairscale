@@ -5,7 +5,7 @@ from typing import Any, Callable, Optional, Tuple
 from torch import Tensor
 
 def spawn(
-    fn: Callable[[Any], Any],
+    fn: Callable[..., Any],
     args: Tuple[Optional[Any], ...] = (),
     nprocs: int = 1,
     join: bool = True,
