@@ -227,7 +227,7 @@ def train(model_config, model, benchmark_config, args):
 
     # TODO(anj-s): Avoid sending fake data to all replicas except the first and last one.
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
-        lm_dataloader = get_synthetic_dataloaders(args, benchmark_config)
+        lm_dataloader, _, _ = get_synthetic_dataloaders(args, benchmark_config)
 
     total_tokens = 0
     total_tokens_per_log_interval = 0
