@@ -25,7 +25,7 @@ from torch.optim import Adam
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
-from fairscale.nn.pipe import LazyModule, pipe
+from fairscale.nn.pipe import LazyModule, MultiProcessPipe
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
 
@@ -157,7 +157,7 @@ def dump_cuda_tensors():
 def log_number_of_parameters(model):
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
-    if model.group:
+    if hasattr(model, "group"):
         total = torch.Tensor([num_params])
         if torch.cuda.is_available():
             total = total.cuda()
@@ -212,7 +212,7 @@ def train(model_config, model, benchmark_config, args):
 
     optimizer = optimizer(model.parameters())
 
-    pipe_group = model.group
+    pipe_group = model.group if hasattr(model, "group") else None
 
     if args.ddp_zero:
         model = DDP(
@@ -479,9 +479,7 @@ def benchmark_single_process(args):
     model = model_config["model"]
 
     balance = generate_balance(min(num_devices, 4), len(model))
-    pipe_model = pipe.Pipe(
-        model, balance, chunks=args.chunks, pipelined_backward=args.pipelined_backward, checkpoint=args.checkpoint
-    )
+    pipe_model = Pipe(model, balance, chunks=args.chunks, checkpoint=args.checkpoint)
     del model
     del model_config["model"]
 
@@ -498,10 +496,10 @@ def run_mp_worker(args, available_workers):
     model = model_config["model"]
 
     balance = generate_balance_weighted(get_pipeline_parallel_group().size(), len(model), 0.8)
-    pipe_model = pipe.Pipe(
+    pipe_model = MultiProcessPipe(
         model,
         balance,
-        style=Pipe.AsyncSchedule,
+        style=MultiProcessPipe.AsyncSchedule,
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),

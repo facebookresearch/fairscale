@@ -19,10 +19,9 @@ import torchtext
 from torchtext.data.utils import get_tokenizer
 
 from experimental.nn.ampnet_pipe import pipe
-from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
-from fairscale.nn.pipe import LazyModule
+from fairscale.nn.pipe import LazyModule, MultiProcessPipe
 from fairscale.optim import GradScaler
 from fairscale.utils.testing import dist_init, get_worker_map
 
@@ -421,7 +420,7 @@ def run_mp_worker(args, available_workers):
     p = pipe.AMPnetPipe(
         module=model,
         balance=balance,
-        style=Pipe.AsyncSchedule,
+        style=MultiProcessPipe.AsyncSchedule,
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
