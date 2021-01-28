@@ -291,7 +291,7 @@ def train(model_config, model, benchmark_config, args):
             if i % log_interval == 0 and i > 0:
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
-                if not args.multiprocess or dist.get_rank() == 1:
+                if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
                     print(
                         "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
                             i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
@@ -380,7 +380,7 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
     print("-" * 110)
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
-    if dist.get_rank() == 1:
+    if dist.get_rank() == dist.get_world_size() - 1:
         print("Throughput(wps) is {:.2f}.".format(wps))
     print(
         "Peak allocated bytes on cuda:{}: {:1d}".format(
