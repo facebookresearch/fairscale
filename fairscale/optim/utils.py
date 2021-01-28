@@ -90,10 +90,12 @@ class Bucket:
 
         # Current status for this buffer
         self.params_checked_in = 0
-        self.max_params_checked_in = 0
+        self.max_params_checked_in = 0  # atttribute present for convenience purposes
+        self.sent = False
 
     def reset(self) -> None:
         self.params_checked_in = 0
+        self.sent = False
 
     def full(self) -> bool:
         """ is the bucket full ? """

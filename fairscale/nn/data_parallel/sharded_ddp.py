@@ -121,10 +121,6 @@ class ShardedDataParallel(nn.Module):
 
         # - setup buckets and tensor views
         model_size = sum([p.numel() for p in self.module.parameters()])
-        if dist.get_world_size(self.process_group) <= 8:
-            logging.info("ShardedDDP assuming single-node configuration, bypassing reduce buckets")
-            reduce_buffer_size = 0
-
         self.buffer_max_size = min(reduce_buffer_size, model_size)
         logging.info(
             "ShardedDDP bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
@@ -213,6 +209,11 @@ class ShardedDataParallel(nn.Module):
         for o in self.buckets.keys():
             for d in self.buckets[o].keys():
                 for bucket in self.buckets[o][d]:
+                    assert (
+                        bucket.sent
+                    ), "A bucket failed being sent, possible unused parameters. See \
+                    https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html?highlight=unused_parameters"
+
                     bucket.reset()
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
@@ -268,6 +269,7 @@ class ShardedDataParallel(nn.Module):
                         bucket.buffer.mul_(self.world_size_scaling)
 
                         # Reduce the bucket
+                        bucket.sent = True
                         optimizer.work_handles.append(
                             Workhandle(
                                 handle=dist.reduce(
