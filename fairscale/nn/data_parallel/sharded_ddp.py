@@ -318,6 +318,28 @@ class ShardedDataParallel(nn.Module):
                         grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank, sharded_optimizer))
                         self._grad_accs.append(grad_acc)  # keep this function in scope
 
+        #  Add a hook on the module to flush the buckets, if needed
+        def bucket_flush(*unused: Any) -> None:
+            handle = None
+
+            for o in self.sharded_optimizers:
+                for _, bucket_per_device in self.buckets[o].items():
+                    for bucket in bucket_per_device:
+                        if not bucket.sent:
+                            bucket.buffer.mul_(self.world_size_scaling)
+
+                            # Reduce the bucket
+                            bucket.sent = True
+                            handle = dist.reduce(
+                                tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                            )
+
+            # Only wait on the last handle
+            if handle:
+                handle.wait()
+
+        self.module.register_backward_hook(bucket_flush)
+
     @torch.no_grad()
     def _sync_params_and_buffers(self) -> None:
         """
@@ -368,6 +390,7 @@ class ShardedDataParallel(nn.Module):
                 for dst_rank, params in enumerate(per_rank_params):
                     offset = 0
                     bucket = self.buckets[sharded_optimizer][device][dst_rank]
+                    bucket.destination = dst_rank
 
                     for param in filter(lambda x: x.requires_grad is True, params):
                         # Criteria to decide whether this parameter is to be bucketed or not:

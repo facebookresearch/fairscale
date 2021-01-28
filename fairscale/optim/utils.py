@@ -91,6 +91,7 @@ class Bucket:
         # Current status for this buffer
         self.params_checked_in = 0
         self.max_params_checked_in = 0  # atttribute present for convenience purposes
+        self.destination = -1
         self.sent = True
 
     def reset(self) -> None:
