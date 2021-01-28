@@ -18,12 +18,9 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.testing._internal.common_distributed import MultiProcessTestCase
+from torch.testing._internal.common_distributed import MultiProcessTestCase, skip_if_not_multigpu
 
 import fairscale.optim as optim
-
-BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
-DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
 
 
 def sync_object_ranks(something_to_sync: Any, reference_rank: int, device: torch.device) -> Any:
@@ -46,15 +43,23 @@ class TestOSS(MultiProcessTestCase):
                 pass
 
     @property
+    def backend(self):
+        return dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
+
+    @property
     def device(self):
-        return torch.device(self.rank) if BACKEND == dist.Backend.NCCL else torch.device("cpu")
+        return torch.device(self.rank) if self.backend == dist.Backend.NCCL else torch.device("cpu")
 
     def dist_init(self, rank):
         url = "file://" + self.file_name
-        return dist.init_process_group(backend=BACKEND, init_method=url, rank=rank, world_size=self.world_size)
+        return dist.init_process_group(backend=self.backend, init_method=url, rank=rank, world_size=self.world_size)
 
 
 class TestOSSSingleRank(TestOSS):
+    """
+    Testing for interface correctness, no distributed execution needed
+    """
+
     @property
     def world_size(self):
         return 1
@@ -66,12 +71,12 @@ class TestOSSSingleRank(TestOSS):
 
     def test_state_dict(self):
         self.dist_init(self.rank)
-        x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+        x = torch.tensor([1.0], device=self.device, requires_grad=True)
         o = optim.OSS([x], optim=torch.optim.SGD, lr=0.1, momentum=0.9)
         x.backward()
         o.step()
-        self.assertEqual(x, torch.tensor([0.9], device=DEVICE))
-        self.assertEqual(o.optim.state[x]["momentum_buffer"], torch.tensor([1.0], device=DEVICE))
+        self.assertEqual(x, torch.tensor([0.9], device=self.device))
+        self.assertEqual(o.optim.state[x]["momentum_buffer"], torch.tensor([1.0], device=self.device))
 
         o.zero_grad()
         o.consolidate_state_dict()  # Sync state dict in between replicas - even if there are none
@@ -97,23 +102,23 @@ class TestOSSSingleRank(TestOSS):
         o = optim.OSS([x], optim=torch.optim.SGD, lr=0.01)
         o.load_state_dict(state_dict)
         # Check that state is correct and on proper device
-        self.assertEqual(o.optim.state[x]["momentum_buffer"], torch.tensor([1.0], device=DEVICE))
+        self.assertEqual(o.optim.state[x]["momentum_buffer"], torch.tensor([1.0], device=self.device))
 
         # We should now be using a lr of 0.1, both within the optimizer
         # and as exposed by the .param_groups attribute
         assert o.param_groups[0]["lr"] == 0.1
         x.backward()
         o.step()
-        self.assertEqual(x, torch.tensor([0.71], device=DEVICE))
-        self.assertEqual(o.optim.state[x]["momentum_buffer"], torch.tensor([1.9], device=DEVICE))
+        self.assertEqual(x, torch.tensor([0.71], device=self.device))
+        self.assertEqual(o.optim.state[x]["momentum_buffer"], torch.tensor([1.9], device=self.device))
 
         # Check that the exposed param_groups are on the proper device
         self.assertEqual(o.param_groups[0]["params"][0].device, x.device)
 
     def test_lr_scheduler(self):
         self.dist_init(self.rank)
-        x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
-        x2 = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+        x = torch.tensor([1.0], device=self.device, requires_grad=True)
+        x2 = torch.tensor([1.0], device=self.device, requires_grad=True)
         o = optim.OSS([x], optim=torch.optim.SGD, lr=0.01)
         o2 = torch.optim.SGD([x2], lr=0.01)
         s = torch.optim.lr_scheduler.StepLR(o, 1)
@@ -138,12 +143,12 @@ class TestOSSSingleRank(TestOSS):
                 kwarg.append(5)
 
         kwarg: List[Any] = []
-        x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+        x = torch.tensor([1.0], device=self.device, requires_grad=True)
         o = optim.OSS([x], optim=SGDWithStepKWArg, lr=0.1)
         x.backward()
         o.step(0, kwarg=kwarg)
         self.assertEqual(kwarg, [5])
-        self.assertEqual(x, torch.tensor([0.9], device=DEVICE))
+        self.assertEqual(x, torch.tensor([0.9], device=self.device))
 
     def test_step_with_extra_inner_key(self):
         self.dist_init(self.rank)
@@ -154,12 +159,12 @@ class TestOSSSingleRank(TestOSS):
                 super().step()
                 self.param_groups[0]["new_key"] = 0.1
 
-        x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+        x = torch.tensor([1.0], device=self.device, requires_grad=True)
         o = optim.OSS([x], optim=SGDWithNewKey, lr=0.1)
         x.backward()
         o.step()
         self.assertEqual(o.param_groups[0]["new_key"], 0.1)
-        self.assertEqual(x, torch.tensor([0.9], device=DEVICE))
+        self.assertEqual(x, torch.tensor([0.9], device=self.device))
 
     def test_step_without_closure(self):
         self.dist_init(self.rank)
@@ -168,28 +173,37 @@ class TestOSSSingleRank(TestOSS):
             def step(self):
                 return super().step()
 
-        x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
+        x = torch.tensor([1.0], device=self.device, requires_grad=True)
         o = optim.OSS([x], optim=SGDWithoutClosure, lr=0.1)
         x.backward()
         o.step()
-        self.assertEqual(x, torch.tensor([0.9], device=DEVICE))
+        self.assertEqual(x, torch.tensor([0.9], device=self.device))
 
 
 class TestOSSMultipleRanks(TestOSS):
     @property
+    def backend(self):
+        return dist.Backend.NCCL if torch.cuda.is_available() and torch.cuda.device_count() > 1 else dist.Backend.GLOO
+
+    @property
     def world_size(self):
-        if BACKEND == torch.distributed.Backend.NCCL:
+        if self.backend == torch.distributed.Backend.NCCL:
             return min(4, torch.cuda.device_count())
 
-        return 2
+        return 4
 
     def test_step(self):
+        if self.world_size != 4:
+            # Hardcoded values
+            return
+
         self.dist_init(self.rank)
-        x = torch.tensor([float(self.rank + 1)], device=torch.device(self.rank))
+        x = torch.tensor([float(self.rank + 1)], device=self.device)
         m = torch.nn.Linear(1, 1)
         m.weight.data = torch.tensor([[1.0]])
         m.bias.data = torch.tensor([2.0])
-        m.to(self.rank)
+        m.to(self.device)
+
         o = optim.OSS(m.parameters(), optim=torch.optim.SGD, lr=0.1)
         y = m(x)
         y.backward(x)
@@ -197,8 +211,8 @@ class TestOSSMultipleRanks(TestOSS):
             dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM)
             p.grad.data /= self.world_size
         o.step()
-        self.assertEqual(m.weight, torch.tensor([[0.75]], device=torch.device(self.rank)))
-        self.assertEqual(m.bias, torch.tensor([1.85], device=torch.device(self.rank)))
+        self.assertEqual(m.weight, torch.tensor([[0.25]], device=self.device))
+        self.assertEqual(m.bias, torch.tensor([1.75], device=self.device))
 
     def test_step_with_closure(self):
         self.dist_init(self.rank)
@@ -207,14 +221,14 @@ class TestOSSMultipleRanks(TestOSS):
         weight = 1.0
         bias = 2.0
         error = 1.0
-        target = torch.tensor([x_val * weight + bias + error], device=torch.device(self.rank))
+        target = torch.tensor([x_val * weight + bias + error], device=self.device)
         loss_fn = torch.nn.L1Loss()
 
-        x = torch.tensor([float(x_val)], device=torch.device(self.rank))
+        x = torch.tensor([float(x_val)], device=self.device)
         m = torch.nn.Linear(1, 1)
         m.weight.data = torch.tensor([[weight]])
         m.bias.data = torch.tensor([bias])
-        m.to(self.rank)
+        m.to(self.device)
 
         o = optim.OSS(m.parameters(), optim=torch.optim.SGD, lr=0.1)
 
@@ -233,9 +247,9 @@ class TestOSSMultipleRanks(TestOSS):
 
         loss = o.step(closure=closure)
 
-        self.assertEqual(loss, torch.tensor(error, device=torch.device(self.rank)))
-        self.assertEqual(m.weight, torch.tensor([[1.1]], device=torch.device(self.rank)))
-        self.assertEqual(m.bias, torch.tensor([2.1], device=torch.device(self.rank)))
+        self.assertEqual(loss, torch.tensor(error, device=self.device))
+        self.assertEqual(m.weight, torch.tensor([[1.1]], device=self.device))
+        self.assertEqual(m.bias, torch.tensor([2.1], device=self.device))
 
     def test_zero_grad(self):
         self.dist_init(self.rank)
@@ -250,15 +264,15 @@ class TestOSSMultipleRanks(TestOSS):
         self.assertFalse(m.weight.grad)
         self.assertFalse(m.bias.grad)
 
+    @skip_if_not_multigpu
     def test_gradient_clipping(self):
         self.dist_init(self.rank)
-        device = torch.device(self.rank)
         torch.manual_seed(self.rank)  # make sure that the different rank get different data
 
         # Run a dummy step so that the optimizer state dict exists
         batch, input_width, hidden, target_width = 3, 20, 10, 5
-        target = torch.rand((batch, target_width), device=device)
-        inputs = torch.rand((batch, input_width), device=device)
+        target = torch.rand((batch, target_width), device=self.device)
+        inputs = torch.rand((batch, input_width), device=self.device)
         NORMS = [1.0, 2.0, 1, 2, inf]
         CLIP_NORM = 0.3
 
@@ -267,7 +281,7 @@ class TestOSSMultipleRanks(TestOSS):
                 torch.nn.Linear(input_width, hidden),
                 torch.nn.Linear(hidden, hidden),
                 torch.nn.Linear(hidden, target_width),
-            ).to(device)
+            ).to(self.device)
             model = copy.deepcopy(model_oss)
 
             # For this test the gradients are (all) reduced in the same way in between the torch reference and fairscale.
@@ -277,10 +291,10 @@ class TestOSSMultipleRanks(TestOSS):
             model_oss = DDP(module=model_oss, device_ids=[self.rank],)
             sharded_optimizer = optim.OSS(model_oss.parameters(), lr=0.1, momentum=0.99)
 
-            model = DDP(model, device_ids=[self.rank],)
+            model = DDP(model, device_ids=[self.rank])
 
             loss_fn = torch.nn.L1Loss()
-            loss_fn.to(device)
+            loss_fn.to(self.device)
 
             model.zero_grad()
             model_oss.zero_grad()
@@ -308,21 +322,21 @@ class TestOSSMultipleRanks(TestOSS):
             print(f"Checking norm {norm}")
             check(norm)
 
+    @skip_if_not_multigpu
     def test_state_dict_distributed(self):
         self.dist_init(self.rank)
-        device = torch.device(self.rank)
         torch.manual_seed(self.rank)  # make sure that the different rank get different data
         reference_rank = 0
 
         # Run a dummy step so that the optimizer state dict exists
         batch, input_width, hidden, target_width = 3, 20, 10, 5
-        target = torch.rand((batch, target_width), device=device)
-        inputs = torch.rand((batch, input_width), device=device)
+        target = torch.rand((batch, target_width), device=self.device)
+        inputs = torch.rand((batch, input_width), device=self.device)
 
         model_oss1 = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden),).to(
-            device
+            self.device
         )
-        head_oss1 = torch.nn.Linear(hidden, target_width).to(device)
+        head_oss1 = torch.nn.Linear(hidden, target_width).to(self.device)
 
         model_oss2 = copy.deepcopy(model_oss1)
         head_oss2 = copy.deepcopy(head_oss1)
@@ -339,9 +353,9 @@ class TestOSSMultipleRanks(TestOSS):
         sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
         sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
 
-        def run_grad_step(device, model, head, optimizer):
+        def run_grad_step(model, head, optimizer):
             loss_fn = torch.nn.L1Loss()
-            loss_fn.to(device)
+            loss_fn.to(self.device)
 
             model.zero_grad()
 
@@ -356,7 +370,7 @@ class TestOSSMultipleRanks(TestOSS):
         # save and reload without taking any steps
         sharded_optimizer2.consolidate_state_dict()
         state_dict2 = sharded_optimizer2.state_dict() if self.rank == reference_rank else {}
-        state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+        state_dict2 = sync_object_ranks(state_dict2, reference_rank, self.device)
 
         sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
         sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
@@ -364,8 +378,8 @@ class TestOSSMultipleRanks(TestOSS):
 
         # now take a step and check that parameters are equal
         # take a step
-        run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
-        run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
+        run_grad_step(model_oss1, head_oss1, sharded_optimizer1)
+        run_grad_step(model_oss2, head_oss2, sharded_optimizer2)
 
         # check that model parameters are equal
         for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
@@ -374,8 +388,8 @@ class TestOSSMultipleRanks(TestOSS):
             ), "parameters of the two identical models have diverged (before any steps)"
 
         # take a step
-        run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
-        run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
+        run_grad_step(model_oss1, head_oss1, sharded_optimizer1)
+        run_grad_step(model_oss2, head_oss2, sharded_optimizer2)
 
         # check that model parameters are equal
         for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
@@ -386,7 +400,7 @@ class TestOSSMultipleRanks(TestOSS):
         # save the state dict for one model only
         sharded_optimizer2.consolidate_state_dict()
         state_dict2 = sharded_optimizer2.state_dict() if self.rank == reference_rank else {}
-        state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+        state_dict2 = sync_object_ranks(state_dict2, reference_rank, self.device)
 
         # Check that the pulled state and the .param_groups attribute are in sync
         for replica in range(len(state_dict2["param_groups"])):
@@ -395,8 +409,8 @@ class TestOSSMultipleRanks(TestOSS):
                     assert state_dict2["param_groups"][replica][k] == sharded_optimizer2.param_groups[0][k]
 
         # take a step
-        run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
-        run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
+        run_grad_step(model_oss1, head_oss1, sharded_optimizer1)
+        run_grad_step(model_oss2, head_oss2, sharded_optimizer2)
 
         # check that saving did not cause a change in the parameters
         for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
@@ -407,7 +421,7 @@ class TestOSSMultipleRanks(TestOSS):
         # save again
         sharded_optimizer2.consolidate_state_dict()
         state_dict2 = sharded_optimizer2.state_dict() if self.rank == reference_rank else {}
-        state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+        state_dict2 = sync_object_ranks(state_dict2, reference_rank, self.device)
 
         # reload the state_dict
         sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
@@ -415,8 +429,8 @@ class TestOSSMultipleRanks(TestOSS):
         sharded_optimizer2.load_state_dict(state_dict2)
 
         # take a step
-        run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
-        run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
+        run_grad_step(model_oss1, head_oss1, sharded_optimizer1)
+        run_grad_step(model_oss2, head_oss2, sharded_optimizer2)
 
         # check that reloading a saved state dict does not change the parameters
         for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
@@ -424,9 +438,9 @@ class TestOSSMultipleRanks(TestOSS):
                 param1, param2
             ), "parameters of the two identical models have diverged (after reloading)"
 
+    @skip_if_not_multigpu
     def test_ddp_parity(self):
         self.dist_init(self.rank)
-        device = self.device
         torch.cuda.set_device(self.rank)
         torch.manual_seed(self.rank)
         np.random.seed(self.rank)
@@ -435,7 +449,7 @@ class TestOSSMultipleRanks(TestOSS):
             # Any model works. Add one different buffer per rank
             model = torch.nn.Sequential(torch.nn.Linear(2, 3), torch.nn.Linear(3, 3), torch.nn.Linear(3, 3),)
             model.register_buffer("test_buffer", torch.ones((1)) * self.rank)
-            model.to(device)
+            model.to(self.device)
 
             sharded_optimizer = optim.OSS(params=model.parameters(), optim=optimizer, lr=1e-3)
             sharded_ddp_model = DDP(module=model, device_ids=[self.rank], broadcast_buffers=True)
@@ -461,7 +475,7 @@ class TestOSSMultipleRanks(TestOSS):
 
             # The models should stay the same in between the ranks
             for i in range(20):
-                input_tensor = torch.rand((64, 2)).to(device)
+                input_tensor = torch.rand((64, 2)).to(self.device)
 
                 def closure_ddp(input_tensor=input_tensor):
                     ddp_optimizer.zero_grad()
@@ -544,19 +558,18 @@ class TestOSSMultipleRanks(TestOSS):
 
     def test_collect_shards(self):
         self.dist_init(self.rank)
-        device = torch.device(self.rank) if torch.cuda.device_count() > 1 else torch.device("cpu")
         reference_rank = 0
 
         # Run a dummy step so that the optimizer state dict exists
         batch, input_width, hidden, target_width = 3, 20, 10, 5
-        target = torch.rand((batch, target_width), device=device)
-        inputs = torch.rand((batch, input_width), device=device)
+        target = torch.rand((batch, target_width), device=self.device)
+        inputs = torch.rand((batch, input_width), device=self.device)
 
         model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
-        model.to(device)
+        model.to(self.device)
 
         loss_fn = torch.nn.L1Loss()
-        loss_fn.to(device)
+        loss_fn.to(self.device)
 
         # With SGD, Momentum is required to get a state to shard
         optimizer = optim.OSS(model.parameters(), optim=torch.optim.SGD, lr=0.1, momentum=0.99)
