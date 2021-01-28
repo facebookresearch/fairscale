@@ -50,8 +50,8 @@ class TestOSS(MultiProcessTestCase):
         return torch.device(self.rank) if BACKEND == dist.Backend.NCCL else torch.device("cpu")
 
     def dist_init(self, rank):
-        store = dist.FileStore(self.file_name, self.world_size)
-        return dist.init_process_group(backend=BACKEND, store=store, rank=rank, world_size=self.world_size)
+        url = "file://" + self.file_name
+        return dist.init_process_group(backend=BACKEND, init_method=url, rank=rank, world_size=self.world_size)
 
 
 class TestOSSSingleRank(TestOSS):
@@ -62,12 +62,12 @@ class TestOSSSingleRank(TestOSS):
     def test_create(self):
         self.dist_init(self.rank)
         params = [torch.rand(1)]
-        o = optim.OSS(params, optim=SGD, lr=0.01)
+        o = optim.OSS(params, optim=torch.optim.SGD, lr=0.01)
 
     def test_state_dict(self):
         self.dist_init(self.rank)
         x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
-        o = optim.OSS([x], optim=SGD, lr=0.1, momentum=0.9)
+        o = optim.OSS([x], optim=torch.optim.SGD, lr=0.1, momentum=0.9)
         x.backward()
         o.step()
         self.assertEqual(x, torch.tensor([0.9], device=DEVICE))
@@ -94,7 +94,7 @@ class TestOSSSingleRank(TestOSS):
                 self.assertEqual(state_dict["param_groups"][0][k], o.param_groups[0][k])
 
         # Check that it's correctly loaded
-        o = optim.OSS([x], optim=SGD, lr=0.01)
+        o = optim.OSS([x], optim=torch.optim.SGD, lr=0.01)
         o.load_state_dict(state_dict)
         # Check that state is correct and on proper device
         self.assertEqual(o.optim.state[x]["momentum_buffer"], torch.tensor([1.0], device=DEVICE))
@@ -114,7 +114,7 @@ class TestOSSSingleRank(TestOSS):
         self.dist_init(self.rank)
         x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
         x2 = torch.tensor([1.0], device=DEVICE, requires_grad=True)
-        o = optim.OSS([x], optim=SGD, lr=0.01)
+        o = optim.OSS([x], optim=torch.optim.SGD, lr=0.01)
         o2 = torch.optim.SGD([x2], lr=0.01)
         s = torch.optim.lr_scheduler.StepLR(o, 1)
         s2 = torch.optim.lr_scheduler.StepLR(o2, 1)
@@ -175,9 +175,12 @@ class TestOSSSingleRank(TestOSS):
         self.assertEqual(x, torch.tensor([0.9], device=DEVICE))
 
 
-class TestOSSTwoRanks(TestOSS):
+class TestOSSMultipleRanks(TestOSS):
     @property
     def world_size(self):
+        if BACKEND == torch.distributed.Backend.NCCL:
+            return min(4, torch.cuda.device_count())
+
         return 2
 
     def test_step(self):
@@ -213,7 +216,7 @@ class TestOSSTwoRanks(TestOSS):
         m.bias.data = torch.tensor([bias])
         m.to(self.rank)
 
-        o = optim.OSS(m.parameters(), optim=SGD, lr=0.1)
+        o = optim.OSS(m.parameters(), optim=torch.optim.SGD, lr=0.1)
 
         y = m(x)
         y.backward(x)
@@ -238,7 +241,7 @@ class TestOSSTwoRanks(TestOSS):
         self.dist_init(self.rank)
         x = torch.rand(1)
         m = torch.nn.Linear(1, 1)
-        o = optim.OSS(m.parameters(), optim=SGD, lr=0.1)
+        o = optim.OSS(m.parameters(), optim=torch.optim.SGD, lr=0.1)
         y = m(x)
         y.backward(x)
         self.assertNotEqual(m.weight.grad, torch.zeros_like(m.weight))
@@ -247,54 +250,8 @@ class TestOSSTwoRanks(TestOSS):
         self.assertFalse(m.weight.grad)
         self.assertFalse(m.bias.grad)
 
-    def test_reproducibility(self):
-        device = torch.device(self.rank) if torch.cuda.device_count() > 1 else DEVICE
-
-        # Run a dummy step so that the optimizer state dict exists
-        batch, input_width, hidden, target_width = 3, 3, 3, 5
-        target = torch.rand((batch, target_width), device=device)
-        inputs = torch.rand((batch, input_width), device=device)
-
-        model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
-        model.to(device)
-
-        loss_fn = torch.nn.L1Loss()
-        loss_fn.to(device)
-
-        optimizer = optim.OSS(model.parameters(), optim=torch.optim.RMSprop, lr=0.1)
-
-        def closure():
-            optimizer.zero_grad()
-            output = model(inputs)
-            loss = loss_fn(output, target)
-            loss.backward()
-            return loss
-
-        _ = optimizer.step(closure=closure)
-
-        # Update the optimizer state on the reference rank
-        optimizer.consolidate_state_dict(recipient_rank=reference_rank)
-
-        # Fetch the state on the reference rank, broadcast to the other ones
-        if self.rank == reference_rank:
-            optimizer_state_dict = optimizer.state_dict()
-        else:
-            optimizer_state_dict = {}
-
-        # Run two steps, log the loss
-        _ = optimizer.step(closure=closure)
-        reference_loss = optimizer.step(closure=closure)
-
-        # Load the optimizer state dict, rewind the state two steps back
-        optimizer.load_state_dict(optimizer_state_dict)
-
-        # Run two new steps, log the loss again and check that we get the same
-        _ = optimizer.step(closure=closure)
-        test_loss = optimizer.step(closure=closure)
-
-        assert torch.allclose(reference_loss, test_loss)
-
     def test_gradient_clipping(self):
+        self.dist_init(self.rank)
         device = torch.device(self.rank)
         torch.manual_seed(self.rank)  # make sure that the different rank get different data
 
@@ -317,10 +274,10 @@ class TestOSSTwoRanks(TestOSS):
             # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
             # gradient norm computation from OSS and adds a dependency.
             # to keep the comparison apples-to-apples DDP is used in both cases
-            model_oss = DDP(module=model_oss, device_ids=[rank],)
+            model_oss = DDP(module=model_oss, device_ids=[self.rank],)
             sharded_optimizer = optim.OSS(model_oss.parameters(), lr=0.1, momentum=0.99)
 
-            model = DDP(model, device_ids=[rank],)
+            model = DDP(model, device_ids=[self.rank],)
 
             loss_fn = torch.nn.L1Loss()
             loss_fn.to(device)
@@ -344,7 +301,7 @@ class TestOSSTwoRanks(TestOSS):
 
             # Check that the params have indeed been clipped
             for params in sharded_optimizer.per_device_params.values():
-                for param in filter(lambda x: x.grad is not None, params[rank]):
+                for param in filter(lambda x: x.grad is not None, params[self.rank]):
                     assert torch.norm(param.grad, p=norm) < CLIP_NORM, f"param grad norm above clip : {param.grad}"
 
         for norm in NORMS:
@@ -419,9 +376,9 @@ class TestOSSTwoRanks(TestOSS):
     def test_ddp_parity(self):
         self.dist_init(self.rank)
         device = self.device
-        torch.cuda.set_device(rank)
-        torch.manual_seed(rank)
-        np.random.seed(rank)
+        torch.cuda.set_device(self.rank)
+        torch.manual_seed(self.rank)
+        np.random.seed(self.rank)
 
         def check_optimizer_equivalence(optimizer: Type[torch.optim.Optimizer]):
             # Any model works. Add one different buffer per rank
@@ -479,12 +436,6 @@ class TestOSSTwoRanks(TestOSS):
         for opt in [torch.optim.SGD, torch.optim.Adam]:
             check_optimizer_equivalence(opt)
 
-
-class TestOSSFourRanks(TestOSS):
-    @property
-    def world_size(self):
-        return 4
-
     def test_add_param_group(self):
         self.dist_init(self.rank)
 
@@ -500,7 +451,7 @@ class TestOSSFourRanks(TestOSS):
             for p in params:
                 p.requires_grad = True
 
-            o = optim.OSS(params, optim=SGD, lr=0.1)
+            o = optim.OSS(params, optim=torch.optim.SGD, lr=0.1)
 
             assert len(o.param_groups) == 1
             o.add_param_group({"params": [torch.rand(3, 1)]})
@@ -520,7 +471,7 @@ class TestOSSFourRanks(TestOSS):
             for p in params[1:]:
                 p.requires_grad = True
 
-            o = optim.OSS(params, optim=SGD, lr=0.1)
+            o = optim.OSS(params, optim=torch.optim.SGD, lr=0.1)
 
             assert len(o.param_groups) == 1
             o.add_param_group({"params": [torch.rand(3, 1)]})
@@ -536,8 +487,8 @@ class TestOSSFourRanks(TestOSS):
         sizes = [9, 7, 5, 3]
         params = []
         for size in sizes * self.world_size:
-            params.append(torch.rand(size, 1))
-        o = optim.OSS(params, optim=SGD, lr=0.1)
+            params.append(torch.rand(size, 1, requires_grad=True))
+        o = optim.OSS(params, optim=torch.optim.SGD, lr=0.1)
         self.assertEqual(sum([x.numel() for x in o.optim.param_groups[0]["params"]]), sum(sizes))
 
     def test_collect_shards(self):
@@ -557,7 +508,7 @@ class TestOSSFourRanks(TestOSS):
         loss_fn.to(device)
 
         # With SGD, Momentum is required to get a state to shard
-        optimizer = optim.OSS(model.parameters(), optim=SGD, lr=0.1, momentum=0.99)
+        optimizer = optim.OSS(model.parameters(), optim=torch.optim.SGD, lr=0.1, momentum=0.99)
 
         def closure():
             optimizer.zero_grad()
@@ -576,7 +527,7 @@ class TestOSSFourRanks(TestOSS):
         # - load it again
         if self.rank == reference_rank:
             optimizer_state_dict = optimizer.state_dict()
-            self.assertEqual(len(optimizer_state_dict["state"]), self.world_size)
+            self.assertEqual(len(optimizer_state_dict["state"]), len(list(model.parameters())))
         else:
             optimizer_state_dict = {}
 
@@ -588,6 +539,10 @@ class TestOSSFourRanks(TestOSS):
 
     def test_multiple_groups(self):
         # Only work with the even ranks, to check that the global_rank indexing is properly used
+        if self.world_size < 4:
+            # Not enough ranks to test
+            return
+
         self.dist_init(self.rank)
         sub_group_ranks = [0, 2]
         process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend="gloo")
@@ -637,7 +592,12 @@ class TestOSSFourRanks(TestOSS):
 
             # With SGD, Momentum is required to get a state to shard
             optimizer = optim.OSS(
-                model.parameters(), optim=SGD, lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=2 ** 10
+                model.parameters(),
+                optim=torch.optim.SGD,
+                lr=0.1,
+                momentum=0.99,
+                group=process_group,
+                broadcast_buffer_size=2 ** 10,
             )
             check(optimizer)
 
@@ -648,7 +608,12 @@ class TestOSSFourRanks(TestOSS):
 
             # With SGD, Momentum is required to get a state to shard
             optimizer = optim.OSS(
-                model.parameters(), optim=SGD, lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=0
+                model.parameters(),
+                optim=torch.optim.SGD,
+                lr=0.1,
+                momentum=0.99,
+                group=process_group,
+                broadcast_buffer_size=0,
             )
             check(optimizer)
 
