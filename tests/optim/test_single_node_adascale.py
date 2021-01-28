@@ -9,7 +9,6 @@
 
 """ Test AdaScale with a single node (1 CPU or 1 GPU). """
 
-import gc
 import tempfile
 
 import numpy as np
@@ -22,6 +21,7 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from fairscale.optim import AdaScale
 from fairscale.utils.testing import skip_if_no_cuda
+from fairscale.utils.testing_memory import find_tensor_by_shape
 
 
 def test_basic_cpu():
@@ -381,28 +381,12 @@ def test_unhook():
     model = Linear(123, 456, bias=False).cuda()  # unique shape so that it can be found
     optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
 
-    def find_tensor():
-        """ Find the weight tensor from the heap
-
-            Return True if found.
-        """
-        for obj in gc.get_objects():
-            try:
-                # Only need to check parameter type objects
-                if "torch.nn.parameter.Parameter" not in str(type(obj)):
-                    continue
-                if torch.is_tensor(obj) or (hasattr(obj, "data") and torch.is_tensor(obj.data)):
-                    if obj.shape == (456, 123):
-                        return True
-            except Exception as e:
-                pass
-        return False
-
     torch.cuda.empty_cache()
-    assert find_tensor(), "something wrong with gc-based method to find the tensor"
+    target_shape = (456, 123)
+    assert find_tensor_by_shape(target_shape), "something wrong with gc-based method to find the tensor"
 
     optim.unhook()
     del model
     del optim
     torch.cuda.empty_cache()
-    assert not find_tensor(), "tensor should have been released"
+    assert not find_tensor_by_shape(target_shape), "tensor should have been released"
