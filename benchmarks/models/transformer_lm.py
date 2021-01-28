@@ -72,8 +72,8 @@ class LinearLayer(nn.Linear):
         self.weight.data.uniform_(-initrange, initrange)
 
 
-class TransformerLMSequntial(nn.Sequential):
-    """A GPT-2 based nn.Sequeitnal language model."""
+class TransformerLM(nn.Sequential):
+    """A GPT-2 based nn.Sequential language model."""
 
     def __init__(self, ntokens, ninp, nhead, nhid, dropout, initrange, ndecoder):
         layers = [
@@ -84,4 +84,4 @@ class TransformerLMSequntial(nn.Sequential):
             layers.append(TransformerDecoderLayer(ninp, nhead, nhid, dropout))
 
         layers.append(LinearLayer(ninp, ntokens, initrange))
-        super(TransformerLMSequntial, self).__init__(*layers)
+        super(TransformerLM, self).__init__(*layers)

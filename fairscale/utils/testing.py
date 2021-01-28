@@ -53,6 +53,8 @@ skip_if_single_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 2, reason="multiple GPUs required"
 )
 
+_, filename_mpi = tempfile.mkstemp()
+
 
 class IdentityLayer(torch.nn.Module):
     def __init__(self, size: int, scale: float = 1.0) -> None:
@@ -64,7 +66,7 @@ class IdentityLayer(torch.nn.Module):
 
 
 def set_random_seed(seed: int) -> None:
-    """Set random seed for reproducability."""
+    """Set random seed for reproducibility."""
     random.seed(seed)
     numpy.random.seed(seed)
     torch.manual_seed(seed)
@@ -241,10 +243,12 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
 
             error_queue = multiprocessing.get_context("spawn").SimpleQueue()
             if "OMPI_COMM_WORLD_RANK" in os.environ:
+                global filename_mpi
+
                 os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
                 os.environ["WORLD_SIZE"] = os.environ["OMPI_COMM_WORLD_SIZE"]
-                _, filename = tempfile.mkstemp()
-                torch.distributed.init_process_group("mpi", init_method=f"file://{filename}")
+                torch.distributed.init_process_group("mpi", init_method=f"file://{filename_mpi}")
+
                 world_size = torch.distributed.get_world_size()
                 destroy_model_parallel()
                 initialize_model_parallel(1, world_size)
@@ -360,3 +364,37 @@ class GPT2(nn.Module):
         h = torch.mean(h, dim=0)  # average pool over sequence
         # return classification logits and generative logits
         return self.clf_head(h), logits
+
+
+def objects_are_equal(a: Any, b: Any, raise_exception: bool = False) -> bool:
+    """
+    Test that two objects are equal. Tensors are compared to ensure matching
+    size, dtype, device and values.
+    """
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, dict):
+        if set(a.keys()) != set(b.keys()):
+            return False
+        for k in a.keys():
+            if not objects_are_equal(a[k], b[k], raise_exception):
+                return False
+        return True
+    elif isinstance(a, (list, tuple, set)):
+        if len(a) != len(b):
+            return False
+        return all(objects_are_equal(x, y, raise_exception) for x, y in zip(a, b))
+    elif torch.is_tensor(a):
+        try:
+            torch.testing.assert_allclose(a, b)
+            # assert_allclose doesn't strictly test shape, dtype and device
+            shape_dtype_device_match = a.size() == b.size() and a.dtype == b.dtype and a.device == b.device
+            assert shape_dtype_device_match
+            return True
+        except AssertionError as e:
+            if raise_exception:
+                raise e
+            else:
+                return False
+    else:
+        return a == b

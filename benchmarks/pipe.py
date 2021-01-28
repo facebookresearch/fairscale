@@ -11,33 +11,23 @@ import os
 import pprint
 import time
 
-from benchmark_dataset import BenchmarkLMDataset, collate_sentences_lm
-import datasets
-import models
+from datasets.wikitext2_data import get_real_dataloaders as get_real_wikitext2_dataloaders
+from datasets.wikitext2_data import get_synthetic_dataloaders as get_synthetic_wikitext2_dataloaders
+from golden_configs import lm_wikitext2
+from models import transformer_lm
 import numpy as np
 import torch
 from torch.distributed import rpc
 import torch.multiprocessing as mp
-import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
+from torch.optim import Adam
 
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
-from fairscale.nn.pipe import LazyModule, pipe
-from fairscale.optim import GradScaler
+from fairscale.nn.pipe import LazyModule, MultiProcessPipe
 from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
-
-try:
-    from fairscale.optim import Adam  # type: ignore
-
-    can_benchmark = True
-except ImportError:
-    from torch.optim import Adam  # type: ignore
-
-    can_benchmark = False
 
 
 def init_random_seed(seed: int):
@@ -78,16 +68,16 @@ def get_lm_model(args, device, config):
 
     if args.lazy_construction:
         layers = [
-            LazyModule(lambda: models.EmbeddingLayer(vocab_size, ninp, initrange)),
-            LazyModule(lambda: models.PositionalEncodingLayer(ninp, dropout)),
+            LazyModule(lambda: transformer_lm.EmbeddingLayer(vocab_size, ninp, initrange)),
+            LazyModule(lambda: transformer_lm.PositionalEncodingLayer(ninp, dropout)),
         ]
         for _ in range(ndecoder):
-            layers.append(LazyModule(lambda: models.TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
+            layers.append(LazyModule(lambda: transformer_lm.TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
 
-        layers.append(LazyModule(lambda: models.LinearLayer(ninp, vocab_size, initrange)))
+        layers.append(LazyModule(lambda: transformer_lm.LinearLayer(ninp, vocab_size, initrange)))
         model = layers
     else:
-        model = models.TransformerLMSequntial(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
+        model = transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
     return model
 
@@ -167,7 +157,7 @@ def dump_cuda_tensors():
 def log_number_of_parameters(model):
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
-    if model.group:
+    if hasattr(model, "group"):
         total = torch.Tensor([num_params])
         if torch.cuda.is_available():
             total = total.cuda()
@@ -208,22 +198,21 @@ def get_fake_dataloader(lm_dataloader_len):
     return FakeDataset()
 
 
-def train(data_config, model, benchmark_config, args):
-    lm_dataloader = data_config["data"]
+def train(model_config, model, benchmark_config, args):
+    lm_dataloader, _, _ = model_config["data"]
     criterion = benchmark_config["criterion"]
     vocab_size = benchmark_config["vocab_size"]
-    optimizer = data_config["optimizer"]
+    optimizer = model_config["optimizer"]
 
     model.train()
     log_number_of_parameters(model)
 
     total_loss = 0.0
-    start_time = time.time()
     word_counter = 0
 
     optimizer = optimizer(model.parameters())
 
-    pipe_group = model.group
+    pipe_group = model.group if hasattr(model, "group") else None
 
     if args.ddp_zero:
         model = DDP(
@@ -239,23 +228,39 @@ def train(data_config, model, benchmark_config, args):
 
     total_tokens = 0
     total_tokens_per_log_interval = 0
+    bptt = 2
+    start_time = time.time()
+    epoch_start_time = 0.0
+
+    def get_batch(source):
+        seq_len = len(source) - 1
+        data = source[0:seq_len]
+        target = source[1 : 1 + seq_len]
+        return data, target
+
     for i, batch in enumerate(lm_dataloader):
+        if i == 1:
+            epoch_start_time = time.time()
+
+        source, target = get_batch(batch)
         if args.max_batch and i > args.max_batch:
             break
-        total_tokens += batch["input"].numel()
+
+        if i > 0:
+            total_tokens += source.numel()
 
         optimizer.zero_grad()
         try:
             if (pipe_group is None or pipe_group.rank() == 0) and not args.ddp_zero:
-                tmp = batch["input"].to(get_device(model, 0))
+                tmp = source.to(get_device(model, 0))
                 output = model(tmp)
             else:
-                output = model(batch["input"])
+                output = model(source)
         except Exception as e:
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
-            target = batch["target"].to(get_device(model, -1))
+            target = target.to(get_device(model, -1))
             output = output.to(target.device)
 
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
@@ -279,7 +284,7 @@ def train(data_config, model, benchmark_config, args):
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
             total_loss += loss.item()
             log_interval = 1
-            total_tokens_per_log_interval += batch["input"].numel()
+            total_tokens_per_log_interval += source.numel()
             if i % log_interval == 0 and i > 0:
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
@@ -292,7 +297,14 @@ def train(data_config, model, benchmark_config, args):
                 total_loss = 0
                 start_time = time.time()
 
-    return total_tokens, loss.item()
+    if epoch_start_time != 0:
+        wps = total_tokens / (time.time() - epoch_start_time)
+    else:
+        raise RuntimeError(
+            "Unable to benchmark on a single batch. Increase the size " " of the dataset and rerun the benchmark."
+        )
+
+    return wps, loss.item()
 
 
 # TODO(anj-s): Add an option for users to be able to benchmark evaluate.
@@ -322,43 +334,52 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
-def verify_lm_run(wps):
+def verify_lm_run(wps, golden_config):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
     # Assert that words per second is within 3 standard deviations of the average
-    # of six golden runs
-    assert wps > 36954.4 - (3 * 116.825)
+    # of five golden runs
+    print("Throughput(wps) is {:.2f}.".format(wps))
+    if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
+        raise RuntimeError(
+            "Throughput(wps):{:.2f} is below the golden threshold of an "
+            "average value of {:.2f} and standard dev of {:.2f}.".format(
+                wps, golden_config["avg_wps"], golden_config["std_dev_wps"]
+            )
+        )
 
     for i in range(4):
         print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]))
 
     # Assert that memory usage on each GPU is within 10% of golden run
     # Right-hand-side is golden run bytes * 110%
-    for i, golden_ref in zip(range(4), [4061909504, 4050944, 10427392, 2031824896]):
-        assert torch.cuda.memory_stats(i)["allocated_bytes.all.peak"] < golden_ref * 1.1
+    for i, golden_ref in zip(range(4), golden_config["peak_mem_usage"]):
+        current_device_usage = torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]
+        if not current_device_usage < golden_ref * 1.1:
+            raise RuntimeError(
+                "Peak memory usage for cuda device {:d} is {:d} which"
+                "is less than golden reference value of {:d}".format(i, current_device_usage, golden_ref)
+            )
 
 
 def benchmark_language_model(model_config, model, benchmark_config, args):
-    ntokens, train_data, val_data, test_data = model_config["data"]
-    optimizer = model_config["optimizer"]
-    criterion = benchmark_config["criterion"]
-    epoch = 1
-
+    golden_config = get_golden_config(args.model_name)
+    epoch = benchmark_config["epochs"]
     print("-" * 110)
     print("| start of epoch {:1d}".format(epoch))
     print("-" * 110)
     start_time = time.time()
-    n_words, loss = train(data_config, model, benchmark_config, args)
+    wps, loss = train(model_config, model, benchmark_config, args)
     elapsed_time = time.time() - start_time
-    wps = nwords / elapsed_time
     print("-" * 110)
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
 
-    if can_benchmark and len(model.balance) == 4:
+    print("wps ", wps)
+    if len(model.balance) == 4:
 
         if args.model_name == "lm":
-            verify_lm_run(wps)
+            verify_lm_run(wps, golden_config)
         else:
             raise RuntimeError("Unrecognized args.model_name " % args.model_name)
 
@@ -388,65 +409,60 @@ def generate_balance(num_devices, num_layers):
     return balance
 
 
-def get_synthetic_dataloader(args):
+def get_synthetic_dataloaders(args, benchmark_config):
     """Returns dataloader for synthetic data."""
 
     if args.model_name == "lm":
-        lm_dataset = BenchmarkLMDataset()
-        lm_dataloader = DataLoader(
-            lm_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_sentences_lm
-        )
-        return lm_dataloader
+        return get_synthetic_wikitext2_dataloaders(args, benchmark_config)
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def get_real_dataloaders(device, config):
+def get_real_dataloaders(args, device, benchmark_config):
     """Returns dataloaders for real data."""
 
     if args.model_name == "lm":
-        data = datasets.get_wikitext2_data(device)
-        ntokens, _, _, _ = data
-        config["vocab_size"] = ntokens
-        return data
+        data = get_real_wikitext2_dataloaders(args, benchmark_config)
+        ntokens, train_dataloader, valid_dataloader, test_dataloader = data
+        benchmark_config["vocab_size"] = ntokens
+        return train_dataloader, valid_dataloader, test_dataloader
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def create_model_config(args, config=None):
+def create_model_config(args, benchmark_config=None):
     """Return a dict with the given model, dataset and optimizer."""
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
     if args.use_synthetic_data:
-        model, optimizer = get_model_and_optimizer(args, device, config)
-        dataloader = get_synthetic_dataloader(args)
-        return {"model": model, "optimizer": optimizer, "data": dataloader}
+        dataloader_fn = get_synthetic_dataloaders
     else:
-        data = get_real_dataloaders(device, config)
-        model, optimizer = get_model_and_optimizer(args, device, config)
-        return {
-            "model": model,
-            "optimizer": optimizer,
-            "data": data,
-        }
+        dataloader_fn = get_real_dataloaders
+
+    data = dataloader_fn(args, device, benchmark_config)
+    model, optimizer = get_model_and_optimizer(args, device, benchmark_config)
+    return {
+        "model": model,
+        "optimizer": optimizer,
+        "data": data,
+    }
 
 
 def create_benchmark_config(model_name):
     """Return a dict with configurations required for benchmarking `model_name` model."""
 
     if model_name == "lm":
-        return {
-            "vocab_size": 10000,
-            "ninp": 2048,  # embedding dimension
-            "nhid": 2048,  # the dimension of the feedforward network model in nn.TransformerEncoder
-            "nhead": 32,  # the number of heads in the multiheadattention models
-            "dropout": 0,
-            "initrange": 0.1,
-            "criterion": nn.CrossEntropyLoss(),
-            "lr": 0.01,  # learning rate
-            "scaler": GradScaler(),
-            "clip_value": 0.05,
-        }
+        return lm_wikitext2.get_benchmark_config()
+    else:
+        raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
+
+
+def get_golden_config(model_name):
+    """Return a dict with the golden data for throughput and memory usage."""
+
+    if model_name == "lm":
+        return lm_wikitext2.get_golden_real_stats()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
@@ -459,17 +475,15 @@ def benchmark_single_process(args):
     init_random_seed(0)
 
     benchmark_config = create_benchmark_config(args.model_name)
-    model_config = create_model_config(args, config=benchmark_config)
+    model_config = create_model_config(args, benchmark_config=benchmark_config)
     model = model_config["model"]
 
     balance = generate_balance(min(num_devices, 4), len(model))
-    pipe_model = pipe.Pipe(
-        model, balance, chunks=args.chunks, pipelined_backward=args.pipelined_backward, checkpoint=args.checkpoint
-    )
+    pipe_model = Pipe(model, balance, chunks=args.chunks, checkpoint=args.checkpoint)
     del model
     del model_config["model"]
 
-    if args.use_synthetic_data:
+    if args.dry_run:
         train(model_config, pipe_model, benchmark_config, args)
     else:
         benchmark_language_model(model_config, pipe_model, benchmark_config, args)
@@ -482,10 +496,10 @@ def run_mp_worker(args, available_workers):
     model = model_config["model"]
 
     balance = generate_balance_weighted(get_pipeline_parallel_group().size(), len(model), 0.8)
-    pipe_model = pipe.Pipe(
+    pipe_model = MultiProcessPipe(
         model,
         balance,
-        style=Pipe.AsyncSchedule,
+        style=MultiProcessPipe.AsyncSchedule,
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
@@ -605,7 +619,8 @@ parser.add_argument(
 parser.add_argument(
     "--no-pipelined-backward", dest="pipelined_backward", action="store_false", help="Pipelined backward pass"
 )
-parser.add_argument("--use_synthetic_data", default=True, help="Uses synthetic data for a sample training run.")
+parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
+parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
     # TODO(anj-s): In the process of adding more models and hence the requirement for a flag.
     "--model_name",

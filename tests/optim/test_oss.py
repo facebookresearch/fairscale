@@ -10,7 +10,7 @@
 
 import copy
 from math import inf
-import tempfile
+import os
 from typing import Any, Type, cast
 import unittest
 
@@ -21,39 +21,22 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.testing._internal.common_distributed import MultiProcessTestCase
 
 import fairscale.optim as optim
-from fairscale.utils.testing import skip_if_single_gpu
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
 
-try:
-    from torch.distributed import broadcast_object_list  # noqa
-
-    _torch_broadcast_object = True
-except ImportError:
-    from fairscale.optim.utils import broadcast_object  # noqa
-
-    _torch_broadcast_object = False
-
 
 def sync_object_ranks(something_to_sync: Any, reference_rank: int, device: torch.device) -> Any:
-    if _torch_broadcast_object:
-        package = [something_to_sync]
-        dist.broadcast_object_list(package, src=reference_rank, group=dist.group.WORLD)
-        package_sync = package[0]
-    else:
-        package_sync = optim.utils.broadcast_object(
-            something_to_sync, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
-        )
-
-    return package_sync
+    return optim.utils.broadcast_object(
+        something_to_sync, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
+    )
 
 
 class TestOSS(MultiProcessTestCase):
     def setUp(self):
         super(TestOSS, self).setUp()
-        self.tempfile = tempfile.mkstemp()[1]
-        self._fork_processes()
+        os.environ["WORLD_SIZE"] = str(self.world_size)
+        self._spawn_processes()
 
     def tearDown(self):
         if torch.distributed.is_initialized():
@@ -62,63 +45,13 @@ class TestOSS(MultiProcessTestCase):
             except AssertionError:
                 pass
 
+    @property
+    def device(self):
+        return torch.device(self.rank) if BACKEND == dist.Backend.NCCL else torch.device("cpu")
+
     def dist_init(self, rank):
-        url = "file://" + self.tempfile
-        return dist.init_process_group(backend=BACKEND, store=store, world_size=self.world_size, url=url)
-
-    def test_step(self):
-        self.dist_init(self.rank)
-        x = torch.tensor([float(self.rank + 1)], device=torch.device(self.rank))
-        m = torch.nn.Linear(1, 1)
-        m.weight.data = torch.tensor([[1.0]])
-        m.bias.data = torch.tensor([2.0])
-        m.to(self.rank)
-        o = optim.OSS(m.parameters(), optim=SGD, lr=0.1)
-        y = m(x)
-        y.backward(x)
-        for p in m.parameters():
-            dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM)
-            p.grad.data /= self.world_size
-        o.step()
-        self.assertEqual(m.weight, torch.tensor([[0.75]], device=torch.device(self.rank)))
-        self.assertEqual(m.bias, torch.tensor([1.85], device=torch.device(self.rank)))
-
-    def test_step_with_closure(self):
-        self.dist_init(self.rank)
-
-        x_val = self.rank + 1
-        weight = 1.0
-        bias = 2.0
-        error = 1.0
-        target = torch.tensor([x_val * weight + bias + error], device=torch.device(self.rank))
-        loss_fn = torch.nn.L1Loss()
-
-        x = torch.tensor([float(x_val)], device=torch.device(self.rank))
-        m = torch.nn.Linear(1, 1)
-        m.weight.data = torch.tensor([[weight]])
-        m.bias.data = torch.tensor([bias])
-        m.to(self.rank)
-
-        o = optim.OSS(m.parameters(), optim=SGD, lr=0.1)
-
-        y = m(x)
-        y.backward(x)
-        for p in m.parameters():
-            dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM)
-            p.grad.data /= self.world_size
-
-        def closure():
-            o.zero_grad()
-            output = m(x)
-            loss = loss_fn(output, target)
-            loss.backward()
-            return loss
-
-        loss = o.step(closure=closure)
-
-        self.assertEqual(loss, torch.tensor(error, device=torch.device(self.rank)))
-        self.assertEqual(m.weight, torch.tensor([[1.1]], device=torch.device(self.rank)))
-        self.assertEqual(m.bias, torch.tensor([2.1], device=torch.device(self.rank)))
+        store = dist.FileStore(self.file_name, self.world_size)
+        return dist.init_process_group(backend=BACKEND, store=store, rank=rank, world_size=self.world_size)
 
 
 class TestOSSSingleRank(TestOSS):
@@ -241,41 +174,65 @@ class TestOSSSingleRank(TestOSS):
         o.step()
         self.assertEqual(x, torch.tensor([0.9], device=DEVICE))
 
-    def test_local_state_dict(self):
-        self.dist_init(self.rank)
-
-        x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
-        o = optim.OSS([x], optim=SGD, lr=0.1)
-        local_state_dict = o.local_state_dict()
-        o = optim.OSS([x], optim=SGD, lr=0.01)
-        o.load_local_state_dict(local_state_dict)
-        # We should now be using a lr of 0.1.
-        self.assertEqual(o.optim.param_groups[0]["lr"], 0.1)
-        self.assertEqual(o.param_groups[0]["lr"], 0.1)
-        x.backward()
-        o.step()
-        self.assertEqual(x, torch.tensor([0.9], device=DEVICE))
-
-    def test_implicit_local_state_dict(self):
-        self.dist_init(self.rank)
-
-        x = torch.tensor([1.0], device=DEVICE, requires_grad=True)
-        o = optim.OSS([x], optim=SGD, lr=0.1)
-        local_state_dict = o.state_dict()
-        o = optim.OSS([x], optim=SGD, lr=0.01)
-        o.load_state_dict(local_state_dict)
-        # We should now be using a lr of 0.1.
-        self.assertEqual(o.optim.param_groups[0]["lr"], 0.1)
-        self.assertEqual(o.param_groups[0]["lr"], 0.1)
-        x.backward()
-        o.step()
-        self.assertEqual(x, torch.tensor([0.9], device=DEVICE))
-
 
 class TestOSSTwoRanks(TestOSS):
     @property
     def world_size(self):
         return 2
+
+    def test_step(self):
+        self.dist_init(self.rank)
+        x = torch.tensor([float(self.rank + 1)], device=torch.device(self.rank))
+        m = torch.nn.Linear(1, 1)
+        m.weight.data = torch.tensor([[1.0]])
+        m.bias.data = torch.tensor([2.0])
+        m.to(self.rank)
+        o = optim.OSS(m.parameters(), optim=torch.optim.SGD, lr=0.1)
+        y = m(x)
+        y.backward(x)
+        for p in m.parameters():
+            dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM)
+            p.grad.data /= self.world_size
+        o.step()
+        self.assertEqual(m.weight, torch.tensor([[0.75]], device=torch.device(self.rank)))
+        self.assertEqual(m.bias, torch.tensor([1.85], device=torch.device(self.rank)))
+
+    def test_step_with_closure(self):
+        self.dist_init(self.rank)
+
+        x_val = self.rank + 1
+        weight = 1.0
+        bias = 2.0
+        error = 1.0
+        target = torch.tensor([x_val * weight + bias + error], device=torch.device(self.rank))
+        loss_fn = torch.nn.L1Loss()
+
+        x = torch.tensor([float(x_val)], device=torch.device(self.rank))
+        m = torch.nn.Linear(1, 1)
+        m.weight.data = torch.tensor([[weight]])
+        m.bias.data = torch.tensor([bias])
+        m.to(self.rank)
+
+        o = optim.OSS(m.parameters(), optim=SGD, lr=0.1)
+
+        y = m(x)
+        y.backward(x)
+        for p in m.parameters():
+            dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM)
+            p.grad.data /= self.world_size
+
+        def closure():
+            o.zero_grad()
+            output = m(x)
+            loss = loss_fn(output, target)
+            loss.backward()
+            return loss
+
+        loss = o.step(closure=closure)
+
+        self.assertEqual(loss, torch.tensor(error, device=torch.device(self.rank)))
+        self.assertEqual(m.weight, torch.tensor([[1.1]], device=torch.device(self.rank)))
+        self.assertEqual(m.bias, torch.tensor([2.1], device=torch.device(self.rank)))
 
     def test_zero_grad(self):
         self.dist_init(self.rank)
@@ -394,108 +351,77 @@ class TestOSSTwoRanks(TestOSS):
             print(f"Checking norm {norm}")
             check(norm)
 
-    def test_state_dict_distributed(self):
-        reference_rank = 0
+    # def test_state_dict_distributed(self):
+    #     reference_rank = 0
 
-        device = torch.device(self.rank)
-        torch.manual_seed(self.rank)  # make sure that the different rank get different data
+    #     device = torch.device(self.rank)
+    #     torch.manual_seed(self.rank)  # make sure that the different rank get different data
 
-        # Setup two problems in parallel, we'll make sure that the second track (with save/load) follows the first one(untouched)
-        batch, input_width, hidden, target_width = 3, 20, 10, 5
-        target = torch.rand((batch, target_width), device=device)
-        inputs = torch.rand((batch, input_width), device=device)
+    #     # Setup two problems in parallel, we'll make sure that the second track (with save/load) follows the first one(untouched)
+    #     batch, input_width, hidden, target_width = 3, 20, 10, 5
+    #     target = torch.rand((batch, target_width), device=device)
+    #     inputs = torch.rand((batch, input_width), device=device)
 
-        model_oss1 = torch.nn.Sequential(
-            torch.nn.Linear(input_width, hidden),
-            torch.nn.Linear(hidden, hidden),
-            torch.nn.Linear(hidden, target_width),
-        ).to(device)
-        model_oss2 = copy.deepcopy(model_oss1)
+    #     model_oss1 = torch.nn.Sequential(
+    #         torch.nn.Linear(input_width, hidden),
+    #         torch.nn.Linear(hidden, hidden),
+    #         torch.nn.Linear(hidden, target_width),
+    #     ).to(device)
+    #     model_oss2 = copy.deepcopy(model_oss1)
 
-        # For this test the gradients are (all) reduced in the same way in between the torch reference and fairscale.
-        # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
-        # gradient norm computation from OSS and adds a dependency.
-        # to keep the comparison apples-to-apples DDP is used in both cases
-        model_oss1 = DDP(module=model_oss1, device_ids=[self.rank],)
-        sharded_optimizer1 = optim.OSS(model_oss1.parameters(), lr=0.1, momentum=0.99)
-        model_oss2 = DDP(module=model_oss2, device_ids=[self.rank],)
-        sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
-        loss_fn = torch.nn.L1Loss().to(device)
+    #     # For this test the gradients are (all) reduced in the same way in between the torch reference and fairscale.
+    #     # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
+    #     # gradient norm computation from OSS and adds a dependency.
+    #     # to keep the comparison apples-to-apples DDP is used in both cases
+    #     model_oss1 = DDP(module=model_oss1, device_ids=[self.rank],)
+    #     sharded_optimizer1 = optim.OSS(model_oss1.parameters(), lr=0.1, momentum=0.99)
+    #     model_oss2 = DDP(module=model_oss2, device_ids=[self.rank],)
+    #     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+    #     loss_fn = torch.nn.L1Loss().to(device)
 
-        def run_grad_step(model, optimizer):
-            model.zero_grad()
-            outputs = model(inputs)
+    #     def run_grad_step(model, optimizer):
+    #         model.zero_grad()
+    #         outputs = model(inputs)
 
-            loss = loss_fn(outputs, target)
-            loss.backward()
+    #         loss = loss_fn(outputs, target)
 
-            optimizer.step()
+    #         optimizer.step()
 
-        def check_equal_models(message: str):
-            # check that model parameters are equal
-            for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
-                assert torch.allclose(param1, param2), message
+    #     def check_equal_models(message: str):
+    #         # check that model parameters are equal
 
-        # save and reload without taking any steps
-        sharded_optimizer2.consolidate_state_dict(recipient_rank=reference_rank)
-        state_dict2 = sharded_optimizer2.state_dict() if self.rank == reference_rank else {}
-        state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+    #         # The models should stay the same in between the ranks
+    #         for i in range(20):
+    #             input_tensor = torch.rand((64, 2)).to(device)
 
-        # re-create a new optimizer from scratch with absurd values, load the previous state
-        sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=9999.0)  # no momentum on purpose
-        sharded_optimizer2.load_state_dict(state_dict2)
-        check_equal_models("parameters of the two identical models have diverged (before any steps)")
+    #             def closure_ddp(input_tensor=input_tensor):
+    #                 ddp_optimizer.zero_grad()
+    #                 ddp_loss = ddp_model(input_tensor).abs().sum()
+    #                 ddp_loss.backward()
+    #                 return ddp_loss
 
-        # now take a step and check that parameters are equal
-        run_grad_step(model_oss1, sharded_optimizer1)
-        run_grad_step(model_oss2, sharded_optimizer2)
-        check_equal_models("parameters of the two identical models have diverged (after stepping)")
+    #             def closure_sharded(input_tensor=input_tensor):
+    #                 sharded_optimizer.zero_grad()
+    #                 sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
+    #                 sharded_loss.backward()
+    #                 return sharded_loss
 
-        # save the state dict for one model only, then distribute to the other ranks
-        sharded_optimizer2.consolidate_state_dict(recipient_rank=reference_rank)  # all ranks
-        state_dict2 = sharded_optimizer2.state_dict() if self.rank == reference_rank else {}
-        state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+    #             loss_ddp = cast(torch.Tensor, ddp_optimizer.step(closure=closure_ddp))
+    #             loss_sharded_optim = cast(torch.Tensor, sharded_optimizer.step(closure=closure_sharded))
 
-        # Check that the pulled state and the .param_groups attribute are in sync
-        for replica in range(len(state_dict2["param_groups"])):
-            for k in state_dict2["param_groups"][replica].keys():
-                if k != "params":
-                    assert state_dict2["param_groups"][replica][k] == sharded_optimizer2.param_groups[0][k]
+    #             assert torch.allclose(loss_ddp, loss_sharded_optim), "Losses differ in between Pytorch optim and OSS"
 
-        # take a step
-        run_grad_step(model_oss1, sharded_optimizer1)
-        run_grad_step(model_oss2, sharded_optimizer2)
-        check_equal_models("parameters of the two identical models have diverged (after consolidating)")
+    #             check_same_model_params()
 
-        # save again for one rank, then distribute to the others
-        sharded_optimizer2.consolidate_state_dict(recipient_rank=reference_rank)  # all ranks
-        state_dict2 = sharded_optimizer2.state_dict() if self.rank == reference_rank else {}
-        state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+    #     for opt in [torch.optim.SGD, torch.optim.Adam]:
+    #         check_optimizer_equivalence(opt)
 
-        # reload the state_dict
-        sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
-        sharded_optimizer2.load_state_dict(state_dict2)
-
-        # take a step
-        run_grad_step(model_oss1, sharded_optimizer1)
-        run_grad_step(model_oss2, sharded_optimizer2)
-
-        # check that reloading a saved state dict does not change the parameters
-        for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
-            assert torch.allclose(
-                param1, param2
-            ), "parameters of the two identical models have diverged (after reloading)"
-
-    @skip_if_single_gpu
-    def test_parity(self):
+    def test_ddp_parity(self):
         self.dist_init(self.rank)
-        if torch.cuda.device_count() < self.world_size:
-            return
-
-        device = torch.device("cuda")
-        torch.cuda.set_device(self.rank)
-        torch.manual_seed(self.rank)
-        np.random.seed(self.rank)
+        device = self.device
+        torch.cuda.set_device(rank)
+        torch.manual_seed(rank)
+        np.random.seed(rank)
 
         def check_optimizer_equivalence(optimizer: Type[torch.optim.Optimizer]):
             # Any model works. Add one different buffer per rank
@@ -515,10 +441,12 @@ class TestOSSTwoRanks(TestOSS):
                     for p, ddp_p in zip(pg["params"], ddp_pg["params"]):
                         assert torch.allclose(
                             p, ddp_p, atol=1e-3
-                        ), f"Model parameters differ in between Pytorch optim and OSS \n{p} {ddp_p}"
+                        ), f"Model parameters differ in between Pytorch optim and OSS \n{p} {ddp_p}\nworld size {self.world_size}"
 
                 for b, ddp_b in zip(sharded_ddp_model.buffers(), ddp_model.buffers()):
-                    assert torch.allclose(b, ddp_b), "Model buffers differ in between Pytorch optim and OSS"
+                    assert torch.allclose(
+                        b, ddp_b
+                    ), f"Model buffers differ in between Pytorch optim and OSS\nworld size {self.world_size}"
 
             # The model should be synchronized in between the ranks at construction time, check that
             check_same_model_params()
@@ -542,7 +470,9 @@ class TestOSSTwoRanks(TestOSS):
                 loss_ddp = cast(torch.Tensor, ddp_optimizer.step(closure=closure_ddp))
                 loss_sharded_optim = cast(torch.Tensor, sharded_optimizer.step(closure=closure_sharded))
 
-                assert torch.allclose(loss_ddp, loss_sharded_optim), "Losses differ in between Pytorch optim and OSS"
+                assert torch.allclose(
+                    loss_ddp, loss_sharded_optim
+                ), f"Losses differ in between Pytorch optim and OSS\nworld size {self.world_size}"
 
                 check_same_model_params()
 

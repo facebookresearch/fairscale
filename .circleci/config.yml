@@ -10,9 +10,19 @@ version: 2
 # -------------------------------------------------------------------------------------
 # Environments to run the jobs in
 # -------------------------------------------------------------------------------------
-cpu: &cpu
+cpu_py37: &cpu_py37
   docker:
     - image: circleci/python:3.7
+  resource_class: medium
+
+cpu_py38: &cpu_py38
+  docker:
+    - image: circleci/python:3.8
+  resource_class: medium
+
+cpu_py39: &cpu_py39
+  docker:
+    - image: circleci/python:3.9
   resource_class: medium
 
 gpu: &gpu
@@ -38,47 +48,39 @@ setup_venv: &setup_venv
         which pip
         pip install --upgrade pip
 
-install_dep_15: &install_dep_15
+install_dep_151: &install_dep_151
   - run:
       name: Install Dependencies
       command: |
         sudo apt-get install -y libopenmpi-dev
+        pip install --progress-bar off torch==1.5.1+cu101 torchvision==0.6.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
-        pip install --progress-bar off torch==1.5.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "5"], "wrong torch version"'
         python -m torch.utils.collect_env
 
-install_dep_16: &install_dep_16
+install_dep_160: &install_dep_160
   - run:
       name: Install Dependencies
       command: |
         sudo apt-get install -y libopenmpi-dev
-        pip install --progress-bar off -r requirements-test.txt
-        pip install --progress-bar off torch==1.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
-        pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
-        python -c 'import torch; print("Torch version:", torch.__version__)'
-        python -m torch.utils.collect_env
-
-
-install_dep_17: &install_dep_17
-  - run:
-      name: Install Dependencies
-      command: |
-        sudo apt-get install -y libopenmpi-dev
-        pip install --progress-bar off -r requirements-test.txt
-        pip install --progress-bar off torch==1.7.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
-        pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
-        python -c 'import torch; print("Torch version:", torch.__version__)'
-        python -m torch.utils.collect_env
-
-install_dep_17_cpu: &install_dep_17_cpu
-  - run:
-      name: Install Dependencies
-      command: |
-        sudo apt-get install -y libopenmpi-dev
+        pip install --progress-bar off torch==1.6.0+cu101 torchvision==0.7.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "6"], "wrong torch version"'
+        python -m torch.utils.collect_env
+
+install_dep_171: &install_dep_171
+  - run:
+      name: Install Dependencies
+      command: |
+        sudo apt-get install -y libopenmpi-dev
+        pip install --progress-bar off torch==1.7.1+cu101 torchvision==0.8.2+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off -r requirements-test.txt
+        pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
+        python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "7"], "wrong torch version"'
         python -m torch.utils.collect_env
 
 install_repo_cpu: &install_repo_cpu
@@ -96,11 +98,37 @@ install_repo_gpu: &install_repo_gpu
         export CUDA_HOME=/usr/local/cuda-10.1
         pip install -e .
 
+
+run_isort: &run_isort
+   - run:
+       name: Run Linter (isort)
+       command: |
+         isort . --check
+
+run_black: &run_black
+   - run:
+       name: Run Linter (black)
+       command: |
+         black --check .
+
+run_mypy: &run_mypy
+   - run:
+       name: Run type-checking (mypy)
+       command: |
+         mypy --ignore-missing-imports --scripts-are-modules --pretty .
+
+run_flake8: &run_flake8
+  - run:
+      name: Run Linter (flake8)
+      command: |
+        flake8 --show-source --statistics
+
+
 run_coverage: &run_coverage
   - run:
       name: Run Unit Tests With Coverage
       command: |
-        pytest --cov-report=xml --cov=./ --timeout 60
+        pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./
         #Uploading test coverage for Python code
         bash <(curl -s https://codecov.io/bash) -f coverage.xml -cF Python
 
@@ -116,11 +144,6 @@ run_mpi_unittests: &run_mpi_unittests
       command: |
         mpirun -n 4 python -m pytest -p torch_pg.pytest --only-mpi --junitxml=test-results/junit.xml --verbose tests/nn/moe
 
-run_flake8: &run_flake8
-  - run:
-      name: Run Linter (flake8)
-      command: |
-        flake8 --show-source --statistics
 
 run_pipe_benchmark: &run_pipe_benchmark
   - run:
@@ -142,20 +165,30 @@ run_oss_gloo: &run_oss_gloo
         python benchmarks/oss.py --gloo --optim_type oss_ddp --epochs 2
         python benchmarks/oss.py --gloo --optim_type oss_sharded_ddp --epochs 2
 
-
 run_oss_amp: &run_oss_amp
-- run:
-    name: Run OSS with Torch AMP
-    command: |
-      python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp
+   - run:
+       name: Run OSS with Torch AMP
+       command: |
+         python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp
+
+
+run_doc_build: &run_doc_build
+   - run:
+       name: Testing doc build
+       command: |
+         cd docs
+         pip install --progress-bar off -r requirements.txt
+         make help
+         make singlehtml | tee make.out
+         ! tail make.out | grep -q warning
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
 # -------------------------------------------------------------------------------------
 
 jobs:
-  cpu_tests:
-    <<: *cpu
+  cpu_tests_py37:
+    <<: *cpu_py37
 
     working_directory: ~/fairscale
 
@@ -166,42 +199,102 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-cpu-py37-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17_cpu
+      - <<: *install_dep_171
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-py37-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_cpu
 
-      - run:
-          name: Run Linter (isort)
-          command: |
-            isort . --check
-
-      - run:
-          name: Run Linter (black)
-          command: |
-            black --check .
-
-      - run:
-          name: Run type-checking (mypy)
-          command: |
-            mypy --ignore-missing-imports --scripts-are-modules --pretty .
-
+      - <<: *run_isort
+      - <<: *run_black
+      - <<: *run_mypy
       - <<: *run_flake8
-
       - <<: *run_unittests
-
       - <<: *run_mpi_unittests
+      - <<: *run_doc_build
 
       - store_test_results:
           path: test-results
 
-  gpu_tests_15:
+  cpu_tests_py38:
+    <<: *cpu_py38
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-cpu-py38-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_dep_171
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-cpu-py38-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_repo_cpu
+
+      - <<: *run_isort
+      - <<: *run_black
+      - <<: *run_mypy
+      - <<: *run_flake8
+      - <<: *run_unittests
+      - <<: *run_mpi_unittests
+      - <<: *run_doc_build
+
+      - store_test_results:
+          path: test-results
+
+  cpu_tests_py39:
+    <<: *cpu_py39
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-cpu-py39-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_dep_171
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-cpu-py39-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_repo_cpu
+
+      - <<: *run_isort
+      - <<: *run_black
+      - <<: *run_mypy
+      - <<: *run_flake8
+      # FIXME: py39 still not stable for us, example:
+      # https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1349/workflows/534aae41-e01d-404e-bfc1-fdc58566c39c/jobs/5952
+      # - <<: *run_unittests
+      # example:
+      # https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1350/workflows/26ebd69e-777e-491a-ae12-da3154ef80f9/jobs/5953
+      # - <<: *run_mpi_unittests
+      - <<: *run_doc_build
+
+      - store_test_results:
+          path: test-results
+
+
+  gpu_tests_151:
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -218,14 +311,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-gpu15-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-gpu-151-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_15
+      - <<: *install_dep_151
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-gpu15-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-gpu-151-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_gpu
 
@@ -234,7 +327,7 @@ jobs:
       - store_test_results:
           path: test-results
 
-  gpu_tests_16:
+  gpu_tests_160:
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -251,53 +344,51 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-gpu16-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-gpu-160-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_16
+      - <<: *install_dep_160
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-gpu16-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-gpu-160-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_gpu
 
       - <<: *run_unittests
+
+      - store_test_results:
+          path: test-results
+
+  gpu_tests_171:
+    <<: *gpu
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+
+      - run: nvidia-smi
+
+      - run: pyenv global 3.7.0
+
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-gpu-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_dep_171
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-gpu-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_repo_gpu
 
       - <<: *run_coverage
-
-      - store_test_results:
-          path: test-results
-
-  gpu_tests_17:
-    <<: *gpu
-
-    working_directory: ~/fairscale
-
-    steps:
-      - checkout
-
-      - run: nvidia-smi
-
-      - run: pyenv global 3.7.0
-
-      - <<: *setup_venv
-
-      # Cache the venv directory that contains dependencies
-      - restore_cache:
-          keys:
-            - cache-key-gpu17-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-
-      - <<: *install_dep_17
-
-      - save_cache:
-          paths:
-            - ~/venv
-          key: cache-key-gpu17-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-
-      - <<: *install_repo_gpu
-
-      - <<: *run_unittests
 
       - store_test_results:
           path: test-results
@@ -325,7 +416,7 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_17
+      - <<: *install_dep_171
 
       - save_cache:
           paths:
@@ -349,8 +440,10 @@ workflows:
   version: 2
   build:
     jobs:
-      - cpu_tests
-      - gpu_tests_15
-      - gpu_tests_16
-      - gpu_tests_17
+      - cpu_tests_py37
+      - cpu_tests_py38
+      - cpu_tests_py39
+      - gpu_tests_151
+      - gpu_tests_160
+      - gpu_tests_171
       - benchmarks

@@ -158,7 +158,7 @@ At a high level, we want ML researchers to:
 
 # Testing
 
-We use circleci to test on PyTorch versions 1.5.1, 1.6.0 and 1.7.0 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
+We use circleci to test on PyTorch versions 1.5.1, 1.6.0 and 1.7.1 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
 ## Contributors
 
@@ -173,6 +173,8 @@ fairscale.nn.pipe is forked from [torchgpipe](https://github.com/kakaobrain/torc
 fairscale.nn.model_parallel is forked from [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), Copyright 2020, NVIDIA CORPORATION, licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
 
 fairscale.optim.adascale is forked from [AdaptDL](https://github.com/petuum/adaptdl), Copyright 2020, Petuum, Inc., licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
+
+fairscale.nn.misc.flatten_params_wrapper is forked from [PyTorch-Reparam-Module](https://github.com/SsnL/PyTorch-Reparam-Module), Copyright 2018, Tongzhou Wang, licensed under [MIT License](https://github.com/SsnL/PyTorch-Reparam-Module/blob/master/LICENSE).
 
 ## References
 

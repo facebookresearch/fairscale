@@ -19,7 +19,8 @@
 
 """A Pipe implementation in PyTorch."""
 from .checkpoint import is_checkpointing, is_recomputing
-from .pipe import LazyModule, Pipe
+from .multiprocess_pipe import LazyModule, MultiProcessPipe
+from .pipe import Pipe
 from .rpc import PipeRPCWrapper
 
 __all__ = ["Pipe", "is_checkpointing", "is_recomputing", "LazyModule"]

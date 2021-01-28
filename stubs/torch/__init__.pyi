@@ -27,6 +27,7 @@ from .autograd import no_grad as no_grad, enable_grad as enable_grad, \
 from . import cuda as cuda
 from . import optim as optim
 from . import nn as nn
+from . import testing as testing
 
 #MODIFIED BY TORCHGPIPE
 from . import backends

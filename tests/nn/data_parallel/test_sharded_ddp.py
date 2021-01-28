@@ -323,6 +323,24 @@ def test_ddp_attributes():
     dist.destroy_process_group()
 
 
+def test_random_attributes():
+    # Check that ShardedDDP exposes the original module's attributes
+
+    url = "file://" + tempfile.mkstemp()[1]
+    dist.init_process_group(init_method=url, backend="gloo", rank=0, world_size=1)
+
+    model = Sequential(Linear(2, 3), Linear(3, 3))
+    model.banana = "sweet"
+
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    ddp_model = ShardedDataParallel(model, optimizer)
+
+    assert hasattr(ddp_model, "banana")
+    assert not hasattr(ddp_model, "orange")
+
+    dist.destroy_process_group()
+
+
 def run_test_ddp_sync_batch_norm(rank, world_size, backend, device, temp_file_name):
     url = "file://" + temp_file_name
     dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)

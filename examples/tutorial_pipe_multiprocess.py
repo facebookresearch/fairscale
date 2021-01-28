@@ -6,11 +6,10 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.optim as optim
 
-import fairscale
 from fairscale.nn.model_parallel import initialize_model_parallel
+from fairscale.nn.pipe import MultiProcessPipe
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-RANK = 0  # example
 
 
 def run(rank, world_size):
@@ -25,12 +24,12 @@ def run(rank, world_size):
     data, target = getData()[0]
     loss_fn = getLossFun()
 
-    device = torch.device("cuda", RANK) if DEVICE == "cuda" else torch.device("cpu")
+    device = torch.device("cuda", rank) if DEVICE == "cuda" else torch.device("cpu")
 
-    model = fairscale.nn.Pipe(
+    model = MultiProcessPipe(
         model,
         balance=[2, 1],
-        style=fairscale.nn.Pipe.MultiProcess,
+        style=MultiProcessPipe.MultiProcess,
         worker_map={0: "worker0", 1: "worker1"},  # Needed to convert ranks to RPC worker names
         input_device=device,
     ).to(device)
@@ -55,6 +54,7 @@ def run(rank, world_size):
         model.back_helper(outputs)
 
     print(f"Finished Training Step on {rank}")
+    dist.rpc.shutdown()
 
     del model
 
