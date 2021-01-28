@@ -318,8 +318,7 @@ class MultiProcessPipeline:
     ) -> None:
         """Runs tasks with synchronization to copy streams."""
 
-        if self.style is PipelineStyle.MultiProcess:
-            n = self.group.size()
+        assert self.style is PipelineStyle.MultiProcess
 
         # With checkpointing, the autograd graph looks like this diagram:
         # ┌─────┸──────┐
@@ -347,18 +346,17 @@ class MultiProcessPipeline:
         # │    Copy    │
         # └─────┰──────┘
         for i, j in schedule:
-            batch = batches[i]
+            assert len(self.partitions) == 1
+            partition = self.partitions[0]
 
-            if self.style is PipelineStyle.MultiProcess:
-                assert len(self.partitions) == 1
-                partition = self.partitions[0]
+            if self.group.rank() != 0:
+                batch = self.get_batch_from_previous_stage(i, skip_trackers, batches)
+            else:
+                batch = batches[i]
 
-                if self.group.rank() != 0:
-                    batch = self.get_batch_from_previous_stage(i, skip_trackers, batches)
+            task = create_task(self.checkpoint_stop, i, j, batch, partition.module, skip_trackers)
 
-                task = create_task(self.checkpoint_stop, i, j, batch, partition.module, skip_trackers)
-
-                batches[i] = self.execute_task(task, i, skip_trackers)
+            batches[i] = self.execute_task(task, i, skip_trackers)
 
     def send_portal_grad(self, ns_name: Tuple[Namespace, str], index: int, grad: TensorOrTensors) -> None:
         dest, src = self.skip_layout.by_ns_name.get(ns_name, (-1, -1))
