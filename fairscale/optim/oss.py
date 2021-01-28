@@ -191,7 +191,7 @@ class OSS(Optimizer):
         .. note: Any extra parameter is passed to the base optimizer as-is"""
 
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
-        self._sync_param_groups()
+        OSS._sync_param_groups(self.param_groups, self.optim.param_groups)
 
         # Run the optimizer step on this shard only:
         if closure is not None:
@@ -203,7 +203,7 @@ class OSS(Optimizer):
         self._broadcast_params()
 
         # Sync hypothethical new results from the wrapped optimizer to the exposed param_groups
-        self._sync_param_groups(local_to_global=True)
+        OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
 
         return loss
 
@@ -286,7 +286,7 @@ class OSS(Optimizer):
         .. warning: This needs to be called on all replicas"""
 
         # Sync lr and other attributes in case its been updated
-        self._sync_param_groups()
+        OSS._sync_param_groups(self.param_groups, self.optim.param_groups)
 
         if self.rank == recipient_rank:
             # Pull the sharded state from all the other replicas
@@ -372,34 +372,28 @@ class OSS(Optimizer):
         # Param index to param map
         global_id_map = {i: p for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
 
-        # Prune the state_dict from the states which this rank does not own, then normal base load
-        for i_param, key in enumerate(state_dict["state"].keys()):
-            # Check that this rank owns this param, if not remove from the state
+        for i_param, (key, value) in enumerate(state_dict["state"].items()):
             param = global_id_map[i_param]
+
+            # Populate the sharded optimizer state on the fly
             if self.param_to_rank[param] != self.rank:
                 state_dict["state"][key] = None
 
-        super().load_state_dict(state_dict)
-
-        # Set the sharded optimizer state.
-        # Keep the original type (not respected by PyTorch which casts to the model type)
-        for k, (_, v) in enumerate(state_dict["state"].items()):
-            if k in global_id_map:
-                param = global_id_map[k]
+            if key in global_id_map:
+                param = global_id_map[i_param]
 
                 # Only add this state to the sharded optimizer if it owns this param
                 for pg in self.optim.param_groups:
                     if id(param) in [id(p) for p in pg["params"]]:
-                        self.optim.state[param] = recursive_copy_to_device(v, non_blocking=True, device=param.device)
+                        self.optim.state[param] = recursive_copy_to_device(
+                            value, non_blocking=True, device=param.device
+                        )
 
-        # Update the param_group keys
-        for fpg, pg in zip(state_dict["param_groups"], self.param_groups):
-            for key in fpg.keys():
-                if key != "params":
-                    pg[key] = fpg[key]
+        super().load_state_dict(state_dict)
 
         # Sync with the optimizer param groups
-        self._sync_param_groups(local_to_global=False)
+        OSS._sync_param_groups(state_dict["param_groups"], self.param_groups)
+        OSS._sync_param_groups(self.param_groups, self.optim.param_groups)
 
     def _broadcast_state_dict(self) -> None:
         """Broadcast this rank's state shard, discard others"""
@@ -504,20 +498,14 @@ class OSS(Optimizer):
             global_rank = dist.distributed_c10d._get_global_rank(group, rank)
         return global_rank
 
-    @torch.no_grad()
-    def _sync_param_groups(self, local_to_global: bool = False) -> None:
-        """Sync learning rate and other optimizer attributes (needed to support schedulers).
-        If the global param groups have been altered, and we want to make sure that the
-        wrapped optimizer uses the up to date version.
-        Conversely if the wrapped optimizer has new keys, we expose them through the global param groups"""
+    @staticmethod
+    def _sync_param_groups(source: List[Dict[Any, Any]], destination: List[Dict[Any, Any]]) -> None:
+        """Sync learning rate and other optimizer attributes (needed to support schedulers)."""
 
-        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
+        for source_group, destination_group in zip(source, destination):
             # Sync everything but the parameters
-            for k in filter(lambda x: x != "params", local_group.keys()):
-                if local_to_global:
-                    global_group[k] = local_group[k]
-                elif k in global_group.keys():
-                    local_group[k] = global_group[k]
+            for k in filter(lambda x: x != "params", source_group.keys()):
+                destination_group[k] = source_group[k]
 
     @torch.no_grad()
     def _broadcast_params(self) -> None:
