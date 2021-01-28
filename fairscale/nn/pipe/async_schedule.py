@@ -18,7 +18,7 @@ from fairscale.nn.model_parallel import get_pipeline_parallel_ranks
 from .messages import Transport
 from .microbatch import Batch
 from .skip.tracker import SkipTrackerThroughPotals
-from .types import EVENT_LOOP_QUEUE, PipelineStyle, PipeMessage, Tensors
+from .types import EVENT_LOOP_QUEUE, PipeMessage, Tensors
 
 
 @dataclass(frozen=True)
@@ -194,13 +194,7 @@ class AsyncEventLoop:
         from .multiprocess_pipeline import create_task
 
         task = create_task(
-            PipelineStyle.AsyncSchedule,
-            self.checkpoint_stop,
-            batch.index,
-            self.group.rank(),
-            batch,
-            partition.module,
-            skip_trackers,
+            self.checkpoint_stop, batch.index, self.group.rank(), batch, partition.module, skip_trackers,
         )
         result = task.compute()
         task.finalize(result)
