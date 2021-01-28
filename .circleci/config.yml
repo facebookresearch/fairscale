@@ -281,7 +281,7 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py39-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-cpu-py39-180-0-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       # py3.9 doesn't work well with torch < 1.8. See this PR:
       # https://github.com/pytorch/pytorch/pull/50998
@@ -292,7 +292,7 @@ jobs:
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py39-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-py39-180-0-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_cpu
 
