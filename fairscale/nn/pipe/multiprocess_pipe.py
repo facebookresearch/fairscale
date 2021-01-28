@@ -461,6 +461,7 @@ class MultiProcessPipe(Module):
 
         self.group = group
         self.worker_map = worker_map
+        self.input_device = input_device
 
         # The micro-batch index where the checkpointing stops.
         checkpoint_stop = {"always": self.chunks, "except_last": self.chunks - 1, "never": 0}[self.checkpoint]
@@ -512,7 +513,7 @@ class MultiProcessPipe(Module):
                 style=style,
                 group=self.group,
                 worker_map=self.worker_map,
-                input_device=input_device,
+                input_device=self.input_device,
                 final_stage=self.final_stage,
             )
             del module
