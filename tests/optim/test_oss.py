@@ -308,70 +308,121 @@ class TestOSSMultipleRanks(TestOSS):
             print(f"Checking norm {norm}")
             check(norm)
 
-    # def test_state_dict_distributed(self):
-    #     reference_rank = 0
+    def test_state_dict_distributed(self):
+        self.dist_init(self.rank)
+        device = torch.device(self.rank)
+        torch.manual_seed(self.rank)  # make sure that the different rank get different data
+        reference_rank = 0
 
-    #     device = torch.device(self.rank)
-    #     torch.manual_seed(self.rank)  # make sure that the different rank get different data
+        # Run a dummy step so that the optimizer state dict exists
+        batch, input_width, hidden, target_width = 3, 20, 10, 5
+        target = torch.rand((batch, target_width), device=device)
+        inputs = torch.rand((batch, input_width), device=device)
 
-    #     # Setup two problems in parallel, we'll make sure that the second track (with save/load) follows the first one(untouched)
-    #     batch, input_width, hidden, target_width = 3, 20, 10, 5
-    #     target = torch.rand((batch, target_width), device=device)
-    #     inputs = torch.rand((batch, input_width), device=device)
+        model_oss1 = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, hidden),).to(
+            device
+        )
+        head_oss1 = torch.nn.Linear(hidden, target_width).to(device)
 
-    #     model_oss1 = torch.nn.Sequential(
-    #         torch.nn.Linear(input_width, hidden),
-    #         torch.nn.Linear(hidden, hidden),
-    #         torch.nn.Linear(hidden, target_width),
-    #     ).to(device)
-    #     model_oss2 = copy.deepcopy(model_oss1)
+        model_oss2 = copy.deepcopy(model_oss1)
+        head_oss2 = copy.deepcopy(head_oss1)
 
-    #     # For this test the gradients are (all) reduced in the same way in between the torch reference and fairscale.
-    #     # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
-    #     # gradient norm computation from OSS and adds a dependency.
-    #     # to keep the comparison apples-to-apples DDP is used in both cases
-    #     model_oss1 = DDP(module=model_oss1, device_ids=[self.rank],)
-    #     sharded_optimizer1 = optim.OSS(model_oss1.parameters(), lr=0.1, momentum=0.99)
-    #     model_oss2 = DDP(module=model_oss2, device_ids=[self.rank],)
-    #     sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
-    #     loss_fn = torch.nn.L1Loss().to(device)
+        # For this test the gradients are (all) reduced in the same way in between the torch reference and fairscale.
+        # Normally OSS would use ShardedDDP and only reduce to the proper rank, but this does not change the
+        # gradient norm computation from OSS and adds a dependency.
+        # to keep the comparison apples-to-apples DDP is used in both cases
+        model_oss1 = DDP(module=model_oss1, device_ids=[self.rank],)
+        sharded_optimizer1 = optim.OSS(model_oss1.parameters(), lr=0.1, momentum=0.99)
+        sharded_optimizer1.add_param_group({"params": head_oss1.parameters()})
 
-    #     def run_grad_step(model, optimizer):
-    #         model.zero_grad()
-    #         outputs = model(inputs)
+        model_oss2 = DDP(module=model_oss2, device_ids=[self.rank],)
+        sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+        sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
 
-    #         loss = loss_fn(outputs, target)
+        def run_grad_step(device, model, head, optimizer):
+            loss_fn = torch.nn.L1Loss()
+            loss_fn.to(device)
 
-    #         optimizer.step()
+            model.zero_grad()
 
-    #     def check_equal_models(message: str):
-    #         # check that model parameters are equal
+            outputs = head(model(inputs))
 
-    #         # The models should stay the same in between the ranks
-    #         for i in range(20):
-    #             input_tensor = torch.rand((64, 2)).to(device)
+            loss = loss_fn(outputs, target)
+            loss.backward()
 
-    #             def closure_ddp(input_tensor=input_tensor):
-    #                 ddp_optimizer.zero_grad()
-    #                 ddp_loss = ddp_model(input_tensor).abs().sum()
-    #                 ddp_loss.backward()
-    #                 return ddp_loss
+            optimizer.step()
+            optimizer.zero_grad()
 
-    #             def closure_sharded(input_tensor=input_tensor):
-    #                 sharded_optimizer.zero_grad()
-    #                 sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
-    #                 sharded_loss.backward()
-    #                 return sharded_loss
+        # save and reload without taking any steps
+        sharded_optimizer2.consolidate_state_dict()
+        state_dict2 = sharded_optimizer2.state_dict() if self.rank == reference_rank else {}
+        state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
 
-    #             loss_ddp = cast(torch.Tensor, ddp_optimizer.step(closure=closure_ddp))
-    #             loss_sharded_optim = cast(torch.Tensor, sharded_optimizer.step(closure=closure_sharded))
+        sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+        sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
+        sharded_optimizer2.load_state_dict(state_dict2)
 
-    #             assert torch.allclose(loss_ddp, loss_sharded_optim), "Losses differ in between Pytorch optim and OSS"
+        # now take a step and check that parameters are equal
+        # take a step
+        run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
+        run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
 
-    #             check_same_model_params()
+        # check that model parameters are equal
+        for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
+            assert torch.allclose(
+                param1, param2
+            ), "parameters of the two identical models have diverged (before any steps)"
 
-    #     for opt in [torch.optim.SGD, torch.optim.Adam]:
-    #         check_optimizer_equivalence(opt)
+        # take a step
+        run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
+        run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
+
+        # check that model parameters are equal
+        for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
+            assert torch.allclose(
+                param1, param2
+            ), "parameters of the two identical models have diverged (before saving)"
+
+        # save the state dict for one model only
+        sharded_optimizer2.consolidate_state_dict()
+        state_dict2 = sharded_optimizer2.state_dict() if self.rank == reference_rank else {}
+        state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+
+        # Check that the pulled state and the .param_groups attribute are in sync
+        for replica in range(len(state_dict2["param_groups"])):
+            for k in state_dict2["param_groups"][replica].keys():
+                if k != "params":
+                    assert state_dict2["param_groups"][replica][k] == sharded_optimizer2.param_groups[0][k]
+
+        # take a step
+        run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
+        run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
+
+        # check that saving did not cause a change in the parameters
+        for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
+            assert torch.allclose(
+                param1, param2
+            ), "parameters of the two identical models have diverged (after consolidating)"
+
+        # save again
+        sharded_optimizer2.consolidate_state_dict()
+        state_dict2 = sharded_optimizer2.state_dict() if self.rank == reference_rank else {}
+        state_dict2 = sync_object_ranks(state_dict2, reference_rank, device)
+
+        # reload the state_dict
+        sharded_optimizer2 = optim.OSS(model_oss2.parameters(), lr=0.1, momentum=0.99)
+        sharded_optimizer2.add_param_group({"params": head_oss2.parameters()})
+        sharded_optimizer2.load_state_dict(state_dict2)
+
+        # take a step
+        run_grad_step(device, model_oss1, head_oss1, sharded_optimizer1)
+        run_grad_step(device, model_oss2, head_oss2, sharded_optimizer2)
+
+        # check that reloading a saved state dict does not change the parameters
+        for param1, param2 in zip(model_oss1.parameters(), model_oss2.parameters()):
+            assert torch.allclose(
+                param1, param2
+            ), "parameters of the two identical models have diverged (after reloading)"
 
     def test_ddp_parity(self):
         self.dist_init(self.rank)
