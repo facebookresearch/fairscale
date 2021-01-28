@@ -86,6 +86,12 @@ def test_sequential(oss):
     temp_file_name = tempfile.mkstemp()[1]
 
     # Run multiple iterations, check the gain for both oss and non-oss cases.
+    #
+    # The inputs are picked arbitrarily. I used vectors that are orthogonal.
+    #
+    # The gain and mean_weight values are recorded from my testing and used here
+    # to ensure their value is unchanged from commit to commit unless we can
+    # explain why.
     test_case = {
         "inputs": [[[1.0, 0], [0, 1.0]], [[0, 1.0], [1.0, 0]]],
         "expected_gain": 1.0335265132125744,
