@@ -46,24 +46,21 @@ def _test_basic_func(rank, world_size, tempfile_name, test_case, oss, model=None
         optim = AdaScale(OSS(model.parameters(), SGD, lr=0.1))
     else:
         optim = AdaScale(SGD(model.parameters(), lr=0.1))
+
     if "input" in test_case:
-        # single iter
-        in_data = Tensor(test_case["input"][rank])
-        in_data = in_data.cuda()
+        inputs = [test_case["input"]]
+    else:
+        inputs = test_case["inputs"]
+
+    for in_data in inputs:
+        in_data = Tensor(in_data[rank]).cuda()
         out = model(in_data)
         out.sum().backward()
-        assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
         optim.step()
         optim.zero_grad()
-    else:
-        # multiple iters
-        for in_data in test_case["inputs"]:
-            in_data = Tensor(in_data[rank]).cuda()
-            out = model(in_data)
-            out.sum().backward()
-            optim.step()
-            optim.zero_grad()
-        assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
+
+    assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
+
     if "expected_mean_weight" in test_case:
         mean_weight = mean([model.module[i].weight.data.mean().item() for i in range(4)])
         assert np.allclose(mean_weight, test_case["expected_mean_weight"]), mean_weight
