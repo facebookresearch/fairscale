@@ -1,7 +1,7 @@
 import time
 from typing import Optional, Union, cast
 
-from helpers import dist_init, getData, getLossFun, getModel
+from helpers import dist_init, get_data, get_loss_fun, get_model
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -21,9 +21,9 @@ def train(rank: int, world_size: int, epochs: int, use_oss: bool):
     device = torch.device("cpu") if DEVICE == "cpu" else rank  # type:ignore
 
     # Problem statement
-    model = getModel().to(device)
-    dataloader = getData(n_batches=1)
-    loss_fn = getLossFun()
+    model = get_model().to(device)
+    dataloader = get_data(n_batches=1)
+    loss_fn = get_loss_fun()
 
     optimizer: Optional[Union[OSS, torch.optim.SGD]] = None
 

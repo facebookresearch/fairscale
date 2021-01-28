@@ -3,7 +3,7 @@
 
 import os
 
-from helpers import dist_init, getData, getLossFun, getModel
+from helpers import dist_init, get_data, get_loss_fun, get_model
 import torch
 import torch.optim as optim
 import torch_pg
@@ -37,9 +37,9 @@ def run(rank, world_size):
         torch.distributed.rpc.shutdown()
         return
 
-    model = getModel()
-    data, target = getData()[0]
-    loss_fn = getLossFun()
+    model = get_model()
+    data, target = get_data()[0]
+    loss_fn = get_loss_fun()
 
     device = torch.device("cuda", rank)
 

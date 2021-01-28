@@ -128,7 +128,7 @@ run_coverage: &run_coverage
   - run:
       name: Run Unit Tests With Coverage
       command: |
-        pytest --cov-report=xml --cov=./ --timeout 60
+        pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./
         #Uploading test coverage for Python code
         bash <(curl -s https://codecov.io/bash) -f coverage.xml -cF Python
 
@@ -357,8 +357,6 @@ jobs:
 
       - <<: *run_unittests
 
-      - <<: *run_coverage
-
       - store_test_results:
           path: test-results
 
@@ -390,7 +388,7 @@ jobs:
 
       - <<: *install_repo_gpu
 
-      - <<: *run_unittests
+      - <<: *run_coverage
 
       - store_test_results:
           path: test-results
