@@ -307,7 +307,7 @@ def train(model_config, model, benchmark_config, args):
         raise RuntimeError(
             "Unable to benchmark on a single batch. Increase the size " " of the dataset and rerun the benchmark."
         )
-    if not args.multiprocess or dist.get_rank() == 1:
+    if not args.multiprocess or dist.get_rank() == dist.get_world_size()-1:
         return wps, loss.item()
     else:
         return 0.0, 0.0
