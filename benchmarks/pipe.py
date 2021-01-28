@@ -182,7 +182,7 @@ def get_device(model, index):
 
     if not torch.cuda.is_available():
         return torch.device("cpu")
-    if model.devices:
+    if hasattr(model, "devices"):
         return model.devices[index]
     else:
         return torch.cuda.current_device()
