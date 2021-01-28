@@ -10,13 +10,13 @@ def dist_init(rank, world_size):
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 
-def getModel():
+def get_model():
     return nn.Sequential(torch.nn.Linear(10, 10), torch.nn.ReLU(), torch.nn.Linear(10, 5))
 
 
-def getData(n_batches=1):
+def get_data(n_batches=1):
     return [(torch.randn(20, 10), torch.randint(0, 2, size=(20, 1)).squeeze()) for i in range(n_batches)]
 
 
-def getLossFun():
+def get_loss_fun():
     return F.nll_loss
