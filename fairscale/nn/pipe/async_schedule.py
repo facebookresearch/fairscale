@@ -17,6 +17,7 @@ from fairscale.nn.model_parallel import get_pipeline_parallel_ranks
 
 from .messages import Transport
 from .microbatch import Batch
+from .multiprocess_pipeline import create_task
 from .skip.tracker import SkipTrackerThroughPotals
 from .types import EVENT_LOOP_QUEUE, PipeMessage, Tensors
 
@@ -190,8 +191,6 @@ class AsyncEventLoop:
     ) -> Batch:
         """Actually run the forward pass for a given module, and send the result
         to the next stage in the pipeline if needed."""
-        assert self.group
-        from .multiprocess_pipeline import create_task
 
         task = create_task(
             self.checkpoint_stop, batch.index, self.group.rank(), batch, partition.module, skip_trackers,
@@ -310,8 +309,6 @@ class AsyncEventLoop:
         calculated. This also handles the first/only stage for the special
         case of a 1-stage pipeline."""
 
-        assert self.group
-
         invocations, activations = self.get_invocations_and_activations()
         expected_invocations = len(invocations) * len(batches)
         actual_invocations = 0
@@ -373,7 +370,6 @@ class AsyncEventLoop:
 
     def event_loop(self, num_microbatch: int, skip_trackers: List[SkipTrackerThroughPotals]) -> None:
         """The event loop for the "middle", i.e. neither the head nor the tail"""
-        assert self.group
 
         invocations, activations = self.get_invocations_and_activations()
 
