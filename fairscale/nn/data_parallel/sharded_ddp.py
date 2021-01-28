@@ -47,7 +47,7 @@ class ShardedDataParallel(nn.Module):
         reduce_buffer_size (int):
             the max size of the buffer used to batch the small parameter tensors, in number of elements (default 8M).
             this will impact the long term memory consumption, because these buckets correspond to parameters which will not be sharded.
-            Note that single-node jobs (world-size <=8) will bypass this setting due to the very fast inter-gpu communication in that case.
+            Set to 0 to remove all bucketing.
 
 
     .. warning:
@@ -55,15 +55,15 @@ class ShardedDataParallel(nn.Module):
         after the backward pass, in order to save memory and some communication bandwidth.
 
     .. warning:
-        As a consequence of sharding, in case of gradient clipping, one has to use the `clip_grad_norm` exposed by
-        the `optimizer state sharding wrapper <fairscale.optim.OSS>`
+        As a consequence of sharding:
+            * in case of gradient clipping, one has to use the `clip_grad_norm` exposed by
+                the `optimizer state sharding wrapper <fairscale.optim.OSS>`
 
-    .. warning:
-        As a consequence of sharding, after loss.backward() (or equivalent) each rank will have `None` in place of some param.grad
+            * after loss.backward() (or equivalent) each rank will have `None` in place of some param.grad
 
-    .. warning:
-        As a consequence of sharding, Pytorch and Apex AMP implementations will hang when used in conjunction with `ShardedDDP`.
-        One needs a `shard-aware grad scaler<ShardedGradScaler>`, which is proposed in `fairscale.optim.grad_scaler`, compatible with PytorchAMP.
+            * Pytorch and Apex AMP implementations will hang when used in conjunction with `ShardedDDP`.
+                One needs a `shard-aware grad scaler<ShardedGradScaler>`, which is proposed in `fairscale.optim.grad_scaler`,
+                compatible with PytorchAMP.
     """
 
     def __init__(
@@ -132,7 +132,6 @@ class ShardedDataParallel(nn.Module):
         self.buckets: Dict[OSS, Dict[torch.device, List[Bucket]]] = {o: {} for o in self.sharded_optimizers}
         self._should_bucket_grad: List[bool] = []
         self._setup_bucket_strategy()
-        self._clear_counters()
 
         # - setup backward hooks which will be called by Torch's autograd in due time
         self._grad_accs: List[Callable] = []
@@ -203,18 +202,19 @@ class ShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _clear_counters(self) -> None:
         """Reset all the grad reduce and call counters"""
-        self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
-        self._reduced_grads = {o: 0 for o in self.sharded_optimizers}
+        if not self.should_accumulate_grads:
+            self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
+            self._reduced_grads = {o: 0 for o in self.sharded_optimizers}
 
-        for o in self.buckets.keys():
-            for d in self.buckets[o].keys():
-                for bucket in self.buckets[o][d]:
-                    assert (
-                        bucket.sent
-                    ), "A bucket failed being sent, possible unused parameters. See \
-                    https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html?highlight=unused_parameters"
+            for o in self.buckets.keys():
+                for d in self.buckets[o].keys():
+                    for bucket in self.buckets[o][d]:
+                        assert (
+                            bucket.sent
+                        ), "A bucket failed being sent, possible unused parameters. See \
+                        https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html?highlight=unused_parameters"
 
-                    bucket.reset()
+                        bucket.reset()
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
@@ -367,8 +367,9 @@ class ShardedDataParallel(nn.Module):
             for device, per_rank_params in sharded_optimizer.per_device_params.items():
                 for dst_rank, params in enumerate(per_rank_params):
                     offset = 0
+                    bucket = self.buckets[sharded_optimizer][device][dst_rank]
 
-                    for param in filter(lambda x: x.requires_grad, params):
+                    for param in filter(lambda x: x.requires_grad is True, params):
                         # Criteria to decide whether this parameter is to be bucketed or not:
                         # - enough room in the bucket
                         if (offset + param.numel()) < self.buffer_max_size:
@@ -381,11 +382,7 @@ class ShardedDataParallel(nn.Module):
                                 # will be overwritten just below, see next line
                                 param.grad = torch.zeros_like(param)
 
-                            param.grad.data = (
-                                self.buckets[sharded_optimizer][device][dst_rank]
-                                .buffer[offset:offset_next]
-                                .view_as(param.data)
-                            )
+                            param.grad.data = bucket.buffer[offset:offset_next].view_as(param.data)
                             offset = offset_next
 
                             # Update the bucket
@@ -396,5 +393,6 @@ class ShardedDataParallel(nn.Module):
                             self._should_bucket_grad.append(False)
 
                     # Resize the bucket to remove lost space in the end
-                    self.buckets[sharded_optimizer][device][dst_rank].buffer.resize_(offset)
-                    self._reduced_grads_max[sharded_optimizer] += 1  # one reduce call per bucket
+                    bucket.buffer.resize_(offset)
+                    if bucket.max_params_checked_in > 0:
+                        self._reduced_grads_max[sharded_optimizer] += 1  # one reduce call per bucket
