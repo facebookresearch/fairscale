@@ -11,7 +11,6 @@
 import copy
 from math import inf
 import os
-import tempfile
 from typing import Any, Type, cast
 import unittest
 
@@ -31,21 +30,10 @@ def sync_object_ranks(something_to_sync: Any, reference_rank: int, device: torch
 
 
 class TestOSS(MultiProcessTestCase):
-    def __init__(self, *args):
-        super().__init__(*args)
-        _, self.tempfile = tempfile.mkstemp()
-
     def setUp(self):
         super(TestOSS, self).setUp()
         os.environ["WORLD_SIZE"] = str(self.world_size)
         self._spawn_processes()
-
-    def tearDown(self):
-        if torch.distributed.is_initialized():
-            try:
-                torch.distributed.destroy_process_group()
-            except AssertionError:
-                pass
 
     @property
     def backend(self):
@@ -56,8 +44,8 @@ class TestOSS(MultiProcessTestCase):
         return torch.device(self.rank) if self.backend == dist.Backend.NCCL else torch.device("cpu")
 
     def dist_init(self, rank):
-        url = "file://" + self.tempfile
-        return dist.init_process_group(init_method=url, backend=self.backend, rank=rank, world_size=self.world_size)
+        url = "file://" + self.file_name
+        dist.init_process_group(init_method=url, backend=self.backend, rank=rank, world_size=self.world_size)
 
 
 class TestOSSSingleRank(TestOSS):
