@@ -507,7 +507,7 @@ def benchmark_single_process(args):
 def run_mp_worker(args, available_workers):
 
     benchmark_config = create_benchmark_config(args.model_name)
-    model_config = create_model_config(args, config=benchmark_config)
+    model_config = create_model_config(args, benchmark_config=benchmark_config)
     model = model_config["model"]
 
     print("get_pipeline_parallel_group().size() ", get_pipeline_parallel_group().size())
@@ -515,7 +515,7 @@ def run_mp_worker(args, available_workers):
     pipe_model = MultiProcessPipe(
         model,
         balance,
-        style=Pipe.MultiProcess,
+        style=MultiProcessPipe.MultiProcess,
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
