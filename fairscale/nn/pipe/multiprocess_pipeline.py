@@ -78,7 +78,7 @@ class RecvOperator(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def forward(ctx, dst_rank: int, tensor: Tensor, input_device, transport: Transport, index: int) -> Tensors:
+    def forward(ctx, dst_rank: int, tensor: Tensor, transport: Transport, index: int) -> Tensors:
         assert dst_rank == torch.distributed.get_rank()
         ctx.transport = transport
         ctx.index = index
@@ -120,7 +120,6 @@ else:
 
 
 def create_task(
-    style: PipelineStyle,
     checkpoint_stop: int,
     i: int,
     j: int,
@@ -176,7 +175,7 @@ class MultiProcessPipeline:
         skip_layout: SkipLayout,
         checkpoint_stop: int,
         style: PipelineStyle,
-        group: Optional[torch.distributed.ProcessGroup] = None,
+        group: torch.distributed.ProcessGroup,
         worker_map: Optional[Dict[int, str]] = None,
         input_device: Union[None, int, str, torch.device] = None,
         final_stage: bool = False,
@@ -193,7 +192,6 @@ class MultiProcessPipeline:
             input_device=input_device,
         )
         self.input_device = input_device
-        self.all_at_once = False
         self.callcount = 0
         self.final_stage = final_stage
 
@@ -219,11 +217,9 @@ class MultiProcessPipeline:
         skip_trackers = [SkipTrackerThroughPotals(self.skip_layout, i) for i in range(len(batches))]
 
         if self.style is PipelineStyle.MultiProcess:
-            assert self.group
             schedule = [(i, self.group.rank()) for i in range(m)]
             self.compute(batches, schedule, skip_trackers)
         elif self.style is PipelineStyle.AsyncSchedule:
-            assert self.group
             rank = self.group.rank()
             event_loop = AsyncEventLoop(
                 self.partitions, self.group, self.transport, self.training, self.checkpoint_stop,
@@ -248,7 +244,7 @@ class MultiProcessPipeline:
     ) -> Batch:
 
         phony = torch.empty(0, device=self.input_device, requires_grad=True)
-        result = RecvOperator.apply(torch.distributed.get_rank(), phony, self.input_device, self.transport, i)
+        result = RecvOperator.apply(torch.distributed.get_rank(), phony, self.transport, i)
         if len(result) == 1:
             batch = Batch(result[0], i)
         else:
@@ -261,7 +257,6 @@ class MultiProcessPipeline:
     def send_skip_tensors(
         self, this_rank: int, ranks: List[int], batch: Batch, i: int, skip_trackers: List[SkipTrackerThroughPotals]
     ) -> None:
-        assert self.group
         for next_j, ns, name in self.skip_layout.copy_policy_by_src(self.group.rank()):
             life = skip_trackers[i].portals[(ns, name)].tensor_life
             loaded = skip_trackers[i].load(batch, ns, name)
@@ -302,7 +297,6 @@ class MultiProcessPipeline:
     def execute_task(self, task: Task, i: int, skip_trackers: List[SkipTrackerThroughPotals]) -> Batch:
         batch = task.compute()
 
-        assert self.group
         rank = self.group.rank()
 
         if self.style is PipelineStyle.MultiProcess and not self.final_stage:
@@ -324,9 +318,7 @@ class MultiProcessPipeline:
     ) -> None:
         """Runs tasks with synchronization to copy streams."""
 
-        if self.style is PipelineStyle.MultiProcess:
-            assert self.group
-            n = self.group.size()
+        assert self.style is PipelineStyle.MultiProcess
 
         # With checkpointing, the autograd graph looks like this diagram:
         # ┌─────┸──────┐
@@ -354,19 +346,17 @@ class MultiProcessPipeline:
         # │    Copy    │
         # └─────┰──────┘
         for i, j in schedule:
-            batch = batches[i]
+            assert len(self.partitions) == 1
+            partition = self.partitions[0]
 
-            if self.style is PipelineStyle.MultiProcess:
-                assert len(self.partitions) == 1
-                partition = self.partitions[0]
+            if self.group.rank() != 0:
+                batch = self.get_batch_from_previous_stage(i, skip_trackers, batches)
+            else:
+                batch = batches[i]
 
-                assert self.group
-                if self.group.rank() != 0:
-                    batch = self.get_batch_from_previous_stage(i, skip_trackers, batches)
+            task = create_task(self.checkpoint_stop, i, j, batch, partition.module, skip_trackers)
 
-                task = create_task(self.style, self.checkpoint_stop, i, j, batch, partition.module, skip_trackers)
-
-                batches[i] = self.execute_task(task, i, skip_trackers)
+            batches[i] = self.execute_task(task, i, skip_trackers)
 
     def send_portal_grad(self, ns_name: Tuple[Namespace, str], index: int, grad: TensorOrTensors) -> None:
         dest, src = self.skip_layout.by_ns_name.get(ns_name, (-1, -1))
@@ -398,43 +388,27 @@ class MultiProcessPipeline:
         if self.style == PipelineStyle.AsyncSchedule:
             return
 
-        o = list(output)
-
         tensors: Tensors
 
-        if self.all_at_once:
-            # FIXME(tom) allow specifying this branch when constructing Pipe(), add a test
+        rank = torch.distributed.get_rank()
+        for batch in reversed(output):
+            found = self.transport.get_out_of_order(ACTIVATIONS_GRADS_QUEUE, batch.index)
+            if batch.atomic:
+                tensors = tuple([batch.tensor])
+            else:
+                tensors = batch.tensors
+
+            if len(found) != len(tensors):
+                raise RuntimeError("different number of tensors and gradients")
+
             grads = []
-            for i, batch in enumerate(o):
-                rank = torch.distributed.get_rank()
-                found = self.transport.get_out_of_order(ACTIVATIONS_GRADS_QUEUE, i)
-                assert len(found) == 1
-                grads.append(found[0])
-                tensors = tuple(x.tensor_or_tensors for x in o)  # type: ignore
+            final_tensors = []
+            for i, tensor in enumerate(tensors):
+                if tensor.requires_grad or getattr(tensor, "grad_fn", None) is not None:
+                    grads.append(found[i])
+                    final_tensors.append(tensor)
+
             try:
-                torch.autograd.backward(tensors, grad_tensors=grads, retain_graph=True)
+                torch.autograd.backward(final_tensors, grad_tensors=grads, retain_graph=True)
             except Exception as e:
-                raise RuntimeError("Autograd failed") from e
-        else:
-            rank = torch.distributed.get_rank()
-            for batch in o:
-                found = self.transport.get_out_of_order(ACTIVATIONS_GRADS_QUEUE, batch.index)
-                if batch.atomic:
-                    tensors = tuple([batch.tensor])
-                else:
-                    tensors = batch.tensors
-
-                if len(found) != len(tensors):
-                    raise RuntimeError("different number of tensors and gradients")
-
-                grads = []
-                final_tensors = []
-                for i, tensor in enumerate(tensors):
-                    if tensor.requires_grad or getattr(tensor, "grad_fn", None) is not None:
-                        grads.append(found[i])
-                        final_tensors.append(tensor)
-
-                try:
-                    torch.autograd.backward(final_tensors, grad_tensors=grads, retain_graph=True)
-                except Exception as e:
-                    raise RuntimeError(f"Autograd failed on {torch.distributed.get_rank()}") from e
+                raise RuntimeError(f"Autograd failed on {torch.distributed.get_rank()}") from e
