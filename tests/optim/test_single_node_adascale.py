@@ -20,6 +20,7 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 
 from fairscale.optim import AdaScale
+from fairscale.utils.golden_testing_data import adascale_test_data
 from fairscale.utils.testing import skip_if_no_cuda
 from fairscale.utils.testing_memory import find_tensor_by_shape
 
@@ -58,24 +59,8 @@ def test_loss_accum_cpu():
     # We don't call optim.step(), since it will detect that backward is not yet done.
 
 
-# IMPORTANT: make sure these test_cases values are sync'ed with the DDP
-# test in test_ddp_adascale.py. This way, we make sure gradient accumulation
-# works exactly like that in DDP.
 @pytest.mark.parametrize("cpu", [True, False])
-@pytest.mark.parametrize(
-    "test_case",
-    [
-        # "input" value is a list of input tensors for micro-batch 0 and micro-batch 1.
-        {"input": [[1.0, 0], [0, 1.0]], "expected_gain": 2.0},
-        {"input": [[1.0, 1.0], [1.0, 1.0]], "expected_gain": 1.0000001249999846},
-        {"input": [[-1.0, 1.0], [1.0, -1.0]], "expected_gain": 2.0},
-        {"input": [[1.0, 4.0], [5.0, 0.5]], "expected_gain": 1.5022222222222221},
-        {"input": [[-0.2, 3.0], [5.0, 0.5]], "expected_gain": 1.9433267229211089},
-        # "inputs" to trigger multiple iteration tests, which make sure the
-        # smoothing factor calculation is also covered.
-        {"inputs": [[[-0.2, 3.3], [5.2, 0.7]], [[1.0, 4.0], [3.1, 0.1]]], "expected_gain": 1.744159431359284},
-    ],
-)
+@pytest.mark.parametrize("test_case", adascale_test_data)
 def test_grad_accum(test_case, cpu):
     """Test the basic functionality on CPU/GPU with gradient accumulation without DDP"""
     model = Linear(2, 2, bias=False)
