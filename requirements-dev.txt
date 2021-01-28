@@ -1,2 +1,5 @@
+# Core deps.
 -r requirements.txt
+
+# For pre-commit hooks.
 pre-commit
