@@ -396,3 +396,43 @@ def objects_are_equal(a: Any, b: Any, raise_exception: bool = False) -> bool:
                 return False
     else:
         return a == b
+
+
+class DeviceAndTypeCheckModule(nn.Module):
+    """A simple module for checking Tensor devices and dtypes."""
+
+    def __init__(
+        self,
+        expected_input_dtype: Optional[torch.dtype] = None,
+        expected_input_device: Optional[torch.device] = None,
+        expected_param_dtype: Optional[torch.dtype] = None,
+        expected_param_device: Optional[torch.device] = None,
+        expected_loss_dtype: Optional[torch.dtype] = None,
+        expected_loss_device: Optional[torch.device] = None,
+    ):
+        super().__init__()
+        self.expected_input_dtype = expected_input_dtype
+        self.expected_input_device = expected_input_device
+        self.expected_param_dtype = expected_param_dtype
+        self.expected_param_device = expected_param_device
+        self.expected_loss_dtype = expected_loss_dtype
+        self.expected_loss_device = expected_loss_device
+
+        self.linear = nn.Linear(5, 5)
+
+    def _check(self, key, x, expected):
+        assert expected in {None, x}, f"{key} ({x}) != expected ({expected})"
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self._check("input.dtype", x.dtype, self.expected_input_dtype)
+        self._check("input.device", x.device, self.expected_input_device)
+
+        param = self.linear.weight
+        self._check("param.dtype", param.dtype, self.expected_param_dtype)
+        self._check("param.device", param.device, self.expected_param_device)
+
+        loss = self.linear(x).sum()
+        self._check("loss.dtype", loss.dtype, self.expected_loss_dtype)
+        self._check("loss.device", loss.device, self.expected_loss_device)
+
+        return loss
