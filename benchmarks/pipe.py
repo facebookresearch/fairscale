@@ -369,7 +369,7 @@ def verify_lm_run(wps, golden_config):
 
 
 def benchmark_language_model(model_config, model, benchmark_config, args):
-    golden_config = get_golden_config(args.model_name)
+    golden_config = get_golden_config(args.model_name, args)
     epoch = benchmark_config["epochs"]
     print("-" * 110)
     print("| start of epoch {:1d}".format(epoch))
@@ -388,7 +388,7 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
         )
     )
 
-    if not args.multiprocess and len(model.balance) == 4:
+    if len(model.balance) == 4:
 
         if args.model_name == "lm":
             verify_lm_run(wps, golden_config)
@@ -470,11 +470,11 @@ def create_benchmark_config(model_name):
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def get_golden_config(model_name):
+def get_golden_config(model_name, args):
     """Return a dict with the golden data for throughput and memory usage."""
 
     if model_name == "lm":
-        return lm_wikitext2.get_golden_real_stats()
+        return lm_wikitext2.get_golden_real_stats(args.single_process)
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 

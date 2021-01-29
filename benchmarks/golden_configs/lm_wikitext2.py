@@ -25,13 +25,19 @@ def get_benchmark_config():
     }
 
 
-def get_golden_real_stats():
-
-    return {
-        "avg_wps": 703.778,
-        "std_dev_wps": 5.732,
-        "peak_mem_usage": [2320996352, 1396742144, 1396742144, 2340010496],
-    }
+def get_golden_real_stats(single_process=True):
+    if single_process:
+        return {
+            "avg_wps": 703.778,
+            "std_dev_wps": 5.732,
+            "peak_mem_usage": [2320996352, 1396742144, 1396742144, 2340010496],
+        }
+    else:
+        return {
+            "avg_wps": 647.404,
+            "std_dev_wps": 14.51,
+            "peak_mem_usage": [2941729280, 2941729280, 2941729280, 2941729280],
+        }
 
 
 def get_golden_synthetic_stats():
