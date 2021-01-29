@@ -344,7 +344,7 @@ def verify_lm_run(wps, golden_config):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
     # Verify wps only on the last rank in multiprocess pipe
-    if not args.multiprocess or dist.get_rank() == dist.get_world_size()-1:
+    if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
         # Assert that words per second is within 3 standard deviations of the average
         # of five golden runs
         print("Throughput(wps) is {:.2f}.".format(wps))
@@ -360,11 +360,11 @@ def verify_lm_run(wps, golden_config):
         rank = dist.get_rank()
         print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]))
         current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
-            if not current_device_usage < golden_ref * 1.1:
-                raise RuntimeError(
-                    "Peak memory usage for cuda device {:d} is {:d} which"
-                    "is less than golden reference value of {:d}".format(rank, current_device_usage, golden_ref)
-                )
+        if not current_device_usage < golden_ref * 1.1:
+            raise RuntimeError(
+                "Peak memory usage for cuda device {:d} is {:d} which"
+                "is less than golden reference value of {:d}".format(rank, current_device_usage, golden_ref)
+            )
     else:
         for i in range(4):
             print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]))
