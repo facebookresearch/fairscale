@@ -9,4 +9,4 @@ from .types import PipelineStyle
 
 class AsyncPipe(MultiProcessPipe):
     def __init__(self, *args, **kwargs) -> None:  # type: ignore
-        super().__init__(*args, style=PipelineStyle.MultiProcess, **kwargs)
+        super().__init__(*args, style=PipelineStyle.AsyncSchedule, **kwargs)
