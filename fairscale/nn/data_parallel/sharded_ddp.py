@@ -11,7 +11,7 @@ reduction automatically.
 import contextlib
 from itertools import chain
 import logging
-from typing import Any, Callable, Dict, Generator, List, Tuple, Union
+from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Tuple, Union
 
 import torch
 from torch import nn
@@ -131,6 +131,7 @@ class ShardedDataParallel(nn.Module):
 
         self.buckets: Dict[OSS, Dict[torch.device, List[Bucket]]] = {o: {} for o in self.sharded_optimizers}
         self._should_bucket_grad: List[bool] = []
+        self._bucket_iterator: Optional[Iterable[Bucket]] = None
         self._setup_bucket_strategy()
 
         # - setup backward hooks which will be called by Torch's autograd in due time
@@ -321,18 +322,16 @@ class ShardedDataParallel(nn.Module):
         #  Add a hook on the module to flush the buckets, if needed
         def bucket_flush(*unused: Any) -> None:
             handle = None
+            assert self._bucket_iterator is not None
 
-            for o in self.sharded_optimizers:
-                for _, bucket_per_device in self.buckets[o].items():
-                    for bucket in bucket_per_device:
-                        if not bucket.sent:
-                            bucket.buffer.mul_(self.world_size_scaling)
-
-                            # Reduce the bucket
-                            bucket.sent = True
-                            handle = dist.reduce(
-                                tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
-                            )
+            for bucket in self._bucket_iterator:
+                if not bucket.sent:
+                    # Reduce the bucket. Some parameters went unused and this bucket was not flushed
+                    bucket.buffer.mul_(self.world_size_scaling)
+                    bucket.sent = True
+                    handle = dist.reduce(
+                        tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                    )
 
             # Only wait on the last handle
             if handle:
@@ -419,3 +418,5 @@ class ShardedDataParallel(nn.Module):
                     bucket.buffer.resize_(offset)
                     if bucket.max_params_checked_in > 0:
                         self._reduced_grads_max[sharded_optimizer] += 1  # one reduce call per bucket
+
+        self._bucket_iterator = (b for o in self.sharded_optimizers for d in self.buckets[o].values() for b in d)
