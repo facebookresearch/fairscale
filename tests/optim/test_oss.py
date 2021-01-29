@@ -18,9 +18,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.testing._internal.common_distributed import MultiProcessTestCase, skip_if_not_multigpu
+from torch.testing._internal.common_distributed import MultiProcessTestCase
 
 import fairscale.optim as optim
+from fairscale.utils.testing import skip_if_single_gpu
 
 
 def sync_object_ranks(something_to_sync: Any, reference_rank: int, device: torch.device) -> Any:
@@ -45,6 +46,7 @@ class TestOSS(MultiProcessTestCase):
 
     def dist_init(self, rank):
         url = "file://" + self.file_name
+        os.environ["RANK"] = str(rank)
         dist.init_process_group(init_method=url, backend=self.backend, rank=rank, world_size=self.world_size)
 
 
@@ -257,7 +259,7 @@ class TestOSSMultipleRanks(TestOSS):
         self.assertFalse(m.weight.grad)
         self.assertFalse(m.bias.grad)
 
-    @skip_if_not_multigpu
+    @skip_if_single_gpu
     def test_gradient_clipping(self):
         self.dist_init(self.rank)
         torch.manual_seed(self.rank)  # make sure that the different rank get different data
@@ -315,7 +317,7 @@ class TestOSSMultipleRanks(TestOSS):
             print(f"Checking norm {norm}")
             check(norm)
 
-    @skip_if_not_multigpu
+    @skip_if_single_gpu
     def test_state_dict_distributed(self):
         self.dist_init(self.rank)
         torch.manual_seed(self.rank)  # make sure that the different rank get different data
@@ -431,7 +433,7 @@ class TestOSSMultipleRanks(TestOSS):
                 param1, param2
             ), "parameters of the two identical models have diverged (after reloading)"
 
-    @skip_if_not_multigpu
+    @skip_if_single_gpu
     def test_ddp_parity(self):
         self.dist_init(self.rank)
         torch.cuda.set_device(self.rank)
