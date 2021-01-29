@@ -798,7 +798,7 @@ def pipelined_backward(pipe_class):
 def async_event_loop():
 
     model = nn.Sequential(nn.Linear(10, 10), nn.ReLU(), nn.Linear(10, 10), nn.ReLU())
-    pipe = AsynPipe(model, [1, 1, 1, 1], worker_map=get_worker_map(), chunks=10)
+    pipe = AsyncPipe(model, [1, 1, 1, 1], worker_map=get_worker_map(), chunks=10)
 
     inputs = torch.rand(100, 10)
 
