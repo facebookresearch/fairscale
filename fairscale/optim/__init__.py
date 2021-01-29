@@ -19,3 +19,7 @@ try:
     from .grad_scaler import GradScaler
 except ImportError:
     logging.warning("Torch AMP is not available on this platform")
+try:
+    from .madgrad import MADGRAD
+except ImportError:  # pragma: no cover
+    pass  # pragma: no cover

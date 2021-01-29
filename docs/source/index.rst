@@ -34,6 +34,7 @@ Components
 
 * Optimization at scale:
    * `AdaScale SGD <../../en/latest/api/optim/adascale.html>`_
+   * `MADGRAD <../../en/latest/api/optim/madgrad.html>`_
 
 
 * `Tutorials <../../en/latest/tutorials/index.html>`_
