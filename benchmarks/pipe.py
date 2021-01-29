@@ -307,7 +307,7 @@ def train(model_config, model, benchmark_config, args):
         raise RuntimeError(
             "Unable to benchmark on a single batch. Increase the size " " of the dataset and rerun the benchmark."
         )
-    if not args.multiprocess or dist.get_rank() == dist.get_world_size()-1:
+    if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
         return wps, loss.item()
     else:
         return 0.0, 0.0
@@ -371,22 +371,22 @@ def verify_lm_run(wps, golden_config):
 def benchmark_language_model(model_config, model, benchmark_config, args):
     golden_config = get_golden_config(args.model_name, args)
     epoch = benchmark_config["epochs"]
-    print("-" * 110)
-    print("| start of epoch {:1d}".format(epoch))
-    print("-" * 110)
     start_time = time.time()
     wps, loss = train(model_config, model, benchmark_config, args)
     elapsed_time = time.time() - start_time
-    print("-" * 110)
-    print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
-    print("-" * 110)
     if dist.get_rank() == dist.get_world_size() - 1:
+        print("-" * 110)
+        print("| start of epoch {:1d}".format(epoch))
+        print("-" * 110)
+        print("-" * 110)
+        print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
+        print("-" * 110)
         print("Throughput(wps) is {:.2f}.".format(wps))
-    print(
-        "Peak allocated bytes on cuda:{}: {:1d}".format(
-            dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]
+        print(
+            "Peak allocated bytes on cuda:{}: {:1d}".format(
+                dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]
+            )
         )
-    )
 
     if len(model.balance) == 4:
 
