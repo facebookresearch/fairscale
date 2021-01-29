@@ -11,7 +11,7 @@
 import copy
 from math import inf
 import os
-from typing import Any, Type, cast
+from typing import Any, List, Type, cast
 import unittest
 
 import numpy as np
@@ -187,6 +187,65 @@ class TestOSSMultipleRanks(TestOSS):
 
         return 4
 
+    def test_add_param_group(self):
+        self.dist_init(self.rank)
+
+        # Test with all parameters trainable to begin with
+        def all_trainable():
+            params = []
+            sizes = [9, 7, 5, 3]
+            sizes_world = sizes * self.world_size
+            for size in sizes_world[:-1]:
+                params.append(torch.rand(size, 1))
+
+            # Make sure that the params are trainable, enforces size-based partitioning
+            for p in params:
+                p.requires_grad = True
+
+            o = optim.OSS(params, optim=torch.optim.SGD, lr=0.1)
+
+            assert len(o.param_groups) == 1
+            o.add_param_group({"params": [torch.rand(3, 1)]})
+
+            assert len(o.param_groups) == 2
+            # Verify that added group is added to the correct partition making all have the same elements.
+            assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == sum(sizes)
+            assert len(o.optim.param_groups) == 2
+
+        # Test a pathological config with a first big non-trainable param
+        def some_trainable():
+            params = []
+            for size in [100, 3, 5, 2, 6, 4]:
+                params.append(torch.rand(size, 1))
+
+            # Make sure that the params are trainable, enforces size-based partitioning
+            for p in params[1:]:
+                p.requires_grad = True
+
+            o = optim.OSS(params, optim=torch.optim.SGD, lr=0.1)
+
+            assert len(o.param_groups) == 1
+            o.add_param_group({"params": [torch.rand(3, 1)]})
+
+            assert len(o.param_groups) == 2
+            assert len(o.optim.param_groups) == 2
+
+        all_trainable()
+        some_trainable()
+
+    def test_zero_grad(self):
+        self.dist_init(self.rank)
+        x = torch.rand(1)
+        m = torch.nn.Linear(1, 1)
+        o = optim.OSS(m.parameters(), optim=torch.optim.SGD, lr=0.1)
+        y = m(x)
+        y.backward(x)
+        self.assertNotEqual(m.weight.grad, torch.zeros_like(m.weight))
+        self.assertNotEqual(m.weight.grad, torch.zeros_like(m.weight))
+        o.zero_grad()
+        self.assertFalse(m.weight.grad)
+        self.assertFalse(m.bias.grad)
+
     def test_step(self):
         if self.world_size != 4:
             # Hardcoded values
@@ -246,18 +305,139 @@ class TestOSSMultipleRanks(TestOSS):
         self.assertEqual(m.weight, torch.tensor([[1.1]], device=self.device))
         self.assertEqual(m.bias, torch.tensor([2.1], device=self.device))
 
-    def test_zero_grad(self):
+    def test_sharding(self):
         self.dist_init(self.rank)
-        x = torch.rand(1)
-        m = torch.nn.Linear(1, 1)
-        o = optim.OSS(m.parameters(), optim=torch.optim.SGD, lr=0.1)
-        y = m(x)
-        y.backward(x)
-        self.assertNotEqual(m.weight.grad, torch.zeros_like(m.weight))
-        self.assertNotEqual(m.weight.grad, torch.zeros_like(m.weight))
-        o.zero_grad()
-        self.assertFalse(m.weight.grad)
-        self.assertFalse(m.bias.grad)
+        sizes = [9, 7, 5, 3]
+        params = []
+        for size in sizes * self.world_size:
+            params.append(torch.rand(size, 1, requires_grad=True))
+        o = optim.OSS(params, optim=torch.optim.SGD, lr=0.1)
+        self.assertEqual(sum([x.numel() for x in o.optim.param_groups[0]["params"]]), sum(sizes))
+
+    def test_collect_shards(self):
+        self.dist_init(self.rank)
+        reference_rank = 0
+
+        # Run a dummy step so that the optimizer state dict exists
+        batch, input_width, hidden, target_width = 3, 20, 10, 5
+        target = torch.rand((batch, target_width), device=self.device)
+        inputs = torch.rand((batch, input_width), device=self.device)
+
+        model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
+        model.to(self.device)
+
+        loss_fn = torch.nn.L1Loss()
+        loss_fn.to(self.device)
+
+        # With SGD, Momentum is required to get a state to shard
+        optimizer = optim.OSS(model.parameters(), optim=torch.optim.SGD, lr=0.1, momentum=0.99)
+
+        def closure():
+            optimizer.zero_grad()
+            output = model(inputs)
+            loss = loss_fn(output, target)
+            loss.backward()
+            return loss
+
+        _ = optimizer.step(closure=closure)
+
+        # Update the optimizer state on the reference rank
+        optimizer.consolidate_state_dict(recipient_rank=reference_rank)
+
+        # Fetch the state on the reference rank
+        # - check that it has the correct size
+        # - load it again
+        if self.rank == reference_rank:
+            optimizer_state_dict = optimizer.state_dict()
+            self.assertEqual(len(optimizer_state_dict["state"]), len(list(model.parameters())))
+        else:
+            optimizer_state_dict = {}
+
+        optim_state = [optimizer_state_dict]
+        dist.broadcast_object_list(optim_state, src=reference_rank, group=dist.group.WORLD)
+
+        # Load the optimizer state dict
+        optimizer.load_state_dict(optim_state[0])
+
+    def test_multiple_groups(self):
+        # Only work with the even ranks, to check that the global_rank indexing is properly used
+        if self.world_size < 4:
+            # Not enough ranks to test
+            return
+
+        self.dist_init(self.rank)
+        sub_group_ranks = [0, 2]
+        process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend="gloo")
+
+        # Make sure that all the ranks get different training data
+        # So that the sync check in between their models is meaningful
+        torch.manual_seed(self.rank)
+        np.random.seed(self.rank)
+
+        # Standard deep learning setup
+        device = "cpu"
+        epochs, batch, input_width, hidden, target_width = 5, 3, 20, 10, 5
+        loss_fn = torch.nn.L1Loss().to(device)
+
+        def check(optimizer):
+            # Just run a couple of epochs, check that the model is properly updated
+            for _ in range(epochs):
+                target = torch.rand((batch, target_width), device=device)
+                inputs = torch.rand((batch, input_width), device=device)
+
+                def closure():
+                    optimizer.zero_grad()
+                    output = model(inputs)
+                    loss = loss_fn(output, target)
+                    loss /= self.world_size
+                    loss.backward()
+                    dist.all_reduce(loss, group=process_group)  # Not strictly needed for the test below
+
+                    return loss
+
+                _ = optimizer.step(closure=closure)
+
+                # Check that all the params are the same on all ranks
+                for pg in optimizer.param_groups:
+                    for p in pg["params"]:
+                        receptacle = [p.clone() for _ in sub_group_ranks] if self.rank == 0 else []
+                        dist.gather(p, receptacle, dst=0, group=process_group)
+                        if self.rank == 0:
+                            for sync_p in receptacle[1:]:
+                                assert torch.all(torch.eq(receptacle[0], sync_p)), "Models differ in between ranks"
+
+        if self.rank in sub_group_ranks:
+            # Model fitting in the broadcast bucket
+            model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
+                device
+            )
+
+            # With SGD, Momentum is required to get a state to shard
+            optimizer = optim.OSS(
+                model.parameters(),
+                optim=torch.optim.SGD,
+                lr=0.1,
+                momentum=0.99,
+                group=process_group,
+                broadcast_buffer_size=2 ** 10,
+            )
+            check(optimizer)
+
+            # Model not-fitting in the broadcast bucket
+            model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
+                device
+            )
+
+            # With SGD, Momentum is required to get a state to shard
+            optimizer = optim.OSS(
+                model.parameters(),
+                optim=torch.optim.SGD,
+                lr=0.1,
+                momentum=0.99,
+                group=process_group,
+                broadcast_buffer_size=0,
+            )
+            check(optimizer)
 
     @skip_if_single_gpu
     def test_gradient_clipping(self):
@@ -495,186 +675,6 @@ class TestOSSMultipleRanks(TestOSS):
 
         for opt in [torch.optim.SGD, torch.optim.Adam]:
             check_optimizer_equivalence(opt)
-
-    def test_add_param_group(self):
-        self.dist_init(self.rank)
-
-        # Test with all parameters trainable to begin with
-        def all_trainable():
-            params = []
-            sizes = [9, 7, 5, 3]
-            sizes_world = sizes * self.world_size
-            for size in sizes_world[:-1]:
-                params.append(torch.rand(size, 1))
-
-            # Make sure that the params are trainable, enforces size-based partitioning
-            for p in params:
-                p.requires_grad = True
-
-            o = optim.OSS(params, optim=torch.optim.SGD, lr=0.1)
-
-            assert len(o.param_groups) == 1
-            o.add_param_group({"params": [torch.rand(3, 1)]})
-
-            assert len(o.param_groups) == 2
-            # Verify that added group is added to the correct partition making all have the same elements.
-            assert sum([x.numel() for g in o.optim.param_groups for x in g["params"]]) == sum(sizes)
-            assert len(o.optim.param_groups) == 2
-
-        # Test a pathological config with a first big non-trainable param
-        def some_trainable():
-            params = []
-            for size in [100, 3, 5, 2, 6, 4]:
-                params.append(torch.rand(size, 1))
-
-            # Make sure that the params are trainable, enforces size-based partitioning
-            for p in params[1:]:
-                p.requires_grad = True
-
-            o = optim.OSS(params, optim=torch.optim.SGD, lr=0.1)
-
-            assert len(o.param_groups) == 1
-            o.add_param_group({"params": [torch.rand(3, 1)]})
-
-            assert len(o.param_groups) == 2
-            assert len(o.optim.param_groups) == 2
-
-        all_trainable()
-        some_trainable()
-
-    def test_sharding(self):
-        self.dist_init(self.rank)
-        sizes = [9, 7, 5, 3]
-        params = []
-        for size in sizes * self.world_size:
-            params.append(torch.rand(size, 1, requires_grad=True))
-        o = optim.OSS(params, optim=torch.optim.SGD, lr=0.1)
-        self.assertEqual(sum([x.numel() for x in o.optim.param_groups[0]["params"]]), sum(sizes))
-
-    def test_collect_shards(self):
-        self.dist_init(self.rank)
-        reference_rank = 0
-
-        # Run a dummy step so that the optimizer state dict exists
-        batch, input_width, hidden, target_width = 3, 20, 10, 5
-        target = torch.rand((batch, target_width), device=self.device)
-        inputs = torch.rand((batch, input_width), device=self.device)
-
-        model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
-        model.to(self.device)
-
-        loss_fn = torch.nn.L1Loss()
-        loss_fn.to(self.device)
-
-        # With SGD, Momentum is required to get a state to shard
-        optimizer = optim.OSS(model.parameters(), optim=torch.optim.SGD, lr=0.1, momentum=0.99)
-
-        def closure():
-            optimizer.zero_grad()
-            output = model(inputs)
-            loss = loss_fn(output, target)
-            loss.backward()
-            return loss
-
-        _ = optimizer.step(closure=closure)
-
-        # Update the optimizer state on the reference rank
-        optimizer.consolidate_state_dict(recipient_rank=reference_rank)
-
-        # Fetch the state on the reference rank
-        # - check that it has the correct size
-        # - load it again
-        if self.rank == reference_rank:
-            optimizer_state_dict = optimizer.state_dict()
-            self.assertEqual(len(optimizer_state_dict["state"]), len(list(model.parameters())))
-        else:
-            optimizer_state_dict = {}
-
-        optim_state = [optimizer_state_dict]
-        dist.broadcast_object_list(optim_state, src=reference_rank, group=dist.group.WORLD)
-
-        # Load the optimizer state dict
-        optimizer.load_state_dict(optim_state[0])
-
-    def test_multiple_groups(self):
-        # Only work with the even ranks, to check that the global_rank indexing is properly used
-        if self.world_size < 4:
-            # Not enough ranks to test
-            return
-
-        self.dist_init(self.rank)
-        sub_group_ranks = [0, 2]
-        process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend="gloo")
-
-        # Make sure that all the ranks get different training data
-        # So that the sync check in between their models is meaningful
-        torch.manual_seed(self.rank)
-        np.random.seed(self.rank)
-
-        # Standard deep learning setup
-        device = "cpu"
-        epochs, batch, input_width, hidden, target_width = 5, 3, 20, 10, 5
-        loss_fn = torch.nn.L1Loss().to(device)
-
-        def check(optimizer):
-            # Just run a couple of epochs, check that the model is properly updated
-            for _ in range(epochs):
-                target = torch.rand((batch, target_width), device=device)
-                inputs = torch.rand((batch, input_width), device=device)
-
-                def closure():
-                    optimizer.zero_grad()
-                    output = model(inputs)
-                    loss = loss_fn(output, target)
-                    loss /= self.world_size
-                    loss.backward()
-                    dist.all_reduce(loss, group=process_group)  # Not strictly needed for the test below
-
-                    return loss
-
-                _ = optimizer.step(closure=closure)
-
-                # Check that all the params are the same on all ranks
-                for pg in optimizer.param_groups:
-                    for p in pg["params"]:
-                        receptacle = [p.clone() for _ in sub_group_ranks] if self.rank == 0 else []
-                        dist.gather(p, receptacle, dst=0, group=process_group)
-                        if self.rank == 0:
-                            for sync_p in receptacle[1:]:
-                                assert torch.all(torch.eq(receptacle[0], sync_p)), "Models differ in between ranks"
-
-        if self.rank in sub_group_ranks:
-            # Model fitting in the broadcast bucket
-            model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
-                device
-            )
-
-            # With SGD, Momentum is required to get a state to shard
-            optimizer = optim.OSS(
-                model.parameters(),
-                optim=torch.optim.SGD,
-                lr=0.1,
-                momentum=0.99,
-                group=process_group,
-                broadcast_buffer_size=2 ** 10,
-            )
-            check(optimizer)
-
-            # Model not-fitting in the broadcast bucket
-            model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
-                device
-            )
-
-            # With SGD, Momentum is required to get a state to shard
-            optimizer = optim.OSS(
-                model.parameters(),
-                optim=torch.optim.SGD,
-                lr=0.1,
-                momentum=0.99,
-                group=process_group,
-                broadcast_buffer_size=0,
-            )
-            check(optimizer)
 
 
 if __name__ == "__main__":
