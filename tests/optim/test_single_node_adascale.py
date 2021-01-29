@@ -218,7 +218,7 @@ def test_add_param_group(debias_ewma):
         model1.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0]).reshape(2, 2))
         model1.bias.fill_(0.1)
     optim = AdaScale(SGD(model1.parameters(), lr=0.1), num_gradients_to_accumulate=2, debias_ewma=debias_ewma)
-    assert len(optim._hook_handles) == 2
+    assert len(optim._hook_handles) == 2, len(optim._hook_handles)
 
     model2 = Linear(2, 3, bias=True)
     with torch.no_grad():
@@ -226,7 +226,7 @@ def test_add_param_group(debias_ewma):
         model2.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).reshape(3, 2))
         model2.bias.fill_(0.2)
     optim.add_param_group({"params": model2.parameters()})
-    assert len(optim._hook_handles) == 4
+    assert len(optim._hook_handles) == 4, len(optim._hook_handles)
 
     # make sure we can run the model.
     model = Sequential(model1, model2).cuda()
@@ -253,7 +253,7 @@ def test_add_param_group(debias_ewma):
         model3.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] * 2).reshape(4, 3))
         model3.bias.fill_(0.2)
     optim.add_param_group({"params": model3.parameters()})
-    assert len(optim._hook_handles) == 6
+    assert len(optim._hook_handles) == 6, len(optim._hook_handles)
 
     # make sure we can run the model.
     model = Sequential(model1, model2, model3).cuda()

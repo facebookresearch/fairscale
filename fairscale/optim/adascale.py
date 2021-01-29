@@ -514,8 +514,9 @@ class AdaScale(Optimizer):
         # Extend the states.
         for name in self._state.keys():
             assert name.startswith("grad_sqr_avg") or name.startswith("grad_var_avg"), name
-            if isinstance(self._state[name], int):
-                # This is the "_count" variable.
+            if name.endswith("_count"):
+                # This is the "_count" variable, should be a 1D int.
+                assert self._state[name].shape == (1,), self._state[name].shape
                 continue
             # must be a np array, extend it with the right value and check the shape.
             val = 1 if name == "grad_sqr_avg" else 0
