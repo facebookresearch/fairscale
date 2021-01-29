@@ -25,8 +25,8 @@ def get_benchmark_config():
     }
 
 
-def get_golden_real_stats(single_process=True):
-    if single_process:
+def get_golden_real_stats(multiprocess=False):
+    if not multiprocess:
         return {
             "avg_wps": 703.778,
             "std_dev_wps": 5.732,
