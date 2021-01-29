@@ -31,15 +31,16 @@ from fairscale.nn.model_parallel.initialize import (
     get_pipeline_parallel_group,
     initialize_model_parallel,
 )
-from fairscale.nn.pipe import LazyModule, MultiProcessPipe
+from fairscale.nn.pipe import AsyncPipe, LazyModule, MultiProcessPipe
+from fairscale.nn.pipe.types import PipelineStyle
 from fairscale.utils.testing import get_worker_map, set_random_seed, torch_spawn, torch_version
 
 
 @torch_spawn([2])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def parameters(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def parameters(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
-    pipe = MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=1)
+    pipe = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=1)
     if torch.distributed.get_rank() == 0:
         assert list(pipe.parameters()) != []
     else:
@@ -107,8 +108,8 @@ def mpi():
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def public_attrs(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def public_attrs(pipe_class):
     class MyString:
         def __init__(self, value):
             self.value = value
@@ -118,14 +119,7 @@ def public_attrs(pipeline_style):
 
     model = nn.Sequential(nn.Linear(1, 1))
 
-    pipe = MultiProcessPipe(
-        model,
-        balance=(1,),
-        style=pipeline_style,
-        worker_map=get_worker_map(),
-        chunks=42.000,
-        checkpoint=MyString("always"),
-    )
+    pipe = pipe_class(model, balance=(1,), worker_map=get_worker_map(), chunks=42.000, checkpoint=MyString("always"),)
 
     assert pipe.balance == [1]
     assert pipe.chunks == 42
@@ -136,13 +130,13 @@ def public_attrs(pipeline_style):
 
 @torch_spawn([2])
 @pytest.mark.parametrize("balance", [[2], [1, 1]])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def sequential_like(balance, pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def sequential_like(balance, pipe_class):
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
 
     model = nn.Sequential(a, b)
-    model = MultiProcessPipe(model, balance, style=pipeline_style, worker_map=get_worker_map())
+    model = pipe_class(model, balance, worker_map=get_worker_map())
 
     if balance == [2]:
         if torch.distributed.get_rank() == 0:
@@ -175,62 +169,62 @@ def sequential_like(balance, pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def balance_wrong_length(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def balance_wrong_length(pipe_class):
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
 
     model = nn.Sequential(a, b)
 
     with pytest.raises(ValueError):
-        MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map())
+        pipe_class(model, balance=[1], worker_map=get_worker_map())
 
     with pytest.raises(ValueError):
-        MultiProcessPipe(model, balance=[3], style=pipeline_style, worker_map=get_worker_map())
+        pipe_class(model, balance=[3], worker_map=get_worker_map())
 
 
 @torch_spawn([2])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def balance_less_than_1(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def balance_less_than_1(pipe_class):
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
 
     model = nn.Sequential(a, b)
 
     with pytest.raises(ValueError):
-        MultiProcessPipe(model, balance=[0, 2], style=pipeline_style, worker_map=get_worker_map())
+        pipe_class(model, balance=[0, 2], worker_map=get_worker_map())
 
     with pytest.raises(ValueError):
-        MultiProcessPipe(model, balance=[-1, 3], style=pipeline_style, worker_map=get_worker_map())
+        pipe_class(model, balance=[-1, 3], worker_map=get_worker_map())
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def chunks_less_than_1(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def chunks_less_than_1(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
 
     with pytest.raises(ValueError):
-        MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=0)
+        pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=0)
 
     with pytest.raises(ValueError):
-        MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=-1)
+        pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=-1)
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def too_few_devices(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def too_few_devices(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1), nn.Linear(1, 1), nn.Linear(1, 1), nn.Linear(1, 1))
 
     with pytest.raises(IndexError):
         # len(balance) > len(group.size())
-        model = MultiProcessPipe(model, balance=[1, 1, 1, 1], style=pipeline_style, worker_map=get_worker_map())
+        model = pipe_class(model, balance=[1, 1, 1, 1], worker_map=get_worker_map())
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def batch_size_indivisible(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def batch_size_indivisible(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
-    model = MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=4)
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=4)
 
     with pytest.warns(None) as record:
         model(torch.rand(7, 1))
@@ -240,10 +234,10 @@ def batch_size_indivisible(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def batch_size_small(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def batch_size_small(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
-    model = MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=4)
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=4)
 
     with pytest.warns(None) as record:
         model(torch.rand(2, 1))
@@ -253,8 +247,8 @@ def batch_size_small(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def checkpoint_mode(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def checkpoint_mode(pipe_class):
     def count_grad_fn(grad_fn, name, visited=set()):
         if grad_fn in visited:
             return 0
@@ -273,32 +267,14 @@ def checkpoint_mode(pipeline_style):
     model = nn.Sequential(nn.Linear(1, 1))
     input = torch.rand(2, 1)
 
-    always = MultiProcessPipe(
-        model,
-        balance=[1],
-        style=pipeline_style,
-        worker_map=get_worker_map(),
-        chunks=2,
-        checkpoint="always",
-        pipelined_backward=False,
+    always = pipe_class(
+        model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="always", pipelined_backward=False,
     )
-    except_last = MultiProcessPipe(
-        model,
-        balance=[1],
-        style=pipeline_style,
-        worker_map=get_worker_map(),
-        chunks=2,
-        checkpoint="except_last",
-        pipelined_backward=False,
+    except_last = pipe_class(
+        model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="except_last", pipelined_backward=False,
     )
-    never = MultiProcessPipe(
-        model,
-        balance=[1],
-        style=pipeline_style,
-        worker_map=get_worker_map(),
-        chunks=2,
-        checkpoint="never",
-        pipelined_backward=False,
+    never = pipe_class(
+        model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="never", pipelined_backward=False,
     )
 
     always_output = always(input)
@@ -311,45 +287,34 @@ def checkpoint_mode(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def checkpoint_mode_invalid(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def checkpoint_mode_invalid(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
 
     with pytest.raises(ValueError, match="checkpoint is not one of 'always', 'except_last', or 'never'"):
-        MultiProcessPipe(
-            model,
-            balance=[1],
-            style=pipeline_style,
-            worker_map=get_worker_map(),
-            chunks=2,
-            checkpoint="INVALID_CHECKPOINT",
+        pipe_class(
+            model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="INVALID_CHECKPOINT",
         )
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def checkpoint_mode_when_chunks_1(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def checkpoint_mode_when_chunks_1(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
 
     # All checkpoint modes are fine.
-    MultiProcessPipe(
-        model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=1, checkpoint="except_last",
+    pipe_class(
+        model, balance=[1], worker_map=get_worker_map(), chunks=1, checkpoint="except_last",
     )
-    MultiProcessPipe(
-        model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=1, checkpoint="always"
-    )
-    MultiProcessPipe(
-        model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=1, checkpoint="never"
-    )
+    pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=1, checkpoint="always")
+    pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=1, checkpoint="never")
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def checkpoint_eval(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def checkpoint_eval(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
-    model = MultiProcessPipe(
-        model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=2, pipelined_backward=False,
-    )
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, pipelined_backward=False,)
     input = torch.rand(2, 1)
 
     def find_grad_fn(grad_fn, name):
@@ -375,8 +340,8 @@ def checkpoint_eval(pipeline_style):
 
 @torch_spawn([2])
 @pytest.mark.xfail(torch_version() < (1, 6, 0), reason="Doesn't work on torch < 1.6.0", strict=True)
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def checkpoint_non_float_input(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def checkpoint_non_float_input(pipe_class):
     class ForkNonFloat(nn.Module):
         def forward(self, input):
             return (input * 2, torch.tensor([False]))
@@ -386,14 +351,8 @@ def checkpoint_non_float_input(pipeline_style):
             return input[0] * 2
 
     model = nn.Sequential(ForkNonFloat(), JoinNonFloat())
-    model = MultiProcessPipe(
-        model,
-        balance=[1, 1],
-        style=pipeline_style,
-        worker_map=get_worker_map(),
-        chunks=1,
-        checkpoint="always",
-        pipelined_backward=False,
+    model = pipe_class(
+        model, balance=[1, 1], worker_map=get_worker_map(), chunks=1, checkpoint="always", pipelined_backward=False,
     )
 
     input = torch.rand(1, requires_grad=True)
@@ -401,17 +360,17 @@ def checkpoint_non_float_input(pipeline_style):
     if model.group.rank() == 1:
         # with torch.autograd.detect_anomaly():
         output.backward()
-    elif pipeline_style == MultiProcessPipe.MultiProcess:
+    elif pipe_class == MultiProcessPipe:
         model.back_helper(output)
 
     torch.distributed.barrier()
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def no_grad(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def no_grad(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
-    model = MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=2)
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2)
     input = torch.rand(2, 1)
 
     latent = None
@@ -433,8 +392,8 @@ def no_grad(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def exception(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def exception(pipe_class):
     class ExpectedException(Exception):
         pass
 
@@ -443,7 +402,7 @@ def exception(pipeline_style):
             raise ExpectedException()
 
     model = nn.Sequential(Raise())
-    model = MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=1)
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=1)
 
     with pytest.raises(ExpectedException):
         model(torch.rand(1))
@@ -453,8 +412,8 @@ def exception(pipeline_style):
 @torch_spawn([4])
 @pytest.mark.skipif(torch.cuda.is_available() and torch.cuda.device_count() < 4, reason="Not enough GPUs")
 @pytest.mark.xfail(strict=True)
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def exception_early_stop_asap(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def exception_early_stop_asap(pipe_class):
     """Even the first partitions have finished to process, the partition before
     the failed partition hould be killed as soon as possible.
     """
@@ -482,7 +441,7 @@ def exception_early_stop_asap(pipeline_style):
             raise ExpectedException()
 
     model = nn.Sequential(Pass(), Pass(), Counter(), Raise())
-    model = MultiProcessPipe(model, [1, 1, 1, 1], style=pipeline_style, worker_map=get_worker_map(), chunks=3)
+    model = pipe_class(model, [1, 1, 1, 1], worker_map=get_worker_map(), chunks=3)
 
     with pytest.raises(ExpectedException):
         model(torch.rand(3))
@@ -492,8 +451,8 @@ def exception_early_stop_asap(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def input_pair(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def input_pair(pipe_class):
     class Two(nn.Module):
         def __init__(self):
             super().__init__()
@@ -505,9 +464,7 @@ def input_pair(pipeline_style):
             return (self.fc_a(a), self.fc_b(b))
 
     model = nn.Sequential(Two())
-    model = MultiProcessPipe(
-        model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=2, pipelined_backward=False,
-    )
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, pipelined_backward=False,)
 
     a = torch.rand(10, 1, requires_grad=True)
     b = torch.rand(10, 1, requires_grad=True)
@@ -521,8 +478,8 @@ def input_pair(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def input_singleton(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def input_singleton(pipe_class):
     class One(nn.Module):
         def __init__(self):
             super().__init__()
@@ -533,9 +490,7 @@ def input_singleton(pipeline_style):
             return (self.fc(a),)
 
     model = nn.Sequential(One())
-    model = MultiProcessPipe(
-        model, balance=[1], style=pipeline_style, worker_map=get_worker_map(), chunks=2, pipelined_backward=False,
-    )
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, pipelined_backward=False,)
 
     a = torch.rand(10, 1, requires_grad=True)
 
@@ -548,10 +503,10 @@ def input_singleton(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def input_varargs(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def input_varargs(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
-    model = MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map())
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map())
 
     a = torch.rand(1)
     b = torch.rand(1)
@@ -562,14 +517,14 @@ def input_varargs(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def non_tensor(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def non_tensor(pipe_class):
     class NonTensor(nn.Module):
         def forward(self, _):
             return "hello"
 
     model = nn.Sequential(NonTensor())
-    model = MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map())
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map())
     x = torch.rand(1)
 
     # TypeError: expected Tensor as element 0 in argument 0, but got str
@@ -582,14 +537,14 @@ def non_tensor(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def non_tensor_tuple(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def non_tensor_tuple(pipe_class):
     class NonTensorTuple(nn.Module):
         def forward(self, x):
             return (x, "hello")
 
     model = nn.Sequential(NonTensorTuple())
-    model = MultiProcessPipe(model, balance=[1], style=pipeline_style, worker_map=get_worker_map())
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map())
     x = torch.rand(1)
 
     # TypeError: CheckpointBackward.forward: expected Variable (got str) for return value 1
@@ -604,8 +559,8 @@ def non_tensor_tuple(pipeline_style):
 @torch_spawn([1])
 @pytest.mark.parametrize("checkpoint", ["never", "always", "except_last"])
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def deferred_batch_norm(checkpoint, lazy, pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def deferred_batch_norm(checkpoint, lazy, pipe_class):
     bn = nn.BatchNorm2d(3)
     pipe_bn = deepcopy(bn)
     pipe_fn = lambda: pipe_bn  # noqa: E731
@@ -613,14 +568,8 @@ def deferred_batch_norm(checkpoint, lazy, pipeline_style):
         model = [LazyModule(pipe_fn)]
     else:
         model = nn.Sequential(pipe_bn)
-    pipe = MultiProcessPipe(
-        model,
-        balance=[1],
-        style=pipeline_style,
-        worker_map=get_worker_map(),
-        chunks=2,
-        checkpoint=checkpoint,
-        deferred_batch_norm=True,
+    pipe = pipe_class(
+        model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint=checkpoint, deferred_batch_norm=True,
     )
 
     x = torch.rand(4, 3, 10, 10)
@@ -634,8 +583,8 @@ def deferred_batch_norm(checkpoint, lazy, pipeline_style):
 @torch_spawn([1])
 @pytest.mark.parametrize("checkpoint", ["never", "always"])
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def deferred_batch_norm_params(checkpoint, lazy, pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def deferred_batch_norm_params(checkpoint, lazy, pipe_class):
     bn = nn.BatchNorm2d(3)
     pipe_bn = deepcopy(bn)
     pipe_fn = lambda: pipe_bn  # noqa: E731
@@ -643,14 +592,8 @@ def deferred_batch_norm_params(checkpoint, lazy, pipeline_style):
         model = [LazyModule(pipe_fn)]
     else:
         model = nn.Sequential(pipe_bn)
-    pipe = MultiProcessPipe(
-        model,
-        balance=[1],
-        style=pipeline_style,
-        worker_map=get_worker_map(),
-        chunks=1,
-        checkpoint=checkpoint,
-        deferred_batch_norm=True,
+    pipe = pipe_class(
+        model, balance=[1], worker_map=get_worker_map(), chunks=1, checkpoint=checkpoint, deferred_batch_norm=True,
     )
 
     x = torch.rand(4, 3, 10, 10)
@@ -665,15 +608,15 @@ def deferred_batch_norm_params(checkpoint, lazy, pipeline_style):
 
 
 @torch_spawn([4])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def devices(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def devices(pipe_class):
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
     c = nn.Linear(1, 1)
 
     # There are extra two ranks.
     model = nn.Sequential(a, b, c)
-    model = MultiProcessPipe(model, [1, 1, 1], style=pipeline_style, worker_map=get_worker_map())
+    model = pipe_class(model, [1, 1, 1], worker_map=get_worker_map())
 
     # Extra devices must be discarded.
     if model.group.rank() == 3:
@@ -681,13 +624,13 @@ def devices(pipeline_style):
 
 
 @torch_spawn([2])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def partitions(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def partitions(pipe_class):
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
 
     model = nn.Sequential(a, b)
-    model = MultiProcessPipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map())
+    model = pipe_class(model, [1, 1], worker_map=get_worker_map())
 
     assert isinstance(model.partitions, list)
     assert len(model) == 1
@@ -701,13 +644,13 @@ def partitions(pipeline_style):
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def deny_moving(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def deny_moving(pipe_class):
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
 
     model = nn.Sequential(a, b)
-    model = MultiProcessPipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map())
+    model = pipe_class(model, [1, 1], worker_map=get_worker_map())
 
     model.cuda()
     model.cpu()
@@ -725,11 +668,11 @@ def deny_moving(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def empty_module(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def empty_module(pipe_class):
     # Empty sequential module is not illegal.
     model = nn.Sequential()
-    model = MultiProcessPipe(model, [], style=pipeline_style, worker_map=get_worker_map())
+    model = pipe_class(model, [], worker_map=get_worker_map())
 
     assert model(torch.tensor([42])) == torch.tensor([42])
     assert model((torch.tensor([42]),)) == (torch.tensor([42]),)
@@ -741,13 +684,13 @@ def empty_module(pipeline_style):
 
 
 @torch_spawn([2])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def named_children(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def named_children(pipe_class):
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
 
     model = nn.Sequential(OrderedDict([("a", a), ("b", b)]))
-    model = MultiProcessPipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map())
+    model = pipe_class(model, [1, 1], worker_map=get_worker_map())
 
     names = set(n for n, _ in model.named_modules())
     if model.group.rank() == 0:
@@ -762,24 +705,24 @@ def named_children(pipeline_style):
 
 
 @torch_spawn([1])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def recommend_auto_balance(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def recommend_auto_balance(pipe_class):
     with pytest.raises(ValueError, match="fairscale.nn.pipe.balance"):
         # balance is required
-        MultiProcessPipe(nn.Sequential())
+        pipe_class(nn.Sequential())
 
     with pytest.raises(ValueError, match="fairscale.nn.pipe.balance"):
         # module and sum of balance have differen length (module: 0, sum of balance: 1)
-        MultiProcessPipe(nn.Sequential(), [1])
+        pipe_class(nn.Sequential(), [1])
 
     with pytest.raises(ValueError, match="fairscale.nn.pipe.balance"):
         # module and sum of balance have different length (module: 2, sum of balance: 1)
-        MultiProcessPipe(nn.Sequential(nn.Linear(1, 1), nn.Linear(1, 1)), [1])
+        pipe_class(nn.Sequential(nn.Linear(1, 1), nn.Linear(1, 1)), [1])
 
 
 @torch_spawn([2])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def lazy_construction(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def lazy_construction(pipe_class):
     init_count = 0
 
     class Custom(nn.Module):
@@ -798,7 +741,7 @@ def lazy_construction(pipeline_style):
         LazyModule(lambda: Custom()),
     ]
 
-    pipe = MultiProcessPipe(model, balance=[2, 2], style=pipeline_style, worker_map=get_worker_map())
+    pipe = pipe_class(model, balance=[2, 2], worker_map=get_worker_map())
 
     assert isinstance(pipe[0], Custom)
     assert isinstance(pipe[1], Custom)
@@ -808,18 +751,18 @@ def lazy_construction(pipeline_style):
 
 @torch_spawn([2])
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" in os.environ, reason="doesn't apply to mpi")
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def missing_worker_map(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def missing_worker_map(pipe_class):
     model = nn.Sequential(nn.ReLU(), nn.ReLU())
 
     with pytest.raises(ValueError, match="'RpcTransport' requires 'worker_map' to be set"):
-        MultiProcessPipe(model, [1, 1], style=pipeline_style)
+        pipe_class(model, [1, 1])
 
 
 @torch_spawn([2])
 @pytest.mark.skip(reason="currently broken")
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def verify_module_duplicate_parameters_on_distinct_partitions(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def verify_module_duplicate_parameters_on_distinct_partitions(pipe_class):
     class Surrogate(nn.Module):
         def __init__(self, module):
             super().__init__()
@@ -830,23 +773,23 @@ def verify_module_duplicate_parameters_on_distinct_partitions(pipeline_style):
 
     # FIXME(tom) can't have duplicate params with separate processes
     with pytest.raises(ValueError, match="module with duplicate parameters on distinct devices is not supported"):
-        MultiProcessPipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map())
+        pipe_class(model, [1, 1], worker_map=get_worker_map())
 
 
 @torch_spawn([4])
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def pipelined_backward(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def pipelined_backward(pipe_class):
     model = nn.Sequential(nn.ReLU(), nn.ReLU())
 
     destroy_model_parallel()
     initialize_model_parallel(1, 4)
-    pipe = MultiProcessPipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map())
+    pipe = pipe_class(model, [1, 1], worker_map=get_worker_map())
 
     assert pipe.pipelined_backward is False
 
     destroy_model_parallel()
     initialize_model_parallel(2, 2)
-    pipe = MultiProcessPipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map())
+    pipe = pipe_class(model, [1, 1], worker_map=get_worker_map())
 
     assert pipe.pipelined_backward is True
 
@@ -855,9 +798,7 @@ def pipelined_backward(pipeline_style):
 def async_event_loop():
 
     model = nn.Sequential(nn.Linear(10, 10), nn.ReLU(), nn.Linear(10, 10), nn.ReLU())
-    pipe = MultiProcessPipe(
-        model, [1, 1, 1, 1], style=MultiProcessPipe.AsyncSchedule, worker_map=get_worker_map(), chunks=10
-    )
+    pipe = AsynPipe(model, [1, 1, 1, 1], worker_map=get_worker_map(), chunks=10)
 
     inputs = torch.rand(100, 10)
 
@@ -873,7 +814,7 @@ def reuse_lazy():
         reused = LazyModule(lambda: nn.Linear(10, 10))
         model = [reused, nn.Linear(10, 10), nn.ReLU(), reused, nn.ReLU(), reused, nn.ReLU()]
         # model = [reused, reused, nn.Linear(10, 10), nn.ReLU(), reused, reused, nn.ReLU(), reused, reused, nn.ReLU()]
-        pipe = MultiProcessPipe(model, [3, 1, 1], style=MultiProcessPipe.AsyncSchedule, worker_map=get_worker_map())
+        pipe = AsyncPipe(model, [3, 1, 1], worker_map=get_worker_map())
         pipe.eval()
         output = pipe(torch.rand(10))
 
@@ -891,7 +832,7 @@ def reuse_lazy():
     # ensure identical weights but no sharing between model and pipe
     reused = nn.Linear(10, 10)
     layers = [reused, nn.Linear(10, 10), nn.ReLU(), reused, nn.ReLU(), reused, nn.ReLU()]
-    pipe = MultiProcessPipe(layers, [3, 1, 1], style=MultiProcessPipe.AsyncSchedule, worker_map=get_worker_map())
+    pipe = AsyncPipe(layers, [3, 1, 1], worker_map=get_worker_map())
     pipe.eval()
     model_optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     pipe_optimizer = torch.optim.SGD(pipe.parameters(), lr=0.01, momentum=0.9) if len(list(pipe.parameters())) else None
@@ -964,7 +905,7 @@ def test_instantiate_partition():
         # instantiated model
         for rank in range(len(balance)):
             instantiated = instantiate_partition(
-                model, balance, FakeGroup(rank, len(balance)), MultiProcessPipe.AsyncSchedule
+                model, balance, FakeGroup(rank, len(balance)), PipelineStyle.AsyncSchedule
             )
             for part in instantiated:
                 assert isinstance(part.module, nn.Sequential)

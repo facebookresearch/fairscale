@@ -13,6 +13,7 @@ from torch.distributed.distributed_c10d import _get_global_rank
 
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 
+from .async_pipe import AsyncPipe
 from .multiprocess_pipe import MultiProcessPipe
 from .types import EVENT_LOOP_QUEUE, PipeMessage, TensorOrTensors
 
@@ -105,10 +106,9 @@ class PipeRPCWrapper(nn.Module):
         else:
             kwargs["group"] = self.group
 
-        kwargs["style"] = MultiProcessPipe.AsyncSchedule
         kwargs["input_device"] = torch.device("cuda", torch.cuda.current_device())
 
-        self.model = MultiProcessPipe(*args, **kwargs)
+        self.model = AsyncPipe(*args, **kwargs)
         self.worker_map = kwargs["worker_map"]
         self._foreach_worker(self._register_remote_model, args=(args, kwargs))
         self.model.cuda()

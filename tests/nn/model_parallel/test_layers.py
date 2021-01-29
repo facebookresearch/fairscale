@@ -431,7 +431,6 @@ def run_test_pipe(rank, world_size, filename, filename_rpc, skip_dist_init=False
     model[2].weight.data = saved_weight_2
 
     worker_map = {i: f"Test{i}" for i in range(torch.distributed.get_world_size())}
-    style = MultiProcessPipe.MultiProcess  # MultiProcessPipe.AsyncSchedule
 
     if pipe_world_size == 2:
         print(f"actually doing pipe stuff now")
@@ -440,7 +439,6 @@ def run_test_pipe(rank, world_size, filename, filename_rpc, skip_dist_init=False
         pipe_model = MultiProcessPipe(
             model,
             [2, 1],
-            style=style,
             group=pipeline_devices,
             worker_map=worker_map,
             input_device=torch.cuda.current_device(),

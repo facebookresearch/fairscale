@@ -37,7 +37,6 @@ def create_task_without_skip_trackers(
     checkpoint_stop: int, i: int, j: int, batch: Batch, partition: nn.Sequential,
 ) -> Task:
     # Determine whether checkpointing or not.
-    # style is guaranteed to be PipelineStyle.AsyncSchedule
     if i < checkpoint_stop:
 
         def function(
