@@ -3,13 +3,17 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import torch
 
+"""Useful functions to deal with tensor types with other python container types."""
 
-def apply_to_tensors(fn, container):
-    def _apply(x):
+
+def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
+    """Recursively apply to all tensor in 4 kinds of container types."""
+
+    def _apply(x: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
         if torch.is_tensor(x):
             return fn(x)
         elif isinstance(x, dict):
@@ -26,7 +30,7 @@ def apply_to_tensors(fn, container):
     return _apply(container)
 
 
-def pack_kwargs(*args, **kwargs) -> Tuple[List[str], List[Any]]:
+def pack_kwargs(*args: Any, **kwargs: Any) -> Tuple[List[str], List[Any]]:
     """
     Usage::
 
@@ -44,6 +48,7 @@ def pack_kwargs(*args, **kwargs) -> Tuple[List[str], List[Any]]:
 
 
 def unpack_kwargs(kwarg_keys: List[str], flat_args: List[Any]) -> Tuple[List[Any], Dict[str, Any]]:
+    """See pack_kwargs."""
     if len(kwarg_keys) == 0:
         return flat_args, {}
     args = flat_args[: -len(kwarg_keys)]
@@ -51,7 +56,9 @@ def unpack_kwargs(kwarg_keys: List[str], flat_args: List[Any]) -> Tuple[List[Any
     return args, kwargs
 
 
-def split_non_tensors(mixed: Union[torch.Tensor, Tuple[Any]]) -> Tuple[Tuple[torch.Tensor], Dict[str, List[Any]]]:
+def split_non_tensors(
+    mixed: Union[torch.Tensor, Tuple[Any]]
+) -> Tuple[Tuple[torch.Tensor, ...], Optional[Dict[str, List[Any]]]]:
     """
     Usage::
 
@@ -63,8 +70,8 @@ def split_non_tensors(mixed: Union[torch.Tensor, Tuple[Any]]) -> Tuple[Tuple[tor
     """
     if isinstance(mixed, torch.Tensor):
         return (mixed,), None
-    tensors = []
-    packed_non_tensors = {"is_tensor": [], "objects": []}
+    tensors: List[torch.Tensor] = []
+    packed_non_tensors: Dict[str, List[Any]] = {"is_tensor": [], "objects": []}
     for o in mixed:
         if isinstance(o, torch.Tensor):
             packed_non_tensors["is_tensor"].append(True)
@@ -75,7 +82,8 @@ def split_non_tensors(mixed: Union[torch.Tensor, Tuple[Any]]) -> Tuple[Tuple[tor
     return tuple(tensors), packed_non_tensors
 
 
-def unpack_non_tensors(tensors: Tuple[torch.Tensor], packed_non_tensors: Dict[str, List[Any]],) -> Tuple[Any]:
+def unpack_non_tensors(tensors: Tuple[torch.Tensor], packed_non_tensors: Dict[str, List[Any]]) -> Tuple[Any, ...]:
+    """See split_non_tensors."""
     if packed_non_tensors is None:
         return tensors
     assert isinstance(packed_non_tensors, dict)
