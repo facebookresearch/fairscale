@@ -505,8 +505,7 @@ def run_test_pipe(rank, world_size, filename, filename_rpc, skip_dist_init=False
             failed = False
             with torch.autograd.profiler.profile() as prof:
                 try:
-                    if style == MultiProcessPipe.MultiProcess:
-                        pipe_model.back_helper(pipe_output)
+                    pipe_model.back_helper(pipe_output)
                 except Exception as e:
                     failed = True
                     print(f"got {e} while doing backward, deadlock?")
