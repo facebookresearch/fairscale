@@ -275,7 +275,7 @@ class TestOSSMultipleRanks(TestOSS):
             self.assertEqual(m.bias, torch.tensor([1.75], device=self.device))
 
     def test_step_with_closure(self):
-        if self.dist_init(self.rank):
+        if self.world_size == 4 and self.dist_init(self.rank):
             x_val = self.rank + 1
             weight = 1.0
             bias = 2.0
