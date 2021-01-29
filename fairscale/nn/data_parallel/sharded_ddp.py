@@ -64,6 +64,13 @@ class ShardedDataParallel(nn.Module):
             * Pytorch and Apex AMP implementations will hang when used in conjunction with `ShardedDDP`.
                 One needs a `shard-aware grad scaler<ShardedGradScaler>`, which is proposed in `fairscale.optim.grad_scaler`,
                 compatible with PytorchAMP.
+
+    .. warning:
+        ShardedDDP uses buckets to speed up the network communications. If some parameters require_grad but are not actually
+        used, there is a chance that this would prevent the bucket mechanism to function, and that this could not be automatically
+        handled. In that case ShardedDDP will raise an exception and suggest to either remove the unused parameters from your model
+        (https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html?highlight=unused_parameters is helpful)
+        or set `reduce_buffer_size` to 0
     """
 
     def __init__(
@@ -121,6 +128,10 @@ class ShardedDataParallel(nn.Module):
 
         # - setup buckets and tensor views
         model_size = sum([p.numel() for p in self.module.parameters()])
+        if dist.get_world_size(self.process_group) <= 8:
+            logging.info("Assuming single node environment. De-activating ShardedDDP buckets")
+            reduce_buffer_size = 0
+
         self.buffer_max_size = min(reduce_buffer_size, model_size)
         logging.info(
             "ShardedDDP bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
@@ -210,10 +221,10 @@ class ShardedDataParallel(nn.Module):
             for o in self.buckets.keys():
                 for d in self.buckets[o].keys():
                     for bucket in self.buckets[o][d]:
-                        assert (
-                            bucket.sent
-                        ), "A bucket failed being sent, possible unused parameters. See \
-                        https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html?highlight=unused_parameters"
+                        assert bucket.sent, (
+                            "A bucket failed being sent, probably unused parameters."
+                            + "Either remove the unused parameter or de-activate ShardedDDP buckets -set reduce_buffer_size to 0-"
+                        )
 
                         bucket.reset()
 
@@ -320,24 +331,30 @@ class ShardedDataParallel(nn.Module):
                         self._grad_accs.append(grad_acc)  # keep this function in scope
 
         #  Add a hook on the module to flush the buckets, if needed
-        def bucket_flush(*unused: Any) -> None:
-            handle = None
-            assert self._bucket_iterator is not None
+        if self.use_buckets:
 
-            for bucket in self._bucket_iterator:
-                if not bucket.sent:
-                    # Reduce the bucket. Some parameters went unused and this bucket was not flushed
-                    bucket.buffer.mul_(self.world_size_scaling)
-                    bucket.sent = True
-                    handle = dist.reduce(
-                        tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
-                    )
+            def bucket_flush(*unused: Any) -> None:
+                handle = None
 
-            # Only wait on the last handle
-            if handle:
-                handle.wait()
+                for bucket_optim in self.buckets.values():
+                    for bucket_rank in bucket_optim.values():
+                        for bucket in bucket_rank:
+                            if not bucket.sent:
+                                # Reduce the bucket. Some parameters went unused and this bucket was not flushed
+                                bucket.buffer.mul_(self.world_size_scaling)
+                                bucket.sent = True
+                                handle = dist.reduce(
+                                    tensor=bucket.buffer,
+                                    dst=bucket.destination,
+                                    group=self.process_group,
+                                    async_op=True,
+                                )
 
-        self.module.register_backward_hook(bucket_flush)
+                # Only wait on the last handle
+                if handle:
+                    handle.wait()
+
+            self.module.register_backward_hook(bucket_flush)
 
     @torch.no_grad()
     def _sync_params_and_buffers(self) -> None:
@@ -418,5 +435,3 @@ class ShardedDataParallel(nn.Module):
                     bucket.buffer.resize_(offset)
                     if bucket.max_params_checked_in > 0:
                         self._reduced_grads_max[sharded_optimizer] += 1  # one reduce call per bucket
-
-        self._bucket_iterator = (b for o in self.sharded_optimizers for d in self.buckets[o].values() for b in d)
