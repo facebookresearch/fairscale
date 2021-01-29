@@ -289,7 +289,7 @@ class AdaScale(Optimizer):
         if pg_idx is not None:
             return self._state["grad_sqr_avg"][pg_idx]
         else:
-            return np.sum(self._state["grad_sqr_avg"])
+            return float(np.sum(self._state["grad_sqr_avg"]))
 
     def _grad_var_avg(self, pg_idx: Optional[int] = None) -> float:
         """
@@ -307,7 +307,7 @@ class AdaScale(Optimizer):
         if pg_idx is not None:
             return self._state["grad_var_avg"][pg_idx]
         else:
-            return np.sum(self._state["grad_var_avg"])
+            return float(np.sum(self._state["grad_var_avg"]))
 
     def gain(self, pg_idx: Optional[int] = None) -> float:
         """
@@ -349,8 +349,8 @@ class AdaScale(Optimizer):
             #       after some iterations are done. But, then the if condition
             #       below will need to be a np.where. I leave this corner
             #       case to a future exercise.
-            count = self._state.get(name + "_count", 0)
-            count += 1
+            count = self._state.get(name + "_count", np.zeros(1))
+            count[0] += 1
             self._state[name + "_count"] = count
             if count < 1 / (1 - self._smoothing):
                 total = self._state.get(name + "_total", None)
@@ -514,8 +514,9 @@ class AdaScale(Optimizer):
         # Extend the states.
         for name in self._state.keys():
             assert name.startswith("grad_sqr_avg") or name.startswith("grad_var_avg"), name
-            if isinstance(self._state[name], int):
-                # This is the "_count" variable.
+            if name.endswith("_count"):
+                # This is the "_count" variable, should be a 1D int.
+                assert self._state[name].shape == (1,), self._state[name].shape
                 continue
             # must be a np array, extend it with the right value and check the shape.
             val = 1 if name == "grad_sqr_avg" else 0

@@ -499,7 +499,6 @@ def run_mp_worker(args, available_workers):
     pipe_model = MultiProcessPipe(
         model,
         balance,
-        style=MultiProcessPipe.AsyncSchedule,
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),

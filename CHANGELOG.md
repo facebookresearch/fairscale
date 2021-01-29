@@ -6,8 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [next rel] - TBD
 ### Added
-- Pytorch compatibility for OSS checkpoints
-- Elastic checkpoints for OSS, world size can vary in between save and loads
+- Bucket calls in ShardedDDP, for faster inter node communications (#327)
 - Tensor views for OSS bucketing, reduced CPU use
 
 ## [0.1.4] - 2021-01-07
