@@ -5,7 +5,6 @@
 
 from collections import OrderedDict, deque
 import copy
-import itertools
 from itertools import chain
 import logging
 from math import inf
@@ -80,6 +79,8 @@ class OSS(Optimizer):
         self._per_device_params: Dict[torch.device, List[List[Parameter]]] = OrderedDict()  # device, rank, params
         self._param_rank: Dict[torch.Tensor, int] = {}
         self._partition_parameters: List[List[dict]] = []
+        self._index_to_param: Dict[int, torch.Tensor] = {}
+        self._param_to_index: Dict[int, int] = {}
 
         # Build the wrapped optimizer, responsible for a shard of the params
         self.group = group if group is not None else dist.group.WORLD
@@ -141,6 +142,24 @@ class OSS(Optimizer):
                     self._partition_parameters[rank].append(param_group_rank)
 
         return self._partition_parameters
+
+    @property
+    def index_to_param(self) -> Dict[int, torch.Tensor]:
+        """ Hash table in between parameter indices in the global optimizer scheme, and the actual params
+        """
+        if len(self._index_to_param) == 0:
+            self._index_to_param = {i: p for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
+
+        return self._index_to_param
+
+    @property
+    def param_to_index(self) -> Dict[int, int]:
+        """ Hash table in between parameter indices in the global optimizer scheme, and the actual params
+        """
+        if len(self._param_to_index) == 0:
+            self._param_to_index = {id(p): i for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
+
+        return self._param_to_index
 
     @property
     def per_device_params(self) -> Dict[torch.device, List[List[Parameter]]]:
@@ -237,7 +256,7 @@ class OSS(Optimizer):
         norm_type = float(norm_type)
 
         # Filter out the grad-less params, concatenate params from all devices
-        local_params = itertools.chain(
+        local_params = chain(
             *[
                 list(filter(lambda x: x.grad is not None, device_params[self.rank]))
                 for device_params in self.per_device_params.values()
@@ -339,9 +358,6 @@ class OSS(Optimizer):
         # - get the pytorch compliant parameter indexing
         state_dict = super().state_dict()
 
-        # - get an id map which links the parameter id to the index in the reference state
-        global_id_map = {id(p): i for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
-
         # - go through the per-shard states, which are all indexed locally
         for rank, s in enumerate(self._all_states):
             # -- match the local indexing and the global partition, update the corresponding saved state globally
@@ -353,7 +369,7 @@ class OSS(Optimizer):
                 for local_param_index in local_pg["params"]:
                     # Update the state, if any
                     if local_param_index in s["state"].keys():
-                        global_id = global_id_map[local_index_to_param_id[local_param_index]]
+                        global_id = self.param_to_index[local_index_to_param_id[local_param_index]]
                         state_dict["state"][global_id] = s["state"][local_param_index]
 
         return state_dict
@@ -369,18 +385,15 @@ class OSS(Optimizer):
         # NOTE: PyTorch 1.5 does not index linearly but with the id(params) at saving time
         # we work around that here by using the fact that the params are ordered as in the param_groups
 
-        # Param index to param map
-        global_id_map = {i: p for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
-
         for i_param, (key, value) in enumerate(state_dict["state"].items()):
-            param = global_id_map[i_param]
+            param = self.index_to_param[i_param]
 
             # Populate the sharded optimizer state on the fly
             if self.param_to_rank[param] != self.rank:
                 state_dict["state"][key] = None
 
-            if key in global_id_map:
-                param = global_id_map[i_param]
+            if key in self.index_to_param:
+                param = self.index_to_param[i_param]
 
                 # Only add this state to the sharded optimizer if it owns this param
                 for pg in self.optim.param_groups:
@@ -479,16 +492,22 @@ class OSS(Optimizer):
         super().add_param_group(param_group)
         if not self.in_super_constructor:
             # Force a re-partitioning
-            self._partition_parameters.clear()
-            self._per_device_params.clear()
-            self._param_rank.clear()
+            self._clear_cache()
 
+            # Update the partition
             param_groups = self.partition_parameters()[self.rank]
             if len(param_groups) == len(self.optim.param_groups) + 1:
                 self.optim.add_param_group(param_groups[-1])
 
             # Update the bucketing strategy accordingly
             self._setup_bucket_strategy()
+
+    def _clear_cache(self) -> None:
+        self._partition_parameters.clear()
+        self._per_device_params.clear()
+        self._param_rank.clear()
+        self._index_to_param.clear()
+        self._param_to_index.clear()
 
     @staticmethod
     def get_global_rank(group: Any, rank: int) -> int:
