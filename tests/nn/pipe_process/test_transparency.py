@@ -21,14 +21,14 @@ import pytest
 import torch
 from torch import nn
 
-from fairscale.nn.pipe import MultiProcessPipe
+from fairscale.nn.pipe import AsyncPipe, MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, set_random_seed, torch_spawn
 
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipeline_style", [MultiProcessPipe.MultiProcess, MultiProcessPipe.AsyncSchedule])
-def simple_linears(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def simple_linears(pipe_class):
     def sum_grad(parameters):
         return sum([p.grad.sum() for p in parameters if p.grad is not None])
 
@@ -54,8 +54,7 @@ def simple_linears(pipeline_style):
 
     zero_grad(model.parameters())
 
-    # With MultiProcessPipe
-    model = MultiProcessPipe(model, [2, 2], style=pipeline_style, worker_map=get_worker_map(), chunks=4)
+    model = pipe_class(model, [2, 2], worker_map=get_worker_map(), chunks=4)
 
     outputs = model(inputs)
     if model.group.rank() == 1:

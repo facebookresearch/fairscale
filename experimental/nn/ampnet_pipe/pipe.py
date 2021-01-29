@@ -11,15 +11,14 @@ from torch import nn
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
 
-from fairscale.nn.pipe import MultiProcessPipe
-from fairscale.nn.pipe.types import PipelineStyle
+from fairscale.nn.pipe import AsyncPipe
 
 from .ampnet import AsyncAMPnetEventLoop
 
 __all__ = ["AMPnetPipe"]
 
 
-class AMPnetPipe(MultiProcessPipe):
+class AMPnetPipe(AsyncPipe):
     """
         AMPnetPipe is the asynchronous version of the MultiProcessPipe implementation
         which avoids the bubble issue, by using stale weights and gradients.
@@ -44,7 +43,6 @@ class AMPnetPipe(MultiProcessPipe):
 
         # AMPnet implementation doesn't handle skip_trackers!
 
-        assert self.pipeline.style is PipelineStyle.AsyncSchedule  # type: ignore
         assert self.group
         rank = self.group.rank()
 

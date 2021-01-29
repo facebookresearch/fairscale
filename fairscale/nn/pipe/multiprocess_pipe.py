@@ -386,9 +386,6 @@ class MultiProcessPipe(Module):
 
     """
 
-    MultiProcess: PipelineStyle = PipelineStyle.MultiProcess
-    AsyncSchedule: PipelineStyle = PipelineStyle.AsyncSchedule
-
     #: The number of layers in each partition.
     balance: List[int] = []
     #                    ^^
