@@ -360,6 +360,7 @@ def verify_lm_run(wps, golden_config, args):
         rank = dist.get_rank()
         print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]))
         current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
+        golden_ref = golden_config["peak_mem_usage"][rank]
         if not current_device_usage < golden_ref * 1.1:
             raise RuntimeError(
                 "Peak memory usage for cuda device {:d} is {:d} which"
