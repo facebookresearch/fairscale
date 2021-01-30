@@ -340,7 +340,7 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
-def verify_lm_run(wps, golden_config):
+def verify_lm_run(wps, golden_config, args):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
     # Verify wps only on the last rank in multiprocess pipe
@@ -401,9 +401,8 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
         )
 
     if len(model.balance) == 4:
-
         if args.model_name == "lm":
-            verify_lm_run(wps, golden_config)
+            verify_lm_run(wps, golden_config, args)
         else:
             raise RuntimeError("Unrecognized args.model_name " % args.model_name)
 
