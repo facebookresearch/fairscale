@@ -32,7 +32,6 @@ from fairscale.nn.model_parallel.initialize import (
     initialize_model_parallel,
 )
 from fairscale.nn.pipe import AsyncPipe, LazyModule, MultiProcessPipe
-from fairscale.nn.pipe.types import PipelineStyle
 from fairscale.utils.testing import get_worker_map, set_random_seed, torch_spawn, torch_version
 
 
@@ -874,9 +873,12 @@ def reuse_lazy():
         assert torch.equal(model_out, pipe_out)
 
 
-def test_instantiate_partition():
+@torch_spawn([1])
+def instantiate_partition():
     from fairscale.nn.pipe.async_schedule import Location
-    from fairscale.nn.pipe.multiprocess_pipe import instantiate_partition
+
+    model = nn.Sequential(nn.Linear(1, 1))
+    pipe = AsyncPipe(model, balance=[1], worker_map=get_worker_map(), chunks=1)
 
     class FakeGroup:
         def __init__(self, rank, size):
@@ -904,9 +906,7 @@ def test_instantiate_partition():
         # Collect `Invocation` and `Invocation` -> `ModuleWrapper` mapping from
         # instantiated model
         for rank in range(len(balance)):
-            instantiated = instantiate_partition(
-                model, balance, FakeGroup(rank, len(balance)), PipelineStyle.AsyncSchedule
-            )
+            instantiated = pipe.instantiate_partition(model, balance, FakeGroup(rank, len(balance)))
             for part in instantiated:
                 assert isinstance(part.module, nn.Sequential)
                 for inv in part.invocations:
