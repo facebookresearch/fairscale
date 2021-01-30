@@ -340,6 +340,17 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
+def verify_peak_memory(rank, std_dev):
+    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]))
+    current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
+    golden_ref = golden_config["peak_mem_usage"][rank]
+    if not current_device_usage < golden_ref * std_dev:
+        raise RuntimeError(
+            "Peak memory usage for cuda device {:d} is {:d} which"
+            "is less than golden reference value of {:d}".format(rank, current_device_usage, golden_ref)
+        )
+
+
 def verify_lm_run(wps, golden_config, args):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
@@ -357,49 +368,32 @@ def verify_lm_run(wps, golden_config, args):
             )
 
     if args.multiprocess:
-        rank = dist.get_rank()
-        print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]))
-        current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
-        golden_ref = golden_config["peak_mem_usage"][rank]
-        if not current_device_usage < golden_ref * 1.5:
-            raise RuntimeError(
-                "Peak memory usage for cuda device {:d} is {:d} which"
-                "is less than golden reference value of {:d}".format(rank, current_device_usage, golden_ref)
-            )
+        verify_peak_memory(dist.get_rank(), 1.5)
     else:
         for i in range(4):
-            print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]))
-
-        # Assert that memory usage on each GPU is within 10% of golden run
-        # Right-hand-side is golden run bytes * 110%
-        for i, golden_ref in zip(range(4), golden_config["peak_mem_usage"]):
-            current_device_usage = torch.cuda.memory_stats(i)["allocated_bytes.all.peak"]
-            if not current_device_usage < golden_ref * 1.1:
-                raise RuntimeError(
-                    "Peak memory usage for cuda device {:d} is {:d} which"
-                    "is less than golden reference value of {:d}".format(i, current_device_usage, golden_ref)
-                )
+            verify_peak_memory(i, 1.1)
 
 
 def benchmark_language_model(model_config, model, benchmark_config, args):
     golden_config = get_golden_config(args.model_name, args)
     epoch = benchmark_config["epochs"]
     start_time = time.time()
-    wps, loss = train(model_config, model, benchmark_config, args)
-    elapsed_time = time.time() - start_time
     if dist.get_rank() == dist.get_world_size() - 1:
         print("-" * 110)
         print("| start of epoch {:1d}".format(epoch))
         print("-" * 110)
+    wps, loss = train(model_config, model, benchmark_config, args)
+    elapsed_time = time.time() - start_time
+    if dist.get_rank() == dist.get_world_size() - 1:
         print("-" * 110)
         print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
         print("-" * 110)
         print("Throughput(wps) is {:.2f}.".format(wps))
-        print(
-            "Peak allocated bytes on cuda:{}: {:1d}".format(
-                dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]
-            )
+    print(
+        "Peak allocated bytes on cuda:{}: {:1d}".format(
+            dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]
         )
+    )
 
     if len(model.balance) == 4:
         if args.model_name == "lm":
@@ -522,7 +516,6 @@ def run_mp_worker(args, available_workers):
     model_config = create_model_config(args, benchmark_config=benchmark_config)
     model = model_config["model"]
 
-    print("get_pipeline_parallel_group().size() ", get_pipeline_parallel_group().size())
     balance = generate_balance(get_pipeline_parallel_group().size(), len(model))
     pipe_model = MultiProcessPipe(
         model,
