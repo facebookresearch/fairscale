@@ -23,7 +23,7 @@ from queue import Empty as QueueEmpty
 from queue import Queue
 from threading import Event
 from types import TracebackType
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Type, Union, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 from torch import Tensor, nn
@@ -171,7 +171,7 @@ class MultiProcessPipeline:
 
     def __init__(
         self,
-        partitions: List[nn.Sequential],
+        partitions: List[ModuleWrapper],
         skip_layout: SkipLayout,
         checkpoint_stop: int,
         style: PipelineStyle,
@@ -180,7 +180,7 @@ class MultiProcessPipeline:
         input_device: Union[None, int, str, torch.device] = None,
         final_stage: bool = False,
     ) -> None:
-        self.partitions: List[ModuleWrapper] = cast(List[ModuleWrapper], partitions)
+        self.partitions = partitions
         self.skip_layout = skip_layout
         self.__checkpoint_stop = checkpoint_stop
         self.style = style
