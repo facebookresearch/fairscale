@@ -340,7 +340,7 @@ def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
 
 
-def verify_peak_memory(rank, std_dev):
+def verify_peak_memory(rank, golden_config, std_dev):
     print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]))
     current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
     golden_ref = golden_config["peak_mem_usage"][rank]
@@ -368,10 +368,10 @@ def verify_lm_run(wps, golden_config, args):
             )
 
     if args.multiprocess:
-        verify_peak_memory(dist.get_rank(), 1.5)
+        verify_peak_memory(dist.get_rank(), golden_config, 1.5)
     else:
         for i in range(4):
-            verify_peak_memory(i, 1.1)
+            verify_peak_memory(i, golden_config, 1.1)
 
 
 def benchmark_language_model(model_config, model, benchmark_config, args):
