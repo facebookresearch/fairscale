@@ -554,12 +554,13 @@ def run_worker(rank, world_size, args):
 def benchmark_multiprocess(rank, world_size, args):
 
     init_method_pgroup = "tcp://localhost:{}".format(MPI_PORT)
+    # TODO(anj-s): Add regression benchmarks for nccl as well.
     torch.distributed.init_process_group(
         backend="gloo", rank=rank, world_size=world_size, init_method=init_method_pgroup
     )
 
     torch.cuda.set_device(rank % torch.cuda.device_count())
-
+    # TODO(anj-s): Move to TensorPipeRpcBackendOptions.
     rpc.init_rpc(
         f"Test{rank}",
         rank=rank,
@@ -603,6 +604,9 @@ parser.add_argument(
 
 if __name__ == "__main__":
     args = parser.parse_args()
+
+    # TODO(anj-s): Remove print statements and introduce logging levels.
+
     if not args.multiprocess:
         print(f"Running single process benchmark with args: {args}")
         benchmark_single_process(args)
