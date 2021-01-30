@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union
 import torch
 from torch import Tensor, nn
 
+from .async_pipeline import AsyncPipeline
 from .async_schedule import Invocation, Location, ModuleWrapper
 from .multiprocess_pipe import MultiProcessPipe, check_balance
-from .multiprocess_pipeline import MultiProcessPipeline
 from .skip.skippable import Skippable
-from .types import LazyModule, PipelineStyle
+from .types import LazyModule
 
 if TYPE_CHECKING:
     Module = nn.Module[TensorOrTensors]
@@ -43,11 +43,10 @@ class AsyncPipe(MultiProcessPipe):
         # The micro-batch index where the checkpointing stops.
         checkpoint_stop = {"always": self.chunks, "except_last": self.chunks - 1, "never": 0}[self.checkpoint]
 
-        self.pipeline = MultiProcessPipeline(
+        self.pipeline = AsyncPipeline(
             self.partitions,
             self._skip_layout,
             checkpoint_stop,
-            style=PipelineStyle.AsyncSchedule,
             group=self.group,
             worker_map=self.worker_map,
             input_device=self.input_device,
