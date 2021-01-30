@@ -873,7 +873,8 @@ def reuse_lazy():
         assert torch.equal(model_out, pipe_out)
 
 
-def test_instantiate_partition():
+@torch_spawn([1])
+def instantiate_partition():
     from fairscale.nn.pipe.async_schedule import Location
 
     model = nn.Sequential(nn.Linear(1, 1))
