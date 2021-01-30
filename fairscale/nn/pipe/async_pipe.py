@@ -19,10 +19,11 @@ from .types import LazyModule, PipelineStyle
 
 if TYPE_CHECKING:
     Module = nn.Module[TensorOrTensors]
+    NamedModules = OrderedDict[str, Module]
 else:
     Module = nn.Module
+    NamedModules = OrderedDict
 
-NamedModules = OrderedDict[str, Module]
 Tensors = Tuple[Tensor, ...]
 TensorOrTensors = Union[Tensor, Tensors]
 
