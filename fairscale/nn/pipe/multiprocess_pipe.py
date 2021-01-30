@@ -36,15 +36,13 @@ from . import microbatch
 from .async_schedule import Invocation, Location, ModuleWrapper
 from .batchnorm import DeferredBatchNorm
 from .multiprocess_pipeline import MultiProcessPipeline
+from .phony import get_phony
 from .skip.layout import SkipLayout, inspect_skip_layout
 from .skip.skippable import Skippable, verify_skippables
 from .types import LazyModule, PipelineStyle
 
 __all__ = ["MultiProcessPipe", "LazyModule"]
 
-
-Device = Union[torch.device, int, str]
-Devices = Union[Iterable[Device], List[Device]]
 
 Tensors = Tuple[Tensor, ...]
 TensorOrTensors = Union[Tensor, Tensors]
@@ -388,9 +386,6 @@ class MultiProcessPipe(Module):
 
     """
 
-    MultiProcess: PipelineStyle = PipelineStyle.MultiProcess
-    AsyncSchedule: PipelineStyle = PipelineStyle.AsyncSchedule
-
     #: The number of layers in each partition.
     balance: List[int] = []
     #                    ^^
@@ -579,10 +574,6 @@ class MultiProcessPipe(Module):
         """
         microbatch.check(input)
 
-        if not self.group:
-            # Empty sequential module is not illegal.
-            return input
-
         if not self.pipeline:
             # No pipeline is not illegal, more ranks than partitions
             return input
@@ -594,18 +585,11 @@ class MultiProcessPipe(Module):
         with self.lock:
             self.pipeline.run(self.training, batches, event)
 
-            if not self.final_stage:
-                # Don't merge micro-batches to avoid unnecessary edges in autograd
-                # graph
-                # FIXME(tom) should figure out a proper type here
-                return batches  # type: ignore
-            else:
+            if self.final_stage:
                 # Merge the micro-batches into one mini-batch.
                 if self.pipelined_backward:
                     with torch.no_grad():
                         output = microbatch.gather(batches)
-
-                    from .phony import get_phony
 
                     phony = get_phony(
                         torch.device(torch.cuda.current_device() if torch.cuda.is_available() else "cpu"),
@@ -614,6 +598,11 @@ class MultiProcessPipe(Module):
                     output = PipelinedBackwardPass.apply(output, batches, phony, True)  # self.retain_graph)
                 else:
                     output = microbatch.gather(batches)
+            else:
+                # Don't merge micro-batches to avoid unnecessary edges in autograd
+                # graph
+                # FIXME(tom) should figure out a proper type here
+                output = batches  # type: ignore
 
             return output
 
@@ -622,7 +611,7 @@ class MultiProcessPipe(Module):
             raise ValueError("back_helper should only be called on non-final stages")
 
         if self.pipeline:
-            self.pipeline.back_helper(list(reversed(output)))
+            self.pipeline.back_helper(output)
 
 
 class PipelinedBackwardPass(torch.autograd.Function):

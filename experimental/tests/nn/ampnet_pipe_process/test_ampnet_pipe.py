@@ -23,7 +23,6 @@ from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader, Dataset
 
 from experimental.nn.ampnet_pipe.pipe import AMPnetPipe
-from fairscale.nn.pipe import MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
@@ -84,14 +83,7 @@ class FakeDataset(Dataset):
 @torch_spawn([2])
 def async_event_loop_interleave_simple():
     model = nn.Sequential(nn.Linear(10, 10), nn.ReLU(inplace=False), nn.Linear(10, 10), nn.ReLU(inplace=False))
-    pipe = AMPnetPipe(
-        module=model,
-        balance=[2, 2],
-        style=MultiProcessPipe.AsyncSchedule,
-        worker_map=get_worker_map(),
-        chunks=10,
-        checkpoint="never",
-    )
+    pipe = AMPnetPipe(module=model, balance=[2, 2], worker_map=get_worker_map(), chunks=10, checkpoint="never",)
     fake_dataset = FakeDataset()
     fake_dataloader = DataLoader(fake_dataset, batch_size=4, shuffle=True, num_workers=0)
     loss = nn.MSELoss()
@@ -102,14 +94,7 @@ def async_event_loop_interleave_simple():
 @torch_spawn([4])
 def async_event_loop_interleave_hard():
     model = nn.Sequential(nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 10))
-    pipe = AMPnetPipe(
-        module=model,
-        balance=[1, 1, 1, 1],
-        style=MultiProcessPipe.AsyncSchedule,
-        worker_map=get_worker_map(),
-        chunks=10,
-        checkpoint="never",
-    )
+    pipe = AMPnetPipe(module=model, balance=[1, 1, 1, 1], worker_map=get_worker_map(), chunks=10, checkpoint="never",)
     fake_dataset = FakeDataset()
     fake_dataloader = DataLoader(fake_dataset, batch_size=4, shuffle=True, num_workers=0)
     loss = nn.MSELoss()

@@ -35,7 +35,6 @@ class LazyModule:
 
 
 class PipelineStyle(Enum):
-    SingleProcess = auto()
     MultiProcess = auto()
     AsyncSchedule = auto()
 
