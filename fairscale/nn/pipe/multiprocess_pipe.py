@@ -37,7 +37,7 @@ from .multiprocess_pipeline import MultiProcessPipeline
 from .phony import get_phony
 from .skip.layout import SkipLayout, inspect_skip_layout
 from .skip.skippable import Skippable, verify_skippables
-from .types import LazyModule, PipelineStyle
+from .types import LazyModule
 
 __all__ = ["MultiProcessPipe", "LazyModule"]
 
@@ -202,11 +202,8 @@ class MultiProcessPipe(Module):
             list of number of layers in each partition
 
     Keyword Args:
-        style (PipelineStyle):
-            whether to use a single process for all pipeline stages or to assign
-            one stage per process
         group (ProcessGroup):
-            specific to `style=MultiProcess`, the process group that all
+            the process group that all
             pipeline stages are a member of. Defaults to
             `get_pipeline_parallel_group()`
         worker_map (Dict[int, str]):
@@ -374,7 +371,6 @@ class MultiProcessPipe(Module):
             self.partitions,
             self._skip_layout,
             checkpoint_stop,
-            style=PipelineStyle.MultiProcess,
             group=self.group,
             worker_map=self.worker_map,
             input_device=self.input_device,
