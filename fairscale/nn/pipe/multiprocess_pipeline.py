@@ -182,7 +182,6 @@ class MultiProcessPipeline:
             input_device=input_device,
         )
         self.input_device = input_device
-        self.callcount = 0
         self.final_stage = final_stage
 
     @property
@@ -220,8 +219,6 @@ class MultiProcessPipeline:
             task = create_task(self.checkpoint_stop, i, j, batch, partition.module, skip_trackers)
 
             batches[i] = self.execute_task(task, i, skip_trackers)
-
-        self.callcount += 1
 
     def get_batch_from_previous_stage(
         self, i: int, skip_trackers: List[SkipTrackerThroughPotals], batches: List[Batch]

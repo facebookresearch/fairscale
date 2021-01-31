@@ -42,7 +42,5 @@ class AsyncPipeline(MultiProcessPipeline):
             event_loop.event_loop(len(batches), skip_trackers)
             logging.debug(f"{torch.distributed.get_rank()}: exited event loop")
 
-        self.callcount += 1
-
     def back_helper(self, output: List[Batch]) -> None:
         pass
