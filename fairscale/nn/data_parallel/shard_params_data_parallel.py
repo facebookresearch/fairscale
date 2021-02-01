@@ -250,36 +250,42 @@ class ShardParamsDataParallel(nn.Module):
     def _pre_forward_init(self) -> None:
         did_init = False
         for p in self.params:
-            if not hasattr(p, "_full_param"):
-                did_init = True
-                assert p._is_sharded
+            if hasattr(p, "_full_param"):
+                continue
+            did_init = True
+            assert p._is_sharded
 
-                p._fp32_shard = p.data
+            p._fp32_shard = p.data
 
-                if self.mixed_precision:
-                    assert p._fp32_shard.dtype == torch.float32
-                    if self.cpu_offload:
-                        p._fp32_shard = p._fp32_shard.pin_memory()
-                    p._fp16_shard = torch.zeros_like(
-                        p._fp32_shard, device=self.compute_device, dtype=self.compute_dtype,
-                    )
-                    free_storage_(p._fp16_shard)
-                    p._full_param = torch.zeros(p._orig_size, device=self.compute_device, dtype=self.compute_dtype)
+            if self.mixed_precision:
+                assert p._fp32_shard.dtype == torch.float32
+
+                if self.cpu_offload:
+                    assert p._fp32_shard.device == torch.device("cpu")
+                    p._fp32_shard = p._fp32_shard.pin_memory()
+
+                p._fp16_shard = torch.zeros_like(
+                    p._fp32_shard,
+                    device=self.compute_device,
+                    dtype=self.compute_dtype,
+                )
+                free_storage_(p._fp16_shard)
+                p._full_param = torch.zeros(p._orig_size, device=self.compute_device, dtype=self.compute_dtype)
+            else:
+                p._fp16_shard = None  # use _fp32_shard
+                p._full_param = p._fp32_shard.new_empty(p._orig_size)
+
+            p._full_param = p._full_param.to(dtype=self.compute_dtype, device=self.compute_device)
+            free_storage_(p._full_param)
+
+            p.data = p._fp32_shard
+
+            if self.move_grads_to_cpu:
+                if self.mixed_precision and not self.fp32_reduce_scatter:
+                    grad_dtype = torch.float16
                 else:
-                    p._fp16_shard = None  # use _fp32_shard
-                    p._full_param = p._fp32_shard.new_empty(p._orig_size)
-
-                p._full_param = p._full_param.to(dtype=self.compute_dtype, device=self.compute_device)
-                free_storage_(p._full_param)
-
-                p.data = p._fp32_shard
-
-                if self.move_grads_to_cpu:
-                    if self.mixed_precision and not self.fp32_reduce_scatter:
-                        grad_dtype = torch.float16
-                    else:
-                        grad_dtype = torch.float32
-                    p._cpu_grad = torch.zeros_like(p.data, dtype=grad_dtype, device="cpu").pin_memory()
+                    grad_dtype = torch.float32
+                p._cpu_grad = torch.zeros_like(p.data, dtype=grad_dtype, device="cpu").pin_memory()
 
         if did_init:
             self._fp32_to_fp16_stream = torch.cuda.Stream()
