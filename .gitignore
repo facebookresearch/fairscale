@@ -10,6 +10,9 @@
 build/
 dist/
 
+# Pytest verbose output
+test-results/
+
 # Coverage reports
 .coverage
 .coverage.*

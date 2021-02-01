@@ -1,0 +1,7 @@
+# Bring in everything that tests depends on.
+-r requirements-test.txt
+
+# Benchmark dependencies.
+torchtext == 0.6.0
+torchvision >= 0.6.0
+timm == 0.3.4

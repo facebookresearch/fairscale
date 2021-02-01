@@ -18,6 +18,7 @@
 # limitations under the License.
 
 """A Pipe implementation in PyTorch."""
+from .async_pipe import AsyncPipe
 from .checkpoint import is_checkpointing, is_recomputing
 from .multiprocess_pipe import LazyModule, MultiProcessPipe
 from .pipe import Pipe
