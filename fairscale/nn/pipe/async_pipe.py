@@ -4,10 +4,10 @@
 # LICENSE file in the root directory of this source tree.
 
 from collections import OrderedDict
-from dataclasses import dataclass, field
 import itertools
 from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union
 
+from dataclasses import dataclass, field
 import torch
 from torch import Tensor, nn
 

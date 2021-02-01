@@ -4,11 +4,11 @@
 # LICENSE file in the root directory of this source tree.
 
 from collections import OrderedDict
-from dataclasses import dataclass
 from enum import Enum, auto
 from threading import Event
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 from torch.distributed import ProcessGroup
