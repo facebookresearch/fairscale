@@ -76,3 +76,28 @@ def broadcast_object(
         buffer = io.BytesIO(data_recv_tensor.cpu().numpy())
         obj = torch.load(buffer, map_location=dist_device)
     return obj
+
+
+class Bucket:
+    """
+    Helper class to simplify the handling of broadcast or reduce buckets
+    """
+
+    def __init__(self, buffer: torch.Tensor) -> None:
+        # The actual flat tensor
+        self.buffer = buffer
+        self.max_size = buffer.numel()
+
+        # Current status for this buffer
+        self.params_checked_in = 0
+        self.max_params_checked_in = 0  # atttribute present for convenience purposes
+        self.destination = -1
+        self.sent = True
+
+    def reset(self) -> None:
+        self.params_checked_in = 0
+        self.sent = False
+
+    def full(self) -> bool:
+        """ is the bucket full ? """
+        return self.max_params_checked_in == self.params_checked_in

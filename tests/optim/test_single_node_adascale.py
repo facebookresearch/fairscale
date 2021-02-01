@@ -9,7 +9,6 @@
 
 """ Test AdaScale with a single node (1 CPU or 1 GPU). """
 
-import gc
 import tempfile
 
 import numpy as np
@@ -21,7 +20,9 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 
 from fairscale.optim import AdaScale
+from fairscale.utils.golden_testing_data import adascale_test_data
 from fairscale.utils.testing import skip_if_no_cuda
+from fairscale.utils.testing_memory import find_tensor_by_shape
 
 
 def test_basic_cpu():
@@ -58,24 +59,8 @@ def test_loss_accum_cpu():
     # We don't call optim.step(), since it will detect that backward is not yet done.
 
 
-# IMPORTANT: make sure these test_cases values are sync'ed with the DDP
-# test in test_ddp_adascale.py. This way, we make sure gradient accumulation
-# works exactly like that in DDP.
 @pytest.mark.parametrize("cpu", [True, False])
-@pytest.mark.parametrize(
-    "test_case",
-    [
-        # "input" value is a list of input tensors for micro-batch 0 and micro-batch 1.
-        {"input": [[1.0, 0], [0, 1.0]], "expected_gain": 2.0},
-        {"input": [[1.0, 1.0], [1.0, 1.0]], "expected_gain": 1.0000001249999846},
-        {"input": [[-1.0, 1.0], [1.0, -1.0]], "expected_gain": 2.0},
-        {"input": [[1.0, 4.0], [5.0, 0.5]], "expected_gain": 1.5022222222222221},
-        {"input": [[-0.2, 3.0], [5.0, 0.5]], "expected_gain": 1.9433267229211089},
-        # "inputs" to trigger multiple iteration tests, which make sure the
-        # smoothing factor calculation is also covered.
-        {"inputs": [[[-0.2, 3.3], [5.2, 0.7]], [[1.0, 4.0], [3.1, 0.1]]], "expected_gain": 1.744159431359284},
-    ],
-)
+@pytest.mark.parametrize("test_case", adascale_test_data)
 def test_grad_accum(test_case, cpu):
     """Test the basic functionality on CPU/GPU with gradient accumulation without DDP"""
     model = Linear(2, 2, bias=False)
@@ -218,7 +203,7 @@ def test_add_param_group(debias_ewma):
         model1.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0]).reshape(2, 2))
         model1.bias.fill_(0.1)
     optim = AdaScale(SGD(model1.parameters(), lr=0.1), num_gradients_to_accumulate=2, debias_ewma=debias_ewma)
-    assert len(optim._hook_handles) == 2
+    assert len(optim._hook_handles) == 2, len(optim._hook_handles)
 
     model2 = Linear(2, 3, bias=True)
     with torch.no_grad():
@@ -226,7 +211,7 @@ def test_add_param_group(debias_ewma):
         model2.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).reshape(3, 2))
         model2.bias.fill_(0.2)
     optim.add_param_group({"params": model2.parameters()})
-    assert len(optim._hook_handles) == 4
+    assert len(optim._hook_handles) == 4, len(optim._hook_handles)
 
     # make sure we can run the model.
     model = Sequential(model1, model2).cuda()
@@ -253,7 +238,7 @@ def test_add_param_group(debias_ewma):
         model3.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] * 2).reshape(4, 3))
         model3.bias.fill_(0.2)
     optim.add_param_group({"params": model3.parameters()})
-    assert len(optim._hook_handles) == 6
+    assert len(optim._hook_handles) == 6, len(optim._hook_handles)
 
     # make sure we can run the model.
     model = Sequential(model1, model2, model3).cuda()
@@ -381,28 +366,12 @@ def test_unhook():
     model = Linear(123, 456, bias=False).cuda()  # unique shape so that it can be found
     optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
 
-    def find_tensor():
-        """ Find the weight tensor from the heap
-
-            Return True if found.
-        """
-        for obj in gc.get_objects():
-            try:
-                # Only need to check parameter type objects
-                if "torch.nn.parameter.Parameter" not in str(type(obj)):
-                    continue
-                if torch.is_tensor(obj) or (hasattr(obj, "data") and torch.is_tensor(obj.data)):
-                    if obj.shape == (456, 123):
-                        return True
-            except Exception as e:
-                pass
-        return False
-
     torch.cuda.empty_cache()
-    assert find_tensor(), "something wrong with gc-based method to find the tensor"
+    target_shape = (456, 123)
+    assert find_tensor_by_shape(target_shape), "something wrong with gc-based method to find the tensor"
 
     optim.unhook()
     del model
     del optim
     torch.cuda.empty_cache()
-    assert not find_tensor(), "tensor should have been released"
+    assert not find_tensor_by_shape(target_shape), "tensor should have been released"

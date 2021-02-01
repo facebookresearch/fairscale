@@ -1,4 +1,4 @@
-from helpers import getData, getLossFun, getModel
+from helpers import get_data, get_loss_fun, get_model
 import torch
 import torch.optim as optim
 
@@ -7,9 +7,9 @@ import fairscale
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 RANK = 0  # example
 
-model = getModel()
-data, target = getData()[0]
-loss_fn = getLossFun()
+model = get_model()
+data, target = get_data()[0]
+loss_fn = get_loss_fun()
 
 model = fairscale.nn.Pipe(model, balance=[2, 1])
 

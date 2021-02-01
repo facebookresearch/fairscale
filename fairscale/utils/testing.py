@@ -75,9 +75,7 @@ def set_random_seed(seed: int) -> None:
 
 
 def torch_version() -> Tuple[int, ...]:
-    numbering = torch.__version__.split("+")[0].split(".")
-
-    assert len(numbering) == 3
+    numbering = torch.__version__.split("+")[0].split(".")[:3]
 
     # Catch torch version if run against internal pre-releases, like `1.8.0a0fb`,
     if not numbering[2].isnumeric():

@@ -22,15 +22,15 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from fairscale.nn.pipe import Pipe
+from fairscale.nn.pipe import AsyncPipe, MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
-def python_autograd_function(pipeline_style):
-    # FIXME deadlock with Pipe.AsyncSchedule?
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def python_autograd_function(pipe_class):
+    # FIXME deadlock with AsyncPipe?
     # A Python autograd function might fail with this error:
     #
     #   RuntimeError: Returning Variables sharing storage with other Variables
@@ -57,7 +57,7 @@ def python_autograd_function(pipeline_style):
             return Identity.apply(input)
 
     model = nn.Sequential(M(), M())
-    model = Pipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map(), checkpoint="always").cuda()
+    model = pipe_class(model, [1, 1], worker_map=get_worker_map(), checkpoint="always").cuda()
     model.eval()
 
     x = torch.rand(42)
@@ -71,8 +71,8 @@ def python_autograd_function(pipeline_style):
 
 @torch_spawn([3])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
-def exception_no_hang(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def exception_no_hang(pipe_class):
     # In v0.0.2, once a failed partition receives a normal message
     # (non-closing) for the next micro-batch, a hang occured. The reason was
     # that a failed partition didn't call in_queue.task_done() on a normal
@@ -90,7 +90,7 @@ def exception_no_hang(pipeline_style):
             raise ExpectedException()
 
     model = nn.Sequential(Pass(), Pass(), Raise())
-    model = Pipe(model, [1, 1, 1], style=pipeline_style, worker_map=get_worker_map(), chunks=3)
+    model = pipe_class(model, [1, 1, 1], worker_map=get_worker_map(), chunks=3)
     model.eval()
 
     if model.group.rank() == 2:
@@ -104,8 +104,8 @@ def exception_no_hang(pipeline_style):
 
 @torch_spawn([2])
 @pytest.mark.skipif(torch.cuda.device_count() < 2, reason="2 cuda devices required")
-@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
-def tuple_wait(cuda_sleep, pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def tuple_wait(cuda_sleep, pipe_class):
     # In v0.0.3, Wait is applied to only the first tensor on a micro-batch.
     # Under this behavior, if checkpointing was disabled, there's a possibility
     # that gradient accumulations on other tensors are not synchronized
@@ -133,10 +133,9 @@ def tuple_wait(cuda_sleep, pipeline_style):
             return a + b + c
 
     model = nn.Sequential(Layer1(), Layer2())
-    model = Pipe(
+    model = pipe_class(
         model,
         [1, 1],
-        style=pipeline_style,
         worker_map=get_worker_map(),
         input_device=torch.cuda.current_device(),
         chunks=32,
@@ -158,8 +157,8 @@ def tuple_wait(cuda_sleep, pipeline_style):
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
-def parallel_randoms(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def parallel_randoms(pipe_class):
     class Dropouts(nn.Module):
         def forward(self, x):
             for _ in range(100):
@@ -170,10 +169,9 @@ def parallel_randoms(pipeline_style):
 
     x = torch.rand(10, 10, requires_grad=True).cuda()
     x.retain_grad()
-    model = Pipe(
+    model = pipe_class(
         model,
         [1, 1],
-        style=pipeline_style,
         input_device=torch.cuda.current_device(),
         worker_map=get_worker_map(),
         chunks=10,

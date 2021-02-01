@@ -6,7 +6,7 @@
 from .data_parallel import OffloadDataParallelExperimental, ShardedDataParallel
 from .misc import FlattenParamsWrapper
 from .moe import MOELayer, Top2Gate
-from .pipe import LazyModule, Pipe, PipeRPCWrapper
+from .pipe import Pipe, PipeRPCWrapper
 
 __all__ = [
     "FlattenParamsWrapper",

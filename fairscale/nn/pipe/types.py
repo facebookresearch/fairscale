@@ -4,7 +4,6 @@
 # LICENSE file in the root directory of this source tree.
 
 from dataclasses import dataclass
-from enum import Enum, auto
 from typing import Any, Callable, List, Optional, Tuple, Union
 
 import torch
@@ -14,7 +13,9 @@ ACTIVATIONS_GRADS_QUEUE = 0
 SKIP_TENSOR_QUEUE = 1
 PORTAL_QUEUE = 2
 EVENT_LOOP_QUEUE = 3
-MESSAGE_GENERATION_START = 4
+EVENT_LOOP_ACTIVATIONS_QUEUE = 4
+EVENT_LOOP_GRADIENTS_QUEUE = 5
+MESSAGE_GENERATION_START = 6
 
 MessageGeneration = MESSAGE_GENERATION_START
 
@@ -22,7 +23,6 @@ Tensors = Tuple[Tensor, ...]
 TensorOrTensors = Union[Tensor, Tensors]
 
 InputDevice = Union[None, int, str, torch.device]
-Schedule = List[Tuple[int, int]]
 
 
 class LazyModule:
@@ -31,12 +31,6 @@ class LazyModule:
 
     def __call__(self) -> nn.Module:
         return self.function()
-
-
-class PipelineStyle(Enum):
-    SingleProcess = auto()
-    MultiProcess = auto()
-    AsyncSchedule = auto()
 
 
 @dataclass(init=False)

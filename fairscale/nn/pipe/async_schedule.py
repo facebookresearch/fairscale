@@ -18,7 +18,7 @@ from fairscale.nn.model_parallel import get_pipeline_parallel_ranks
 from .messages import Transport
 from .microbatch import Batch
 from .skip.tracker import SkipTrackerThroughPotals
-from .types import EVENT_LOOP_QUEUE, PipelineStyle, PipeMessage, Tensors
+from .types import EVENT_LOOP_QUEUE, PipeMessage, Tensors
 
 
 @dataclass(frozen=True)
@@ -102,10 +102,10 @@ class AsyncRecvOperator(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def forward(ctx, phony: Tensor, transport: Transport, message: PipeMessage) -> Tensors:
+    def forward(ctx, phony: Tensor, transport: Transport, message: PipeMessage, queue_name: int) -> Tensors:
         ctx.transport = transport
         ctx.index = message.args.microbatch_index
-
+        ctx.queue_name = queue_name
         result = transport.recv_message_tensors(message)
 
         ctx.args = result.args
@@ -127,7 +127,7 @@ class AsyncRecvOperator(torch.autograd.Function):
         )
         ctx.transport.send_message(
             PipeMessage(
-                this_rank, ranks[ctx.args.source.stage], queue_name=EVENT_LOOP_QUEUE, args=body, tensors=tuple(grad),
+                this_rank, ranks[ctx.args.source.stage], queue_name=ctx.queue_name, args=body, tensors=tuple(grad),
             ),
             sync=True,
         )
@@ -136,7 +136,7 @@ class AsyncRecvOperator(torch.autograd.Function):
         if tail_ctx:
             expected_gradients = tail_ctx.expected_gradients
             while expected_gradients > 0:
-                message = ctx.transport.recv_message_header(EVENT_LOOP_QUEUE)
+                message = ctx.transport.recv_message_header(ctx.queue_name)
 
                 args: AsyncMessageBody = message.args
                 assert args.message_type is AsyncMessageType.Gradients
@@ -190,18 +190,13 @@ class AsyncEventLoop:
     ) -> Batch:
         """Actually run the forward pass for a given module, and send the result
         to the next stage in the pipeline if needed."""
-        assert self.group
-        from .pipeline import create_task
+
+        # We import here to avoid a cyclic dependency.
+        # TODO(msb) Break the cyclic dependency.
+        from .multiprocess_pipeline import create_task
 
         task = create_task(
-            PipelineStyle.AsyncSchedule,
-            self.checkpoint_stop,
-            batch.index,
-            self.group.rank(),
-            batch,
-            partition.module,
-            skip_trackers,
-            [],
+            self.checkpoint_stop, batch.index, self.group.rank(), batch, partition.module, skip_trackers,
         )
         result = task.compute()
         task.finalize(result)
@@ -304,7 +299,7 @@ class AsyncEventLoop:
 
         microbatch_index = message.args.microbatch_index
         phony = torch.empty(0, device=self.transport.input_device, requires_grad=True)
-        result = AsyncRecvOperator.apply(phony, self.transport, message)
+        result = AsyncRecvOperator.apply(phony, self.transport, message, EVENT_LOOP_QUEUE)
         if len(result) == 1:
             batch = Batch(result[0], microbatch_index)
         else:
@@ -316,8 +311,6 @@ class AsyncEventLoop:
         activations and then returns to the caller so that the loss can be
         calculated. This also handles the first/only stage for the special
         case of a 1-stage pipeline."""
-
-        assert self.group
 
         invocations, activations = self.get_invocations_and_activations()
         expected_invocations = len(invocations) * len(batches)
@@ -380,7 +373,6 @@ class AsyncEventLoop:
 
     def event_loop(self, num_microbatch: int, skip_trackers: List[SkipTrackerThroughPotals]) -> None:
         """The event loop for the "middle", i.e. neither the head nor the tail"""
-        assert self.group
 
         invocations, activations = self.get_invocations_and_activations()
 

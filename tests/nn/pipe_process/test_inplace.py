@@ -21,21 +21,21 @@ import pytest
 import torch
 from torch import nn
 
-from fairscale.nn.pipe import Pipe
+from fairscale.nn.pipe import AsyncPipe, MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
-def inplace_on_requires_grad(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def inplace_on_requires_grad(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1), nn.ReLU(inplace=True))
-    model = Pipe(model, [1, 1], style=pipeline_style, worker_map=get_worker_map(), checkpoint="always")
+    model = pipe_class(model, [1, 1], worker_map=get_worker_map(), checkpoint="always")
 
     x = torch.rand(1)
 
-    if pipeline_style == Pipe.AsyncSchedule and model.group.rank() == 0:
-        # With AsyncSchedule, model will wait forever for gradients if not eval
+    if pipe_class == AsyncPipe and model.group.rank() == 0:
+        # With AsyncPipe, model will wait forever for gradients if not eval
         model.eval()
 
     y = model(x)
@@ -50,12 +50,12 @@ def inplace_on_requires_grad(pipeline_style):
 
 @torch_spawn([1])
 @pytest.mark.xfail(strict=True)
-@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
-def inplace_on_not_requires_grad(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def inplace_on_not_requires_grad(pipe_class):
     # In-place operation on a tensor not requiring grad doesn't cause a
     # RuntimeError. Currently, we cannot detect this case.
     model = nn.Sequential(nn.ReLU(inplace=True))
-    model = Pipe(model, [1], style=pipeline_style, worker_map=get_worker_map(), checkpoint="always")
+    model = pipe_class(model, [1], worker_map=get_worker_map(), checkpoint="always")
 
     x = torch.rand(1)
     y = model(x)
@@ -70,8 +70,8 @@ def inplace_on_not_requires_grad(pipeline_style):
 
 @torch_spawn([1])
 @pytest.mark.xfail(strict=True)
-@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
-def inplace_incorrect_grad(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def inplace_incorrect_grad(pipe_class):
     class M(nn.Module):
         def forward(self, foo_bar):
             # 'foo' requires grad but 'bar' does not. In-place operation on
@@ -88,7 +88,7 @@ def inplace_incorrect_grad(pipeline_style):
             return foo * bar
 
     model = nn.Sequential(M())
-    model = Pipe(model, [1], style=pipeline_style, worker_map=get_worker_map(), checkpoint="always")
+    model = pipe_class(model, [1], worker_map=get_worker_map(), checkpoint="always")
 
     foo = torch.tensor([1.0], requires_grad=True)
     bar = torch.tensor([1.0])

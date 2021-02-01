@@ -21,14 +21,14 @@ import pytest
 import torch
 from torch import nn
 
-from fairscale.nn import Pipe
+from fairscale.nn.pipe import AsyncPipe, MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, set_random_seed, torch_spawn
 
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipeline_style", [Pipe.MultiProcess, Pipe.AsyncSchedule])
-def simple_linears(pipeline_style):
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+def simple_linears(pipe_class):
     def sum_grad(parameters):
         return sum([p.grad.sum() for p in parameters if p.grad is not None])
 
@@ -40,7 +40,7 @@ def simple_linears(pipeline_style):
     inputs = torch.rand(8, 1)
     model = nn.Sequential(nn.Linear(1, 2), nn.Linear(2, 4), nn.Linear(4, 2), nn.Linear(2, 1),)
 
-    # Without Pipe
+    # Without MultiProcessPipe
     outputs = model(inputs)
     loss = outputs.mean()
     loss.backward()
@@ -54,20 +54,19 @@ def simple_linears(pipeline_style):
 
     zero_grad(model.parameters())
 
-    # With Pipe
-    model = Pipe(model, [2, 2], style=pipeline_style, worker_map=get_worker_map(), chunks=4)
+    model = pipe_class(model, [2, 2], worker_map=get_worker_map(), chunks=4)
 
     outputs = model(inputs)
     if model.group.rank() == 1:
         loss = outputs.mean()
         loss.backward()
-        grad_with_pipe = sum_grad(model.pipeline.mp_partitions[0].module.parameters())
+        grad_with_pipe = sum_grad(model.pipeline.partitions[0].module.parameters())
 
         # Both grads should be identical.
         assert torch.allclose(grad_with_pipe, grad_without_pipe[1])
     else:
         model.back_helper(outputs)
-        grad_with_pipe = sum_grad(model.pipeline.mp_partitions[0].module.parameters())
+        grad_with_pipe = sum_grad(model.pipeline.partitions[0].module.parameters())
 
         # Both grads should be identical.
         assert torch.allclose(grad_with_pipe, grad_without_pipe[0])
