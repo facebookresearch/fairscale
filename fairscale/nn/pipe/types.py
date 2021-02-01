@@ -4,7 +4,6 @@
 # LICENSE file in the root directory of this source tree.
 
 from dataclasses import dataclass
-from enum import Enum, auto
 from typing import Any, Callable, List, Optional, Tuple, Union
 
 import torch
@@ -32,11 +31,6 @@ class LazyModule:
 
     def __call__(self) -> nn.Module:
         return self.function()
-
-
-class PipelineStyle(Enum):
-    MultiProcess = auto()
-    AsyncSchedule = auto()
 
 
 @dataclass(init=False)
