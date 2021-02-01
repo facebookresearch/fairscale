@@ -22,7 +22,7 @@ from torch.nn import Linear, Sequential
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
-from fairscale.optim import OSS, AdaScale
+from fairscale.optim import OSS, AdaScale, AdaScaleWrapper
 from fairscale.utils.golden_testing_data import adascale_test_data
 from fairscale.utils.testing import skip_if_single_gpu
 
@@ -40,11 +40,16 @@ def _test_basic_func(rank, world_size, tempfile_name, test_case, oss, model=None
         model = Linear(2, 2, bias=False)
     model.to("cuda")
     model = DDP(model, device_ids=[rank])
-    if oss:
-        # For now, we can only wrap AdaScale over OSS. If we do it the other way around,
-        # AdaScale needs to take different parameter types, i.e. the parameter list, etc.
+
+    assert oss in ["none", "ada-oss", "wrapper-oss", "oss-wrapper"]
+    if oss == "ada-oss":
         optim = AdaScale(OSS(model.parameters(), SGD, lr=0.1))
+    elif oss == "wrapper-oss":
+        optim = AdaScaleWrapper(model.parameters(), optim_cls=OSS, optim=SGD, lr=0.1)
+    elif oss == "oss-wrapper":
+        optim = OSS(model.parameters(), AdaScaleWrapper, optim_cls=SGD, lr=0.1)
     else:
+        assert oss == "none"
         optim = AdaScale(SGD(model.parameters(), lr=0.1))
 
     if "input" in test_case:
@@ -59,7 +64,8 @@ def _test_basic_func(rank, world_size, tempfile_name, test_case, oss, model=None
         optim.step()
         optim.zero_grad()
 
-    assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
+    if "expected_gain" in test_case:
+        assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
 
     if "expected_mean_weight" in test_case:
         mean_weight = mean([model.module[i].weight.data.mean().item() for i in range(4)])
@@ -75,11 +81,11 @@ def test_basic(test_case):
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
-    mp.spawn(_test_basic_func, args=(world_size, temp_file_name, test_case, True), nprocs=world_size, join=True)
+    mp.spawn(_test_basic_func, args=(world_size, temp_file_name, test_case, "ada-oss"), nprocs=world_size, join=True)
 
 
 @skip_if_single_gpu
-@pytest.mark.parametrize("oss", [True, False])
+@pytest.mark.parametrize("oss", ["none", "ada-oss", "wrapper-oss", "oss-wrapper"])
 def test_sequential(oss):
     """Test adascale with DDP + OSS with a sequential model"""
     world_size = 2
@@ -97,6 +103,14 @@ def test_sequential(oss):
         "expected_gain": 1.0335265132125744,
         "expected_mean_weight": 52.92657661437988,
     }
+
+    if oss == "oss-wrapper":
+        # When OSS wraps AdaScale, the training is neumerically different
+        # and it exists only to enable future research. So we don't check
+        # the gain (OSS doesn't have a gain() function, different rank's
+        # gains are different). We just ensure the mean_weight is expected.
+        del test_case["expected_gain"]
+        test_case["expected_mean_weight"] = 94.93386840820312
 
     # The model.
     model = Sequential(
