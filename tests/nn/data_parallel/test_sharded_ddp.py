@@ -116,7 +116,6 @@ def run_test(backend, device, world_size=2):
 @skip_if_single_gpu
 def test_step():
     run_test(backend=dist.Backend.NCCL, device=torch.device("cuda"))
-    run_test(backend=dist.Backend.GLOO, device=torch.device("cuda"))
 
 
 def run_ddp_parity(rank, world_size, backend, temp_file_name):
