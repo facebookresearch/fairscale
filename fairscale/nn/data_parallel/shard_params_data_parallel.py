@@ -5,10 +5,11 @@
 
 import copy
 import functools
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
+from torch.distributed import ProcessGroup
 import torch.nn as nn
 
 from fairscale.nn.misc import FlattenParamsWrapper
@@ -19,6 +20,9 @@ from fairscale.utils.containers import (
     unpack_kwargs,
     unpack_non_tensors,
 )
+
+if TYPE_CHECKING:
+    from collections import OrderedDict  # noqa: F401
 
 
 class ShardParamsDataParallel(nn.Module):
@@ -77,7 +81,7 @@ class ShardParamsDataParallel(nn.Module):
     def __init__(
         self,
         module: nn.Module,
-        process_group=None,
+        process_group: Optional[ProcessGroup] = None,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
@@ -85,7 +89,7 @@ class ShardParamsDataParallel(nn.Module):
         cpu_offload: bool = False,
         compute_device: Optional[torch.device] = None,
         compute_dtype: Optional[torch.dtype] = None,
-        move_grads_to_cpu: Optional[bool] = False,
+        move_grads_to_cpu: bool = False,
     ):
         super().__init__()
         self.process_group = process_group or dist.new_group()
@@ -111,7 +115,7 @@ class ShardParamsDataParallel(nn.Module):
         params = list(p for p in module.parameters() if not getattr(p, "_is_sharded", False))
 
         if self.flatten_parameters and len(params) > 0:
-            self.module = FlattenParamsWrapper(module, param_list=params)
+            self.module: nn.Module = FlattenParamsWrapper(module, param_list=params)
             del module
             self.params = [self.module.flat_param]
         else:
@@ -130,7 +134,7 @@ class ShardParamsDataParallel(nn.Module):
             assert getattr(p, "_is_sharded", False), f"found unsharded parameter: {n} ; {p.size()}"
 
     @torch.no_grad()
-    def _shard_initial_params(self):
+    def _shard_initial_params(self) -> None:
         """
         At initialization we wrap a module with full parameters and shard the
         parameters in-place. Sharding is implemented by viewing each parameter
@@ -139,12 +143,14 @@ class ShardParamsDataParallel(nn.Module):
 
         Wrapping modules with many small parameters (or with a very large data
         parallel world size) will result in many small parameter shards and slow
-        performance. In this case it's better to set *flatten_parameters* to
+        performance. In this case it's better to set *``flatten_parameters``* to
         ``True``, so that all of the small parameters in the module are combined
         into a single contiguous Tensor and sharded once.
 
         After this initial sharding is complete, the user can initialize a
         ``torch.optim.Optimizer`` in the usual way, i.e.::
+
+        .. code-block:: python
 
             optim = torch.optim.Adam(sharded_module.parameters(), lr=0.0001)
 
@@ -169,14 +175,14 @@ class ShardParamsDataParallel(nn.Module):
             p.data = p.data.view(-1)[s:e].clone()
             free_storage_(orig_data)
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
         try:
             return super().__getattr__(name)  # defer to nn.Module's logic
         except AttributeError:
             return getattr(self.module, name)
 
-    def __getstate__(self):
+    def __getstate__(self) -> Dict[str, str]:
         state = copy.copy(self.__dict__)
         state["orig_sizes"] = [p._orig_size for p in self.params]
         if state["process_group"] is not None:
@@ -185,12 +191,14 @@ class ShardParamsDataParallel(nn.Module):
             del state["_fp32_to_fp16_stream"]
         return state
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Intercept state setting and perform needed changes on params."""
         super().__setstate__(state)
 
-        def fixup(p, size):
+        def fixup(p: torch.nn.Parameter, size: int) -> torch.nn.Parameter:
             assert isinstance(p, torch.nn.Parameter)
             p.data = p.data.clone()  # move tensors out of shared memory
+            # Ignore mypy error since we add additional fields to a param.
             p._is_sharded = True
             p._orig_size = size
             return p
@@ -198,7 +206,8 @@ class ShardParamsDataParallel(nn.Module):
         self.params = [fixup(p, size) for p, size in zip(self.params, self.orig_sizes)]
         del self.orig_sizes
 
-    def state_dict(self, *args, **kwargs):
+    # TODO: figuring out how to do typing for this overloaded function.
+    def state_dict(self, *args, **kwargs):  # type: ignore
         """
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
@@ -211,7 +220,8 @@ class ShardParamsDataParallel(nn.Module):
         # returned state dict.
         return self.module.state_dict(*args, **kwargs)
 
-    def local_state_dict(self, *args, **kwargs):
+    # TODO: figuring out how to do typing for this overloaded function.
+    def local_state_dict(self, *args, **kwargs):  # type: ignore
         """
         Returns the local (sharded) state of the module. Parameters are sharded,
         so the resulting state_dict can only be loaded after the Module has been
@@ -221,19 +231,23 @@ class ShardParamsDataParallel(nn.Module):
             kwargs["unflatten_params"] = False
         return self.module.state_dict(*args, **kwargs)
 
-    def load_state_dict(self, *args, **kwargs):
+    def load_state_dict(
+        self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
+    ) -> NamedTuple:
         """Load a whole (unsharded) state_dict."""
         self._rebuild_full_params()
-        output = self.module.load_state_dict(*args, **kwargs)
+        output = self.module.load_state_dict(state_dict, strict)
         self._free_full_params()
         return output
 
-    def load_local_state_dict(self, *args, **kwargs):
+    def load_local_state_dict(
+        self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
+    ) -> NamedTuple:
         """Load a local (sharded) state_dict."""
-        return self.module.load_state_dict(*args, **kwargs)
+        return self.module.load_state_dict(state_dict, strict)
 
     @torch.no_grad()
-    def _pre_forward_init(self):
+    def _pre_forward_init(self) -> None:
         did_init = False
         for p in self.params:
             if not hasattr(p, "_full_param"):
@@ -271,7 +285,7 @@ class ShardParamsDataParallel(nn.Module):
             self._fp32_to_fp16_stream = torch.cuda.Stream()
         self._fp32_to_fp16_stream.wait_stream(torch.cuda.current_stream())
 
-    def forward(self, *args, **kwargs):
+    def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self._pre_forward_init()
 
         if self.mixed_precision:
@@ -297,7 +311,7 @@ class ShardParamsDataParallel(nn.Module):
         if torch.is_grad_enabled():
             pre_backward_hook_has_run = [False]
 
-            def _pre_backward_hook(*unused):
+            def _pre_backward_hook(*unused: Any) -> None:
                 if pre_backward_hook_has_run[0]:
                     return  # only run once
                 pre_backward_hook_has_run[0] = True
@@ -307,7 +321,7 @@ class ShardParamsDataParallel(nn.Module):
                 else:
                     self._use_full_params()
 
-            def _register_hook(t):
+            def _register_hook(t: torch.Tensor) -> torch.Tensor:
                 t.register_hook(_pre_backward_hook)
                 return t
 
@@ -316,7 +330,7 @@ class ShardParamsDataParallel(nn.Module):
 
         return outputs
 
-    def _register_post_backward_hooks(self):
+    def _register_post_backward_hooks(self) -> None:
         # Register backward hooks to reshard params and reduce-scatter grads.
         if not torch.is_grad_enabled():
             return  # don't register grad hooks if grad isn't enabled
@@ -330,7 +344,7 @@ class ShardParamsDataParallel(nn.Module):
                 p._shard_bwd_hook = (grad_acc, handle)
 
     @torch.no_grad()
-    def _post_backward_hook(self, param, *unused):
+    def _post_backward_hook(self, param: torch.nn.Parameter, *unused: Any) -> None:
         if param.grad is None:
             return
         if param.grad.requires_grad:
@@ -362,7 +376,8 @@ class ShardParamsDataParallel(nn.Module):
             param.grad.data = param.grad.data.to(dtype=param.data.dtype)
 
     @torch.no_grad()
-    def _rebuild_full_params(self):
+    def _rebuild_full_params(self) -> None:
+        """Get all shards of params."""
         if self.mixed_precision:
             self._cast_fp32_param_shards_to_fp16()
 
@@ -378,13 +393,14 @@ class ShardParamsDataParallel(nn.Module):
                 self._free_fp16_param_shard([p])
 
     @torch.no_grad()
-    def _use_full_params(self):
+    def _use_full_params(self) -> None:
         for p in self.params:
             assert p._full_param.storage().size() != 0
             p.data = p._full_param
 
     @torch.no_grad()
-    def _free_full_params(self, params=None):
+    def _free_full_params(self, params: Optional[List[torch.nn.Parameter]] = None) -> None:
+        """Free up storage for full parameters."""
         if params is None:
             params = self.params
         current_stream = torch.cuda.current_stream()
@@ -399,14 +415,16 @@ class ShardParamsDataParallel(nn.Module):
             free_storage_(p._full_param)
 
     @torch.no_grad()
-    def _use_fp32_param_shard(self, params=None):
+    def _use_fp32_param_shard(self, params: Optional[List[torch.nn.Parameter]] = None) -> None:
+        """Use FP32 shard for a list of params."""
         if params is None:
             params = self.params
         for p in params:
             p.data = p._fp32_shard
 
     @torch.no_grad()
-    def _cast_fp32_param_shards_to_fp16(self, params=None):
+    def _cast_fp32_param_shards_to_fp16(self, params: Optional[List[torch.nn.Parameter]] = None) -> None:
+        """Cast FP32 param shard to FP16 for a list of params."""
         if params is None:
             params = self.params
         with torch.cuda.stream(self._fp32_to_fp16_stream):
@@ -418,7 +436,8 @@ class ShardParamsDataParallel(nn.Module):
         torch.cuda.current_stream().wait_stream(self._fp32_to_fp16_stream)
 
     @torch.no_grad()
-    def _free_fp16_param_shard(self, params=None):
+    def _free_fp16_param_shard(self, params: Optional[List[torch.nn.Parameter]] = None) -> None:
+        """Free storage for FP16 shards for a list of params."""
         if params is None:
             params = self.params
         current_stream = torch.cuda.current_stream()
@@ -430,7 +449,7 @@ class ShardParamsDataParallel(nn.Module):
                 free_storage_(p._fp16_shard)
 
     @torch.no_grad()
-    def _reduce_scatter(self, tensor, output=None):
+    def _reduce_scatter(self, tensor: torch.Tensor, output: Optional[torch.Tensor] = None) -> torch.Tensor:
         assert tensor.numel() % self.world_size == 0
         tensor = tensor.view(self.world_size, -1)
         if output is None:
@@ -440,7 +459,7 @@ class ShardParamsDataParallel(nn.Module):
 
 
 @torch.no_grad()
-def cast_inputs_to_fp16(*args, **kwargs):
+def cast_inputs_to_fp16(*args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     """
     Cast any Tensors in *args or **kwargs to FP16.
 
@@ -454,13 +473,15 @@ def cast_inputs_to_fp16(*args, **kwargs):
     return args, kwargs
 
 
-def cast_buffers_to_fp16(module):
+def cast_buffers_to_fp16(module: nn.Module) -> None:
+    """Cast buffers of a module to FP16."""
     for key, buf in module.named_buffers(recurse=False):
         if buf is not None:
             setattr(module, key, buf.half())
 
 
-def free_storage_(data):
+def free_storage_(data: torch.Tensor) -> None:
+    """Free underlying storage of a Tensor."""
     if data.storage().size() > 0:
         # Since we're modifying the Tensor's Storage directly, make sure the Tensor
         # is the sole occupant of the Storage.
@@ -470,7 +491,8 @@ def free_storage_(data):
 
 
 @torch.no_grad()
-def alloc_storage_(data, size):
+def alloc_storage_(data: torch.Tensor, size: torch.Size) -> None:
+    """Allocate storage for a tensor."""
     assert data.storage().size() == 0
     data.storage().resize_(size.numel())
     # data.set_(size=size)

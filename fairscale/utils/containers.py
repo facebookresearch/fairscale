@@ -30,7 +30,7 @@ def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tu
     return _apply(container)
 
 
-def pack_kwargs(*args: Any, **kwargs: Any) -> Tuple[List[str], List[Any]]:
+def pack_kwargs(*args: Any, **kwargs: Any) -> Tuple[Tuple[str, ...], Tuple[Any, ...]]:
     """
     Usage::
 
@@ -39,15 +39,15 @@ def pack_kwargs(*args: Any, **kwargs: Any) -> Tuple[List[str], List[Any]]:
         assert args == [1, 2]
         assert kwargs == {"a": 3, "b": 4}
     """
-    kwarg_keys = []
-    flat_args = list(args)
+    kwarg_keys: List[str] = []
+    flat_args: List[Any] = list(args)
     for k, v in kwargs.items():
         kwarg_keys.append(k)
         flat_args.append(v)
-    return kwarg_keys, flat_args
+    return tuple(kwarg_keys), tuple(flat_args)
 
 
-def unpack_kwargs(kwarg_keys: List[str], flat_args: List[Any]) -> Tuple[List[Any], Dict[str, Any]]:
+def unpack_kwargs(kwarg_keys: Tuple[str, ...], flat_args: Tuple[Any, ...]) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
     """See pack_kwargs."""
     if len(kwarg_keys) == 0:
         return flat_args, {}
@@ -57,7 +57,7 @@ def unpack_kwargs(kwarg_keys: List[str], flat_args: List[Any]) -> Tuple[List[Any
 
 
 def split_non_tensors(
-    mixed: Union[torch.Tensor, Tuple[Any]]
+    mixed: Union[torch.Tensor, Tuple[Any, ...]]
 ) -> Tuple[Tuple[torch.Tensor, ...], Optional[Dict[str, List[Any]]]]:
     """
     Usage::
@@ -82,12 +82,14 @@ def split_non_tensors(
     return tuple(tensors), packed_non_tensors
 
 
-def unpack_non_tensors(tensors: Tuple[torch.Tensor], packed_non_tensors: Dict[str, List[Any]]) -> Tuple[Any, ...]:
+def unpack_non_tensors(
+    tensors: Tuple[torch.Tensor, ...], packed_non_tensors: Optional[Dict[str, List[Any]]]
+) -> Tuple[Any, ...]:
     """See split_non_tensors."""
     if packed_non_tensors is None:
         return tensors
     assert isinstance(packed_non_tensors, dict)
-    mixed = []
+    mixed: List[Any] = []
     is_tensor_list = packed_non_tensors["is_tensor"]
     objects = packed_non_tensors["objects"]
     assert len(tensors) + len(objects) == len(is_tensor_list)

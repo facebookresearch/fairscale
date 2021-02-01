@@ -2,11 +2,14 @@
 # Licensed under the MIT License.
 
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
 from torch import Tensor
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from collections import OrderedDict  # noqa: F401
 
 
 class FlattenParamsWrapper(nn.Module):
@@ -136,12 +139,14 @@ class FlattenParamsWrapper(nn.Module):
         """Return the flattened state_dict."""
         return super().state_dict(*args, **kwargs)
 
-    def load_state_dict(self, state_dict: Dict[str, Any], *args: Any, **kwargs: Any) -> None:
+    def load_state_dict(
+        self, state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], strict: bool = True
+    ) -> NamedTuple:
         if "flat_param" in state_dict:
-            super().load_state_dict(state_dict, strict=True)
+            return super().load_state_dict(state_dict, strict=strict)
         else:
             with self.unflatten_params():
-                return self.module.load_state_dict(state_dict, *args, **kwargs)
+                return self.module.load_state_dict(state_dict, strict)
 
     def forward(self, *inputs: Any, **kwinputs: Any) -> Any:
         self._unflatten_params_as_views()
