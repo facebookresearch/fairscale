@@ -215,81 +215,112 @@ class GossipDataParallel(Module):
         self.nprocs_per_node_device = torch.tensor([self.nprocs_per_node], device=comm_device, dtype=first_param_dtype)
 
         if self.sgp:
-            if graph is None:
-                graph = NPDDEGraph(rank, world_size, self.nprocs_per_node, self.local_rank)
-
-            if mixing is None:
-                mixing = UniformMixing(graph, comm_device)
-
-            self.dist_config.update({"graph": graph, "mixing": mixing, "push_sum": push_sum})
-
-            self.overlap = overlap
-            # TODO: fix error feedback implementation for SGP-overlap
-            assert self.overlap is False
-
-            self.synch_freq = synch_freq
-            self.asynch = synch_freq > 0
-
-            # push-sum weight=1.0 ==> distributed averaging
-            self.ps_weight = torch.ones(1, device=comm_device, dtype=first_param_dtype)
-            self.is_ps_numerator = False
-            self.gossip_enable = True
-            self.gossiping = False
-            self.params_mixed = True
-            self.gossip_ps_factor = torch.zeros(1, device=comm_device, dtype=first_param_dtype)
-            self.gossip_ps_weight = self.ps_weight.clone()
-            self.gossip_params = []
-            self.gossip_device_buffer = []
-            for p in module.parameters():
-                cp = cast(torch.nn.Parameter, p.clone().detach_())
-                cp = cast(torch.nn.Parameter, cp.cpu().pin_memory() if self.__cpu_comm else cp.cuda())
-                self.gossip_params.append(cp)
-                self.gossip_device_buffer.append(cp)
-
-            # prepare gossip process control objects
-            self.gossip_lock = threading.Lock()
-            self.gossip_flag = threading.Event()
-            self.train_flag = threading.Event()
-
-            if cast(torch.device, self.dist_config["comm_device"]).type != "cpu" and use_streams:
-                self.gossip_stream = torch.cuda.Stream()
-            else:
-                self.gossip_stream = torch.cuda.current_stream()
-
-            if self.process_rank % self.nprocs_per_node == 0:
-                self.gossip_thread = threading.Thread(
-                    target=GossipDataParallel._gossip_target,
-                    args=(
-                        self.dist_config,
-                        self.gossip_flag,
-                        self.train_flag,
-                        self.gossip_lock,
-                        self.gossip_params,
-                        self.gossip_device_buffer,
-                        self.gossip_ps_weight,
-                        self.gossip_ps_factor,
-                        self.gossip_stream,
-                    ),
-                )
-                self.gossip_thread.daemon = True
-                self.gossip_thread.name = "Gossip-Thread"
-                self.gossip_thread.start()
-            else:
-                self.gossip_flag.set()
-
-            # wait for thread to complete initialization
-            self.gossip_flag.wait()
-            self.gossip_flag.clear()
-
-            # lazy mixing avoids additional bias/de-bias steps
-            self.lazy_mixing = not self.asynch and cast(MixingManager, self.dist_config["mixing"]).is_regular()
-            self.lazy_ps_factor = self.gossip_ps_factor.clone()
-            self.logger.debug("lazy mixing: %r", self.lazy_mixing)
+            self.sgp_init(
+                module=module,
+                first_param_dtype=first_param_dtype,
+                rank=rank,
+                world_size=world_size,
+                comm_device=comm_device,
+                graph=graph,
+                mixing=mixing,
+                push_sum=push_sum,
+                overlap=overlap,
+                synch_freq=synch_freq,
+                use_streams=use_streams,
+                slowmo_sgp_average_params=slowmo_sgp_average_params,
+            )
 
         # register ps/grad-reduction hooks
         self.__register_hooks()
 
         self.logger.debug("Initialization of GossipDataParallel complete")
+
+    def sgp_init(
+        self,
+        module: torch.nn.Module,
+        first_param_dtype: torch.dtype,
+        rank: int,
+        world_size: int,
+        comm_device: Optional[torch.device] = None,
+        graph: Optional[GraphManager] = None,
+        mixing: Optional[MixingManager] = None,
+        push_sum: bool = True,
+        overlap: bool = False,
+        synch_freq: int = 0,
+        use_streams: bool = True,
+        slowmo_sgp_average_params: bool = False,
+    ) -> None:
+
+        if graph is None:
+            graph = NPDDEGraph(rank, world_size, self.nprocs_per_node, self.local_rank)
+
+        if mixing is None:
+            mixing = UniformMixing(graph, comm_device)
+
+        self.dist_config.update({"graph": graph, "mixing": mixing, "push_sum": push_sum})
+
+        self.overlap = overlap
+        # TODO: fix error feedback implementation for SGP-overlap
+        assert self.overlap is False
+
+        self.synch_freq = synch_freq
+        self.asynch = synch_freq > 0
+
+        # push-sum weight=1.0 ==> distributed averaging
+        self.ps_weight = torch.ones(1, device=comm_device, dtype=first_param_dtype)
+        self.is_ps_numerator = False
+        self.gossip_enable = True
+        self.gossiping = False
+        self.params_mixed = True
+        self.gossip_ps_factor = torch.zeros(1, device=comm_device, dtype=first_param_dtype)
+        self.gossip_ps_weight = self.ps_weight.clone()
+        self.gossip_params = []
+        self.gossip_device_buffer = []
+        for p in module.parameters():
+            cp = cast(torch.nn.Parameter, p.clone().detach_())
+            cp = cast(torch.nn.Parameter, cp.cpu().pin_memory() if self.__cpu_comm else cp.cuda())
+            self.gossip_params.append(cp)
+            self.gossip_device_buffer.append(cp)
+
+        # prepare gossip process control objects
+        self.gossip_lock = threading.Lock()
+        self.gossip_flag = threading.Event()
+        self.train_flag = threading.Event()
+
+        if cast(torch.device, self.dist_config["comm_device"]).type != "cpu" and use_streams:
+            self.gossip_stream = torch.cuda.Stream()
+        else:
+            self.gossip_stream = torch.cuda.current_stream()
+
+        if self.process_rank % self.nprocs_per_node == 0:
+            self.gossip_thread = threading.Thread(
+                target=GossipDataParallel._gossip_target,
+                args=(
+                    self.dist_config,
+                    self.gossip_flag,
+                    self.train_flag,
+                    self.gossip_lock,
+                    self.gossip_params,
+                    self.gossip_device_buffer,
+                    self.gossip_ps_weight,
+                    self.gossip_ps_factor,
+                    self.gossip_stream,
+                ),
+            )
+            self.gossip_thread.daemon = True
+            self.gossip_thread.name = "Gossip-Thread"
+            self.gossip_thread.start()
+        else:
+            self.gossip_flag.set()
+
+        # wait for thread to complete initialization
+        self.gossip_flag.wait()
+        self.gossip_flag.clear()
+
+        # lazy mixing avoids additional bias/de-bias steps
+        self.lazy_mixing = not self.asynch and cast(MixingManager, self.dist_config["mixing"]).is_regular()
+        self.lazy_ps_factor = self.gossip_ps_factor.clone()
+        self.logger.debug("lazy mixing: %r", self.lazy_mixing)
 
     def state_dict(self) -> Dict[str, Union[torch.Tensor, bool]]:  # type: ignore
         state_dict = super(GossipDataParallel, self).state_dict()
