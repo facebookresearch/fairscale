@@ -12,6 +12,7 @@ Distributed Gossip Wrapper
               multi-peer training.
 """
 
+from enum import Enum
 import functools
 import logging
 import os
@@ -45,6 +46,12 @@ from .utils.cuda_metering import EventRecorder, create_event_recorder
 HEARTBEAT_TIMEOUT = 300  # maximum time to wait for message (seconds)
 
 
+class SlowMoAlgorithms(Enum):
+    LOCALSGD = 1
+    SGP = 2
+    NONE = 3
+
+
 class GossipDataParallel(Module):
     """ Distributed Gossip model wrapper """
 
@@ -53,7 +60,6 @@ class GossipDataParallel(Module):
         module: torch.nn.Module,
         nprocs_per_node: int = 1,  # To be specified as the number of GPUs in a node
         broadcast_buffers: bool = True,  # Copy from Pytorch DDP
-
         # SlowMo parameters
         slowmo: bool = True,
         # Might need to be tuned depending on the use case
@@ -63,10 +69,9 @@ class GossipDataParallel(Module):
         slowmo_lr: float = 1.0,
         # Only to be tuned if slow momentum is becoming a bottleneck
         slowmo_world_size: int = 32,
-
         # SlowMo algorithm parameters
+        slowmo_base_algorithm: SlowMoAlgorithms = SlowMoAlgorithms.LOCALSGD,
         # LocalSGD
-        localsgd: bool = False,
         localsgd_frequency: int = 48,
         # SGP
         graph: Optional[GraphManager] = None,
@@ -76,11 +81,9 @@ class GossipDataParallel(Module):
         synch_freq: int = 0,
         use_streams: bool = True,
         slowmo_sgp_average_params: bool = False,
-
         # For debugging
         verbose: bool = False,
         profile_mode: bool = False,
-
         # Most probably not needed. Process groups can be specified only if they are to be re-used to save memory
         rank: Optional[int] = None,
         world_size: Optional[int] = None,
@@ -190,12 +193,13 @@ class GossipDataParallel(Module):
 
         self.slowmo_frequency = slowmo_frequency
         self.slowmo_sgp_average_params = slowmo_sgp_average_params
-        self.localsgd = localsgd
+        self.slowmo_base_algorithm = slowmo_base_algorithm
+        self.localsgd = slowmo_base_algorithm == SlowMoAlgorithms.LOCALSGD
+        self.sgp = slowmo_base_algorithm == SlowMoAlgorithms.SGP
+
         self.localsgd_frequency = localsgd_frequency
         self.ef1: Optional[List[torch.Tensor]] = None
         self.global_momentum_buffers_initialized = False
-
-        self.sgp = not self.localsgd
 
         if self.master_group is None:
             if self.localsgd or self.sgp:
