@@ -381,33 +381,6 @@ class TestOSSMultipleRanks(TestOSS):
             epochs, batch, input_width, hidden, target_width = 5, 3, 20, 10, 5
             loss_fn = torch.nn.L1Loss().to(device)
 
-            def check(optimizer):
-                # Just run a couple of epochs, check that the model is properly updated
-                for _ in range(epochs):
-                    target = torch.rand((batch, target_width), device=device)
-                    inputs = torch.rand((batch, input_width), device=device)
-
-                    def closure():
-                        optimizer.zero_grad()
-                        output = model(inputs)
-                        loss = loss_fn(output, target)
-                        loss /= self.world_size
-                        loss.backward()
-                        dist.all_reduce(loss, group=process_group)  # Not strictly needed for the test below
-
-                        return loss
-
-                    _ = optimizer.step(closure=closure)
-
-                    # Check that all the params are the same on all ranks
-                    for pg in optimizer.param_groups:
-                        for p in pg["params"]:
-                            receptacle = [p.clone() for _ in sub_group_ranks] if self.rank == 0 else []
-                            dist.gather(p, receptacle, dst=0, group=process_group)
-                            if self.rank == 0:
-                                for sync_p in receptacle[1:]:
-                                    assert torch.all(torch.eq(receptacle[0], sync_p)), "Models differ in between ranks"
-
             if self.rank in sub_group_ranks:
                 # Model fitting in the broadcast bucket
                 model = torch.nn.Sequential(
@@ -423,6 +396,36 @@ class TestOSSMultipleRanks(TestOSS):
                     group=process_group,
                     broadcast_buffer_size=2 ** 10,
                 )
+
+                def check(optimizer):
+                    # Just run a couple of epochs, check that the model is properly updated
+                    for _ in range(epochs):
+                        target = torch.rand((batch, target_width), device=device)
+                        inputs = torch.rand((batch, input_width), device=device)
+
+                        def closure():
+                            optimizer.zero_grad()
+                            output = model(inputs)
+                            loss = loss_fn(output, target)
+                            loss /= self.world_size
+                            loss.backward()
+                            dist.all_reduce(loss, group=process_group)  # Not strictly needed for the test below
+
+                            return loss
+
+                        _ = optimizer.step(closure=closure)
+
+                        # Check that all the params are the same on all ranks
+                        for pg in optimizer.param_groups:
+                            for p in pg["params"]:
+                                receptacle = [p.clone() for _ in sub_group_ranks] if self.rank == 0 else []
+                                dist.gather(p, receptacle, dst=0, group=process_group)
+                                if self.rank == 0:
+                                    for sync_p in receptacle[1:]:
+                                        assert torch.all(
+                                            torch.eq(receptacle[0], sync_p)
+                                        ), "Models differ in between ranks"
+
                 check(optimizer)
 
                 # Model not-fitting in the broadcast bucket
@@ -441,6 +444,8 @@ class TestOSSMultipleRanks(TestOSS):
                 )
                 check(optimizer)
 
+            dist.destroy_process_group(process_group)
+
     @skip_if_single_gpu
     def test_gradient_clipping(self):
         if self.dist_init(self.rank):
@@ -457,6 +462,7 @@ class TestOSSMultipleRanks(TestOSS):
                 model_oss = torch.nn.Sequential(
                     torch.nn.Linear(input_width, hidden),
                     torch.nn.Linear(hidden, hidden),
+                    torch.nn.Linear(hidden, hidden),
                     torch.nn.Linear(hidden, target_width),
                 ).to(self.device)
                 model = copy.deepcopy(model_oss)
@@ -469,9 +475,7 @@ class TestOSSMultipleRanks(TestOSS):
                 sharded_optimizer = optim.OSS(model_oss.parameters(), lr=0.1, momentum=0.99)
 
                 model = DDP(model, device_ids=[self.rank])
-
-                loss_fn = torch.nn.L1Loss()
-                loss_fn.to(self.device)
+                loss_fn = torch.nn.L1Loss().to(self.device)
 
                 model.zero_grad()
                 model_oss.zero_grad()
