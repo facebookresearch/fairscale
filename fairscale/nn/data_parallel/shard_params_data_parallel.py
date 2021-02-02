@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
 import torch.nn as nn
+from torch.nn import Parameter
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.utils.containers import (
@@ -133,6 +134,11 @@ class ShardParamsDataParallel(nn.Module):
         for n, p in self.named_parameters():
             assert getattr(p, "_is_sharded", False), f"found unsharded parameter: {n} ; {p.size()}"
 
+        # Flag to indicate if this instance is wrapped by any other
+        # ShardParamsDataParallel instances. This flag is only set after the
+        # first forward pass.
+        self._is_root: Optional[bool] = None
+
     @torch.no_grad()
     def _shard_initial_params(self) -> None:
         """
@@ -195,8 +201,8 @@ class ShardParamsDataParallel(nn.Module):
         """Intercept state setting and perform needed changes on params."""
         super().__setstate__(state)
 
-        def fixup(p: torch.nn.Parameter, size: int) -> torch.nn.Parameter:
-            assert isinstance(p, torch.nn.Parameter)
+        def fixup(p: Parameter, size: torch.Size) -> Parameter:
+            assert isinstance(p, Parameter)
             p.data = p.data.clone()  # move tensors out of shared memory
             # Ignore mypy error since we add additional fields to a param.
             p._is_sharded = True
@@ -247,49 +253,71 @@ class ShardParamsDataParallel(nn.Module):
         return self.module.load_state_dict(state_dict, strict)
 
     @torch.no_grad()
-    def _pre_forward_init(self) -> None:
-        did_init = False
-        for p in self.params:
-            if hasattr(p, "_full_param"):
-                continue
-            did_init = True
-            assert p._is_sharded
+    def _init_param(self, p: Parameter) -> None:
+        assert p._is_sharded
+        assert not hasattr(p, "_full_param")
 
-            p._fp32_shard = p.data
+        p._fp32_shard = p.data
 
-            if self.mixed_precision:
-                assert p._fp32_shard.dtype == torch.float32
+        if self.mixed_precision:
+            assert p._fp32_shard.dtype == torch.float32
 
-                if self.cpu_offload:
-                    assert p._fp32_shard.device == torch.device("cpu")
-                    p._fp32_shard = p._fp32_shard.pin_memory()
+            if self.cpu_offload:
+                assert p._fp32_shard.device == torch.device("cpu")
+                p._fp32_shard = p._fp32_shard.pin_memory()
 
-                p._fp16_shard = torch.zeros_like(
-                    p._fp32_shard,
-                    device=self.compute_device,
-                    dtype=self.compute_dtype,
-                )
-                free_storage_(p._fp16_shard)
-                p._full_param = torch.zeros(p._orig_size, device=self.compute_device, dtype=self.compute_dtype)
+            p._fp16_shard = torch.zeros_like(p._fp32_shard, device=self.compute_device, dtype=self.compute_dtype)
+            free_storage_(p._fp16_shard)
+        else:
+            p._fp16_shard = None  # use _fp32_shard
+
+        p.data = p._fp32_shard
+
+        p._full_param = torch.zeros(p._orig_size, device=self.compute_device, dtype=self.compute_dtype)
+        free_storage_(p._full_param)
+
+        if self.move_grads_to_cpu:
+            if self.mixed_precision and not self.fp32_reduce_scatter:
+                grad_dtype = torch.float16
             else:
-                p._fp16_shard = None  # use _fp32_shard
-                p._full_param = p._fp32_shard.new_empty(p._orig_size)
+                grad_dtype = torch.float32
+            p._cpu_grad = torch.zeros_like(p.data, dtype=grad_dtype, device="cpu").pin_memory()
 
-            p._full_param = p._full_param.to(dtype=self.compute_dtype, device=self.compute_device)
-            free_storage_(p._full_param)
+    @torch.no_grad()
+    def _pre_forward_init(self) -> None:
+        first_time_params = [p for p in self.params if not hasattr(p, "_full_param")]
+        for p in first_time_params:
+            self._init_param(p)
 
-            p.data = p._fp32_shard
+        if len(first_time_params) > 0:
+            if self._is_root is None:
+                # This implies that no other ShardParamsDataParallel instance
+                # wraps this instance, otherwise it would have already set this
+                # flag to False.
+                self._is_root = True
 
-            if self.move_grads_to_cpu:
-                if self.mixed_precision and not self.fp32_reduce_scatter:
-                    grad_dtype = torch.float16
-                else:
-                    grad_dtype = torch.float32
-                p._cpu_grad = torch.zeros_like(p.data, dtype=grad_dtype, device="cpu").pin_memory()
+                # As the root, we now set all children instances to False.
+                for n, m in self.named_modules():
+                    if n != "" and isinstance(m, ShardParamsDataParallel):
+                        assert m._is_root is None
+                        m._is_root = False
 
-        if did_init:
-            self._fp32_to_fp16_stream = torch.cuda.Stream()
-        self._fp32_to_fp16_stream.wait_stream(torch.cuda.current_stream())
+            if self._is_root:
+                # Stream for moving FP32 master params (which may be on CPU) to
+                # FP16 for computation. We share this stream with all children
+                # instances, which allows them to overlap transfers across the
+                # forward pass without synchronizing with the default stream.
+                self._fp32_to_fp16_stream = torch.cuda.Stream()
+
+                for n, m in self.named_modules():
+                    if n != "" and isinstance(m, ShardParamsDataParallel):
+                        m._fp32_to_fp16_stream = self._fp32_to_fp16_stream
+
+        assert self._is_root is not None
+        if self._is_root:
+            # The top-most (root) instance needs to synchronize with the default
+            # stream, so we don't move the FP32 master weights prematurely.
+            self._fp32_to_fp16_stream.wait_stream(torch.cuda.current_stream())
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self._pre_forward_init()
@@ -313,8 +341,12 @@ class ShardParamsDataParallel(nn.Module):
         # initialized with the correct dtype and size.
         self._use_fp32_param_shard()
 
-        if not torch.is_grad_enabled():
-            return outputs
+        if torch.is_grad_enabled():
+            outputs = self._register_pre_backward_hooks(outputs)
+
+        return outputs
+
+    def _register_pre_backward_hooks(self, outputs: Any) -> Any:
 
         # Register pre-backward hook to run before the wrapped module's backward.
         pre_backward_hook_has_run = [False]
@@ -352,7 +384,7 @@ class ShardParamsDataParallel(nn.Module):
                 p._shard_bwd_hook = (grad_acc, handle)
 
     @torch.no_grad()
-    def _post_backward_hook(self, param: torch.nn.Parameter, *unused: Any) -> None:
+    def _post_backward_hook(self, param: Parameter, *unused: Any) -> None:
         if param.grad is None:
             return
         if param.grad.requires_grad:
@@ -407,7 +439,7 @@ class ShardParamsDataParallel(nn.Module):
             p.data = p._full_param
 
     @torch.no_grad()
-    def _free_full_params(self, params: Optional[List[torch.nn.Parameter]] = None) -> None:
+    def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
         """Free up storage for full parameters."""
         if params is None:
             params = self.params
@@ -423,7 +455,7 @@ class ShardParamsDataParallel(nn.Module):
             free_storage_(p._full_param)
 
     @torch.no_grad()
-    def _use_fp32_param_shard(self, params: Optional[List[torch.nn.Parameter]] = None) -> None:
+    def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
         """Use FP32 shard for a list of params."""
         if params is None:
             params = self.params
@@ -431,7 +463,7 @@ class ShardParamsDataParallel(nn.Module):
             p.data = p._fp32_shard
 
     @torch.no_grad()
-    def _cast_fp32_param_shards_to_fp16(self, params: Optional[List[torch.nn.Parameter]] = None) -> None:
+    def _cast_fp32_param_shards_to_fp16(self, params: Optional[List[Parameter]] = None) -> None:
         """Cast FP32 param shard to FP16 for a list of params."""
         if params is None:
             params = self.params
@@ -444,7 +476,7 @@ class ShardParamsDataParallel(nn.Module):
         torch.cuda.current_stream().wait_stream(self._fp32_to_fp16_stream)
 
     @torch.no_grad()
-    def _free_fp16_param_shard(self, params: Optional[List[torch.nn.Parameter]] = None) -> None:
+    def _free_fp16_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
         """Free storage for FP16 shards for a list of params."""
         if params is None:
             params = self.params

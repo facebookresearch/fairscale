@@ -130,10 +130,10 @@ class FlattenParamsWrapper(nn.Module):
         except AttributeError:
             return getattr(self.module, name)  # fallback to wrapped module
 
-    def state_dict(self, prefix: str = "", keep_vars: bool = False) -> "OrderedDict[str, Tensor]":  # type: ignore
+    def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, Tensor]":  # type: ignore
         """Return an unflattened state_dict."""
         with self.unflatten_params():
-            return self.module.state_dict(prefix=prefix, keep_vars=keep_vars)
+            return self.module.state_dict(*args, **kwargs)
 
     def flat_state_dict(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         """Return the flattened state_dict."""

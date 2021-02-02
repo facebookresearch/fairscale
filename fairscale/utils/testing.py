@@ -294,11 +294,7 @@ class _Block(Base):
         self.ln_1 = nn.LayerNorm(embed_dim)
         self.ln_2 = nn.LayerNorm(embed_dim)
         self.attn = nn.MultiheadAttention(embed_dim, num_heads)  # type: ignore
-        self.mlp = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim * 4),
-            nn.GELU(),
-            nn.Linear(embed_dim * 4, embed_dim),
-        )
+        self.mlp = nn.Sequential(nn.Linear(embed_dim, embed_dim * 4), nn.GELU(), nn.Linear(embed_dim * 4, embed_dim),)
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
         x = inputs[0]
@@ -452,3 +448,19 @@ class DeviceAndTypeCheckModule(Base):
         self._check("loss.device", loss.device, self.expected_loss_device)
 
         return loss
+
+
+@functools.lru_cache
+def get_cycles_per_ms() -> float:
+    """Approximate number of cycles per millisecond for torch.cuda._sleep
+
+    Copied from: github.com/pytorch/pytorch/blob/master/test/test_cuda.py
+    """
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    torch.cuda._sleep(1000000)
+    end.record()
+    end.synchronize()
+    cycles_per_ms = 1000000 / start.elapsed_time(end)
+    return cycles_per_ms

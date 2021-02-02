@@ -7,6 +7,7 @@ import functools
 import itertools
 import sys
 import tempfile
+from typing import Dict
 import unittest
 from unittest import mock
 
@@ -14,8 +15,7 @@ import torch
 from torch import nn
 
 from fairscale.nn.data_parallel import ShardParamsDataParallel
-from fairscale.utils.testing import DeviceAndTypeCheckModule, objects_are_equal
-from typing import Dict
+from fairscale.utils.testing import DeviceAndTypeCheckModule, get_cycles_per_ms, objects_are_equal
 
 
 class DistributedTest(unittest.TestCase):
@@ -30,6 +30,7 @@ class DistributedTest(unittest.TestCase):
             raise unittest.SkipTest("NCCL doesn't support Windows, skipping test")
         if torch.cuda.device_count() < 2:
             raise unittest.SkipTest("distributed tests require 2+ GPUs, skipping")
+        torch.manual_seed(0)  # keep everything deterministic
 
     @staticmethod
     def _train_for_several_steps(model, num_steps, autocast):
@@ -42,7 +43,7 @@ class DistributedTest(unittest.TestCase):
                 input = model.module.get_input(torch.device("cuda"))
                 output = model(*input)
                 loss = model.module.get_loss(input, output).to(model_device)
-                print(f'loss device: {loss.device}')
+                print(f"loss device: {loss.device}")
             assert loss.dtype == torch.float32
             loss.backward()
             optim.step()
@@ -122,9 +123,7 @@ class TestMixedPrecision(DistributedTest):
         orig_reduce_scatter = ShardParamsDataParallel._reduce_scatter
 
         model = DeviceAndTypeCheckModule(
-            expected_input_dtype=in_dtype,
-            expected_param_dtype=p_dtype,
-            expected_loss_dtype=loss_dtype,
+            expected_input_dtype=in_dtype, expected_param_dtype=p_dtype, expected_loss_dtype=loss_dtype,
         )
 
         def _reduce_scatter(self, tensor):
@@ -152,8 +151,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         for config in itertools.product([True, False], repeat=len(keys)):
             config = dict(zip(keys, config))
             spawn_and_init(
-                functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config),
-                world_size=2,
+                functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config), world_size=2,
             )
 
     def test_cpu_offload_and_cpu_grads(self):
@@ -164,12 +162,34 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def test_cpu_offload_and_cuda_grads(self):
         # If grads are on gpu, but model and optimizer are on cpu, backward breaks.
         config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": False}
-        with self.assertRaises(Exception):   # RuntimeError inside spawn
-            test_fn = functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False)
+        with self.assertRaises(Exception):  # RuntimeError inside spawn
+            test_fn = functools.partial(
+                self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False
+            )
             spawn_and_init(test_fn)
 
+    def test_delayed_optim_step(self):
+        # We use a model with a long CUDA delay right before the optimizer step.
+        # This tests our streams logic, and that we don't start the FP32 -> FP16
+        # transfer until after the optimization step completes.
+        config = {"mixed_precision": True}
+        test_fn = functools.partial(self._test_identical_outputs, self._delayed_optim_step_model, config)
+        spawn_and_init(test_fn)
+
     @classmethod
-    def _test_identical_outputs(cls, model_cls, config, rank, group, num_steps=3, use_cuda=True):
+    def _delayed_optim_step_model(cls, rank, group, config=None):
+        def _maybe_wrap(layer):
+            if config is not None:
+                return ShardParamsDataParallel(layer, group, **config)
+            return layer
+
+        model = nn.Sequential(
+            nn.Linear(8, 4), _maybe_wrap(nn.Linear(4, 16)), _maybe_wrap(nn.Linear(16, 4)), nn.Linear(4, 8),
+        )
+        return ModuleWithDelay(model, delay_after_loss_ms=250)
+
+    @classmethod
+    def _test_identical_outputs(cls, model_init_fn, config, rank, group, num_steps=3, use_cuda=True):
         if config["mixed_precision"]:
             autocast = True
             # Force the compute dtype to be torch.float32 so that we get
@@ -181,14 +201,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             autocast = False
 
         # Establish reference behavior with PyTorch DDP (+ optionally autocast).
-        model = nn.parallel.DistributedDataParallel(
-            model_cls().cuda(), device_ids=[rank], output_device=rank, process_group=group
-        )
+        model = model_init_fn(rank, group).cuda()
+        model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank, process_group=group)
         ref_loss = cls._train_for_several_steps(model, num_steps, autocast)
         ref_state_dict = model.module.state_dict()
 
         # Confirm we get the same behavior using ShardParamsDataParallel.
-        model = ShardParamsDataParallel(model_cls(), group, **config)
+        model = ShardParamsDataParallel(model_init_fn(rank, group, config), group, **config)
         if use_cuda:
             model = model.cuda()
         else:
@@ -204,18 +223,14 @@ class TestComparisonToPyTorchDDP(DistributedTest):
 
 
 class TransformerWithSharedParams(nn.Module):
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         super().__init__()
         torch.manual_seed(0)  # keep everything deterministic
         d_model = 16
         d_vocab = 32
         self.embed_tokens = nn.Embedding(d_vocab, d_model)
         self.transformer = nn.Transformer(
-            d_model=d_model,
-            num_encoder_layers=2,
-            num_decoder_layers=2,
-            dim_feedforward=8,
-            dropout=0.1,
+            d_model=d_model, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=8, dropout=0.1,
         )
         self.output_proj = nn.Linear(d_model, d_vocab)
         # share the embedding and output projection weights
@@ -238,6 +253,25 @@ class TransformerWithSharedParams(nn.Module):
         return nn.functional.cross_entropy(output.view(-1, output.size(-1)), tgt.view(-1), reduction="sum")
 
 
+class ModuleWithDelay(nn.Module):
+    def __init__(self, module, delay_after_loss_ms):
+        super().__init__()
+        self.module = module
+        self.delay_after_loss_ms = delay_after_loss_ms
+
+    def get_input(self, device):
+        torch.manual_seed(1)  # keep everything deterministic
+        return (torch.rand(4, 8, device=device),)
+
+    def forward(self, x):
+        return self.module(x)
+
+    def get_loss(self, input, output):
+        loss = output.sum()
+        torch.cuda._sleep(int(self.delay_after_loss_ms * get_cycles_per_ms()))
+        return loss
+
+
 def spawn_and_init(fn, world_size=2, args=None):
     if args is None:
         args = ()
@@ -252,10 +286,7 @@ def spawn_and_init(fn, world_size=2, args=None):
 
 def distributed_init(rank, world_size, tmp_file):
     torch.distributed.init_process_group(
-        backend="nccl",
-        init_method="file://{}".format(tmp_file),
-        world_size=world_size,
-        rank=rank,
+        backend="nccl", init_method="file://{}".format(tmp_file), world_size=world_size, rank=rank,
     )
     torch.cuda.set_device(rank)
 
