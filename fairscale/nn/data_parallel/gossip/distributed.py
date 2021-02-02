@@ -21,12 +21,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 import torch
 from torch.autograd import Variable
-from torch.cuda.comm import broadcast_coalesced, reduce_add_coalesced
 import torch.distributed as dist
 from torch.nn.modules import Module
-from torch.nn.parallel.parallel_apply import parallel_apply
-from torch.nn.parallel.replicate import replicate
-from torch.nn.parallel.scatter_gather import gather, scatter_kwargs
 
 if dist.is_available():
     from torch.distributed.distributed_c10d import _get_default_group
@@ -92,10 +88,6 @@ class GossipDataParallel(Module):
         master_group: Optional[torch.distributed.ProcessGroup] = None,
         local_node_group: Optional[torch.distributed.ProcessGroup] = None,
         comm_device: Optional[torch.device] = None,
-
-        # Deprecated: these are needed for single process per node
-        device_ids: Optional[List[int]] = None,
-        output_device: Optional[int] = None,
     ) -> None:
         super(GossipDataParallel, self).__init__()
 
@@ -105,12 +97,6 @@ class GossipDataParallel(Module):
         self.logger = logging.getLogger(__name__)
         if verbose:
             self.logger.setLevel(logging.DEBUG)
-
-        # devices available locally
-        if device_ids is None:
-            device_ids = list(range(torch.cuda.device_count()))
-        self.output_device = output_device if output_device is not None else device_ids[0]
-        self.device_ids = device_ids
 
         self.nprocs_per_node = nprocs_per_node
 
@@ -173,18 +159,8 @@ class GossipDataParallel(Module):
 
         # prepare local intra-node all-reduce objects
         self.broadcast_bucket_size = 10 * 1024 * 1024  # bytes
-        if len(self.device_ids) > 1:
-            self.nccl_reduce_bucket_size = 256 * 1024 * 1024  # bytes
-
-            self._module_copies = replicate(self.module, self.device_ids, detach=True)
-            self._module_copies[0] = self.module
-            for cmodule in self._module_copies[1:]:
-                for p, cp in zip(self.module.parameters(), cmodule.parameters()):
-                    cp.requires_grad = p.requires_grad
-        else:
-            self._module_copies = [self.module]
-
-        self.modules_buffers = [list(m.buffers()) for m in self._module_copies]
+        self.nccl_reduce_bucket_size = 256 * 1024 * 1024  # bytes  # TODO: Maybe not needed
+        self.module_buffers = list(self.module.buffers())
 
         # choose communication device based on backend
         if comm_device is None:
@@ -332,58 +308,15 @@ class GossipDataParallel(Module):
     def forward(self, *inputs: Any, **kwargs: Any) -> Union[torch.Tensor, List[torch.Tensor]]:
         """ Forward pass performed in parallel across all devices on node """
         # scatter inputs onto devices
-        inputs, kwargs = self.scatter(inputs, kwargs, self.device_ids)  # type: ignore
-        self._sync_buffers()
-        if len(self.device_ids) > 1:
-            self._sync_params()
-            outputs = self.parallel_apply(self._module_copies[: len(inputs)], inputs, kwargs)
-            return self.gather(outputs, self.output_device)
-        else:
-            return self.module(*inputs[0], **kwargs[0])  # type: ignore
-
-    def scatter(
-        self, inputs: Any, kwargs: Any, device_ids: Sequence[Union[int, torch.device]]
-    ) -> Tuple[Union[torch.Tensor, List[torch.Tensor]], Any]:
-        return scatter_kwargs(inputs, kwargs, device_ids, dim=0)
-
-    def parallel_apply(
-        self, replicas: Sequence[Module], inputs: Sequence[Any], kwargs: Optional[Any]
-    ) -> List[torch.Tensor]:
-        return parallel_apply(replicas, inputs, kwargs, self.device_ids[: len(replicas)])
-
-    def gather(
-        self, outputs: Any, output_device: Union[int, torch.device, Sequence[Union[int, torch.device]]]
-    ) -> List[torch.Tensor]:
-        return gather(outputs, output_device, dim=0)  # type: ignore
+        self.module
+        # print(inputs)
+        # print(*inputs)
+        # print(*inputs[0])
+        return self.module(*inputs, **kwargs)  # type: ignore
 
     def _sync_params(self) -> None:
-        if len(self.device_ids) > 1:
-            self._sync_params_single_process()
-        if self.nprocs_per_node > 1:
-            self._sync_params_multiprocess()
-
-    def _sync_params_single_process(self) -> None:
         """ Synchronize parameters across devices (intra-node) """
-        if self.device_ids and len(self.device_ids) > 1:
-            # intra-node parameter sync
-            params = list(self.module.parameters())
-            # TODO: deprecate this full method
-            result = broadcast_coalesced(params, self.device_ids, self.broadcast_bucket_size)
-            for tensors, module in zip(result[1:], self._module_copies[1:]):
-                for tensor, param in zip(tensors, module.parameters()):
-                    param.data.set_(tensor)
-
-    def _sync_params_multiprocess(self) -> None:
-        """ Synchronize parameters across devices (intra-node) """
-        if self.nprocs_per_node <= 1:
-            self.logger.warning(
-                "There is only 1 process on this node. Please "
-                "use _sync_params if you wish to synchronize "
-                "parameters on the different GPUs"
-            )
-            return
-
-        if self.local_node_group is None:
+        if self.nprocs_per_node <= 1 or self.local_node_group is None:
             return
 
         # intra-node parameter sync
@@ -400,20 +333,10 @@ class GossipDataParallel(Module):
         """ Made to make it same as the new DDP implementation. """
         """ Synchronize buffers across devices (intra-node) """
         # module buffer sync
-        if self.broadcast_buffers and len(self.modules_buffers[0]) > 0:
+        if self.broadcast_buffers and len(self.module_buffers) > 0:
             # Synchronize buffers across processes.
             # The process with rank 0 is considered the authoritative copy.
-            self._distributed_broadcast_coalesced(self.modules_buffers[0], self.broadcast_bucket_size)
-            # only do intra-node buffer sync for replicated single-device
-            # CUDA modules
-            if self.device_ids and len(self.device_ids) > 1:
-                # intra-node buffer sync
-                result = torch.cuda.comm.broadcast_coalesced(
-                    self.modules_buffers[0], self.device_ids, self.broadcast_bucket_size
-                )
-                for tensors, module_buffers in zip(result[1:], self.modules_buffers[1:]):
-                    for tensor, buffer in zip(tensors, module_buffers):
-                        buffer.set_(tensor)
+            self._distributed_broadcast_coalesced(self.module_buffers, self.broadcast_bucket_size)
         self.logger.debug("Intra-node buffer sync complete")
 
     def _distributed_broadcast_coalesced(self, tensors: List[torch.Tensor], buffer_size: int) -> None:
@@ -443,16 +366,12 @@ class GossipDataParallel(Module):
         super(GossipDataParallel, self).train(mode)
         if self.sgp:
             self.gossip_enable = True
-        for module in self._module_copies[1:]:
-            module.train(mode)
         return self
 
     def eval(self) -> "GossipDataParallel":
         super(GossipDataParallel, self).eval()
         if self.sgp:
             self.gossip_enable = False
-        for module in self._module_copies[1:]:
-            return_value = module.eval()
         if self.sgp:
             self._query_gossip_queue(non_blocking=self.asynch)
         return self
@@ -968,31 +887,6 @@ class GossipDataParallel(Module):
 
         def hook(*unused: Any) -> None:
             # reduce gradients across devices on a single machine
-            if len(self.device_ids) > 1:
-
-                # collect gradients from all copies
-                all_grads: List[List[torch.Tensor]] = [[] for _ in range(len(self._module_copies))]
-                for dev_idx, module in enumerate(self._module_copies):
-                    for p in module.parameters():
-                        if not p.requires_grad or p.grad is None:
-                            continue
-                        all_grads[dev_idx].append(p.grad)
-
-                # reduce grads
-                # TODO: deprecate this entire method as well
-                reduced_grads = reduce_add_coalesced(all_grads, self.output_device, self.nccl_reduce_bucket_size)
-
-                # update grads with reduced grads
-                for grad, reduced in zip(all_grads[0], reduced_grads):
-                    grad.copy_(reduced)
-
-                # clear the gradients and parameters across all replicas
-                for module in self._module_copies[1:]:
-                    for param in module.parameters():
-                        if param.requires_grad:
-                            param.grad = None
-                            param.data.set_()
-
             if self.nprocs_per_node > 1 and self.local_node_group is not None:
                 grads = []
                 for p in self.module.parameters():
@@ -1025,6 +919,9 @@ class GossipDataParallel(Module):
 
         def hook(*unused: Any) -> None:
             """ Query gossip queue and de-bias during forward pass """
+            # sync buffers before the forward pass
+            self._sync_buffers()
+
             # gossip during training (not inference)
             if self.sgp:
                 if self.gossip_enable:

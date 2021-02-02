@@ -122,11 +122,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         return 2
 
     def _prepare_single_device_module(
-        self,
-        devices: List[torch.device],
-        device_ids: List[int],
-        slowmo_init_dict: Dict[Any, Any],
-        global_batch_size: int,
+        self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], global_batch_size: int,
     ):
         if not torch.distributed.is_initialized():
             torch.distributed.init_process_group(
@@ -135,7 +131,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
         model = Net()
         slowmo_model = GossipDataParallel(
             copy.deepcopy(model).to(devices[0]),
-            device_ids=device_ids,
             comm_device=devices[0],
             rank=self.rank,
             world_size=self.world_size,
@@ -150,11 +145,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         return model, slowmo_model, input, target
 
     def _test_slowmo_with_slowmo_freq_1(
-        self,
-        devices: List[torch.device],
-        device_ids: List[int],
-        slowmo_init_dict: Dict[Any, Any],
-        model_optimizer_momentum: float = 0,
+        self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0,
     ) -> None:
         """
         Note: we pass down `device_ids` all the way to GossipDataParallel
@@ -168,7 +159,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         global_batch_size = self.world_size * local_batch_size
 
         model, slowmo_model, input, target = self._prepare_single_device_module(
-            devices, device_ids, slowmo_init_dict, global_batch_size
+            devices, slowmo_init_dict, global_batch_size
         )
         model_optimizer = torch.optim.SGD(
             model.parameters(), lr=slowmo_model.slowmo_lr, momentum=slowmo_model.slowmo_momentum,
@@ -199,9 +190,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
             torch.manual_seed(1337 + iteration)
             input = input[torch.randperm(global_batch_size)]
 
-    def _test_slowmo_with_slowmo_freq_ge_2(
-        self, devices: List[torch.device], device_ids: List[int], slowmo_init_dict: Dict[Any, Any]
-    ) -> None:
+    def _test_slowmo_with_slowmo_freq_ge_2(self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any]) -> None:
         """
         Note: we pass down `device_ids` all the way to GossipDataParallel
         as part of the test. Below you find tests that either use a list of
@@ -214,7 +203,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         global_batch_size = self.world_size * local_batch_size
 
         model, slowmo_model, input, target = self._prepare_single_device_module(
-            devices, device_ids, slowmo_init_dict, global_batch_size
+            devices, slowmo_init_dict, global_batch_size
         )
         base_lr, base_momentum = 1, 0
         model_optimizer = torch.optim.SGD(model.parameters(), lr=base_lr, momentum=base_momentum)
@@ -262,18 +251,14 @@ class GossipDataParallelTest(MultiProcessTestCase):
             input = input[torch.randperm(global_batch_size)]
 
     def _test_localsgd_with_freq_ge_2(
-        self,
-        devices: List[torch.device],
-        device_ids: List[int],
-        slowmo_init_dict: Dict[Any, Any],
-        model_optimizer_momentum: float = 0,
+        self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0,
     ) -> None:
         torch.cuda.set_device(devices[0])
         local_batch_size = len(devices)
         global_batch_size = self.world_size * local_batch_size
 
         model, slowmo_model, input, target = self._prepare_single_device_module(
-            devices, device_ids, slowmo_init_dict, global_batch_size
+            devices, slowmo_init_dict, global_batch_size
         )
         self.assertEqual(model_optimizer_momentum, 0)
         self.assertFalse(slowmo_model.slowmo)
@@ -317,11 +302,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
             input = input[torch.randperm(global_batch_size)]
 
     def _test_memory_usage_localsgd_with_slowmo(
-        self,
-        devices: List[torch.device],
-        device_ids: List[int],
-        slowmo_init_dict: Dict[Any, Any],
-        use_gossip_data_parallel: bool = False,
+        self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], use_gossip_data_parallel: bool = False,
     ) -> int:
         torch.cuda.set_device(devices[0])
         torch.cuda.reset_peak_memory_stats(devices[0])
@@ -337,7 +318,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
         if use_gossip_data_parallel:
             model: nn.Module = GossipDataParallel(
                 LargeNet().to(devices[0]),
-                device_ids=device_ids,
                 comm_device=devices[0],
                 rank=self.rank,
                 world_size=self.world_size,
@@ -379,7 +359,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_1(
-            devices, int_devices, {"localsgd": True, "localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},
+            devices, {"localsgd": True, "localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},
         )
 
     @requires_nccl()
@@ -388,7 +368,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_1(  # type: ignore
-            devices, devices, {"localsgd": True, "localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},  # type: ignore
+            devices, {"localsgd": True, "localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},  # type: ignore
         )  # type: ignore
 
     @requires_nccl()
@@ -398,7 +378,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_1(
             devices,
-            int_devices,
             {
                 "localsgd": True,
                 "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in GossipDataParallel in the one node case
@@ -421,7 +400,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
     #     self._test_slowmo_with_process_group(
     #         process_group,
     #         devices,
-    #         device_ids,
     #         {
     #             "localsgd": True,
     #             "localsgd_frequency": 1,
@@ -441,7 +419,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_1(
             devices,
-            int_devices,
             {
                 "localsgd": True,
                 "localsgd_frequency": 1,
@@ -459,7 +436,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_1(
             devices,
-            int_devices,
             {"localsgd": False, "nprocs_per_node": 1, "slowmo_momentum": 0.5, "slowmo_frequency": 1},
             model_optimizer_momentum=0.5,
         )
@@ -471,7 +447,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_ge_2(
             devices,
-            int_devices,
             {
                 "localsgd": True,
                 "localsgd_frequency": 1,
@@ -487,9 +462,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_ge_2(
-            devices,
-            int_devices,
-            {"localsgd": False, "nprocs_per_node": 1, "slowmo_momentum": 0.5, "slowmo_frequency": 2},
+            devices, {"localsgd": False, "nprocs_per_node": 1, "slowmo_momentum": 0.5, "slowmo_frequency": 2},
         )
 
     @requires_nccl()
@@ -499,7 +472,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_ge_2(
             devices,
-            int_devices,
             {
                 "localsgd": True,
                 "localsgd_frequency": 1,
@@ -516,7 +488,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_localsgd_with_freq_ge_2(
-            devices, int_devices, {"localsgd": True, "localsgd_frequency": 2, "nprocs_per_node": 1, "slowmo": False},
+            devices, {"localsgd": True, "localsgd_frequency": 2, "nprocs_per_node": 1, "slowmo": False},
         )
 
     @requires_nccl()
@@ -527,13 +499,12 @@ class GossipDataParallelTest(MultiProcessTestCase):
 
         # Memory usage when running optimization locally on a single GPU
         max_memory_local = self._test_memory_usage_localsgd_with_slowmo(
-            devices, int_devices, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+            devices, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
         )
 
         # Memory usage when running optimization using LocalSGD-SlowMo
         max_memory_localsgd_slowmo = self._test_memory_usage_localsgd_with_slowmo(
             devices,
-            int_devices,
             {
                 "localsgd": True,
                 "localsgd_frequency": 1,
@@ -572,11 +543,10 @@ class GossipDataParallelTest(MultiProcessTestCase):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         max_memory_local = self._test_memory_usage_localsgd_with_slowmo(
-            devices, int_devices, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+            devices, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
         )
         max_memory_slowmo = self._test_memory_usage_localsgd_with_slowmo(
             devices,
-            int_devices,
             {
                 "localsgd": True,
                 "localsgd_frequency": 100,  # This is so that localsgd does not occur
