@@ -173,7 +173,7 @@ run_oss_benchmark: &run_oss_benchmark
       name: Run OSS Benchmark
       command: |
         python benchmarks/oss.py --world_size 4 --epochs 2
-        python benchmarks/oss.py --check_regression --world_size 4 --optim_type oss_sharded_ddp --reference_speed 660 --reference_memory 1000 --reference_loss 0.026
+        python benchmarks/oss.py --check_regression --world_size 4 --optim_type oss_sharded_ddp
 
 run_oss_gloo: &run_oss_gloo
   - run:
