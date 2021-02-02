@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 import threading
-from typing import Any, Callable, Dict, Iterable, List, Optional, OrderedDict, Sequence, Tuple, Union, cast
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union, cast
 
 import torch
 from torch.autograd import Variable
@@ -296,12 +296,12 @@ class GossipDataParallel(Module):
 
         self.logger.debug("Initialization of GossipDataParallel complete")
 
-    def state_dict(self) -> OrderedDict[str, Union[torch.Tensor, bool]]:  # type: ignore
+    def state_dict(self) -> Dict[str, Union[torch.Tensor, bool]]:  # type: ignore
         state_dict = super(GossipDataParallel, self).state_dict()
         if self.sgp:
             state_dict["ps_weight"] = self.ps_weight.cpu()
             state_dict["is_ps_numerator"] = self.is_ps_numerator  # type: ignore
-        return state_dict
+        return state_dict  # type: ignore
 
     def load_state_dict(self, state_dict: Dict[str, Union[torch.Tensor, bool]]) -> None:  # type: ignore
         if self.sgp:

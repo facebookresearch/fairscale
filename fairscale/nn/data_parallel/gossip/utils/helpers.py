@@ -13,7 +13,7 @@ import collections
 import logging
 import math
 import sys
-from typing import Any, Dict, List, MutableMapping, Protocol, Set, Tuple
+from typing import Any, Dict, List, MutableMapping, Set, Tuple
 
 import torch
 import torch.distributed as dist
@@ -73,12 +73,7 @@ def group_by_dtype(tensors: List[torch.Tensor]) -> Dict[torch.dtype, List[torch.
     return tensors_by_dtype
 
 
-class CommunicationOp(Protocol):
-    def __call__(self, tensor: torch.Tensor) -> None:
-        ...
-
-
-def communicate(tensors: List[torch.Tensor], communication_op: CommunicationOp, logger: logging.Logger = None) -> None:
+def communicate(tensors: List[torch.Tensor], communication_op: Any, logger: logging.Logger = None) -> None:
     """
     Communicate a list of tensors.
     Arguments:
@@ -92,7 +87,7 @@ def communicate(tensors: List[torch.Tensor], communication_op: CommunicationOp, 
         flat_tensor = flatten_tensors(tensors_by_dtype[dtype])
         if logger is not None:
             logger.debug("Flatten completed")
-        communication_op(tensor=flat_tensor)
+        communication_op(tensor=flat_tensor)  # type: ignore
         if logger is not None:
             logger.debug("Commmunication completed")
         with torch.no_grad():
