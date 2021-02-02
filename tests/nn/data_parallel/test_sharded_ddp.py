@@ -21,7 +21,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
-from fairscale.utils.testing import GPT2, skip_if_no_cuda, skip_if_single_gpu
+from fairscale.utils.testing import GPT2, skip_if_no_cuda, skip_if_py38, skip_if_single_gpu
 
 
 def run_one_step(rank, world_size, backend, device, temp_file_name):
@@ -112,14 +112,15 @@ def run_test(backend, device, world_size=2):
     mp.spawn(run_one_step, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
 
 
-def test_step_on_cpu():
-    run_test(backend=dist.Backend.GLOO, device=torch.device("cpu"), world_size=4)
-
-
 @skip_if_no_cuda
 @skip_if_single_gpu
-def test_step_on_gpu():
+def test_step_gpu():
     run_test(backend=dist.Backend.NCCL, device=torch.device("cuda"))
+
+
+@skip_if_py38
+def test_step_cpu():
+    run_test(backend=dist.Backend.GLOO, device=torch.device("cpu"))
 
 
 def run_ddp_parity(rank, world_size, backend, temp_file_name):
