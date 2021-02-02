@@ -156,7 +156,9 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def test_cpu_offload_and_cpu_grads(self):
         for move_grads_choice in (True, None):
             config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": move_grads_choice}
-            test_fn = functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False)
+            test_fn = functools.partial(
+                self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False
+            )
             spawn_and_init(test_fn)
 
     def test_cpu_offload_and_cuda_grads(self):
