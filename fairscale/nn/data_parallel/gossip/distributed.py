@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 import threading
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union, cast
+from typing import Any, Callable, Dict, Iterable, List, Optional, OrderedDict, Sequence, Tuple, Union, cast
 
 import torch
 from torch.autograd import Variable
@@ -296,34 +296,23 @@ class GossipDataParallel(Module):
 
         self.logger.debug("Initialization of GossipDataParallel complete")
 
-    # Not anntotating temporarily. Function definition is broken
-    def state_dict(self, finish_gossip=True):
-        # If user is saving the model, complete the gossip to avoid losing
-        # the information which has been sent by a peer. If _query_gossip_queue
-        # is not called here, it would only be called in the next
-        # pre_forward_hook and information sent by the peer will be lost
-        # if the checkpoint is restored
-        if finish_gossip:
-            self._query_gossip_queue()
-
+    def state_dict(self) -> OrderedDict[str, Union[torch.Tensor, bool]]:  # type: ignore
         state_dict = super(GossipDataParallel, self).state_dict()
         if self.sgp:
-            state_dict = {
-                "state_dict": state_dict,
-                "ps_weight": self.ps_weight.cpu(),
-                "is_ps_numerator": self.is_ps_numerator,
-            }
+            state_dict["ps_weight"] = self.ps_weight.cpu()
+            state_dict["is_ps_numerator"] = self.is_ps_numerator  # type: ignore
         return state_dict
 
-    # Not anntotating temporarily. Function definition is different from superclass
-    def load_state_dict(self):
+    def load_state_dict(self, state_dict: Dict[str, Union[torch.Tensor, bool]]) -> None:  # type: ignore
         if self.sgp:
-            state_dict = load_dict["state_dict"]
-            super(GossipDataParallel, self).load_state_dict(state_dict)
-            self.ps_weight = load_dict["ps_weight"].to(device=self.dist_config["comm_device"])
-            self.is_ps_numerator = load_dict["is_ps_numerator"]
+            assert isinstance(state_dict, dict)
+            self.ps_weight = cast(torch.Tensor, state_dict.pop("ps_weight")).to(
+                device=cast(torch.device, self.dist_config["comm_device"])
+            )
+            self.is_ps_numerator = cast(bool, state_dict.pop("is_ps_numerator"))
+            super(GossipDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
         else:
-            super(GossipDataParallel, self).load_state_dict(load_dict)
+            super(GossipDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Union[torch.Tensor, List[torch.Tensor]]:
         """ Forward pass performed in parallel across all devices on node """
@@ -337,14 +326,20 @@ class GossipDataParallel(Module):
         else:
             return self.module(*inputs[0], **kwargs[0])  # type: ignore
 
-    def scatter(self, inputs, kwargs, device_ids) -> Tuple[Union[torch.Tensor, List[torch.Tensor]], Any]:
+    def scatter(
+        self, inputs: Any, kwargs: Any, device_ids: Sequence[Union[int, torch.device]]
+    ) -> Tuple[Union[torch.Tensor, List[torch.Tensor]], Any]:
         return scatter_kwargs(inputs, kwargs, device_ids, dim=0)
 
-    def parallel_apply(self, replicas, inputs, kwargs) -> List[torch.Tensor]:
+    def parallel_apply(
+        self, replicas: Sequence[Module], inputs: Sequence[Any], kwargs: Optional[Any]
+    ) -> List[torch.Tensor]:
         return parallel_apply(replicas, inputs, kwargs, self.device_ids[: len(replicas)])
 
-    def gather(self, outputs, output_device) -> List[torch.Tensor]:
-        return gather(outputs, output_device, dim=0)
+    def gather(
+        self, outputs: Any, output_device: Union[int, torch.device, Sequence[Union[int, torch.device]]]
+    ) -> List[torch.Tensor]:
+        return gather(outputs, output_device, dim=0)  # type: ignore
 
     def _sync_params(self) -> None:
         if len(self.device_ids) > 1:
@@ -717,7 +712,7 @@ class GossipDataParallel(Module):
         gossip_ps_weight: torch.Tensor,
         gossip_lock: threading.Lock,
         dist_config: Dict[Any, Any],
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # flatten parameters before sending
         out_msg = flatten_tensors(send_buffer)
 
@@ -738,7 +733,7 @@ class GossipDataParallel(Module):
 
     @staticmethod
     def _gossip_target(
-        dist_config,
+        dist_config: Dict[Any, Any],
         gossip_flag: threading.Event,
         train_flag: threading.Event,
         gossip_lock: threading.Lock,
@@ -1005,7 +1000,7 @@ class GossipDataParallel(Module):
                     if self.overlap:
                         self._query_gossip_queue()
 
-        def queue_hook(*unused):
+        def queue_hook(*unused: Any) -> None:
             Variable._execution_engine.queue_callback(hook)
 
         return queue_hook
