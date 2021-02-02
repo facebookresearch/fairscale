@@ -311,11 +311,6 @@ class GossipDataParallel(Module):
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Union[torch.Tensor, List[torch.Tensor]]:
         """ Forward pass performed in parallel across all devices on node """
-        # scatter inputs onto devices
-        self.module
-        # print(inputs)
-        # print(*inputs)
-        # print(*inputs[0])
         return self.module(*inputs, **kwargs)  # type: ignore
 
     def _sync_params(self) -> None:
