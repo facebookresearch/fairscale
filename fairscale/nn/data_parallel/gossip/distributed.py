@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 import threading
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union, cast
 
 import torch
 from torch.autograd import Variable
@@ -459,58 +459,27 @@ class GossipDataParallel(Module):
                 yield p.view(-1), fp32_params[offset : offset + numel]
                 offset += numel
 
-    def perform_additional_optimizer_actions(
-        self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor] = None
-    ) -> None:
-        """Perform additional steps needed for SGP/LocalSGD/SlowMo"""
-        # Done here in case the global momentum buffers has not been initialized by the caller.
-        # In an ideal implementation, this would be called by the caller. We do it here instead of
-        # waiting for it to happen in the global_momentum step function so that we store a copy of
-        # the version of the parameters at iteration 0 and can use them for a slow momentum step later
-        if not self.global_momentum_buffers_initialized:
-            self.init_global_momentum_buffers(optimizer)
-        fp16_fp32_list = list(self.fp16_fp32_iterator(optimizer, fp32_params))
+    def should_perform_slowmo(self) -> bool:
+        return self.slowmo and (self.num_updates + 1) % self.slowmo_frequency == 0
 
-        self.logger.debug("Created a list of fp16 and fp32 corresponding parameters")
+    def should_perform_localsgd(self) -> bool:
+        return self.localsgd and (self.num_updates + 1) % self.localsgd_frequency == 0
 
-        perform_slowmo_step = self.slowmo and (self.num_updates + 1) % self.slowmo_frequency == 0
-
-        perform_localsgd_step = self.localsgd and (self.num_updates + 1) % self.localsgd_frequency == 0
-
+    def should_allreduce_params(self) -> bool:
         # We do not all-reduce parameters with local SGD if a slow momentum step is
         # performed, since this step contains a reduce operation already. Note that this
         # also means there is no error feedback correction in that case: it is not needed
         # since communication within the slow momentum step happens in fp32.
-        allreduce_params = (self.sgp and perform_slowmo_step and self.slowmo_sgp_average_params) or (
-            perform_localsgd_step and not perform_slowmo_step
+        return (self.sgp and self.should_perform_slowmo() and self.slowmo_sgp_average_params) or (
+            self.should_perform_localsgd() and not self.should_perform_slowmo()
         )
 
-        self.logger.debug(
-            "Booleans set. Values - perform_slowmo_step=%r, perform_localsgd_step=%r, allreduce_params=%r",
-            perform_slowmo_step,
-            perform_localsgd_step,
-            allreduce_params,
-        )
-        self.logger.debug("Step number(0-indexed)=%d", self.num_updates)
-
-        if (
-            self.num_updates == 0
-            and fp32_params is None
-            and not hasattr(optimizer, "_amp_stash")
-            and any(p.dtype == torch.float16 for p in self.parameters())
-        ):
-            self.logger.warning(
-                "WARNING: please set fp32_params in "
-                "perform_additional_optimizer_actions in order to "
-                "avoid accuracy loss"
-            )
-
+    def maybe_pre_communicate_error_feedback(self, fp16_fp32_list) -> None:
         ef_rec = self.create_event_recorder("Error feedback")
-        # Error Feedback Implementation
-        if self.sgp or allreduce_params:
+        if self.sgp or self.should_allreduce_params():
             with torch.no_grad():
                 for p_fp16, p_fp32 in fp16_fp32_list:
-                    if allreduce_params:
+                    if self.should_allreduce_params():
                         # This division and multiplication with the same number is done
                         # to ensure that we do not lose bits of information when we divide
                         # before the all_reduce. In order to preserve these bits in an
@@ -528,17 +497,29 @@ class GossipDataParallel(Module):
         ef_rec.stop()
         self.logger.debug("Error feedback completed")
 
+    def maybe_post_communicate_error_feedback(self, fp16_fp32_list) -> None:
+        ef_unroll_rec = self.create_event_recorder("Sync and error feedback unroll rec")
+        if self.sgp or self.should_allreduce_params():
+            # Error Feedback Reversal
+            with torch.no_grad():
+                for p, p_fp32 in fp16_fp32_list:
+                    p_fp32 += p.float()
+        ef_unroll_rec.stop()
+        self.logger.debug("Error feedback unroll completed")
+
+    def maybe_perform_sgp(self) -> None:
         if self.sgp and not self.overlap:
             sgp_rec = self.create_event_recorder("SGP")
-            if not allreduce_params:
+            if not self.should_allreduce_params():
                 self.transfer_params()
                 self._query_gossip_queue()
                 torch.cuda.synchronize()
             sgp_rec.stop()
             self.logger.debug("SGP completed")
 
+    def maybe_allreduce(self) -> None:
         localsgd_rec = self.create_event_recorder("Localsgd communication time")
-        if allreduce_params:
+        if self.should_allreduce_params():
             communication_op = functools.partial(dist.all_reduce, group=self.master_group)
             params = cast(List[torch.Tensor], list(self.parameters()))
             with torch.no_grad():
@@ -557,42 +538,83 @@ class GossipDataParallel(Module):
             self.logger.debug("Allreduce completed")
         localsgd_rec.stop()
 
-        ef_unroll_rec = self.create_event_recorder("Sync and error feedback unroll rec")
-        if self.sgp or allreduce_params:
+    def maybe_sync_locally(self) -> None:
+        if self.sgp or self.should_allreduce_params():
             self._sync_params()
             torch.cuda.synchronize()
 
-            # Error Feedback Reversal
-            with torch.no_grad():
-                for p, p_fp32 in fp16_fp32_list:
-                    p_fp32 += p.float()
-        ef_unroll_rec.stop()
-        self.logger.debug("Error feedback unroll completed")
-
+    def maybe_perform_slowmo(self, optimizer) -> None:
         slowmo_rec = self.create_event_recorder("Slowmo")
-        if perform_slowmo_step:
+        if self.should_perform_slowmo():
             self.global_momentum_step(optimizer)
         slowmo_rec.stop()
         self.logger.debug("Global momentum step completed")
 
+    def maybe_copy_back_fp32_parameters(self, fp16_fp32_list) -> None:
         ef_copy_rec = self.create_event_recorder("Error feedback copy back")
-        if (self.sgp or allreduce_params or perform_slowmo_step) and fp16_fp32_list:
+        if (self.sgp or self.should_allreduce_params() or self.should_perform_slowmo()) and fp16_fp32_list:
+            with torch.no_grad():
+                for idx, (p_fp16, p_fp32) in enumerate(fp16_fp32_list):
+                    p_fp16.copy_(p_fp32)
+        ef_copy_rec.stop()
+        self.logger.debug("Error feedback copy-back completed")
+
+    def sgp_overlap_pre_communicate_error_feedback(self, fp16_fp32_list) -> None:
+        if self.sgp and self.overlap and fp16_fp32_list:
             # Initialize error feedback for SGP-overlap
-            if self.sgp and self.overlap and self.ef1 is None:
+            if self.ef1 is None:
                 self.ef1 = []
                 for _, p_fp32 in fp16_fp32_list:
                     self.ef1.append(p_fp32.clone().detach_())
 
-            # copy FP32 params back into FP16 model
             with torch.no_grad():
                 for idx, (p_fp16, p_fp32) in enumerate(fp16_fp32_list):
-                    p_fp16.copy_(p_fp32)
-
                     assert self.ef1 is not None
-                    if self.sgp and self.overlap:
-                        self.ef1[idx].copy_(p_fp32 - p_fp16.float())
-        ef_copy_rec.stop()
-        self.logger.debug("Error feedback copy-back completed")
+                    self.ef1[idx].copy_(p_fp32 - p_fp16.float())
+
+    def perform_additional_optimizer_actions(
+        self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor] = None
+    ) -> None:
+        """Perform additional steps needed for SGP/LocalSGD/SlowMo"""
+        # Done here in case the global momentum buffers has not been initialized by the caller.
+        # In an ideal implementation, this would be called by the caller. We do it here instead of
+        # waiting for it to happen in the global_momentum step function so that we store a copy of
+        # the version of the parameters at iteration 0 and can use them for a slow momentum step later
+        if not self.global_momentum_buffers_initialized:
+            self.init_global_momentum_buffers(optimizer)
+
+        fp16_fp32_list = list(self.fp16_fp32_iterator(optimizer, fp32_params))
+        self.logger.debug("Created a list of fp16 and fp32 corresponding parameters")
+
+        self.logger.debug(
+            "Booleans set. Values - self.should_perform_slowmo()=%r, self.should_perform_localsgd()=%r, self.should_allreduce_params()=%r",
+            self.should_perform_slowmo(),
+            self.should_perform_localsgd(),
+            self.should_allreduce_params(),
+        )
+        self.logger.debug("Step number(0-indexed)=%d", self.num_updates)
+
+        if (
+            self.num_updates == 0
+            and fp32_params is None
+            and not hasattr(optimizer, "_amp_stash")
+            and any(p.dtype == torch.float16 for p in self.parameters())
+        ):
+            self.logger.warning(
+                "WARNING: please set fp32_params in "
+                "perform_additional_optimizer_actions in order to "
+                "avoid accuracy loss"
+            )
+
+        self.maybe_pre_communicate_error_feedback(fp16_fp32_list)
+        self.maybe_perform_sgp()
+        self.maybe_allreduce()
+        self.maybe_sync_locally()
+        self.maybe_post_communicate_error_feedback(fp16_fp32_list)
+        self.maybe_perform_slowmo(optimizer)
+        self.maybe_copy_back_fp32_parameters(fp16_fp32_list)
+        if self.sgp and self.overlap:
+            self.sgp_overlap_pre_communicate_error_feedback(fp16_fp32_list)
 
         self.num_updates += 1
 
