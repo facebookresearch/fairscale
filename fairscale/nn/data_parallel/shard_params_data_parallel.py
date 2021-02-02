@@ -90,7 +90,7 @@ class ShardParamsDataParallel(nn.Module):
         cpu_offload: bool = False,
         compute_device: Optional[torch.device] = None,
         compute_dtype: Optional[torch.dtype] = None,
-        move_grads_to_cpu: bool = False,
+        move_grads_to_cpu: Optional[bool] = None,
     ):
         super().__init__()
         self.process_group = process_group or dist.new_group()
@@ -103,12 +103,13 @@ class ShardParamsDataParallel(nn.Module):
         self.cpu_offload = cpu_offload
         self.compute_device = compute_device or torch.device("cuda")
         self.compute_dtype = compute_dtype or (torch.float16 if mixed_precision else torch.float32)
-        self.move_grads_to_cpu = move_grads_to_cpu
+        self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
         if self.cpu_offload and not self.mixed_precision:
             raise ValueError("cpu_offload requires mixed_precision=True")
+
 
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to
