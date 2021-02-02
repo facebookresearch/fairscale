@@ -30,7 +30,6 @@ class DistributedTest(unittest.TestCase):
             raise unittest.SkipTest("NCCL doesn't support Windows, skipping test")
         if torch.cuda.device_count() < 2:
             raise unittest.SkipTest("distributed tests require 2+ GPUs, skipping")
-        torch.manual_seed(0)  # keep everything deterministic
 
     @staticmethod
     def _train_for_several_steps(model, num_steps, autocast):
@@ -183,6 +182,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
                 return ShardParamsDataParallel(layer, group, **config)
             return layer
 
+        torch.manual_seed(0)  # keep everything deterministic
         model = nn.Sequential(
             nn.Linear(8, 4), _maybe_wrap(nn.Linear(4, 16)), _maybe_wrap(nn.Linear(16, 4)), nn.Linear(4, 8),
         )
