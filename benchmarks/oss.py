@@ -276,9 +276,6 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", action="store", default=10, type=int)
     parser.add_argument("--batch_size", action="store", default=256, type=int)
     parser.add_argument("--check_regression", action="store_true", default=False)
-    parser.add_argument("--reference_speed", action="store", default=1430, type=float)
-    parser.add_argument("--reference_memory", action="store", default=1220, type=float)
-    parser.add_argument("--reference_loss", action="store", default=0.006, type=float)
     parser.add_argument(
         "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
     )
