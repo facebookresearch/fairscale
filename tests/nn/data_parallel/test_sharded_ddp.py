@@ -342,6 +342,35 @@ def test_random_attributes():
     dist.destroy_process_group()
 
 
+def run_test_device_change(rank, world_size, backend, device, temp_file_name):
+    # Check that the wrapped module can change devices
+
+    url = "file://" + temp_file_name
+    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+
+    model = Sequential(Linear(2, 3), Linear(3, 3)).cpu()
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    ddp_model = ShardedDataParallel(model, optimizer)
+    ddp_model.to(device)
+
+    inputs = torch.rand((10, 2), device=device)
+    outputs = ddp_model(inputs)  # assert if the module has not been changed properly
+    loss = outputs.norm().backward()
+
+    dist.destroy_process_group()
+
+
+@skip_if_no_cuda
+@skip_if_single_gpu
+def test_device_change():
+    # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
+    world_size = 2
+    backend = "gloo"
+    temp_file_name = tempfile.mkstemp()[1]
+    device = "cuda"
+    mp.spawn(run_test_device_change, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
+
+
 def run_test_ddp_sync_batch_norm(rank, world_size, backend, device, temp_file_name):
     url = "file://" + temp_file_name
     dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
