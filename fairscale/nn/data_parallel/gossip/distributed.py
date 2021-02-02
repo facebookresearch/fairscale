@@ -55,32 +55,47 @@ class GossipDataParallel(Module):
     def __init__(
         self,
         module: torch.nn.Module,
-        device_ids: Optional[List[int]] = None,
-        output_device: Optional[int] = None,
-        broadcast_buffers: bool = True,
-        rank: Optional[int] = None,
-        world_size: Optional[int] = None,
+        nprocs_per_node: int = 1,  # To be specified as the number of GPUs in a node
+        broadcast_buffers: bool = True,  # Copy from Pytorch DDP
+
+        # SlowMo parameters
+        slowmo: bool = True,
+        # Might need to be tuned depending on the use case
+        slowmo_momentum: float = 0.5,
+        # Most probably don't need to be changed
+        slowmo_frequency: int = 48,
+        slowmo_lr: float = 1.0,
+        # Only to be tuned if slow momentum is becoming a bottleneck
+        slowmo_world_size: int = 32,
+
+        # SlowMo algorithm parameters
+        # LocalSGD
+        localsgd: bool = False,
+        localsgd_frequency: int = 48,
+        # SGP
         graph: Optional[GraphManager] = None,
         mixing: Optional[MixingManager] = None,
-        comm_device: Optional[torch.device] = None,
         push_sum: bool = True,
         overlap: bool = False,
         synch_freq: int = 0,
+        use_streams: bool = True,
+        slowmo_sgp_average_params: bool = False,
+
+        # For debugging
         verbose: bool = False,
         profile_mode: bool = False,
-        use_streams: bool = True,
-        nprocs_per_node: int = 1,
+
+        # Most probably not needed. Process groups can be specified only if they are to be re-used to save memory
+        rank: Optional[int] = None,
+        world_size: Optional[int] = None,
         global_group: Optional[torch.distributed.ProcessGroup] = None,
         master_group: Optional[torch.distributed.ProcessGroup] = None,
         local_node_group: Optional[torch.distributed.ProcessGroup] = None,
-        slowmo: bool = True,
-        slowmo_lr: float = 1.0,
-        slowmo_momentum: float = 0.5,
-        slowmo_frequency: int = 48,
-        slowmo_sgp_average_params: bool = False,
-        slowmo_world_size: int = 32,
-        localsgd: bool = False,
-        localsgd_frequency: int = 48,
+        comm_device: Optional[torch.device] = None,
+
+        # Deprecated: these are needed for single process per node
+        device_ids: Optional[List[int]] = None,
+        output_device: Optional[int] = None,
     ) -> None:
         super(GossipDataParallel, self).__init__()
 
