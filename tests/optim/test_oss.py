@@ -759,25 +759,51 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     torch.cuda.set_device(rank)
     torch.manual_seed(rank)
     np.random.seed(rank)
+    hidden = 5
+    in_channels = 3
+    out_channels = 3
+    batch = 64
 
     def check_optimizer_equivalence(optimizer: Type[torch.optim.Optimizer]):
         # Any model works. Add one different buffer per rank
-        model = torch.nn.Sequential(torch.nn.Linear(2, 3), torch.nn.Linear(3, 3), torch.nn.Linear(3, 3),)
-        model.register_buffer("test_buffer", torch.ones((1)) * rank)
-        model.to(device)
+        trunk = torch.nn.Sequential(torch.nn.Linear(in_channels, hidden), torch.nn.Linear(hidden, hidden))
+        trunk.register_buffer("test_buffer", torch.ones((1)) * rank)
+        trunk.to(device)
 
-        optimizer_settings = {"lr": 1e-3}
+        head = torch.nn.Linear(hidden, out_channels).to(device)
+
+        # Define a model to be trained by OSS
+        oss_model = torch.nn.Sequential(trunk, head)
+        oss_trainable_params = [
+            {"params": trunk.parameters(), "lr": 1e-5},
+            {"params": head.parameters(), "lr": 1e-4},
+        ]
+
+        optimizer_settings = {}
         if isinstance(optim, torch.optim.SGD):
             optimizer_settings["momentum"] = 0.9
 
         sharded_optimizer = optim.OSS(
-            params=model.parameters(), optim=optimizer, group=None, broadcast_buffer_size=2 ** 10, **optimizer_settings
+            params=oss_trainable_params,
+            optim=optimizer,
+            group=None,
+            broadcast_buffer_size=2 ** 10,
+            **optimizer_settings,
         )
-        sharded_ddp_model = DDP(module=model, device_ids=[rank], broadcast_buffers=True)
 
-        ddp_model_single = copy.deepcopy(model)
-        ddp_optimizer = optimizer(ddp_model_single.parameters(), **optimizer_settings)  # type: ignore
-        ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True)
+        oss_ddp_model = DDP(module=oss_model, device_ids=[rank], broadcast_buffers=True)
+
+        # Define a model to be trained by normal pytorch + DDP
+        ddp_trunk = copy.deepcopy(trunk)
+        ddp_head = copy.deepcopy(head)
+        ddp_module = torch.nn.Sequential(ddp_trunk, ddp_head)
+
+        ddp_trainable_params = [
+            {"params": ddp_trunk.parameters(), "lr": 1e-5},
+            {"params": ddp_head.parameters(), "lr": 1e-4},
+        ]
+        ddp_optimizer = optimizer(ddp_trainable_params, **optimizer_settings)  # type: ignore
+        ddp_model = DDP(module=ddp_module, device_ids=[rank], broadcast_buffers=True)
 
         def check_same_model_params():
             for pg, ddp_pg in zip(sharded_optimizer.param_groups, ddp_optimizer.param_groups):
@@ -786,13 +812,13 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                         p, ddp_p, atol=1e-3
                     ), f"Model parameters differ in between Pytorch optim and OSS \n{p} {ddp_p}\nworld size {world_size}"
 
-            for b, ddp_b in zip(sharded_ddp_model.buffers(), ddp_model.buffers()):
+            for b, ddp_b in zip(oss_ddp_model.buffers(), ddp_model.buffers()):
                 assert torch.allclose(
                     b, ddp_b
                 ), f"Model buffers differ in between Pytorch optim and OSS\nworld size {world_size}"
 
         def check_step():
-            input_tensor = torch.rand((64, 2)).to(device)
+            input_tensor = torch.rand((batch, in_channels)).to(device)
 
             def closure_ddp(input_tensor=input_tensor):
                 ddp_optimizer.zero_grad()
@@ -802,7 +828,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
 
             def closure_sharded(input_tensor=input_tensor):
                 sharded_optimizer.zero_grad()
-                sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
+                sharded_loss = oss_ddp_model(input_tensor).abs().sum()
                 sharded_loss.backward()
                 return sharded_loss
 
@@ -817,7 +843,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         check_same_model_params()
 
         # The models should stay the same in between ddp and sharded optimizer
-        for i in range(20):
+        for i in range(5):
             check_step()
             check_same_model_params()
 
