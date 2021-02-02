@@ -54,7 +54,9 @@ skip_if_single_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 2, reason="multiple GPUs required"
 )
 
-skip_if_py38 = pytest.mark.skipif(sys.version_info.major == 3 and sys.version_info.minor == 8)
+skip_if_py38 = pytest.mark.skipif(
+    sys.version_info.major == 3 and sys.version_info.minor == 8, reason="Python3.8 is skipped"
+)
 
 _, filename_mpi = tempfile.mkstemp()
 
