@@ -109,16 +109,9 @@ def mpi():
 @torch_spawn([1])
 @pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
 def public_attrs(pipe_class):
-    class MyString:
-        def __init__(self, value):
-            self.value = value
-
-        def __str__(self):
-            return self.value
-
     model = nn.Sequential(nn.Linear(1, 1))
 
-    pipe = pipe_class(model, balance=(1,), worker_map=get_worker_map(), chunks=42.000, checkpoint=MyString("always"),)
+    pipe = pipe_class(model, balance=(1,), worker_map=get_worker_map(), chunks=42, checkpoint="always",)
 
     assert pipe.balance == [1]
     assert pipe.chunks == 42
