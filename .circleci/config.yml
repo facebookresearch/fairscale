@@ -168,6 +168,12 @@ run_pipe_benchmark: &run_pipe_benchmark
       command: |
         python benchmarks/pipe.py
 
+run_mp_pipe_benchmark: &run_mp_pipe_benchmark
+  - run:
+      name: Run Multiprocess Pipe Benchmark
+      command: |
+        python benchmarks/pipe.py --multiprocess
+
 run_oss_benchmark: &run_oss_benchmark
   - run:
       name: Run OSS Benchmark
@@ -443,6 +449,8 @@ jobs:
       - <<: *install_repo_gpu
 
       - <<: *run_pipe_benchmark
+
+      - <<: *run_mp_pipe_benchmark
 
       - <<: *run_oss_benchmark
 
