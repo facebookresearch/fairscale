@@ -58,6 +58,11 @@ skip_if_py38 = pytest.mark.skipif(
     sys.version_info.major == 3 and sys.version_info.minor == 8, reason="Python3.8 is skipped"
 )
 
+skip_if_py39_no_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available() and sys.version_info.major == 3 and sys.version_info.minor == 9,
+    reason="Python3.9 wo CUDA is skipped",
+)
+
 _, filename_mpi = tempfile.mkstemp()
 
 
