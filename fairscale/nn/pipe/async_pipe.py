@@ -13,7 +13,7 @@ from torch import Tensor, nn
 
 from .async_pipeline import AsyncPipeline
 from .async_schedule import Invocation, Location, ModuleWrapper
-from .multiprocess_pipe import MultiProcessPipe, check_balance
+from .multiprocess_pipe import MultiProcessPipe
 from .skip.skippable import Skippable
 from .types import LazyModule
 
@@ -54,14 +54,8 @@ class AsyncPipe(MultiProcessPipe):
         )
 
     def instantiate_partition(
-        self,
-        module: Union[nn.Sequential, List[LazyModule]],
-        balance: Iterable[int],
-        group: torch.distributed.ProcessGroup,
+        self, module: Union[nn.Sequential, List[LazyModule]], balance: List[int], group: torch.distributed.ProcessGroup,
     ) -> List[ModuleWrapper]:
-        balance = list(balance)
-        check_balance(module, balance, True)
-
         layers: NamedModules = OrderedDict()
 
         def maybe_realize(layer: Any) -> nn.Module:
