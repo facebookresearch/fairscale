@@ -11,6 +11,7 @@ from typing import Dict
 import unittest
 from unittest import mock
 
+from parameterized import parameterized
 import torch
 from torch import nn
 
@@ -42,11 +43,18 @@ class DistributedTest(unittest.TestCase):
                 input = model.module.get_input(torch.device("cuda"))
                 output = model(*input)
                 loss = model.module.get_loss(input, output).to(model_device)
-                print(f"loss device: {loss.device}")
             assert loss.dtype == torch.float32
             loss.backward()
             optim.step()
         return loss.detach()
+
+    @staticmethod
+    def get_wrapped_model(group, cuda_first=False, config={}, **model_kwargs) -> ShardParamsDataParallel:
+        if cuda_first:
+            model = ShardParamsDataParallel(TransformerWithSharedParams(**model_kwargs).cuda(), group, **config)
+        else:
+            model = ShardParamsDataParallel(TransformerWithSharedParams(**model_kwargs), group, **config).cuda()
+        return model
 
 
 class TestMixedPrecision(DistributedTest):
@@ -223,6 +231,53 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
         except (AssertionError, RuntimeError) as e:
             raise Exception(f"ShardParamsDataParallel didn't match PyTorch DDP using config: {config}" "\n\n{e}")
+
+
+class TestHooks(DistributedTest):
+    # Feel free to modify these tests as the implementation changes.
+    # They aspire to make sure that backward hooks are registered and used
+
+
+
+    @parameterized.expand([[True], [False]])
+    def test_output_backward_hooks(self, cuda_first):
+        fn = functools.partial(self._test_output_backward_hooks, cuda_first=cuda_first)
+        spawn_and_init(fn)
+
+    @classmethod
+    def _test_output_backward_hooks(self, rank, group, cuda_first=False):
+        model = self.get_wrapped_model(group, cuda_first=cuda_first)
+        optim = torch.optim.Adam(model.parameters(), lr=0.0001)
+        optim.zero_grad()
+        # Inputs always cuda regardless of move_grads_cpu, or model.device
+        input = model.module.get_input(torch.device("cuda"))
+        output = model(*input)
+        assert len(output._backward_hooks) == 1  # this is pre-bwd hook
+        loss = model.module.get_loss(input, output).cuda()
+        for p in model.params:
+            assert p.grad is None  # because of pre_backward_hook
+        loss.backward()
+        assert len(output._backward_hooks) == 1  # It doesn't get removed
+        optim.step()
+        assert len(output._backward_hooks) == 1
+
+    @parameterized.expand([[True], [False]])
+    def test_register_functions_called(self, cuda_first):
+        fn = functools.partial(self._test_register_functions_called, cuda_first=cuda_first)
+        spawn_and_init(fn)
+
+    @classmethod
+    def _test_register_functions_called(self, rank, group, cuda_first=False):
+        """Tests that _register_{pre|post}_backward_hooks called during forward."""
+        model = self.get_wrapped_model(group, cuda_first=cuda_first)
+        input = model.module.get_input(torch.device("cuda"))
+        model._register_post_backward_hooks = mock.MagicMock(return_value=None)
+        model._register_pre_backward_hooks = mock.MagicMock(return_value=None)
+        assert not model._register_post_backward_hooks.called
+        assert not model._register_pre_backward_hooks.called
+        model(*input)
+        assert model._register_post_backward_hooks.called
+        assert model._register_pre_backward_hooks.called
 
 
 class TransformerWithSharedParams(nn.Module):
