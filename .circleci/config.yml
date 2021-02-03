@@ -179,7 +179,7 @@ run_oss_benchmark: &run_oss_benchmark
       name: Run OSS Benchmark
       command: |
         python benchmarks/oss.py --world_size 4 --epochs 2
-        python benchmarks/oss.py --check_regression --world_size 4 --optim_type oss_sharded_ddp --reference_speed 660 --reference_memory 930 --reference_loss 0.023
+        python benchmarks/oss.py --check_regression --world_size 4 --optim_type oss_sharded_ddp
 
 run_oss_gloo: &run_oss_gloo
   - run:
@@ -193,6 +193,12 @@ run_oss_amp: &run_oss_amp
        name: Run OSS with Torch AMP
        command: |
          python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp
+
+run_oss_for_each: &run_oss_for_each
+   - run:
+       name: Run OSS with Torch AMP and ForEach optmizer
+       command: |
+         python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp --multi_tensor_optim
 
 
 run_doc_build: &run_doc_build
@@ -458,6 +464,7 @@ jobs:
 
       - <<: *run_oss_amp
 
+      - <<: *run_oss_for_each
 
 
 
