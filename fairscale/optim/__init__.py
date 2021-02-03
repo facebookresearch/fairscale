@@ -8,7 +8,7 @@
 """
 import logging
 
-from .adascale import AdaScale
+from .adascale import AdaScale, AdaScaleWrapper
 from .oss import OSS
 
 try:

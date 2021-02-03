@@ -32,13 +32,18 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import functools
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 import numpy as np
 import torch
 from torch.autograd import Variable
 import torch.distributed as dist
-from torch.optim import Optimizer
+from torch.optim import SGD, Optimizer
+
+if TYPE_CHECKING:  # pragma: no cover
+    from torch.optim.optimizer import _params_t
+else:
+    _params_t = Any
 
 
 class AdaScale(Optimizer):
@@ -582,3 +587,47 @@ class AdaScale(Optimizer):
             # When effective world size is large enough, smoothing is probably
             # not needed, so the smoothing factor is 0.
             self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
+
+
+class AdaScaleWrapper(AdaScale):
+    """
+    A thin wrapper for AdaScale so that the constructor resembles a
+    standard optimizer. This allows it to work with other Optimizer
+    Wrappers, like `OSS`.
+
+    .. warn::
+        OSS(AdaScaleWrapper) (i.e. OSS wrapping AdaScale) resulting in each
+        rank's AdaScale operates on different set of parameters. They
+        will get different gain values and it is unclear how to adjust
+        effective step size in that case. We have not validated effectiveness
+        or benefit in this case.
+
+        OTOH, AdaScale(OSS) (i.e. AdaScale wrapping OSS) is recommended
+        and is numerically identical to AdaScale without OSS. Since
+        AdaScale doesn't incur per-parameter state, the memory benefit
+        of OSS is still the same.
+
+    Args:
+        params (list of tensors):
+            parameters to be optimized
+        optim (class subtyping torch.optim.Optimizer):
+            a optimizer class to be wrapped.
+        additional_optim_args (argument dict):
+            keyward arguments to the `optim` class above.
+
+        The rest params are in-sync with the `AdaScale` class above.
+    """
+
+    def __init__(
+        self,
+        params: _params_t,
+        world_size: Optional[int] = None,
+        scale: Optional[float] = None,
+        smoothing: float = None,
+        num_gradients_to_accumulate: int = 1,
+        debias_ewma: bool = True,
+        optim_cls: Type[Optimizer] = SGD,
+        **additional_optim_args: Any,
+    ):
+        optim_obj = optim_cls(params, **additional_optim_args)
+        super().__init__(optim_obj, world_size, scale, smoothing, num_gradients_to_accumulate, debias_ewma)
