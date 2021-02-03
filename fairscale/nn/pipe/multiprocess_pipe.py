@@ -220,9 +220,6 @@ class MultiProcessPipe(Module):
     ) -> None:
         super().__init__()
 
-        chunks = int(chunks)
-        checkpoint = str(checkpoint)
-
         if chunks <= 0:
             raise ValueError("number of chunks must be positive integer")
         if checkpoint not in ["always", "except_last", "never"]:
@@ -259,17 +256,6 @@ class MultiProcessPipe(Module):
                 f" {len(self.balance)})"
             )
 
-        rank = self.group.rank()
-        if rank >= len(self.balance):
-            warnings.warn("More ranks than partitions, some ranks unused")
-            self.partitions: List[ModuleWrapper] = []
-        else:
-            self.partitions = self.instantiate_partition(module, self.balance, self.group)
-            if deferred_batch_norm:
-                for part in self.partitions:
-                    part.module = DeferredBatchNorm.convert_deferred_batch_norm(part.module, chunks)
-            for name, part in enumerate(self.partitions):
-                self.add_module(str(name), part.module)
         if isinstance(module, nn.Sequential):
             local_partitions = split_module(module, self.balance)
             self._skip_layout = inspect_skip_layout(local_partitions)
@@ -277,14 +263,22 @@ class MultiProcessPipe(Module):
             self._skip_layout = SkipLayout(len(module), {})  # FIXME(tom)
 
         rank = self.group.rank()
+        self.final_stage = rank == len(self.balance) - 1
         if rank >= len(self.balance):
+            warnings.warn("More ranks than partitions, some ranks unused")
+            self.partitions: List[ModuleWrapper] = []
             self.pipeline = None
-            self.final_stage = False
         else:
-            self.final_stage = rank == len(self.balance) - 1
-
+            self.partitions = self.instantiate_partition(module, self.balance, self.group)
+            if deferred_batch_norm:
+                for part in self.partitions:
+                    part.module = DeferredBatchNorm.convert_deferred_batch_norm(part.module, chunks)
+            for name, part in enumerate(self.partitions):
+                self.add_module(str(name), part.module)
             self.create_pipeline()
-            del module
+
+        del module
+
         if self.pipelined_backward is None:
             if get_model_parallel_world_size() > 1:
                 self.pipelined_backward = True
