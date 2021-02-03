@@ -105,7 +105,7 @@ def test_sequential(oss):
     }
 
     if oss == "oss-wrapper":
-        # When OSS wraps AdaScale, the training is neumerically different
+        # When OSS wraps AdaScale, the training is numerically different
         # and it exists only to enable future research. So we don't check
         # the gain (OSS doesn't have a gain() function, different rank's
         # gains are different). We just ensure the mean_weight is expected.
