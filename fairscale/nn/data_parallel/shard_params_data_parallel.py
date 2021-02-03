@@ -212,7 +212,7 @@ class ShardParamsDataParallel(nn.Module):
         self.params = [fixup(p, size) for p, size in zip(self.params, self.orig_sizes)]
         del self.orig_sizes
 
-    # TODO: figuring out how to do typing for this overloaded function.
+    # TODO (Min): figuring out how to do typing for this overloaded function.
     def state_dict(self, *args, **kwargs):  # type: ignore
         """
         Returns the whole (unsharded) state of the module. Parameters are not
@@ -226,7 +226,7 @@ class ShardParamsDataParallel(nn.Module):
         # returned state dict.
         return self.module.state_dict(*args, **kwargs)
 
-    # TODO: figuring out how to do typing for this overloaded function.
+    # TODO (Min): figuring out how to do typing for this overloaded function.
     def local_state_dict(self, *args, **kwargs):  # type: ignore
         """
         Returns the local (sharded) state of the module. Parameters are sharded,

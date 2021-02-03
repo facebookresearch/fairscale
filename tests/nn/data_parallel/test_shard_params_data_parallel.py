@@ -237,8 +237,6 @@ class TestHooks(DistributedTest):
     # Feel free to modify these tests as the implementation changes.
     # They aspire to make sure that backward hooks are registered and used
 
-
-
     @parameterized.expand([[True], [False]])
     def test_output_backward_hooks(self, cuda_first):
         fn = functools.partial(self._test_output_backward_hooks, cuda_first=cuda_first)

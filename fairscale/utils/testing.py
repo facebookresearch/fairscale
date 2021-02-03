@@ -450,11 +450,23 @@ class DeviceAndTypeCheckModule(Base):
         return loss
 
 
-@functools.lru_cache
+@functools.lru_cache()
 def get_cycles_per_ms() -> float:
     """Approximate number of cycles per millisecond for torch.cuda._sleep
 
     Copied from: github.com/pytorch/pytorch/blob/master/test/test_cuda.py
+
+    ..note::
+        This doesn't seems to return consistent cycles on desktop GPUs likely
+        due to frequency scaling.
+        >>> get_cycles_per_ms()
+        227.6441091140009
+        # new python process
+        >>> get_cycles_per_ms()
+        564.652154766248
+        # new python process
+        >>> get_cycles_per_ms()
+        245.56459442962856
     """
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
