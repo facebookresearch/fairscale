@@ -22,7 +22,7 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
-from fairscale.utils.testing import skip_if_no_cuda, skip_if_py39, skip_if_single_gpu
+from fairscale.utils.testing import skip_if_no_cuda, skip_if_py39_no_cuda, skip_if_single_gpu
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
@@ -493,7 +493,6 @@ def test_reproducibility():
     )
 
 
-@skip_if_py39
 def run_test_multiple_groups(rank, world_size, tempfile_name):
     # Only work with the even ranks, to check that the global_rank indexing is properly used
     dist_init(rank=rank, world_size=world_size, tempfile_name=tempfile_name, backend="gloo")
@@ -565,6 +564,7 @@ def run_test_multiple_groups(rank, world_size, tempfile_name):
     dist.destroy_process_group(process_group)
 
 
+@skip_if_py39_no_cuda
 def test_multiple_groups():
     world_size = 6
     temp_file_name = tempfile.mkstemp()[1]
