@@ -58,6 +58,10 @@ skip_if_py38 = pytest.mark.skipif(
     sys.version_info.major == 3 and sys.version_info.minor == 8, reason="Python3.8 is skipped"
 )
 
+skip_if_py39 = pytest.mark.skipif(
+    sys.version_info.major == 3 and sys.version_info.minor == 9, reason="Python3.9 is skipped"
+)
+
 _, filename_mpi = tempfile.mkstemp()
 
 
