@@ -178,7 +178,7 @@ class ShardParamsDataParallel(nn.Module):
             e = (self.rank + 1) * shard_size
 
             orig_data = p.data
-            p.data = p.data.view(-1)[s:e].clone()
+            p.data = torch.flatten(p.data)[s:e].clone()
             free_storage_(orig_data)
 
     def __getattr__(self, name: str) -> Any:
@@ -405,7 +405,7 @@ class ShardParamsDataParallel(nn.Module):
         param.grad.data.div_(self.world_size)
 
         # Reduce-scatter grad.
-        param.grad.data = self._reduce_scatter(param.grad.data.view(-1))
+        param.grad.data = self._reduce_scatter(torch.flatten(param.grad.data))
 
         if self.move_grads_to_cpu:
             param._cpu_grad.copy_(param.grad.data, non_blocking=True)
@@ -424,7 +424,7 @@ class ShardParamsDataParallel(nn.Module):
         for p in self.params:
             # All-gather parameters
             alloc_storage_(p._full_param, size=p._orig_size)
-            output_list = list(p._full_param.view(-1).chunk(self.world_size))
+            output_list = list(torch.flatten(p._full_param).chunk(self.world_size))
             dist.all_gather(output_list, p.data, group=self.process_group)
             p.data = p._full_param
             p.grad = None
