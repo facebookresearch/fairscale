@@ -118,13 +118,6 @@ class MultiProcessPipe(Module):
             whether to use deferred BatchNorm moving statistics (default:
             :data:`False`, see :class:`DeferredBatchNorm` for more
             details)
-        pipelined_backward (bool, optional):
-            if True, call torch.autograd.backward once per microbatch on the
-            backward pass (instead of once for the whole batch). This works
-            around a potential deadlock in pytorch when using tensor parallelism
-            at the same time. Defaults to `True` if
-            `get_model_parallel_world_size() > 1`
-            (default: `None`)
 
     Raises:
         TypeError:
@@ -174,7 +167,6 @@ class MultiProcessPipe(Module):
         chunks: int = chunks,
         checkpoint: str = checkpoint,
         deferred_batch_norm: bool = False,
-        pipelined_backward: bool = None,
     ) -> None:
         super().__init__()
 
@@ -183,13 +175,17 @@ class MultiProcessPipe(Module):
         if checkpoint not in ["always", "except_last", "never"]:
             raise ValueError("checkpoint is not one of 'always', 'except_last', or 'never'")
 
+        if get_model_parallel_world_size() > 1:
+            self.pipelined_backward = True
+        else:
+            self.pipelined_backward = False
+
         self.balance = list(balance)
         verify_module(module)
         check_balance(module, self.balance)
 
         self.chunks = chunks
         self.checkpoint = checkpoint
-        self.pipelined_backward = pipelined_backward
         self.pipeline: Optional[MultiProcessPipeline]
         self.lock = threading.Lock()
 
@@ -226,12 +222,6 @@ class MultiProcessPipe(Module):
             self.create_pipeline()
 
         del module
-
-        if self.pipelined_backward is None:
-            if get_model_parallel_world_size() > 1:
-                self.pipelined_backward = True
-            else:
-                self.pipelined_backward = False
 
     def create_pipeline(self) -> None:
         # The micro-batch index where the checkpointing stops.

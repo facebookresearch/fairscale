@@ -39,6 +39,10 @@ class PartitionInfo:
 
 
 class AsyncPipe(MultiProcessPipe):
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.pipelined_backward = False
+
     def create_pipeline(self) -> None:
         # The micro-batch index where the checkpointing stops.
         checkpoint_stop = {"always": self.chunks, "except_last": self.chunks - 1, "never": 0}[self.checkpoint]

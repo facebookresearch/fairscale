@@ -523,7 +523,6 @@ def run_mp_worker(args, available_workers):
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
-        pipelined_backward=args.pipelined_backward,
         checkpoint=args.checkpoint,
         # TODO(anj-s): Do we need to comment this out? loss_fn=benchmark_config["criterion"],
     )
@@ -592,7 +591,6 @@ parser.add_argument(
 parser.add_argument(
     "--checkpoint", default="never", choices=["always", "except_last", "never"], help="Checkpointing strategy for pipe"
 )
-parser.add_argument("--pipelined-backward", action="store_true", help="Pipelined backward pass")
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
