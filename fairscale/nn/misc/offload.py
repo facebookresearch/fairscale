@@ -4,7 +4,8 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-A distributed data parallel class that shards the model and the optimizer into pieces.
+A wrapper which streams the model in and out of the GPU automatically during FW and optionally BW passes
+(Can be used for inference only)
 
 See https://github.com/pytorch/pytorch/issues/42849 for more context. Credits to Shen Li for the original idea
 
@@ -16,16 +17,15 @@ from typing import Any, Dict, List, Optional, Type
 
 import torch
 from torch import nn
-import torch.distributed as dist
 
 
-def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
-    splits: List[List[nn.Module]] = [[] for _ in range(number_shards)]
-    n = len(modules) // number_shards
+def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
+    number_splits = min(len(modules), number_splits)
+    splits: List[List[nn.Module]] = [[] for _ in range(number_splits)]
 
     # Count the number of parameters per exposed layer, use that as a proxy for memory footprint
     total_number_params = sum([sum(p.numel() for p in m.parameters()) for m in modules])
-    number_parameters_per_shard = total_number_params // number_shards
+    number_parameters_per_shard = total_number_params // number_splits
 
     current_shard = 0
 
@@ -39,8 +39,9 @@ def _split(modules: nn.Sequential, number_shards: int) -> List[List[nn.Module]]:
 
         # This shard is big enough, point to the next one
         if (
-            current_shard_params + sum(p.numel() for p in m.parameters()) > number_parameters_per_shard
-            and current_shard < number_shards - 1
+            current_shard_params > 0
+            and current_shard_params + sum(p.numel() for p in m.parameters()) > number_parameters_per_shard
+            and current_shard < number_splits - 1
         ):
             current_shard += 1
 
@@ -61,48 +62,24 @@ class ModelShard(nn.Module):
     """
 
     def __init__(
-        self,
-        cpu_model_shard: nn.Module,
-        owner_rank: int,
-        process_group: Any,
-        device: torch.device,
-        offload_device: torch.device,
-        broadcast_bufers: bool = True,
-        offload_optimizer: bool = False,
+        self, cpu_model_shard: nn.Module, device: torch.device, offload_device: torch.device,
     ):
         super().__init__()
-        self.owner_rank = owner_rank
-        self.process_group = process_group
         self.model_shard = cpu_model_shard
-
-        self.rank = OffloadDataParallelExperimental.get_global_rank(
-            self.process_group, dist.get_rank(self.process_group)
-        )
-        self.is_owner = self.rank == self.owner_rank
-        self.world_size = dist.get_world_size(self.process_group)
-        self.broadcast_buffers = broadcast_bufers
 
         # Save all the parameter sizes to be able to restore them
         self.device = device
         torch.cuda.device(self.device)
 
         self.offload_device = offload_device
-        self.should_offload_optimizer = offload_optimizer
 
         self.model_shard.to(offload_device)
         self.cuda_stream = torch.cuda.Stream(
             device=self.device
         )  # needed to make sure load/offload really run in parallel with compute
 
-        if not self.is_owner:
-            # Record all the shapes
-            self.param_shapes = [p.shape for p in self.model_shard.parameters()]
-
     def forward(self, *inputs):  # type: ignore
-        if self.broadcast_buffers and len(list(self.model_shard.buffers())) > 0:
-            self.sync_buffers(non_blocking=False)
-
-        return (self.model_shard(*inputs),) if isinstance(inputs, tuple) else self.model_shard(inputs)
+        return self.model_shard(*inputs) if isinstance(inputs, tuple) else self.model_shard(inputs)
 
     def to(self, device: torch.device) -> "ModelShard":  # type: ignore
         # Make sure that the lookahead and lookback shards are not captured by this call
@@ -117,19 +94,10 @@ class ModelShard(nn.Module):
     def to_device(self) -> None:
         self.model_shard.to(device=self.device, non_blocking=True)
 
-    def forward_load(self, non_blocking: bool = True) -> Optional[List[Any]]:
+    def forward_load(self, non_blocking: bool = True) -> None:
         with torch.cuda.stream(self.cuda_stream):
             # Restore all the parameter buffers
             self.model_shard.to(device=self.device, non_blocking=non_blocking)
-
-            # Fetch or broadcast the latest parameters
-            requests = list(
-                map(
-                    lambda p: dist.broadcast(p, self.owner_rank, group=self.process_group, async_op=True),
-                    self.model_shard.parameters(),
-                ),
-            )
-            return requests if non_blocking else self._sync(requests)
 
     def backward_load(self, non_blocking: bool = True) -> None:
         with torch.cuda.stream(self.cuda_stream):
@@ -137,68 +105,11 @@ class ModelShard(nn.Module):
 
     def forward_drop(self, non_blocking: bool = True) -> None:
         with torch.cuda.stream(self.cuda_stream):
-            for p in self.model_shard.parameters():
-                p.grad = None
-
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
     def backward_drop(self, non_blocking: bool = True) -> None:
         with torch.cuda.stream(self.cuda_stream):
-            if not self.is_owner:
-                # Gradients have been reduced and can be discarded
-                for p in self.model_shard.parameters():
-                    p.grad = None
-
-            if self.should_offload_optimizer or not self.is_owner:
-                # Either the optimization takes place on the offload device
-                # or this rank does not own this shard
-                self.model_shard.to(self.offload_device, non_blocking=non_blocking)
-
-    def reduce_grads(self, non_blocking: bool) -> Optional[List[Any]]:
-        requests = []
-
-        # Send all the gradients to the owner
-        for p in filter(lambda p: p.grad is not None, self.parameters()):
-            assert p.grad is not None  # useless but mypy requires that
-
-            p.grad /= self.world_size
-            requests.append(dist.reduce(p.grad.data, dst=self.owner_rank, group=self.process_group, async_op=True))
-
-        return requests if non_blocking else self._sync(requests)
-
-    def sync_buffers(self, non_blocking: bool = True) -> Optional[List[Any]]:
-        """
-        Sync all the param buffers in between ranks.
-        """
-        requests = list(
-            map(
-                lambda x: dist.broadcast(x, self.owner_rank, self.process_group, async_op=True),
-                self.model_shard.buffers(),
-            ),
-        )
-        return requests if non_blocking else self._sync(requests)
-
-    def sync_parameters(self, non_blocking: bool = True) -> Optional[List[Any]]:
-        """
-        Sync all the parameters in between ranks.
-        """
-        requests = list(
-            map(
-                lambda x: dist.broadcast(x.data, self.owner_rank, self.process_group, async_op=True),
-                self.model_shard.parameters(),
-            ),
-        )
-        return requests if non_blocking else self._sync(requests)
-
-    @staticmethod
-    def _sync(requests: Optional[List[Any]]) -> None:
-        """
-        Make an async function synchronous.
-        Use this to wrap the function call directly
-        """
-        if requests:
-            _ = list(map(lambda x: x.wait(), requests))
-        return
+            self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
 
 class ShardSyncLayer(torch.autograd.Function):
@@ -208,7 +119,7 @@ class ShardSyncLayer(torch.autograd.Function):
      - In the forward pass, it drops parameters in the previous shard and
      loads parameters for the next shard.
 
-     - In the backward pass, it does the reverse and also gathers gradients to the owner.
+     - In the backward pass, it does the reverse.
 
      It does not change or create any outputs at all, instead it just
      forwards the input as the output.
@@ -239,7 +150,6 @@ class ShardSyncLayer(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
         if ctx.n1_shard:
-            ctx.n1_shard.reduce_grads(non_blocking=True)
             ctx.n1_shard.backward_drop(non_blocking=True)
 
         # Opportunistically pre-load ahead of the compute wavefront
@@ -253,8 +163,8 @@ class ShardSyncLayer(torch.autograd.Function):
         return None, None, None, None, grad_outputs
 
 
-class OffloadDataParallelExperimental(nn.Module):
-    """Implements distributed data parallel training with optimizer state sharding and model sharding.
+class OffloadWrapperExperimental(nn.Module):
+    """Implements training with optimizer state sharding and model sharding.
 
     This experiments with a different way to get to the full zero suite
     The model is sharded, then the normal distributed data parallel algorithm can be used on a per-model shard basis.
@@ -267,7 +177,6 @@ class OffloadDataParallelExperimental(nn.Module):
         module (~torch.nn.Sequential): module to be parallelized
         optimizer (~torch.optim.Optimizer): optimizer to be used for training
         optimizer_params(Dict): extra parameters for the optimizer
-        world_size (int): number of parallel workers
 
         device (torch.device):
             device where the active model should reside
@@ -275,16 +184,8 @@ class OffloadDataParallelExperimental(nn.Module):
         offload_device (torch.device):
             device where the inactive model should reside
 
-        process_group (optional):
-            the c10d process group to be used for
-            distributed gradient reduction. If None, the default WORLD process group
-            will be used.
-
-        broadcast_buffers (bool, optional):
-            whether to sync all the model buffers at the beginning of a FW pass
-
-        offload_optimizer (bool):
-            move optimizer computations to the offload device (for instance CPU), which saves more memory but slows down
+        n_slices (int):
+            number of slices in which to decomppose the model
     """
 
     def __init__(
@@ -292,57 +193,39 @@ class OffloadDataParallelExperimental(nn.Module):
         model_cpu: nn.Sequential,  # hard pre-requisite for now, easier model slicing
         optimizer: Type[torch.optim.Optimizer],
         optimizer_params: Dict[str, Any],
-        world_size: int,
         device: torch.device,
         offload_device: torch.device = torch.device("cpu"),
-        process_group: Any = None,
-        broadcast_buffers: bool = True,
-        offload_optimizer: bool = False,
+        n_slices: int = 5,
     ):
         super().__init__()
 
-        self.world_size = world_size
-        self.process_group = process_group if process_group is not None else torch.distributed.group.WORLD
-        self.rank = dist.get_rank(self.process_group)
-        self.global_rank = self.get_global_rank(self.process_group, self.rank)
-        self.backend = dist.get_backend(group=self.process_group)
         self.device = device
-        self.offload_device = device
+        self.offload_device = offload_device
 
         # Slice the model into roughly equivalent sequential shards
-        splits = _split(model_cpu, self.world_size)
+        splits = _split(model_cpu, n_slices)
 
         # Each rank either owns the slice, or temporarily helps processing it in a data parallel fashion
         self.model_slices: List[nn.Module] = []
 
-        for i_slice, module_shard in enumerate(splits):
-            global_owner_rank = self.get_global_rank(self.process_group, i_slice)
-
-            # Add one dataparallel model handling this slice
+        for split in splits:
+            # Add one model handling this slice
             self.model_slices.append(
-                ModelShard(
-                    cpu_model_shard=nn.Sequential(*module_shard),
-                    owner_rank=global_owner_rank,
-                    process_group=self.process_group,
-                    device=device,
-                    offload_device=offload_device,
-                    broadcast_bufers=broadcast_buffers,
-                    offload_optimizer=False,
-                )
+                ModelShard(cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device,)
             )
 
-            # Use one normal optimizer per shard
-            if i_slice == self.rank:
-                self.optimizer = optimizer(nn.Sequential(*module_shard).parameters(), **optimizer_params)
+            # Use one normal optimizer per slice
+            # TODO: Keep all optimizers, return a wrap which will distribute the steps()
+            self.optimizer = optimizer(nn.Sequential(*split).parameters(), **optimizer_params)
 
         # Expose a unified view of the slices
         self.model = torch.nn.Sequential(*self.model_slices)
-        self.sync_ranks()
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         # Slice per slice FW, sync in between
         syncRanks = ShardSyncLayer.apply
 
+        # TODO: Rewrite this and make it more flexible, this is ugly
         for i, (p2, p1, n1, n2) in enumerate(
             zip(
                 [None, None, *self.model_slices],
@@ -351,6 +234,8 @@ class OffloadDataParallelExperimental(nn.Module):
                 [*self.model_slices, None, None],
             )
         ):
+            print(i)
+
             # Per shard FW
             inputs = p1(*inputs) if p1 else inputs
 
@@ -358,23 +243,3 @@ class OffloadDataParallelExperimental(nn.Module):
             inputs = syncRanks(p2, p1, n1, n2, *inputs)
 
         return inputs[0] if len(inputs) == 1 else inputs
-
-    @staticmethod
-    def get_global_rank(group: Any, rank: int) -> int:
-        if group is dist.group.WORLD:
-            return rank
-        else:
-            global_rank = dist.distributed_c10d._get_global_rank(group, rank)
-        return global_rank
-
-    def sync_ranks(self, non_blocking: bool = False) -> None:
-        for model_slice in self.model_slices:
-            if self.backend != "nccl":
-                model_slice.sync_parameters(non_blocking=non_blocking)  # type: ignore
-                model_slice.sync_buffers(non_blocking=non_blocking)  # type: ignore
-            else:
-                # NCCL requires the tensors to be on GPU for broadcast
-                model_slice.to(self.device)
-                model_slice.sync_parameters(non_blocking=False)  # type: ignore
-                model_slice.sync_buffers(non_blocking=False)  # type: ignore
-                model_slice.to("cpu")

@@ -400,7 +400,7 @@ class TransformerModel(nn.Module):
         super().__init__()
         self.model_type = "Transformer"
         self.pos_encoder = PositionalEncoding(ninp, dropout)
-        encoder_layers = nn.TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        encoder_layers = nn.TransformerEncoderLayer(ninp, nhead, nhid, dropout)  # type: ignore
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayers)  # type: ignore
         self.encoder = nn.Embedding(ntoken, ninp)
         self.ninp = ninp

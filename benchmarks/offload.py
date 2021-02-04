@@ -8,8 +8,6 @@ import tempfile
 import time
 from pathlib import Path
 import torch
-import torch.distributed as dist
-import torch.multiprocessing as mp
 import torch.nn as nn
 import math
 
@@ -23,8 +21,7 @@ TEMPDIR = tempfile.gettempdir()
 BPTT = 35
 OPTIM = torch.optim.SGD
 
-from fairscale.nn.data_parallel.offload_ddp import OffloadDataParallelExperimental
-from torch.nn.parallel import DistributedDataParallel as DDP
+from fairscale.nn.misc.offload import OffloadWrapperExperimental
 
 
 def default_data_download():
@@ -80,20 +77,16 @@ def get_batch(source, i, device):
 def get_transformer(ntokens):
     emsize = 200  # embedding dimension
     nhid = 200  # the dimension of the feedforward network model in nn.TransformerEncoder
-    nlayers = 2  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-    nhead = 2  # the number of heads in the multiheadattention models
+    nlayers = 6  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
+    nhead = 4  # the number of heads in the multiheadattention models
     dropout = 0.2  # the dropout value
 
     return get_sequential_transformer(ntokens, emsize, nhead, nhid, nlayers, dropout)
 
 
-def train(rank: int, args: argparse.Namespace):
+def train(args: argparse.Namespace):
     logging.basicConfig(level=logging.INFO)
-
-    # DDP
-    dist.init_process_group(backend="nccl", init_method="tcp://localhost:29501", rank=rank, world_size=args.world_size)
-    torch.cuda.device(rank)
-    device = torch.device(rank)
+    device = torch.device("cuda")
 
     # Setup the problem
     logging.info("Building dataset")
@@ -110,26 +103,24 @@ def train(rank: int, args: argparse.Namespace):
 
     if args.offload:
         logging.info("Using sharded offloading for training")
-        offload_model = OffloadDataParallelExperimental(
+        offload_model = OffloadWrapperExperimental(
             model_cpu=model,
             optimizer=OPTIM,
             optimizer_params={"lr": lr},
-            world_size=args.world_size,
             device=device,
             offload_device=torch.device("cpu"),
+            n_slices=args.slices,
         )
 
         optimizer = offload_model.optimizer
         model = offload_model
 
     else:
-        logging.info("Using DDP for training")
-        model = model.to(device)
-        model = DDP(module=model, device_ids=[rank], find_unused_parameters=False)  # type: ignore
+        logging.info("Using Pytorch for training")
+        model = model.to(torch.device("cuda"))
         optimizer = OPTIM(model.parameters(), lr=lr)
 
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    logging.info(f"Rank {rank} starts training")
 
     def train_epoch():
         model.train()  # Turn on the train mode
@@ -224,7 +215,6 @@ def train(rank: int, args: argparse.Namespace):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test the CPU offload + sharding with a Transformer training")
-    parser.add_argument("--world_size", action="store", default=2, type=int)
     parser.add_argument("--epochs", action="store", default=10, type=int)
     parser.add_argument("--batch_size", action="store", default=20, type=int)
     parser.add_argument("--eval_batch_size", action="store", default=10, type=int)
@@ -232,6 +222,7 @@ if __name__ == "__main__":
     parser.add_argument("--valid_filepath", action="store", default=None, type=str)
     parser.add_argument("--test_filepath", action="store", default=None, type=str)
     parser.add_argument("--offload", action="store_true", default=False)
+    parser.add_argument("--slices", action="store", default=3, type=int)
 
     args = parser.parse_args()
 
@@ -242,8 +233,5 @@ if __name__ == "__main__":
         logging.info("Fetching default dataset")
         args.test_filepath, args.valid_filepath, args.train_filepath = default_data_download()
 
-    # Kick training, one process per rank
     logging.info("Starting training")
-    mp.spawn(
-        train, args=(args,), nprocs=args.world_size, join=True,
-    )
+    train(args)
