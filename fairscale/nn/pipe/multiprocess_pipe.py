@@ -28,7 +28,7 @@ from torch import Tensor, nn
 import torch.autograd
 import torch.cuda
 
-from fairscale.nn.model_parallel import get_pipeline_parallel_group
+from fairscale.nn.model_parallel import get_model_parallel_world_size, get_pipeline_parallel_group
 
 from . import microbatch
 from .async_schedule import Location, ModuleWrapper
@@ -175,13 +175,17 @@ class MultiProcessPipe(Module):
         if checkpoint not in ["always", "except_last", "never"]:
             raise ValueError("checkpoint is not one of 'always', 'except_last', or 'never'")
 
+        if get_model_parallel_world_size() > 1:
+            self.pipelined_backward = True
+        else:
+            self.pipelined_backward = False
+
         self.balance = list(balance)
         verify_module(module)
         check_balance(module, self.balance)
 
         self.chunks = chunks
         self.checkpoint = checkpoint
-        self.pipelined_backward = True
         self.pipeline: Optional[MultiProcessPipeline]
         self.lock = threading.Lock()
 
