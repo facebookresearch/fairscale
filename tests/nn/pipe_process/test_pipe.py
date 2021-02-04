@@ -754,6 +754,24 @@ def verify_module_duplicate_parameters_on_distinct_partitions(pipe_class):
 
 
 @torch_spawn([4])
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe])
+def pipelined_backward(pipe_class):
+    model = nn.Sequential(nn.ReLU(), nn.ReLU())
+
+    destroy_model_parallel()
+    initialize_model_parallel(1, 4)
+    pipe = pipe_class(model, [1, 1], worker_map=get_worker_map())
+
+    assert pipe.pipelined_backward is False
+
+    destroy_model_parallel()
+    initialize_model_parallel(2, 2)
+    pipe = pipe_class(model, [1, 1], worker_map=get_worker_map())
+
+    assert pipe.pipelined_backward is True
+
+
+@torch_spawn([4])
 def async_event_loop():
 
     model = nn.Sequential(nn.Linear(10, 10), nn.ReLU(), nn.Linear(10, 10), nn.ReLU())
