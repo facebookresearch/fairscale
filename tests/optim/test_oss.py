@@ -632,6 +632,9 @@ def run_gradient_clipping(rank, world_size, tempfile_name):
         print(f"Checking norm {norm}")
         check(norm)
 
+        # Check twice, catch an hypothetic iterator dumb mistake
+        check(norm)
+
     dist.destroy_process_group()
 
 
