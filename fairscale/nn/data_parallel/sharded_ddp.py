@@ -259,15 +259,16 @@ class ShardedDataParallel(nn.Module):
             self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
             self._reduced_grads = {o: 0 for o in self.sharded_optimizers}
 
-            assert self._bucket_list is not None
+            if self.use_buckets:
+                assert self._bucket_list is not None
 
-            for bucket in self._bucket_list:
-                assert bucket.sent, (
-                    "A bucket failed to be sent, probably unused parameters."
-                    + "Either remove the unused parameter or de-activate ShardedDDP buckets -set reduce_buffer_size to 0-"
-                )
+                for bucket in self._bucket_list:
+                    assert bucket.sent, (
+                        "A bucket failed to be sent, probably unused parameters."
+                        + "Either remove the unused parameter or de-activate ShardedDDP buckets -set reduce_buffer_size to 0-"
+                    )
 
-                bucket.reset()
+                    bucket.reset()
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
