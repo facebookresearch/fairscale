@@ -35,8 +35,7 @@ from .async_schedule import Location, ModuleWrapper
 from .batchnorm import DeferredBatchNorm
 from .multiprocess_pipeline import MultiProcessPipeline
 from .phony import get_phony
-from .skip.layout import SkipLayout, inspect_skip_layout
-from .skip.skippable import Skippable, verify_skippables
+from .skip.layout import SkipLayout
 from .types import LazyModule
 
 __all__ = ["MultiProcessPipe", "LazyModule"]
@@ -66,43 +65,6 @@ def check_balance(module: Union[nn.Sequential, List[LazyModule]], balance: List[
 
     if any(x <= 0 for x in balance):
         raise ValueError(f"all balance numbers must be positive integer (balance: {balance})")
-
-
-def split_module(module: nn.Sequential, balance: List[int]) -> List[nn.Sequential]:
-    """Splits a module into multiple partitions.
-
-    Returns:
-        partitions
-
-        Partitions are represented as a :class:`~torch.nn.ModuleList` whose
-        item is a partition. All layers in a partition are placed in the
-        same device.
-
-    Raises:
-        BalanceError:
-            wrong balance
-        IndexError:
-            the number of devices is fewer than the number of partitions.
-
-    """
-    j = 0
-    partitions = []
-    layers: NamedModules = OrderedDict()
-
-    for name, layer in module.named_children():
-        layers[name] = layer
-
-        if len(layers) == balance[j]:
-            # Group buffered layers as a partition.
-            partition = nn.Sequential(layers)
-
-            partitions.append(partition)
-
-            # Prepare for the next partition.
-            layers.clear()
-            j += 1
-
-    return partitions
 
 
 MOVING_DENIED = TypeError("denied to move parameters and buffers, because Pipe should manage device placement")
@@ -225,11 +187,6 @@ class MultiProcessPipe(Module):
         verify_module(module)
         check_balance(module, self.balance)
 
-        # Verify if the underlying skippable modules satisfy integrity. The
-        # integrity can be verified before forward() because it is static.
-        if isinstance(module, nn.Sequential):
-            verify_skippables(module)
-
         self.chunks = chunks
         self.checkpoint = checkpoint
         self.pipelined_backward = pipelined_backward
@@ -251,11 +208,7 @@ class MultiProcessPipe(Module):
                 f" {len(self.balance)})"
             )
 
-        if isinstance(module, nn.Sequential):
-            local_partitions = split_module(module, self.balance)
-            self._skip_layout = inspect_skip_layout(local_partitions)
-        else:
-            self._skip_layout = SkipLayout(len(module), {})  # FIXME(tom)
+        self._skip_layout = SkipLayout(len(module), {})  # FIXME(tom)
 
         rank = self.group.rank()
         self.final_stage = rank == len(self.balance) - 1
@@ -297,45 +250,12 @@ class MultiProcessPipe(Module):
     def instantiate_partition(
         self, module: Union[nn.Sequential, List[LazyModule]], balance: List[int], group: torch.distributed.ProcessGroup,
     ) -> List[ModuleWrapper]:
-        layers: NamedModules = OrderedDict()
-
-        def maybe_realize(layer: Any) -> nn.Module:
-            if isinstance(layer, nn.Module):
-                return layer
-            elif callable(layer):
-                return layer()
-            else:
-                raise TypeError(f"layer must be nn.Module or callable, is {type(layer)}")
-
-        def iterate_module(module: Union[nn.Sequential, list]) -> Iterable[Tuple[Any, nn.Module]]:
-            if isinstance(module, nn.Sequential):
-                yield from module.named_children()
-            else:
-                yield from ((str(k), v) for k, v in enumerate(module))
-
-        j = 0
-
-        for name, layer in iterate_module(module):
-            layers[name] = layer
-
-            if len(layers) == balance[j]:
-                if j == group.rank():
-                    for key in layers:
-                        layers[key] = maybe_realize(layers[key])
-                    if not isinstance(module, nn.Sequential):
-                        for layer in layers.values():
-                            if isinstance(layer, Skippable):
-                                raise ValueError(
-                                    "Can't use Skippable layers with multi-process pipe and lazy construction"
-                                )
-
-                    return [ModuleWrapper(nn.Sequential(layers), Location(j, 0))]
-
-                # Prepare for the next partition.
-                layers.clear()
-                j += 1
-
-        raise ValueError("Souldn't get here, more ranks than partitions")
+        rank = group.rank()
+        first_layer = sum(balance[:rank])
+        num_layers = balance[rank]
+        layers = module[first_layer : first_layer + num_layers]
+        instantiated_layers = [l if isinstance(l, nn.Module) else l() for l in layers]
+        return [ModuleWrapper(nn.Sequential(*instantiated_layers), Location(rank, 0))]
 
     def __len__(self) -> int:
         """Counts the length of the underlying sequential module."""
