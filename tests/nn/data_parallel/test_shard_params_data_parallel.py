@@ -203,6 +203,21 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         )
         return ModuleWithDelay(model, delay_after_loss_ms=250)
 
+    def test_delayed_reduce_scatter(self):
+        # We insert a delay in the torch.distributed.reduce_scatter op, so that
+        # the post_backward_stream takes much longer than the backward pass.
+        # This tests that we properly block at the end of the backward pass for
+        # the reductions to finish.
+        config = {"mixed_precision": True}
+        with mock.patch("torch.distributed.reduce_scatter", wraps=self._delayed_reduce_scatter):
+            test_fn = functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config)
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _delayed_reduce_scatter(cls, *args, **kwargs):
+        torch.cuda._sleep(int(250 * get_cycles_per_ms()))
+        return torch.distributed.reduce_scatter(*args, **kwargs)
+
     @classmethod
     def _test_identical_outputs(cls, model_init_fn, config, rank, group, num_steps=3, use_cuda=True):
         if config["mixed_precision"]:
