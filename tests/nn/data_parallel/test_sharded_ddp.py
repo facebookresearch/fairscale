@@ -168,7 +168,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         check_same_model_params()
 
         # The models should stay the same in between the ranks
-        for i in range(20):
+        for i in range(10):
             input_tensor = torch.rand((64, 2)).to(device)
 
             def closure_ddp(input_tensor=input_tensor):
