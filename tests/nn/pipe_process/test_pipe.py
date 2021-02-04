@@ -26,7 +26,11 @@ import pytest
 import torch
 from torch import nn
 
-from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
+from fairscale.nn.model_parallel.initialize import (
+    destroy_model_parallel,
+    get_pipeline_parallel_group,
+    initialize_model_parallel,
+)
 from fairscale.nn.pipe import AsyncPipe, LazyModule, MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn, torch_version
 
