@@ -28,13 +28,12 @@ from torch import Tensor, nn
 import torch.autograd
 import torch.cuda
 
-from fairscale.nn.model_parallel import get_model_parallel_world_size, get_pipeline_parallel_group
+from fairscale.nn.model_parallel import get_pipeline_parallel_group
 
 from . import microbatch
 from .async_schedule import Location, ModuleWrapper
 from .batchnorm import DeferredBatchNorm
 from .multiprocess_pipeline import MultiProcessPipeline
-from .phony import get_phony
 from .skip.layout import SkipLayout
 from .types import LazyModule
 
@@ -118,13 +117,6 @@ class MultiProcessPipe(Module):
             whether to use deferred BatchNorm moving statistics (default:
             :data:`False`, see :class:`DeferredBatchNorm` for more
             details)
-        pipelined_backward (bool, optional):
-            if True, call torch.autograd.backward once per microbatch on the
-            backward pass (instead of once for the whole batch). This works
-            around a potential deadlock in pytorch when using tensor parallelism
-            at the same time. Defaults to `True` if
-            `get_model_parallel_world_size() > 1`
-            (default: `None`)
 
     Raises:
         TypeError:
@@ -174,7 +166,6 @@ class MultiProcessPipe(Module):
         chunks: int = chunks,
         checkpoint: str = checkpoint,
         deferred_batch_norm: bool = False,
-        pipelined_backward: bool = None,
     ) -> None:
         super().__init__()
 
@@ -189,7 +180,6 @@ class MultiProcessPipe(Module):
 
         self.chunks = chunks
         self.checkpoint = checkpoint
-        self.pipelined_backward = pipelined_backward
         self.pipeline: Optional[MultiProcessPipeline]
         self.lock = threading.Lock()
 
@@ -226,12 +216,6 @@ class MultiProcessPipe(Module):
             self.create_pipeline()
 
         del module
-
-        if self.pipelined_backward is None:
-            if get_model_parallel_world_size() > 1:
-                self.pipelined_backward = True
-            else:
-                self.pipelined_backward = False
 
     def create_pipeline(self) -> None:
         # The micro-batch index where the checkpointing stops.
@@ -324,17 +308,7 @@ class MultiProcessPipe(Module):
 
             if self.final_stage:
                 # Merge the micro-batches into one mini-batch.
-                if self.pipelined_backward:
-                    with torch.no_grad():
-                        output = microbatch.gather(batches)
-
-                    phony = get_phony(
-                        torch.device(torch.cuda.current_device() if torch.cuda.is_available() else "cpu"),
-                        requires_grad=True,
-                    )
-                    output = PipelinedBackwardPass.apply(output, batches, phony)
-                else:
-                    output = microbatch.gather(batches)
+                output = microbatch.gather(batches)
             else:
                 # Don't merge micro-batches to avoid unnecessary edges in autograd
                 # graph
@@ -349,37 +323,3 @@ class MultiProcessPipe(Module):
 
         if self.pipeline:
             self.pipeline.back_helper(output)
-
-
-class PipelinedBackwardPass(torch.autograd.Function):
-    @staticmethod
-    # type: ignore
-    def forward(ctx, input: TensorOrTensors, batches, phony) -> TensorOrTensors:
-        ctx.batches = batches
-        return input
-
-    @staticmethod
-    # type: ignore
-    def backward(ctx, *grads) -> Tuple:
-        with torch.no_grad():
-            grad_batches = microbatch.scatter(grads, len(ctx.batches))
-        for grad, batch in reversed(list(zip(grad_batches, ctx.batches))):
-            for t in batch:
-                t.retain_grad()
-            torch.autograd.backward(batch.tensor_or_tensors, grad_tensors=(*grad,), retain_graph=True)
-
-        with torch.no_grad():
-            if ctx.batches[0].atomic:
-                tensors = tuple(b.tensor.grad for b in ctx.batches)
-                output: TensorOrTensors = torch.cat(tensors)
-            else:
-                rotated = [[t.grad for t in b.tensors] for b in ctx.batches]
-                output_buf = []
-
-                for tensors in zip(*rotated):
-                    output_buf.append(torch.cat(tensors))
-
-                output = tuple(output_buf)
-            del ctx.batches
-
-        return (output, None, None, None)

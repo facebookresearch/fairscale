@@ -443,7 +443,6 @@ def run_test_pipe(rank, world_size, filename, filename_rpc, skip_dist_init=False
             worker_map=worker_map,
             input_device=torch.cuda.current_device(),
             chunks=chunk_size,
-            pipelined_backward=True,
         ).cuda()
         torch.distributed.barrier()
         pipe_rank = torch.distributed.get_rank(group=mpu.get_pipeline_parallel_group())
