@@ -8,6 +8,7 @@ import functools
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import torch
+from torch.autograd import Variable
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
 import torch.nn as nn
@@ -294,14 +295,10 @@ class ShardParamsDataParallel(nn.Module):
         free_storage_(p._full_param)
 
         if self.move_grads_to_cpu:
-            if self.mixed_precision and not self.fp32_reduce_scatter:
-                grad_dtype = torch.float16
-            else:
-                grad_dtype = torch.float32
             # We can optionally move the grad shard to CPU during the backward
             # pass. In this case, it's important to pre-allocate the CPU grad
             # shard in pinned memory so that we can do a non-blocking transfer.
-            p._cpu_grad = torch.zeros_like(p.data, dtype=grad_dtype, device="cpu").pin_memory()
+            p._cpu_grad = torch.zeros_like(p.data, device="cpu").pin_memory()
 
     @torch.no_grad()
     def _pre_forward_init(self) -> None:
@@ -394,6 +391,7 @@ class ShardParamsDataParallel(nn.Module):
         # Register backward hooks to reshard params and reduce-scatter grads.
         if not torch.is_grad_enabled():
             return  # don't register grad hooks if grad isn't enabled
+        self._post_backward_callback_queued = False
         for p in self.params:
             if p.requires_grad:
                 if hasattr(p, "_shard_bwd_hook"):
@@ -446,13 +444,28 @@ class ShardParamsDataParallel(nn.Module):
         # Reduce-scatter grad.
         param.grad.data = self._reduce_scatter(torch.flatten(param.grad.data))
 
+        # Cast grad to param's dtype (typically FP32). Note: we do this
+        # before the move_grads_to_cpu step so that this entire hook remains
+        # non-blocking. The downside is a bit more D2H transfer in that case.
+        if self.mixed_precision:
+            param.grad.data = param.grad.data.to(dtype=param.data.dtype)
+
         if self.move_grads_to_cpu:
             param._cpu_grad.copy_(param.grad.data, non_blocking=True)
             param.grad.data = param._cpu_grad
 
-        # Cast grad to param's dtype (typically FP32).
-        if self.mixed_precision:
-            param.grad.data = param.grad.data.to(dtype=param.data.dtype)
+        # Enqueue a callback at the end of the backward pass to ensure that all
+        # post-backward work has finished. We only need one callback.
+        if not self._post_backward_callback_queued:
+            self._post_backward_callback_queued = True
+            Variable._execution_engine.queue_callback(self._wait_for_post_backward)
+
+    @torch.no_grad()
+    def _wait_for_post_backward(self) -> None:
+        """Wait for all post-backward work to finish."""
+        if self.move_grads_to_cpu:
+            # Wait for the non-blocking GPU -> CPU grad transfers to finish.
+            torch.cuda.current_stream().synchronize()
 
     @torch.no_grad()
     def _rebuild_full_params(self) -> None:

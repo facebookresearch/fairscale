@@ -163,6 +163,9 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config),)
 
     def test_cpu_offload_and_cpu_grads(self):
+        # We only test True and None (which implies True). We don't test the
+        # False condition because that requires the optimizer to internally do
+        # the device transfer and PyTorch optimizers don't support this.
         for move_grads_choice in (True, None):
             config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": move_grads_choice}
             test_fn = functools.partial(
