@@ -629,9 +629,9 @@ def partitions(pipe_class):
     assert isinstance(model.partitions[0].module, nn.Sequential)
 
     if model.group.rank() == 0:
-        assert "0.0.weight" in model.state_dict()
+        assert model[0].weight == a.weight
     else:
-        assert "0.1.weight" in model.state_dict()
+        assert model[0].weight == b.weight
 
 
 @torch_spawn([2])
@@ -677,6 +677,7 @@ def empty_module(pipe_class):
 
 @torch_spawn([2])
 @pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+@pytest.mark.skip(reason="TODO(msb) handle named_children")
 def named_children(pipe_class):
     a = nn.Linear(1, 1)
     b = nn.Linear(1, 1)
