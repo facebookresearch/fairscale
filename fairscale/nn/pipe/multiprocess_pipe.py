@@ -20,7 +20,7 @@
 """The MultiProcessPipe interface."""
 from collections import OrderedDict
 import threading
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Union
 import warnings
 
 import torch
@@ -210,16 +210,17 @@ class MultiProcessPipe(Module):
         self.final_stage = rank == len(self.balance) - 1
         if rank >= len(self.balance):
             warnings.warn("More ranks than partitions, some ranks unused")
-            self.partitions: List[ModuleWrapper] = []
+            self.partition = nn.Sequential()
             self.pipeline = None
         else:
-            self.partitions = self.instantiate_partition(module, self.balance, self.group)
+            self.partition = self.instantiate_partition(module, self.balance, self.group)
             if deferred_batch_norm:
-                for part in self.partitions:
-                    part.module = DeferredBatchNorm.convert_deferred_batch_norm(part.module, chunks)
-            for name, part in enumerate(self.partitions):
-                self.add_module(str(name), part.module)
+                self.partitition = DeferredBatchNorm.convert_deferred_batch_norm(self.partition, chunks)
+            self.add_module(str(0), self.partition)
             self.create_pipeline()
+
+        # TODO(msb) Remove this hack at some point.
+        self.partitions = [ModuleWrapper(self.partition, Location(self.group.rank(), 0))]
 
         del module
 
@@ -228,7 +229,7 @@ class MultiProcessPipe(Module):
         checkpoint_stop = {"always": self.chunks, "except_last": self.chunks - 1, "never": 0}[self.checkpoint]
 
         self.pipeline = MultiProcessPipeline(
-            self.partitions,
+            [ModuleWrapper(self.partition, Location(self.group.rank(), 0))],
             self._skip_layout,
             checkpoint_stop,
             group=self.group,
@@ -239,48 +240,25 @@ class MultiProcessPipe(Module):
 
     def instantiate_partition(
         self, module: Union[nn.Sequential, List[LazyModule]], balance: List[int], group: torch.distributed.ProcessGroup,
-    ) -> List[ModuleWrapper]:
+    ) -> nn.Sequential:
         rank = group.rank()
         first_layer = sum(balance[:rank])
         num_layers = balance[rank]
         layers = module[first_layer : first_layer + num_layers]
         instantiated_layers = [l if isinstance(l, nn.Module) else l() for l in layers]
-        return [ModuleWrapper(nn.Sequential(*instantiated_layers), Location(rank, 0))]
+        return nn.Sequential(*instantiated_layers)
 
     def __len__(self) -> int:
         """Counts the length of the underlying sequential module."""
-        return sum(len(p) for p in self.partitions)
+        return self.partition.__len__()
 
     def __getitem__(self, index: int) -> nn.Module:
         """Gets a layer in the underlying sequential module."""
-        partitions: List[Any]
-        partitions = self.partitions
-
-        if index < 0:
-            partitions = partitions[::-1]
-
-        for partition in partitions:
-            try:
-                if isinstance(partition, ModuleWrapper):
-                    return partition.module[index]
-                else:
-                    return partition[index]
-            except IndexError:
-                pass
-
-            shift = len(partition)
-
-            if index < 0:
-                index += shift
-            else:
-                index -= shift
-
-        raise IndexError
+        return self.partition.__getitem__(index)
 
     def __iter__(self) -> Iterable[nn.Module]:
         """Iterates over children of the underlying sequential module."""
-        for partition in self.partitions:
-            yield from partition.module
+        return self.partition.__iter__()
 
     def forward(self, input: TensorOrTensors, *, event=None) -> TensorOrTensors:  # type: ignore
         """:class:`MultiProcessPipe` is a fairly transparent module wrapper. It doesn't

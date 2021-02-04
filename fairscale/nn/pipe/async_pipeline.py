@@ -4,18 +4,54 @@
 # LICENSE file in the root directory of this source tree.
 
 import logging
+import os
 from threading import Event
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 
 import torch
 
-from .async_schedule import AsyncEventLoop
+from .async_schedule import AsyncEventLoop, ModuleWrapper
+from .messages import MakeTransport
 from .microbatch import Batch
-from .multiprocess_pipeline import MultiProcessPipeline
+from .skip.layout import SkipLayout
 from .skip.tracker import SkipTrackerThroughPotals
 
 
-class AsyncPipeline(MultiProcessPipeline):
+class AsyncPipeline:
+    """The async pipeline parallelism for Pipe."""
+
+    def __init__(
+        self,
+        partitions: List[ModuleWrapper],
+        skip_layout: SkipLayout,
+        checkpoint_stop: int,
+        group: torch.distributed.ProcessGroup,
+        *,
+        worker_map: Optional[Dict[int, str]] = None,
+        input_device: Union[None, int, str, torch.device] = None,
+        final_stage: bool = False,
+    ) -> None:
+        self.partitions = partitions
+        self.skip_layout = skip_layout
+        self.__checkpoint_stop = checkpoint_stop
+        self.group = group
+        self.training: bool
+        self.transport = MakeTransport(
+            use_rpc=("OMPI_COMM_WORLD_RANK" not in os.environ) or ("FORCE_RPC" in os.environ),
+            worker_map=worker_map,
+            input_device=input_device,
+        )
+        self.input_device = input_device
+        self.final_stage = final_stage
+
+    @property
+    def checkpoint_stop(self) -> int:
+        # Disable checkpointing if in eval mode.
+        training = self.partitions[0].module.training
+        if not training:
+            return 0
+        return self.__checkpoint_stop
+
     def run(self, training: bool, batches: List[Batch], event: Optional[Event]) -> None:
 
         """Runs pipeline parallelism.
