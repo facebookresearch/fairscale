@@ -117,7 +117,7 @@ class ShardParamsDataParallel(nn.Module):
 
         if self.flatten_parameters and len(params) > 0:
             self.module: nn.Module = FlattenParamsWrapper(module, param_list=params)
-            del module
+            del module  # free original module in case it helps garbage collection
             self.params = [self.module.flat_param]
         else:
             self.module = module
@@ -189,6 +189,11 @@ class ShardParamsDataParallel(nn.Module):
             return getattr(self.module, name)
 
     def __getstate__(self) -> Dict[str, str]:
+        """Serialize the state of the current ShardParamsDataParallel instance.
+
+        Some properties are not serializable (e.g., process groups, streams), so
+        we remove them and try to reconstruct them in :func:`__setstate__`.
+        """
         state = copy.copy(self.__dict__)
         state["orig_sizes"] = [p._orig_size for p in self.params]
         if state["process_group"] is not None:
@@ -204,7 +209,6 @@ class ShardParamsDataParallel(nn.Module):
         def fixup(p: Parameter, size: torch.Size) -> Parameter:
             assert isinstance(p, Parameter)
             p.data = p.data.clone()  # move tensors out of shared memory
-            # Ignore mypy error since we add additional fields to a param.
             p._is_sharded = True
             p._orig_size = size
             return p
@@ -257,6 +261,9 @@ class ShardParamsDataParallel(nn.Module):
         assert p._is_sharded
         assert not hasattr(p, "_full_param")
 
+        # _fp32_shard will correspond to a single shard of the parameters in
+        # full precision (typically FP32, but this is dependent on the dtype of
+        # the model as it's passed in by the user).
         p._fp32_shard = p.data
 
         if self.mixed_precision:
@@ -264,15 +271,25 @@ class ShardParamsDataParallel(nn.Module):
 
             if self.cpu_offload:
                 assert p._fp32_shard.device == torch.device("cpu")
+                # If we plan to keep the FP32 parameters on CPU, then pinning
+                # memory allows us to later use non-blocking transfers when moving
+                # the FP32 param shard to self.compute_device.
                 p._fp32_shard = p._fp32_shard.pin_memory()
+                p.data = p._fp32_shard
 
+            # In mixed precision mode, we maintain a reduced precision
+            # (typically FP16) parameter shard on self.compute_device for
+            # performing the computation in the forward/backward pass. We resize
+            # the storage to size 0 at init and rematerialize this (by copying
+            # from _fp32_shard) as needed.
             p._fp16_shard = torch.zeros_like(p._fp32_shard, device=self.compute_device, dtype=self.compute_dtype)
             free_storage_(p._fp16_shard)
         else:
             p._fp16_shard = None  # use _fp32_shard
 
-        p.data = p._fp32_shard
-
+        # We also maintain a full-sized parameter of type self.compute_dtype
+        # (typically FP16 for mixed_precision or FP32 otherwise). We resize the
+        # storage to size 0 at init and only materialize this when needed.
         p._full_param = torch.zeros(p._orig_size, device=self.compute_device, dtype=self.compute_dtype)
         free_storage_(p._full_param)
 
@@ -281,6 +298,9 @@ class ShardParamsDataParallel(nn.Module):
                 grad_dtype = torch.float16
             else:
                 grad_dtype = torch.float32
+            # We can optionally move the grad shard to CPU during the backward
+            # pass. In this case, it's important to pre-allocate the CPU grad
+            # shard in pinned memory so that we can do a non-blocking transfer.
             p._cpu_grad = torch.zeros_like(p.data, dtype=grad_dtype, device="cpu").pin_memory()
 
     @torch.no_grad()
@@ -385,6 +405,25 @@ class ShardParamsDataParallel(nn.Module):
 
     @torch.no_grad()
     def _post_backward_hook(self, param: Parameter, *unused: Any) -> None:
+        """
+        At the start of _post_backward_hook, param.grad contains the full
+        gradient for the local batch. The reduce_scatter op will replace
+        param.grad with a single shard of the summed gradient across all GPUs.
+        This shard will align with the current GPU rank. For example::
+
+            before reduce_scatter:
+                param.grad (GPU #0): [1, 2, 3, 4]
+                param.grad (GPU #1): [5, 6, 7, 8]
+
+            after reduce_scatter:
+                param.grad (GPU #0): [6, 8]
+                param.grad (GPU #1): [10, 12]
+
+        The local GPU's optimizer.step is responsible for updating a single
+        shard of params, also corresponding to the current GPU's rank. This
+        alignment is created by _shard_initial_params, which ensures that the
+        local optimizer only sees the relevant single parameter shard.
+        """
         if param.grad is None:
             return
         if param.grad.requires_grad:
