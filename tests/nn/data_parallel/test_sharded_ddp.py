@@ -213,7 +213,10 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             check_same_model_params()
 
     check_parity(amp=False)
-    check_parity(amp=True)
+
+    # Catch a version of pytorch which would not support AMP
+    if hasattr(torch.cuda.amp, "autocast"):
+        check_parity(amp=True)
 
     dist.destroy_process_group()
 
