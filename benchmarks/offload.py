@@ -53,7 +53,7 @@ def train(args: argparse.Namespace):
     def train_epoch():
         model.train()
         for batch_inputs, batch_outputs in dataloader:
-            batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
+            # batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
 
             start = time.time_ns()
             optimizer.zero_grad()
