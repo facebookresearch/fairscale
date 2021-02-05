@@ -6,9 +6,6 @@
 """
 A wrapper which streams the model in and out of the GPU automatically during FW and optionally BW passes
 (Can be used for inference only)
-
-See https://github.com/pytorch/pytorch/issues/42849 for more context. Credits to Shen Li for the original idea
-
 """
 
 from builtins import isinstance
