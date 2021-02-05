@@ -133,10 +133,36 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     torch.cuda.set_device(rank)
     torch.manual_seed(rank)
     np.random.seed(rank)
+    NUMBER_BATCHS = 10
+    INPUTS = 2
+    BATCH_SIZE = 32
 
-    def check_parity(amp: bool):
+    def check_parity(amp: bool, accumulate: bool):
+        # Helper, check that models are the same
+        def check_same_model_params(model_a, model_b):
+            for pa, pb in zip(model_a.parameters(), model_b.parameters()):
+                assert torch.allclose(pa, pb, atol=1e-3), f"Model parameters differ {pa} {pb}"
+
+            for ba, bb in zip(model_a.buffers(), model_b.buffers()):
+                assert torch.allclose(ba, bb, atol=1e-3), f"Model buffers differ. AMP {amp}"
+
+        # The API should be the exact same in between the sharded and non-sharded variants, generic closure
+        accumulate_steps = 3 if accumulate else 1
+
+        def closure(model, scaler, input_tensor):
+            model.zero_grad()
+            with model.no_sync() if accumulate else suppress():
+                if scaler is not None:
+                    with torch.cuda.amp.autocast():
+                        loss = model(input_tensor).abs().sum()
+                        scaler.scale(loss).backward()
+                else:
+                    loss = model(input_tensor).abs().sum()
+                    loss.backward()
+            return loss
+
         # Any model works. Add one different buffer per rank
-        model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
+        model = Sequential(Linear(INPUTS, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
         model.register_buffer("test_buffer", torch.ones((1)) * rank)
         model.to(device)
 
@@ -152,48 +178,18 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         ddp_scaler = TorchGradScaler() if amp else None
         sharded_ddp_scaler = ShardedGradScaler() if amp else None
 
-        def check_same_model_params():
-            for pg, ddp_pg in zip(sharded_optimizer.param_groups, ddp_optimizer.param_groups):
-                for p, ddp_p in zip(pg["params"], ddp_pg["params"]):
-                    assert torch.allclose(
-                        p, ddp_p, atol=1e-3
-                    ), f"Model parameters differ in between DDP and ShardedDDP {p} {ddp_p}"
-
-            for b, ddp_b in zip(sharded_ddp_model.buffers(), ddp_model.buffers()):
-                assert torch.allclose(
-                    b, ddp_b, atol=1e-3
-                ), f"Model buffers differ in between DDP and ShardedDDP. AMP {amp}"
-
         # The model should be synchronized in between the ranks at construction time, check that
-        check_same_model_params()
+        check_same_model_params(sharded_ddp_model, ddp_model)
 
-        # The models should stay the same in between the ranks
-        for i in range(10):
-            input_tensor = torch.rand((64, 2)).to(device)
+        # Typical training loop, check that we get the exact same results as DDP
+        for i in range(NUMBER_BATCHS):
+            input_tensor = torch.rand((BATCH_SIZE, INPUTS)).to(device)
 
             def closure_ddp(input_tensor=input_tensor):
-                ddp_optimizer.zero_grad()
-
-                if ddp_scaler is not None:
-                    with torch.cuda.amp.autocast():
-                        ddp_loss = ddp_model(input_tensor).abs().sum()
-                        ddp_scaler.scale(ddp_loss).backward()
-                else:
-                    ddp_loss = ddp_model(input_tensor).abs().sum()
-                    ddp_loss.backward()
-                return ddp_loss
+                return closure(ddp_model, ddp_scaler, input_tensor)
 
             def closure_sharded(input_tensor=input_tensor):
-                sharded_optimizer.zero_grad()
-
-                if sharded_ddp_scaler is not None:
-                    with torch.cuda.amp.autocast():
-                        sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
-                        sharded_ddp_scaler.scale(sharded_loss).backward()
-                else:
-                    sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
-                    sharded_loss.backward()
-                return sharded_loss
+                return closure(sharded_ddp_model, sharded_ddp_scaler, input_tensor)
 
             # Step/scale both
             if ddp_scaler is not None:
@@ -210,13 +206,15 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             else:
                 sharded_optimizer.step(closure=closure_sharded)
 
-            check_same_model_params()
+            check_same_model_params(sharded_ddp_model, ddp_model)
+            print(f"{i} VALID")
 
-    check_parity(amp=False)
+    check_parity(amp=False, accumulate=False)
+    # check_parity(amp=False, accumulate=True)
 
     # Catch a version of pytorch which would not support AMP
     if hasattr(torch.cuda.amp, "autocast"):
-        check_parity(amp=True)
+        check_parity(amp=True, accumulate=False)
 
     dist.destroy_process_group()
 
