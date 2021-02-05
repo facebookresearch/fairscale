@@ -6,7 +6,6 @@
 import functools
 import itertools
 import sys
-import tempfile
 from typing import Dict
 import unittest
 from unittest import mock
@@ -16,7 +15,13 @@ import torch
 from torch import nn
 
 from fairscale.nn.data_parallel import ShardParamsDataParallel
-from fairscale.utils.testing import DeviceAndTypeCheckModule, get_cycles_per_ms, objects_are_equal
+from fairscale.utils.testing import (
+    DeviceAndTypeCheckModule,
+    dist_init,
+    get_cycles_per_ms,
+    objects_are_equal,
+    spawn_for_all_world_sizes,
+)
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 
@@ -125,7 +130,7 @@ class TestMixedPrecision(DistributedTest):
     def _spawn_test_case(self, cfg, autocast_enabled, in_dtype, p_dtype, loss_dtype, reduce_dtype, world_size=2):
         """Call test_dtypes inside of torch.multiprocessing.spawn"""
         fn = functools.partial(self._test_dtypes, cfg, autocast_enabled, in_dtype, p_dtype, loss_dtype, reduce_dtype)
-        spawn_and_init(fn, world_size=world_size)
+        spawn_and_init(fn, world_sizes=[world_size])
 
     @staticmethod
     def _test_dtypes(cfg: Dict, autocast, in_dtype, p_dtype, loss_dtype, reduce_dtype, rank, group):
@@ -448,27 +453,16 @@ class ModuleWithDelay(nn.Module):
         return loss
 
 
-def spawn_and_init(fn, world_size=2, args=None):
+def spawn_and_init(fn, args=None, **spawn_kwargs):
     if args is None:
         args = ()
-    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-        torch.multiprocessing.spawn(
-            fn=functools.partial(init_and_run, fn, args),
-            args=(world_size, tmp_file.name),
-            nprocs=world_size,
-            join=True,
-        )
+
+    run_fn = functools.partial(init_and_run, fn, args)
+    spawn_for_all_world_sizes(run_fn, **spawn_kwargs)
 
 
-def distributed_init(rank, world_size, tmp_file):
-    torch.distributed.init_process_group(
-        backend="nccl", init_method="file://{}".format(tmp_file), world_size=world_size, rank=rank,
-    )
-    torch.cuda.set_device(rank)
-
-
-def init_and_run(fn, args, rank, world_size, tmp_file):
-    distributed_init(rank, world_size, tmp_file)
+def init_and_run(fn, args, rank, world_size, filename, filename_rpc):
+    dist_init(rank, world_size, filename, filename_rpc)
     group = torch.distributed.new_group()
     fn(rank, group, *args)
 
