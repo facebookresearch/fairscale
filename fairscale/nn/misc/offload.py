@@ -10,7 +10,7 @@ A wrapper which streams the model in and out of the GPU automatically during FW 
 
 from builtins import isinstance
 import logging
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Tuple, Type
 
 import torch
 from torch import nn
@@ -125,39 +125,33 @@ class ShardSyncLayer(torch.autograd.Function):
      """
 
     @staticmethod
-    def forward(ctx: Any, p2_shard: Optional[ModelShard], p1_shard: Optional[ModelShard], n1_shard: Optional[ModelShard], n2_shard: Optional[ModelShard], *inputs: Any) -> Any:  # type: ignore
+    def forward(ctx: Any, layer_window: Tuple[ModelShard, ModelShard, ModelShard, ModelShard], inputs: Any) -> Any:  # type: ignore
         # Drop the shard we just went through, except if this is the last one in line
-        if p1_shard and n1_shard:
-            p1_shard.forward_drop(non_blocking=True)
+        if layer_window[1] and layer_window[2]:
+            layer_window[1].forward_drop(non_blocking=True)
 
         # Start the load of the next shard in line, opportunistically look ahead
-        if n2_shard:
-            n2_shard.forward_load(non_blocking=True)
+        if layer_window[3]:
+            layer_window[3].forward_load(non_blocking=True)
 
-        ctx.p2_shard = p2_shard
-        ctx.p1_shard = p1_shard
-        ctx.n1_shard = n1_shard
-        ctx.n2_shard = n2_shard
+        ctx.layer_window = layer_window
 
-        # FIXME: handle corner cases / type dependent
-        outputs = inputs
-
-        return outputs
+        return inputs if isinstance(inputs, tuple) else (inputs,)
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
-        if ctx.n1_shard:
-            ctx.n1_shard.backward_drop(non_blocking=True)
+        if ctx.layer_window[3]:
+            ctx.layer_window[3].backward_drop(non_blocking=True)
 
         # Opportunistically pre-load ahead of the compute wavefront
-        if ctx.p2_shard:
-            ctx.p2_shard.backward_load(non_blocking=True)
+        if ctx.layer_window[1]:
+            ctx.layer_window[1].backward_load(non_blocking=True)
 
         # The returned variables need to mirror the forward inputs
         if isinstance(grad_outputs, tuple):
-            return None, None, None, None, grad_outputs[0]
+            return None, grad_outputs[0]
 
-        return None, None, None, None, grad_outputs
+        return None, grad_outputs
 
 
 class OffloadWrapperExperimental(nn.Module):
@@ -218,25 +212,22 @@ class OffloadWrapperExperimental(nn.Module):
         # Expose a unified view of the slices
         self.model = torch.nn.Sequential(*self.model_slices)
 
-    def forward(self, *inputs: Any, **kwargs: Any) -> Any:
+    def forward(self, *inputs: Any, **_: Any) -> Any:
         # Slice per slice FW, sync in between
         syncRanks = ShardSyncLayer.apply
 
         # TODO: Rewrite this and make it more flexible, this is ugly
-        for i, (p2, p1, n1, n2) in enumerate(
-            zip(
-                [None, None, *self.model_slices],
-                [None, *self.model_slices],
-                [*self.model_slices, None],
-                [*self.model_slices, None, None],
-            )
+        for (p2, p1, n1, n2) in zip(
+            [None, None, *self.model_slices],
+            [None, *self.model_slices],
+            [*self.model_slices, None],
+            [*self.model_slices, None, None],
         ):
-            print(i)
 
             # Per shard FW
             inputs = p1(*inputs) if p1 else inputs
 
             # Call the custom autograd hooks (discard/load slices FW and BW)
-            inputs = syncRanks(p2, p1, n1, n2, *inputs)
+            inputs = syncRanks((p2, p1, n1, n2), inputs)
 
         return inputs[0] if len(inputs) == 1 else inputs
