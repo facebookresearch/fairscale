@@ -8,10 +8,11 @@ A nn.Module wrapper to go with a Sharded Optimizer in order to handle targeted g
 reduction automatically.
 """
 
+from collections import deque
 import contextlib
 from itertools import chain
 import logging
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Deque, Dict, Generator, List, Optional, Tuple, Union
 
 import torch
 from torch import nn
@@ -71,6 +72,11 @@ class ShardedDataParallel(nn.Module):
         handled. In that case ShardedDDP will raise an exception and suggest to either remove the unused parameters from your model
         (https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html?highlight=unused_parameters is helpful)
         or set `reduce_buffer_size` to 0
+
+    .. warning:
+        ShardedDDP does not refresh its assumptions with respect to trainable parameters for every forward pass, in the hope of saving some time.
+        If some parameters are frozen or unfrozen over time, please refresh ShardedDDP assumptions by calling `refresh_trainable()`
+
     """
 
     def __init__(
@@ -117,14 +123,15 @@ class ShardedDataParallel(nn.Module):
         # several optimizers can be present each working on seperate parameter set which is spread across multiple ranks
 
         # - we build an iterator which goes through all the parameters involved globally
-        all_param_iterator = chain(
+        self._all_params = chain(
             *[sum([sum(p, []) for p in optim.per_device_params.values()], []) for optim in self.sharded_optimizers]
         )
-        self._grad_to_be_reduced = [True for _ in filter(lambda x: x.requires_grad, all_param_iterator)]
+        self._all_grad_params: List[torch.Tensor] = []
+        self._grad_to_be_reduced: List[bool] = []
 
         # - keep track of the grads which have already been reduced
-        self._reduced_grads: Dict[OSS, int] = {}
-        self._reduced_grads_max = {o: len(o.param_to_rank.values()) for o in self.sharded_optimizers}
+        self._reduced_grads = 0
+        self._reduced_grads_max = 0
 
         # - setup buckets and tensor views
         model_size = sum([p.numel() for p in self.module.parameters()])
@@ -140,14 +147,12 @@ class ShardedDataParallel(nn.Module):
         )
         self.use_buckets = self.buffer_max_size > 0
 
-        self.buckets: Dict[OSS, Dict[torch.device, List[Bucket]]] = {o: {} for o in self.sharded_optimizers}
+        self.buckets: Dict[torch.device, List[Bucket]] = {}
         self._should_bucket_grad: List[bool] = []
         self._bucket_list: Optional[List[Bucket]] = None
-        self._setup_bucket_strategy()
 
         # - setup backward hooks which will be called by Torch's autograd in due time
         self._grad_accs: List[Callable] = []
-        self._setup_backward_hooks()
 
         # passing a handle to torch.nn.SyncBatchNorm layer
         self._passing_sync_batchnorm_handle(self.module)
@@ -156,7 +161,9 @@ class ShardedDataParallel(nn.Module):
         if sync_models_at_startup:
             self._sync_params_and_buffers()
 
-        self._clear_counters()
+        self._work_handles: Deque[Workhandle] = deque()
+
+        self.refresh_trainable()
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         """
@@ -205,12 +212,21 @@ class ShardedDataParallel(nn.Module):
 
         """
 
-        for optimizer in self.buckets.keys():
-            for device in self.buckets[optimizer].keys():
-                for bucket in self.buckets[optimizer][device]:
-                    bucket.buffer.to(device=device, dtype=dtype, non_blocking=non_blocking)
+        for device in self.buckets.keys():
+            for bucket in self.buckets[device]:
+                bucket.buffer.to(device=device, dtype=dtype, non_blocking=non_blocking)
 
         self.module.to(device)
+
+    def refresh_trainable(self) -> None:
+        """ If the module trainability has changed, update all the assumptions """
+
+        self._all_grad_params = list(filter(lambda x: x.requires_grad, self._all_params))
+        self._grad_to_be_reduced = [True for _ in self._all_grad_params]
+
+        self._setup_bucket_strategy()
+        self._setup_backward_hooks()
+        self._clear_counters()
 
     def reduce(self) -> None:
         """.. deprecated:: 0.0.4
@@ -236,6 +252,11 @@ class ShardedDataParallel(nn.Module):
             # Only wait for the last coms, they're inlined on the same CUDA stream
             last_work_handle.wait()
 
+    def zero_grad(self, _: bool = False) -> None:
+        # TODO: Handle the command properly
+        for trainable_param in filter(lambda x: x.grad is not None, self._all_grad_params):
+            trainable_param.grad.zero_()  # type: ignore   # mypy is drunk
+
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
         try:
@@ -257,7 +278,7 @@ class ShardedDataParallel(nn.Module):
         if not self.should_accumulate_grads:
 
             self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
-            self._reduced_grads = {o: 0 for o in self.sharded_optimizers}
+            self._reduced_grads = 0
 
             if self.use_buckets:
                 assert self._bucket_list is not None
@@ -279,7 +300,7 @@ class ShardedDataParallel(nn.Module):
         assert False, "This parameter is not present in an optimizer, this should not happen"
         return (None, -1)
 
-    def _get_reduce_fn(self, index: int, param: torch.Tensor, dst_rank: int, optimizer: OSS) -> Callable:
+    def _get_reduce_fn(self, index: int, param: torch.Tensor, dst_rank: int) -> Callable:
         """
         Two possible backward hooks for a given parameter: either directly reduce to the appropriate rank,
         or contribute to a bucket and reduce when the bucket is full.
@@ -305,7 +326,7 @@ class ShardedDataParallel(nn.Module):
                             param.grad = None
 
                     # Async reduce for this buffer, log the future
-                    optimizer.work_handles.append(
+                    self._work_handles.append(
                         Workhandle(
                             handle=dist.reduce(
                                 tensor=param.grad.data, dst=dst_rank, group=self.process_group, async_op=True
@@ -313,9 +334,9 @@ class ShardedDataParallel(nn.Module):
                             callback=cleanup,
                         )
                     )
-                    self._reduced_grads[optimizer] += 1
+                    self._reduced_grads += 1
                 else:
-                    bucket = self.buckets[optimizer][param.device][dst_rank]
+                    bucket = self.buckets[param.device][dst_rank]
                     bucket.params_checked_in += 1
 
                     if bucket.full():
@@ -324,7 +345,7 @@ class ShardedDataParallel(nn.Module):
 
                         # Reduce the bucket
                         bucket.sent = True
-                        optimizer.work_handles.append(
+                        self._work_handles.append(
                             Workhandle(
                                 handle=dist.reduce(
                                     tensor=bucket.buffer, dst=dst_rank, group=self.process_group, async_op=True,
@@ -332,16 +353,16 @@ class ShardedDataParallel(nn.Module):
                                 callback=None,
                             )
                         )
-                        self._reduced_grads[optimizer] += 1
+                        self._reduced_grads += 1
 
                 # Opportunistically try to empty the queue
-                optimizer._try_consume_work_handle()
+                self._try_consume_work_handle()
 
                 # If all the reduce operations have been called,
                 # make sure that all the asynchronous calls have concluded before moving on
                 # and execute the delayed actions (release gradients, unroll the buckets)
-                if self._reduced_grads[optimizer] == self._reduced_grads_max[optimizer]:
-                    optimizer._consume_work_handles()
+                if self._reduced_grads == self._reduced_grads_max:
+                    self._consume_work_handles()
 
         return reduce
 
@@ -352,10 +373,10 @@ class ShardedDataParallel(nn.Module):
         """
 
         # Go through the parameters, attach the hook
-        for sharded_optimizer in self.sharded_optimizers:
+        for optim in self.sharded_optimizers:
             for (
                 device_per_rank_params
-            ) in sharded_optimizer.per_device_params.values():  # all the params on this device (inc all ranks)
+            ) in optim.per_device_params.values():  # all the params on this device (inc all ranks)
                 for device_params in device_per_rank_params:
                     for param in filter(lambda x: x.requires_grad, device_params):
                         if param.grad is not None and param.grad.requires_grad:
@@ -366,10 +387,10 @@ class ShardedDataParallel(nn.Module):
                         p_tmp = param.expand_as(param)
                         assert p_tmp.grad_fn is not None
                         grad_acc = p_tmp.grad_fn.next_functions[0][0]
-                        dst_rank = sharded_optimizer.param_to_rank[param]
+                        dst_rank = optim.param_to_rank[param]
                         index = len(self._grad_accs)
 
-                        grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank, sharded_optimizer))
+                        grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank))
                         self._grad_accs.append(grad_acc)  # keep this function in scope
 
         #  Add a hook on the module to flush the buckets, if needed
@@ -428,23 +449,25 @@ class ShardedDataParallel(nn.Module):
         """Devise a bucketing strategy on a per-rank ownership level. These buckets will not be sharded, since the gradients would be re-allocated during the backward in that case.
         """
 
+        self._reduced_grads_max = sum(len(o.param_to_rank.values()) for o in self.sharded_optimizers)
+
         if not self.use_buckets:
             return
 
         # Devise the bucketing strategy
         for sharded_optimizer in self.sharded_optimizers:
             for device, per_rank_params in sharded_optimizer.per_device_params.items():
-                self.buckets[sharded_optimizer][device] = []
+                self.buckets[device] = []
 
                 for dst_rank, params in enumerate(per_rank_params):
                     offset = 0
 
-                    self.buckets[sharded_optimizer][device].append(
+                    self.buckets[device].append(
                         Bucket(
                             buffer=torch.zeros(self.buffer_max_size, dtype=per_rank_params[0][0].dtype, device=device)
                         )
                     )
-                    bucket = self.buckets[sharded_optimizer][device][dst_rank]
+                    bucket = self.buckets[device][dst_rank]
                     bucket.destination = dst_rank
 
                     for param in filter(lambda x: x.requires_grad is True, params):
@@ -464,8 +487,8 @@ class ShardedDataParallel(nn.Module):
                             offset = offset_next
 
                             # Update the bucket
-                            self._reduced_grads_max[sharded_optimizer] -= 1  # one less reduce call per bucketed grad
-                            self.buckets[sharded_optimizer][device][dst_rank].max_params_checked_in += 1
+                            self._reduced_grads_max -= 1  # one less reduce call per bucketed grad
+                            self.buckets[device][dst_rank].max_params_checked_in += 1
 
                         else:
                             self._should_bucket_grad.append(False)
@@ -473,14 +496,32 @@ class ShardedDataParallel(nn.Module):
                     # Resize the bucket to remove lost space in the end
                     bucket.buffer.resize_(offset)
                     if bucket.max_params_checked_in > 0:
-                        self._reduced_grads_max[sharded_optimizer] += 1  # one reduce call per bucket
+                        self._reduced_grads_max += 1  # one reduce call per bucket
 
         self._bucket_list = list(
             chain(
                 *[
-                    self.buckets[sharded_optimizer][device]
+                    self.buckets[device]
                     for sharded_optimizer in self.sharded_optimizers
                     for device in sharded_optimizer.per_device_params.keys()
                 ]
             )
         )
+
+    def _consume_work_handles(self) -> None:
+        """Consume all the futures which are tied to this optimizer's buckets.
+            We start from the first/older ones, since they are the most likely to be ready and non-blocking
+            """
+
+        while len(self._work_handles) > 0:
+            work_handle = self._work_handles.popleft()
+            work_handle.handle.wait()
+            if work_handle.callback is not None:
+                work_handle.callback()
+
+    def _try_consume_work_handle(self) -> None:
+        """Try to consume the oldest future. This is non blocking, if not ready we'll pass"""
+        while len(self._work_handles) > 0 and self._work_handles[0].handle.is_completed():
+            work_handle = self._work_handles.popleft()
+            if work_handle.callback is not None:
+                work_handle.callback()

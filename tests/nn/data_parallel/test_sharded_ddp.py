@@ -142,16 +142,18 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         def check_same_model_params(model_a, model_b):
             for pa, pb in zip(model_a.parameters(), model_b.parameters()):
                 assert torch.allclose(pa, pb, atol=1e-3), f"Model parameters differ {pa} {pb}"
+                if pa.grad is not None:
+                    assert torch.allclose(pa.grad.data, pb.grad.data, atol=1e-1), f"Model grads differ {pa} {pb}"
 
             for ba, bb in zip(model_a.buffers(), model_b.buffers()):
                 assert torch.allclose(ba, bb, atol=1e-3), f"Model buffers differ. AMP {amp}"
 
         # The API should be the exact same in between the sharded and non-sharded variants, generic closure
-        accumulate_steps = 3 if accumulate else 1
+        def closure(model, scaler, input_tensor, should_accumulate):
+            # accumulate_steps = 3 if should_accumulate else 1
 
-        def closure(model, scaler, input_tensor):
             model.zero_grad()
-            with model.no_sync() if accumulate else suppress():
+            with model.no_sync() if should_accumulate else suppress():
                 if scaler is not None:
                     with torch.cuda.amp.autocast():
                         loss = model(input_tensor).abs().sum()
@@ -186,10 +188,10 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             input_tensor = torch.rand((BATCH_SIZE, INPUTS)).to(device)
 
             def closure_ddp(input_tensor=input_tensor):
-                return closure(ddp_model, ddp_scaler, input_tensor)
+                return closure(ddp_model, ddp_scaler, input_tensor, accumulate)
 
             def closure_sharded(input_tensor=input_tensor):
-                return closure(sharded_ddp_model, sharded_ddp_scaler, input_tensor)
+                return closure(sharded_ddp_model, sharded_ddp_scaler, input_tensor, accumulate)
 
             # Step/scale both
             if ddp_scaler is not None:
@@ -213,8 +215,8 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     # check_parity(amp=False, accumulate=True)
 
     # Catch a version of pytorch which would not support AMP
-    if hasattr(torch.cuda.amp, "autocast"):
-        check_parity(amp=True, accumulate=False)
+    # if hasattr(torch.cuda.amp, "autocast"):
+    # check_parity(amp=True, accumulate=False)
 
     dist.destroy_process_group()
 
