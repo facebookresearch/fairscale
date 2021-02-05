@@ -10,7 +10,7 @@ A wrapper which streams the model in and out of the GPU automatically during FW 
 
 from builtins import isinstance
 import logging
-from typing import Any, Dict, List, Tuple, Type
+from typing import Any, List, Tuple
 
 import torch
 from torch import nn
@@ -182,8 +182,6 @@ class OffloadWrapperExperimental(nn.Module):
     def __init__(
         self,
         model_cpu: nn.Sequential,  # hard pre-requisite for now, easier model slicing
-        optimizer: Type[torch.optim.Optimizer],
-        optimizer_params: Dict[str, Any],
         device: torch.device,
         offload_device: torch.device = torch.device("cpu"),
         n_slices: int = 5,
@@ -204,10 +202,6 @@ class OffloadWrapperExperimental(nn.Module):
             self.model_slices.append(
                 ModelShard(cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device,)
             )
-
-            # Use one normal optimizer per slice
-            # TODO: Keep all optimizers, return a wrap which will distribute the steps()
-            self.optimizer = optimizer(nn.Sequential(*split).parameters(), **optimizer_params)
 
         # Expose a unified view of the slices
         self.model = torch.nn.Sequential(*self.model_slices)

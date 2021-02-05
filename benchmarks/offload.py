@@ -34,22 +34,15 @@ def train(args: argparse.Namespace):
     criterion = nn.CrossEntropyLoss()
     if args.offload:
         logging.info("Using sharded offloading for training")
-        offload_model = OffloadWrapperExperimental(
-            model_cpu=model,
-            optimizer=OPTIM,
-            optimizer_params={"lr": LR},
-            device=device,
-            offload_device=torch.device("cpu"),
-            n_slices=args.slices,
-        )
-
-        optimizer = offload_model.optimizer
-        model = offload_model  # type: ignore
+        model = OffloadWrapperExperimental(
+            model_cpu=model, device=device, offload_device=torch.device("cpu"), n_slices=args.slices,
+        )  # type: ignore
 
     else:
         logging.info("Using Pytorch for training")
         model = model.to(torch.device("cuda"))
-        optimizer = OPTIM(model.parameters(), lr=LR)
+
+    optimizer = OPTIM(model.parameters(), lr=LR)
 
     transform = ToTensor()
     dataloader = DataLoader(
