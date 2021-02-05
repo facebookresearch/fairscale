@@ -141,12 +141,10 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         # Helper, check that models are the same
         def check_same_model_params(model_a, model_b):
             for pa, pb in zip(model_a.parameters(), model_b.parameters()):
-                assert torch.allclose(pa, pb, atol=1e-3), f"Model parameters differ {pa} {pb}"
-                if pa.grad is not None:
-                    assert torch.allclose(pa.grad.data, pb.grad.data, atol=1e-1), f"Model grads differ {pa} {pb}"
+                assert torch.allclose(pa, pb, rtol=1e-3), f"Model parameters differ {pa} {pb}"
 
             for ba, bb in zip(model_a.buffers(), model_b.buffers()):
-                assert torch.allclose(ba, bb, atol=1e-3), f"Model buffers differ. AMP {amp}"
+                assert torch.allclose(ba, bb, rtol=1e-3), f"Model buffers differ. AMP {amp}"
 
         # The API should be the exact same in between the sharded and non-sharded variants, generic closure
         def closure(model, scaler, input_tensor, should_accumulate):
@@ -209,14 +207,12 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                 sharded_optimizer.step(closure=closure_sharded)
 
             check_same_model_params(sharded_ddp_model, ddp_model)
-            print(f"{i} VALID")
 
     check_parity(amp=False, accumulate=False)
-    # check_parity(amp=False, accumulate=True)
 
     # Catch a version of pytorch which would not support AMP
-    # if hasattr(torch.cuda.amp, "autocast"):
-    # check_parity(amp=True, accumulate=False)
+    if hasattr(torch.cuda.amp, "autocast"):
+        check_parity(amp=True, accumulate=False)
 
     dist.destroy_process_group()
 
