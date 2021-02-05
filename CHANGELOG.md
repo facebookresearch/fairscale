@@ -5,9 +5,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [next rel] - TBD
+
+
+## [0.1.5] - 2021-02-03
 ### Added
+- Pytorch compatibility for OSS checkpoints (#310)
+- Elastic checkpoints for OSS, world size can vary in between save and loads (#310)
+- Tensor views for OSS bucketing, reduced CPU use (#300)
 - Bucket calls in ShardedDDP, for faster inter node communications (#327)
-- Tensor views for OSS bucketing, reduced CPU use
+- FlattenParamWrapper, which flattens module parameters into a single tensor seamlessly (#317)
+- AMPnet experimental support (#304)
+
+### Fixed
+- ShardedDDP properly handles device changes via `.to()` (#353)
+- Add a new interface for AdaScale, AdaScaleWrapper, which makes it compatible with OSS (#347)
+
 
 ## [0.1.4] - 2021-01-07
 ### Fixed

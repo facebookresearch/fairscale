@@ -19,59 +19,16 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim import Optimizer
 from torch.utils.data import BatchSampler, DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.datasets import MNIST
 from torchvision.transforms import Compose, Resize, ToTensor
 
-from fairscale.nn.data_parallel import OffloadDataParallelExperimental as OffloadDDPExperimental
 from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
 
-OPTIM = torch.optim.RMSprop
 TEMPDIR = tempfile.gettempdir()
-
-
-class ReshapeModule(torch.nn.Module):
-    def forward(self, x):
-        x = x.view(x.size(0), -1)
-        return x
-
-
-class ReshapeTokens(torch.nn.Module):
-    def __init__(self, vit):
-        super().__init__()
-        self.patch_embed = vit.patch_embed
-        self.cls_token = vit.cls_token
-
-    def forward(self, x):
-        B = x.shape[0]
-        x = self.patch_embed(x)
-
-        cls_token = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        return torch.cat((cls_token, x), dim=1)
-
-
-class Norm(torch.nn.Module):
-    def __init__(self, vit):
-        super().__init__()
-        self.norm = vit.norm
-
-    def forward(self, x):
-        x = self.norm(x)
-        return x[:, 0]
-
-
-class PosEmbed(torch.nn.Module):
-    def __init__(self, vit):
-        super().__init__()
-        self.pos_embed = vit.pos_embed
-        self.pos_drop = vit.pos_drop
-
-    def forward(self, x):
-        return self.pos_drop(x + self.pos_embed)
 
 
 def dist_init(rank, world_size, backend):
@@ -79,34 +36,14 @@ def dist_init(rank, world_size, backend):
     dist.init_process_group(backend=backend, init_method="tcp://localhost:29501", rank=rank, world_size=world_size)
 
 
-def get_problem(rank, world_size, batch_size, device, model_name: str, unroll_model: bool = False):
+def get_problem(rank, world_size, batch_size, device, model_name: str):
     # Select the desired model on the fly
     logging.info(f"Using {model_name} for benchmarking")
-    try:
-        model = getattr(importlib.import_module("torchvision.models"), model_name)(pretrained=False)
-    except AttributeError:
-        model = getattr(importlib.import_module("timm.models"), model_name)(pretrained=False)
 
-    # Tentatively unroll the model
-    if unroll_model:
-        if "resnet" in model_name:
-            model = torch.nn.Sequential(
-                model.conv1,
-                model.bn1,
-                model.relu,
-                model.maxpool,
-                *model.layer1,
-                *model.layer2,
-                *model.layer3,
-                *model.layer4,
-                model.avgpool,
-                ReshapeModule(),
-                model.fc,
-            )
-        elif "vit" in model_name:
-            model = torch.nn.Sequential(ReshapeTokens(model), PosEmbed(model), *model.blocks, Norm(model), model.head)
-        else:
-            raise RuntimeError("This model cannot be unrolled")
+    try:
+        model = getattr(importlib.import_module("torchvision.models"), model_name)(pretrained=False).to(device)
+    except AttributeError:
+        model = getattr(importlib.import_module("timm.models"), model_name)(pretrained=False).to(device)
 
     # Data setup, duplicate the grey channels to get pseudo color
     def collate(inputs: List[Any]):
@@ -137,11 +74,10 @@ class OptimType(str, Enum):
     vanilla = "pytorch"
     oss_ddp = "oss_ddp"
     oss_sharded_ddp = "oss_sharded_ddp"
-    oss_offload_ddp = "oss_offload_ddp"
     everyone = "everyone"
 
 
-def validate_benchmark(measurements, args, check_regression):
+def validate_benchmark(measurements, final_loss, args, check_regression):
     """Validate the measurments against the golden benchmark config."""
 
     golden_data = oss_mnist.get_golden_real_stats()
@@ -181,6 +117,10 @@ def train(
 ):
     logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
 
+    use_multi_tensor = args.multi_tensor_optim and hasattr(torch.optim, "_multi_tensor")
+    OPTIM = torch.optim._multi_tensor.RMSprop if use_multi_tensor else torch.optim.RMSprop  # type: ignore  # attr is  checked but mypy misses that
+    logging.info("Multi tensor optimizer: {}".format(use_multi_tensor))
+
     # DDP
     dist_init(rank=rank, world_size=args.world_size, backend=backend)
 
@@ -190,44 +130,23 @@ def train(
         torch.cuda.manual_seed(0)
     torch.manual_seed(0)  # also sets the cuda seed
     np.random.seed(0)
-    torch.cuda.device(rank)
 
     if backend == "nccl":
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
     device = torch.device("cpu") if args.cpu else torch.device(rank)
-    model, dataloader, loss_fn = get_problem(
-        rank,
-        args.world_size,
-        args.batch_size,
-        device,
-        args.model,
-        unroll_model=optim_type == OptimType.oss_offload_ddp,
-    )
+    model, dataloader, loss_fn = get_problem(rank, args.world_size, args.batch_size, device, args.model)
 
-    # Shard the optimizer, test different methods
+    # Shard the optimizer
     optimizer: Optional[torch.optim.Optimizer] = None
     model = cast(nn.Module, model)
     scaler = (TorchGradScaler() if args.optim_type == OptimType.vanilla else ShardedGradScaler()) if args.amp else None
 
     if optim_type == OptimType.oss_sharded_ddp:
-        model = model.to(device)
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
         model = ShardedDDP(model, optimizer)
-    elif optim_type == OptimType.oss_offload_ddp:
-        ddp_exp = OffloadDDPExperimental(
-            model_cpu=model,
-            optimizer=OPTIM,
-            optimizer_params={"lr": 1e-4, "momentum": 0.9},
-            world_size=args.world_size,
-            device=torch.device(torch.cuda.current_device()),
-            offload_device=torch.device("cpu"),
-        )
-        optimizer = ddp_exp.optimizer
-        model = ddp_exp
     else:
-        model = model.to(device)
         device_ids = None if args.cpu else [rank]
         model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
         optimizer = (
@@ -235,7 +154,6 @@ def train(
             if optim_type == OptimType.oss_ddp
             else OPTIM(model.parameters(), lr=1e-4, momentum=0.9)
         )
-
     optimizer = cast(torch.optim.Optimizer, optimizer)
 
     # Reset the memory use counter
@@ -250,7 +168,6 @@ def train(
 
     measurements = []
     final_loss: Optional[float] = -1.0
-    optimizer = cast(Optimizer, optimizer)
     need_profiling = args.profile
 
     for epoch in range(args.epochs):
@@ -346,7 +263,7 @@ def train(
     img_per_sec = n_items / (training_stop - training_start) * args.epochs
     logging.info(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec inc. checkpoint")
 
-    validate_benchmark(measurements, args, check_regression)
+    validate_benchmark(measurements, final_loss, args, check_regression)
 
     dist.destroy_process_group()  # type: ignore
 
@@ -359,9 +276,6 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", action="store", default=10, type=int)
     parser.add_argument("--batch_size", action="store", default=256, type=int)
     parser.add_argument("--check_regression", action="store_true", default=False)
-    parser.add_argument("--reference_speed", action="store", default=1430, type=float)
-    parser.add_argument("--reference_memory", action="store", default=1220, type=float)
-    parser.add_argument("--reference_loss", action="store", default=0.006, type=float)
     parser.add_argument(
         "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
     )
@@ -371,7 +285,10 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, help="Any torchvision or timm model name (str)", default="resnet101")
     parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
     parser.add_argument("--amp", action="store_true", default=False, help="Activate torch AMP")
-    parser.add_argument("--fake_data", action="store_true", default=False, help="Use fake data")
+    parser.add_argument(
+        "--multi_tensor_optim", action="store_true", default=False, help="Use the faster multi-tensor optimizers"
+    )
+
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
@@ -418,18 +335,7 @@ if __name__ == "__main__":
         logging.info("\n*** Benchmark OSS with ShardedDDP")
         mp.spawn(
             train,  # type: ignore
-            args=(
-                args,
-                BACKEND,
-                OptimType.oss_sharded_ddp,
-                False,
-            ),  # FIXME: @lefaudeux - SDP should give the same results
+            args=(args, BACKEND, OptimType.oss_sharded_ddp, args.check_regression,),
             nprocs=args.world_size,
             join=True,
-        )
-
-    if args.optim_type == OptimType.oss_offload_ddp or args.optim_type == OptimType.everyone:
-        print("\nBenchmark OSS experimental")
-        mp.spawn(
-            train, args=(args, BACKEND, OptimType.oss_offload_ddp, False,), nprocs=args.world_size, join=True,  # type: ignore
         )

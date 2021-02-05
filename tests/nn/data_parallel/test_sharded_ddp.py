@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-Testing OssDdp class.
+Testing ShardedDDP
 """
 
 from contextlib import suppress
@@ -14,6 +14,7 @@ from typing import List
 
 import numpy as np
 import torch
+from torch.cuda.amp import GradScaler as TorchGradScaler
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn import Linear, Sequential
@@ -21,7 +22,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
-from fairscale.utils.testing import GPT2, skip_if_no_cuda, skip_if_single_gpu
+from fairscale.optim.grad_scaler import ShardedGradScaler
+from fairscale.utils.testing import GPT2, skip_if_no_cuda, skip_if_py38, skip_if_single_gpu
 
 
 def run_one_step(rank, world_size, backend, device, temp_file_name):
@@ -112,14 +114,15 @@ def run_test(backend, device, world_size=2):
     mp.spawn(run_one_step, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
 
 
-def test_step_on_cpu():
-    run_test(backend=dist.Backend.GLOO, device=torch.device("cpu"), world_size=4)
-
-
 @skip_if_no_cuda
 @skip_if_single_gpu
-def test_step_on_gpu():
+def test_step_gpu():
     run_test(backend=dist.Backend.NCCL, device=torch.device("cuda"))
+
+
+@skip_if_py38
+def test_step_cpu():
+    run_test(backend=dist.Backend.GLOO, device=torch.device("cpu"))
 
 
 def run_ddp_parity(rank, world_size, backend, temp_file_name):
@@ -131,51 +134,89 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     torch.manual_seed(rank)
     np.random.seed(rank)
 
-    # Any model works. Add one different buffer per rank
-    model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
-    model.register_buffer("test_buffer", torch.ones((1)) * rank)
-    model.to(device)
+    def check_parity(amp: bool):
+        # Any model works. Add one different buffer per rank
+        model = Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
+        model.register_buffer("test_buffer", torch.ones((1)) * rank)
+        model.to(device)
 
-    sharded_optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
-    sharded_ddp_model = ShardedDataParallel(module=model, sharded_optimizer=sharded_optimizer, broadcast_buffers=True)
+        sharded_optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+        sharded_ddp_model = ShardedDataParallel(
+            module=model, sharded_optimizer=sharded_optimizer, broadcast_buffers=True
+        )
 
-    ddp_model_single = copy.deepcopy(model)
-    ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-3, momentum=0.99)
-    ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True)
+        ddp_model_single = copy.deepcopy(model)
+        ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-3, momentum=0.99)
+        ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True)
 
-    def check_same_model_params():
-        for pg, ddp_pg in zip(sharded_optimizer.param_groups, ddp_optimizer.param_groups):
-            for p, ddp_p in zip(pg["params"], ddp_pg["params"]):
+        ddp_scaler = TorchGradScaler() if amp else None
+        sharded_ddp_scaler = ShardedGradScaler() if amp else None
+
+        def check_same_model_params():
+            for pg, ddp_pg in zip(sharded_optimizer.param_groups, ddp_optimizer.param_groups):
+                for p, ddp_p in zip(pg["params"], ddp_pg["params"]):
+                    assert torch.allclose(
+                        p, ddp_p, atol=1e-3
+                    ), f"Model parameters differ in between DDP and ShardedDDP {p} {ddp_p}"
+
+            for b, ddp_b in zip(sharded_ddp_model.buffers(), ddp_model.buffers()):
                 assert torch.allclose(
-                    p, ddp_p, atol=1e-3
-                ), f"Model parameters differ in between DDP and ShardedDDP {p} {ddp_p}"
+                    b, ddp_b, atol=1e-3
+                ), f"Model buffers differ in between DDP and ShardedDDP. AMP {amp}"
 
-        for b, ddp_b in zip(sharded_ddp_model.buffers(), ddp_model.buffers()):
-            assert torch.allclose(b, ddp_b, atol=1e-3), "Model buffers differ in between DDP and ShardedDDP"
-
-    # The model should be synchronized in between the ranks at construction time, check that
-    check_same_model_params()
-
-    # The models should stay the same in between the ranks
-    for i in range(20):
-        input_tensor = torch.rand((64, 2)).to(device)
-
-        def closure_ddp(input_tensor=input_tensor):
-            ddp_optimizer.zero_grad()
-            ddp_loss = ddp_model(input_tensor).abs().sum()
-            ddp_loss.backward()
-            return ddp_loss
-
-        def closure_sharded(input_tensor=input_tensor):
-            sharded_optimizer.zero_grad()
-            sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
-            sharded_loss.backward()
-            return sharded_loss
-
-        _ = ddp_optimizer.step(closure=closure_ddp)
-        _ = sharded_optimizer.step(closure=closure_sharded)
-
+        # The model should be synchronized in between the ranks at construction time, check that
         check_same_model_params()
+
+        # The models should stay the same in between the ranks
+        for i in range(10):
+            input_tensor = torch.rand((64, 2)).to(device)
+
+            def closure_ddp(input_tensor=input_tensor):
+                ddp_optimizer.zero_grad()
+
+                if ddp_scaler is not None:
+                    with torch.cuda.amp.autocast():
+                        ddp_loss = ddp_model(input_tensor).abs().sum()
+                        ddp_scaler.scale(ddp_loss).backward()
+                else:
+                    ddp_loss = ddp_model(input_tensor).abs().sum()
+                    ddp_loss.backward()
+                return ddp_loss
+
+            def closure_sharded(input_tensor=input_tensor):
+                sharded_optimizer.zero_grad()
+
+                if sharded_ddp_scaler is not None:
+                    with torch.cuda.amp.autocast():
+                        sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
+                        sharded_ddp_scaler.scale(sharded_loss).backward()
+                else:
+                    sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
+                    sharded_loss.backward()
+                return sharded_loss
+
+            # Step/scale both
+            if ddp_scaler is not None:
+                _ = closure_ddp(input_tensor)
+                ddp_scaler.step(ddp_optimizer)
+                ddp_scaler.update()
+            else:
+                ddp_optimizer.step(closure=closure_ddp)
+
+            if sharded_ddp_scaler is not None:
+                _ = closure_sharded(input_tensor)
+                sharded_ddp_scaler.step(sharded_optimizer)
+                sharded_ddp_scaler.update()
+            else:
+                sharded_optimizer.step(closure=closure_sharded)
+
+            check_same_model_params()
+
+    check_parity(amp=False)
+
+    # Catch a version of pytorch which would not support AMP
+    if hasattr(torch.cuda.amp, "autocast"):
+        check_parity(amp=True)
 
     dist.destroy_process_group()
 
@@ -339,6 +380,35 @@ def test_random_attributes():
     assert not hasattr(ddp_model, "orange")
 
     dist.destroy_process_group()
+
+
+def run_test_device_change(rank, world_size, backend, device, temp_file_name):
+    # Check that the wrapped module can change devices
+
+    url = "file://" + temp_file_name
+    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+
+    model = Sequential(Linear(2, 3), Linear(3, 3)).cpu()
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    ddp_model = ShardedDataParallel(model, optimizer)
+    ddp_model.to(device)
+
+    inputs = torch.rand((10, 2), device=device)
+    outputs = ddp_model(inputs)  # assert if the module has not been changed properly
+    loss = outputs.norm().backward()
+
+    dist.destroy_process_group()
+
+
+@skip_if_no_cuda
+@skip_if_single_gpu
+def test_device_change():
+    # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
+    world_size = 2
+    backend = "gloo"
+    temp_file_name = tempfile.mkstemp()[1]
+    device = "cuda"
+    mp.spawn(run_test_device_change, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
 
 
 def run_test_ddp_sync_batch_norm(rank, world_size, backend, device, temp_file_name):
