@@ -571,14 +571,15 @@ class OSS(Optimizer):
             self.buckets[device] = []
 
             for dst_rank, params in enumerate(per_rank_params):
-                buffer_size = sum(map(lambda x: x.numel(), filter(lambda x: x.requires_grad, params)))
-                self.buckets[device].append(torch.zeros(buffer_size, dtype=params[0].dtype, device=device))
-                offset = 0
+                if len(params) > 0:
+                    buffer_size = sum(map(lambda x: x.numel(), filter(lambda x: x.requires_grad, params)))
+                    self.buckets[device].append(torch.zeros(buffer_size, dtype=params[0].dtype, device=device))
+                    offset = 0
 
-                for param in filter(lambda x: x.requires_grad, params):
-                    # This parameter becomes a view of the bucket
-                    offset_next = offset + param.numel()
+                    for param in filter(lambda x: x.requires_grad, params):
+                        # This parameter becomes a view of the bucket
+                        offset_next = offset + param.numel()
 
-                    self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.flatten())
-                    param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
-                    offset = offset_next
+                        self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.flatten())
+                        param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
+                        offset = offset_next
