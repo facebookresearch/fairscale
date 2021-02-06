@@ -9,6 +9,7 @@ from itertools import chain
 import logging
 from math import inf
 from typing import TYPE_CHECKING, Any, Callable, Deque, Dict, List, Optional, Type, Union
+
 import torch
 import torch.distributed as dist
 from torch.nn import Parameter
