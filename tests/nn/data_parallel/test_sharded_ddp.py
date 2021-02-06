@@ -171,9 +171,13 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             module=model, sharded_optimizer=sharded_optimizer, broadcast_buffers=True
         )
 
+        next(model.parameters()).requires_grad = False  # Test non-trainable parameters
+        sharded_ddp_model.refresh_trainable()
+
         ddp_model_single = copy.deepcopy(model)
         ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-3, momentum=0.99)
         ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True)
+        next(ddp_model.parameters()).requires_grad = False  # Test non-trainable parameters
 
         ddp_scaler = TorchGradScaler() if amp else None
         sharded_ddp_scaler = ShardedGradScaler() if amp else None

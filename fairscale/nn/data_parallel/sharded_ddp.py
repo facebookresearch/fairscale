@@ -417,6 +417,7 @@ class ShardedDataParallel(nn.Module):
         """
 
         # Go through the parameters, attach the hook
+        self._grad_accs = []
         for index, param in enumerate(self._trainable_params):
             if param.grad is not None and param.grad.requires_grad:
                 raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
@@ -503,12 +504,10 @@ class ShardedDataParallel(nn.Module):
             dst_rank = self._trainable_param_to_rank[param]
 
             if param.device not in self.buckets.keys():
-                self.buckets[param.device] = []
-
-            if len(self.buckets[device]) < dst_rank + 1:
-                self.buckets[device].append(
+                self.buckets[param.device] = [
                     Bucket(buffer=torch.zeros(self.buffer_max_size, dtype=param.dtype, device=device))
-                )
+                    for _ in range(dist.get_world_size(self.process_group))
+                ]
 
             bucket = self.buckets[device][dst_rank]
             bucket.destination = dst_rank
