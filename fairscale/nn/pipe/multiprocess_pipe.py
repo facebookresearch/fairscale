@@ -31,7 +31,6 @@ import torch.cuda
 from fairscale.nn.model_parallel import get_model_parallel_world_size, get_pipeline_parallel_group
 
 from . import microbatch
-from .async_schedule import Location, ModuleWrapper
 from .batchnorm import DeferredBatchNorm
 from .multiprocess_pipeline import MultiProcessPipeline
 from .phony import get_phony
@@ -219,9 +218,6 @@ class MultiProcessPipe(Module):
             self.add_module(str(0), self.partition)
             self.create_pipeline()
 
-        # TODO(msb) Remove this hack at some point.
-        self.partitions = [ModuleWrapper(self.partition, Location(self.group.rank(), 0))]
-
         del module
 
     def create_pipeline(self) -> None:
@@ -229,7 +225,7 @@ class MultiProcessPipe(Module):
         checkpoint_stop = {"always": self.chunks, "except_last": self.chunks - 1, "never": 0}[self.checkpoint]
 
         self.pipeline = MultiProcessPipeline(
-            [ModuleWrapper(self.partition, Location(self.group.rank(), 0))],
+            self.partition,
             self._skip_layout,
             checkpoint_stop,
             group=self.group,

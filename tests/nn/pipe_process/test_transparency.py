@@ -60,13 +60,13 @@ def simple_linears(pipe_class):
     if model.group.rank() == 1:
         loss = outputs.mean()
         loss.backward()
-        grad_with_pipe = sum_grad(model.pipeline.partitions[0].module.parameters())
+        grad_with_pipe = sum_grad(model.pipeline.partition.parameters())
 
         # Both grads should be identical.
         assert torch.allclose(grad_with_pipe, grad_without_pipe[1])
     else:
         model.back_helper(outputs)
-        grad_with_pipe = sum_grad(model.pipeline.partitions[0].module.parameters())
+        grad_with_pipe = sum_grad(model.pipeline.partition.parameters())
 
         # Both grads should be identical.
         assert torch.allclose(grad_with_pipe, grad_without_pipe[0])
