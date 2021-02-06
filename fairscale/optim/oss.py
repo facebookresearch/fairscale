@@ -51,9 +51,7 @@ class OSS(Optimizer):
         group (group):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
-            the max size of the buffer used to batch the small parameter tensors, in number of elements (default 16M).
-            this will not impact the long term memory consumption, but the peak memory can be impacted by the moment
-            when the buffers are allocated and the bucketed params have not yet been relocated to them.
+            (deprecated) used to cap the size of the broadcast buffers, not being used anymore.
     """
 
     #: The optimizer used for a given shard
@@ -66,7 +64,7 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
-        broadcast_buffer_size: int = 2 ** 24,
+        broadcast_buffer_size: int = -1,
         **default: Any,
     ):
 
