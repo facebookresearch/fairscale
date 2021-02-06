@@ -489,7 +489,8 @@ class ShardedDataParallel(nn.Module):
         This method can be a slow for big models, but it it not typically called often (not for every forward for instance)
         """
 
-        self._reduced_grads_max = sum(len(o.param_to_rank.values()) for o in self.sharded_optimizers)
+        # A priori, one reduce call per param
+        self._reduced_grads_max = len(self._trainable_params)
 
         if not self.use_buckets:
             return
