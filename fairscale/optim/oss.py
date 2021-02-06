@@ -538,7 +538,6 @@ class OSS(Optimizer):
         last_work_handle = None  # Work handles are consumed within this scope, no callback
 
         for device in self.per_device_params.keys():
-            # Bucket and issue all the async calls
             for src_rank, bucket in enumerate(self.buckets[device]):
                 global_src_rank = self.get_global_rank(self.group, src_rank)
                 last_work_handle = dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True)
@@ -568,12 +567,10 @@ class OSS(Optimizer):
         """Make all params which are on the same device and tied to the same rank views of a single buffer
         """
 
-        # Devise the bucketing strategy
         for device, per_rank_params in self.per_device_params.items():
             self.buckets[device] = []
 
             for dst_rank, params in enumerate(per_rank_params):
-
                 buffer_size = sum(map(lambda x: x.numel(), filter(lambda x: x.requires_grad, params)))
                 self.buckets[device].append(torch.zeros(buffer_size, dtype=params[0].dtype, device=device))
                 offset = 0
