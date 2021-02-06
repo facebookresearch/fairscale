@@ -17,7 +17,7 @@ from torch import nn
 
 
 # Custom Autograd function to carry out the backward pass
-class OffloadBackwardFunction(torch.autograd.Function):
+class OffloadFunction(torch.autograd.Function):
     """
     We can implement our own custom autograd Functions by subclassing
     torch.autograd.Function and implementing the forward and backward passes
@@ -38,13 +38,18 @@ class OffloadBackwardFunction(torch.autograd.Function):
         # Enumerate through layer shards and apply activations from the previous shard
         for index, layer_shard in enumerate(model_instance.model_slices):
             # Bring in the current activations onto the device
-            current_input = model_instance._activations[index].to("cuda")
+            model_instance._activations[index] = model_instance._activations[index].to(
+                "cuda")
             # Bring in the current layer shard onto the device
-            layer_shard.to("cuda")
+            layer_shard = layer_shard.to("cuda")
+            # Run the FP on the layer shard.
+            inter_activations = layer_shard(model_instance._activations[index])
+            # Move the activations to the CPU
+            inter_activations = inter_activations.to("cpu")
             # Apply the FP and store the activations on the CPU.
-            model_instance._activations.append(layer_shard(current_input).to("cpu"))
+            model_instance._activations.append(inter_activations)
             # Move the layer shard back to the CPU
-            layer_shard.to("cpu")
+            layer_shard = layer_shard.to("cpu") 
         return model_instance._activations[-1]
 
     @staticmethod
@@ -54,31 +59,30 @@ class OffloadBackwardFunction(torch.autograd.Function):
         with respect to the output, and we need to compute the gradient of the loss
         with respect to the input.
         """
-        input, model_instance = ctx.save_for_backward
-        final_grads = grad_output.clone()
+        _, model_instance = ctx.save_for_backward
+        final_grads = grad_output.to("cuda")
         all_grads = [final_grads]
-        # reverse the model shards and iterate through them
-        # calculate the gradients as you go along
-        logging.info("model_instance._activations ", model_instance._activations)
+        # reverse the model shards and iterate through them.
         for model_shard, activation in zip(reverse(model_instance.model_slices), reverse(model_instance._activations[:-1])):
             # move the activation to the device
-            activation.to("cuda")
+            activation = activation.to("cuda")
             # move the model shard to the device
-            model_shard.to("cuda")
+            model_shard = model_shard.to("cuda")
             # calculate the output of the last shard wrt to the stored activation at the slice boundary.
             output = model_shard(activation)
             # Get the last gradient calculation
             final_grads = all_grads[-1]
             # calculate the gradient wrt to the output on the CPU
-            output.backward(final_grads.to("cpu"))
+            output.backward(final_grads)
+
             # Move activation back to the GPU
-            activation.to("cpu")
-            # Append the list of grads to the all_grads list and this should be on the CPU
-            all_grads.append(activation.grad.to("cpu"))
+            activation = activation.to("cpu")
             # move the shard back to the cpu
-            model_shard.to("cpu")
+            model_shard = model_shard.to("cpu")     
+            # Append the list of grads to the all_grads list and this should be on the CPU
+            all_grads.append(activation)   
 
-
+        return all_grads[-1]
 
 def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
     number_splits = min(len(modules), number_splits)
@@ -110,7 +114,8 @@ def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
 
     for i, split in enumerate(splits):
         current_shard_params = sum(p.numel() for sm in split for p in sm.parameters())
-        logging.info(f"Shard {i} holds {current_shard_params/1e6:.2f}M parameters")
+        # logging.info(f"Shard {i} holds {current_shard_params/1e6:.2f}M parameters")
+        logging.info(f"Shard {i} holds {current_shard_params:.2f} parameters")
 
     return splits
 
@@ -270,24 +275,24 @@ class OffloadWrapperExperimental(nn.Module):
         # Expose a unified view of the slices
         self.model = torch.nn.Sequential(*self.model_slices)
 
-
-    def forward(self, *inputs: Any, **_: Any) -> Any:
+    def _alternate_forward(self, *inputs: Any, **_: Any) -> Any:
         # Slice per slice FW, sync in between
         syncRanks = ShardSyncLayer.apply
 
-        # # TODO: Rewrite this and make it more flexible, this is ugly
-        # for (p2, p1, n1, n2) in zip(
-        #     [None, None, *self.model_slices],
-        #     [None, *self.model_slices],
-        #     [*self.model_slices, None],
-        #     [*self.model_slices, None, None],
-        # ):
+        # TODO: Rewrite this and make it more flexible, this is ugly
+        for (p2, p1, n1, n2) in zip(
+            [None, None, *self.model_slices],
+            [None, *self.model_slices],
+            [*self.model_slices, None],
+            [*self.model_slices, None, None],
+        ):
+            # Per shard FW
+            inputs = p1(*inputs) if p1 else inputs
 
-        #     # Per shard FW
-        #     inputs = p1(*inputs) if p1 else inputs
+            # Call the custom autograd hooks (discard/load slices FW and BW)
+            inputs = syncRanks((p2, p1, n1, n2), inputs)
+        return inputs[0] if len(inputs) == 1 else inputs
 
-        #     # Call the custom autograd hooks (discard/load slices FW and BW)
-        #     inputs = syncRanks((p2, p1, n1, n2), inputs)
-        # return inputs[0] if len(inputs) == 1 else inputs
-        
-        return OffloadBackwardFunction.apply(*inputs, self)
+    def forward(self, *inputs: Any, **_: Any) -> Any:
+        # Defer to the overriden autograd function.
+        return OffloadFunction.apply(*inputs, self)

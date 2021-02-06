@@ -14,7 +14,6 @@ from torchvision.transforms import ToTensor
 
 OPTIM = torch.optim.SGD
 LR = 1e-3
-BATCH = 32
 
 from fairscale.nn.misc.offload import OffloadWrapperExperimental
 
@@ -25,9 +24,9 @@ def train(args: argparse.Namespace):
 
     # Setup the problem
     model = torch.nn.Sequential(
-        torch.nn.Linear(args.inputs * args.inputs, args.hidden),
+        torch.nn.Linear(args.inputs * args.inputs, args.hidden, bias=False),
         *([torch.nn.Linear(args.hidden, args.hidden) for _ in range(args.layers)]),
-        torch.nn.Linear(args.hidden, args.outputs)
+        torch.nn.Linear(args.hidden, args.outputs, bias=False)
     ).cpu()
 
     # Optim loop
@@ -47,10 +46,10 @@ def train(args: argparse.Namespace):
     transform = ToTensor()
     dataloader = DataLoader(
         FakeData(image_size=(1, args.inputs, args.inputs), num_classes=args.outputs, transform=transform),
-        batch_size=BATCH,
+        batch_size=args.batch_size,
     )
 
-    def train_epoch():
+    def train_epoch(args):
         model.train()
         for batch_inputs, batch_outputs in dataloader:
             # batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
@@ -60,25 +59,25 @@ def train(args: argparse.Namespace):
             inputs = batch_inputs.reshape(-1, args.inputs * args.inputs)
             output = model(inputs)
             loss = criterion(output, target=batch_outputs)
+            print(f"loss {loss.item()}")
             loss.backward()
             optimizer.step()
 
-            print("Loss {:.2f} - throughput {:.2f}fps".format(loss.item(), BATCH / (time.time_ns() - start) * 10 ** 9))
-
-    train_epoch()
+            print("Loss {:.2f} - throughput {:.2f}fps".format(loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9))
+    train_epoch(args)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test the CPU offload + sharding with a Transformer training")
-    parser.add_argument("--epochs", action="store", default=10, type=int)
-    parser.add_argument("--batch_size", action="store", default=20, type=int)
-    parser.add_argument("--inputs", action="store", help="The dimension of the inputs", default=100, type=int)
-    parser.add_argument("--hidden", action="store", help="The dimension of the hidden state", default=10000, type=int)
-    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=20, type=int)
-    parser.add_argument("--outputs", action="store", help="The number of predicted classes", default=5, type=int)
+    parser.add_argument("--epochs", action="store", default=1, type=int)
+    parser.add_argument("--batch_size", action="store", default=1, type=int)
+    parser.add_argument("--inputs", action="store", help="The dimension of the inputs", default=2, type=int)
+    parser.add_argument("--hidden", action="store", help="The dimension of the hidden state", default=2, type=int)
+    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=1, type=int)
+    parser.add_argument("--outputs", action="store", help="The number of predicted classes", default=2, type=int)
 
     parser.add_argument("--offload", action="store_true", default=False)
-    parser.add_argument("--slices", action="store", default=3, type=int)
+    parser.add_argument("--slices", action="store", default=2, type=int)
 
     args = parser.parse_args()
 
