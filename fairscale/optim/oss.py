@@ -3,19 +3,18 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections import OrderedDict
+from collections import OrderedDict, deque
 import copy
 from itertools import chain
 import logging
 from math import inf
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type, Union
-
+from typing import TYPE_CHECKING, Any, Callable, Deque, Dict, List, Optional, Type, Union
 import torch
 import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
-from .utils import broadcast_object, recursive_copy_to_device
+from .utils import Workhandle, broadcast_object, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
@@ -101,7 +100,7 @@ class OSS(Optimizer):
 
         # Current default device is set by the parameters allocated to this rank
         self._device = list(self.per_device_params.keys())[0]
-
+        self.work_handles: Deque[Workhandle] = deque()
         self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
         self._setup_flat_buffers()
 
@@ -548,6 +547,23 @@ class OSS(Optimizer):
         # Only check on the last handle, they're all inlined on the same CUDA stream
         if last_work_handle:
             last_work_handle.wait()
+
+    def _consume_work_handles(self) -> None:
+        """Consume all the futures which are tied to this optimizer's buckets.
+        We start from the first/older ones, since they are the most likely to be ready and non-blocking
+        """
+        while len(self.work_handles) > 0:
+            work_handle = self.work_handles.popleft()
+            work_handle.handle.wait()
+            if work_handle.callback is not None:
+                work_handle.callback()
+
+    def _try_consume_work_handle(self) -> None:
+        """Try to consume the oldest future. This is non blocking, if not ready we'll pass"""
+        while len(self.work_handles) > 0 and self.work_handles[0].handle.is_completed():
+            work_handle = self.work_handles.popleft()
+            if work_handle.callback is not None:
+                work_handle.callback()
 
     def _setup_flat_buffers(self) -> None:
         """Make all params which are on the same device and tied to the same rank views of a single buffer
