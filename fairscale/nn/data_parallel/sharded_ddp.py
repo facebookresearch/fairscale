@@ -239,6 +239,9 @@ class ShardedDataParallel(nn.Module):
     def sync_buffers(self, blocking: bool = False) -> None:
         """
         Sync all the param buffers in between ranks (including for instance batch norm statistics).
+
+        Arguments:
+            blocking (bool): wait for the operation to conclude.
         """
 
         last_work_handle = None
@@ -252,10 +255,20 @@ class ShardedDataParallel(nn.Module):
             # Only wait for the last coms, they're inlined on the same CUDA stream
             last_work_handle.wait()
 
-    def zero_grad(self, _: bool = False) -> None:
-        # TODO: Handle the command properly
-        for trainable_param in filter(lambda x: x.grad is not None, self._all_grad_params):
-            trainable_param.grad.zero_()  # type: ignore   # mypy is drunk
+    def zero_grad(self, set_to_none: bool = False) -> None:
+        r"""Sets gradients of all model parameters to zero. See similar function
+        under :class:`torch.optim.Optimizer` for more context.
+
+        Arguments:
+            set_to_none (bool): instead of setting to zero, set the grads to None.
+                See :meth:`torch.optim.Optimizer.zero_grad` for details.
+        """
+
+        for index, trainable_param in enumerate(self._all_grad_params):
+            if set_to_none and not self._should_bucket_grad[index]:
+                trainable_param.grad = None
+            elif trainable_param.grad is not None:
+                trainable_param.grad.zero_()
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -455,18 +468,24 @@ class ShardedDataParallel(nn.Module):
             return
 
         # Devise the bucketing strategy
+        self.buckets = {}
+
         for sharded_optimizer in self.sharded_optimizers:
             for device, per_rank_params in sharded_optimizer.per_device_params.items():
-                self.buckets[device] = []
+                if device not in self.bucket.keys():
+                    self.buckets[device] = []
 
                 for dst_rank, params in enumerate(per_rank_params):
                     offset = 0
 
-                    self.buckets[device].append(
-                        Bucket(
-                            buffer=torch.zeros(self.buffer_max_size, dtype=per_rank_params[0][0].dtype, device=device)
+                    if len(self.buckets[device]) < dst_rank + 1:
+                        self.buckets[device].append(
+                            Bucket(
+                                buffer=torch.zeros(
+                                    self.buffer_max_size, dtype=per_rank_params[0][0].dtype, device=device
+                                )
+                            )
                         )
-                    )
                     bucket = self.buckets[device][dst_rank]
                     bucket.destination = dst_rank
 
