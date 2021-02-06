@@ -42,8 +42,7 @@ class DistributedTest(unittest.TestCase):
     @staticmethod
     def _train_for_several_steps(model, num_steps, autocast):
         model_device = next(model.parameters()).device
-        optim = torch.optim.Adam(model.parameters(), lr=0.0001)
-        # If you set this higher implem differs from ddp in the 5th decimal place
+        optim = torch.optim.Adam(model.parameters(), lr=0.01)
         for _ in range(num_steps):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
@@ -168,17 +167,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config),)
 
     def test_cpu_offload_and_cpu_grads(self):
-        # We only test True and None (which implies True). We don't test the
-        # False condition because that requires the optimizer to internally do
+        # We don't test the False condition because that requires the optimizer to internally do
         # the device transfer and PyTorch optimizers don't support this.
-        for move_grads_choice in (True, None):
-            config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": move_grads_choice}
-            test_fn = functools.partial(
-                self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False
-            )
-            spawn_and_init(test_fn)
+        config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": True}
+        test_fn = functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False)
+        spawn_and_init(test_fn)
 
-    def test_cpu_offload_and_cuda_grads(self):
+    def test_cpu_offload_and_cuda_grads_breaks(self):
         # If grads are on gpu, but model and optimizer are on cpu, backward breaks.
         config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": False}
         with self.assertRaises(Exception):  # RuntimeError inside spawn
@@ -257,17 +252,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             raise Exception(f"ShardParamsDataParallel didn't match PyTorch DDP using config: {config}" "\n\n{e}")
 
 
-class TestSaveLoadLocalStateDict(DistributedTest):
-    def test_load_local_state_dict(self):
-        test_fn = functools.partial(self._load_local_and_train, {"flatten_parameters": False})
+class TestLocalStateDict(DistributedTest):
+    @parameterized.expand([[True, True], [False, False]])
+    def test_load_local_state_dict(self, flatten_params, mixed_precision):
+        test_fn = functools.partial(
+            self._load_local_and_train, {"flatten_parameters": flatten_params, "mixed_precision": mixed_precision}
+        )
         spawn_and_init(test_fn)
-
-    def test_local_state_dict_flatten_params_breaks(self):
-        test_fn_broken = functools.partial(self._load_local_and_train, {"flatten_parameters": True})
-        with self.assertRaises(Exception):
-            spawn_and_init(test_fn_broken)
-        # RuntimeError: Traceback [1]
-        # [1] https://gist.github.com/sshleifer/612d8eb02dbbf357d6133b2700e02f5e
 
     def test_local_state_dict_odd_vocab_shape_breaks(self):
         test_fn = functools.partial(self._load_local_and_train, {"flatten_parameters": False}, d_model=16, d_vocab=37)
@@ -282,14 +273,18 @@ class TestSaveLoadLocalStateDict(DistributedTest):
         ).cuda()
         state_1 = model.local_state_dict()
         state_before_training = {k: v.cpu().clone() for k, v in state_1.items()}
+        assert len(state_1) > 0
         model.load_local_state_dict(state_1)
-        state_1_weight = state_1["embed_tokens.weight"]
+        weight_key = "flat_param" if model.flatten_parameters else "embed_tokens.weight"
 
-        # This weight will be sharded since we access module.state_dict directly
-        state_1_module_weight = model.module.state_dict()["embed_tokens.weight"]
-        torch.testing.assert_allclose(state_1_weight, state_1_module_weight)
-        torch.testing.assert_allclose(state_1_weight, model.module.embed_tokens.weight)
-        self._train_for_several_steps(model, 4, False)
+        state_1_weight = state_1[weight_key]
+        assert state_1_weight.dtype == torch.float32, f"got dtype {state_1_weight.dtype} expected torch.float32"
+        if not model.flatten_parameters:
+            # This weight will be sharded since we access module.state_dict directly
+            state_1_module_weight = model.module.state_dict()[weight_key]
+            torch.testing.assert_allclose(state_1_weight, state_1_module_weight)
+            torch.testing.assert_allclose(state_1_weight, model.module.embed_tokens.weight)
+        self._train_for_several_steps(model, 4, model.mixed_precision)
 
         state_2 = model.local_state_dict()
         state_after_training = {k: v.cpu().clone() for k, v in state_2.items()}
@@ -307,40 +302,57 @@ class TestSaveLoadLocalStateDict(DistributedTest):
 
 
 class TestSaveLoadStateDict(DistributedTest):
-    def test_calling_state_dict_twice_breaks(self):
-        test_fn = functools.partial(self._test_calling_state_dict_twice_breaks, {"flatten_parameters": False})
+    @parameterized.expand([[False], [True]])
+    def test_calling_state_dict_twice(self, mixed_precision):
+        test_fn = functools.partial(
+            self._test_calling_state_dict_twice, {"flatten_parameters": False, "mixed_precision": mixed_precision}
+        )
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_calling_state_dict_twice_breaks(self, config, rank, group):
+    def _test_calling_state_dict_twice(self, config, rank, group):
         ddp_model = self.get_wrapped_model(group, cuda_first=False, config=config)
-        self._train_for_several_steps(ddp_model, 1, False)
-        ddp_model.state_dict()  # Succeeds
-        try:
-            ddp_model.state_dict()
-            assert False, "Second state_dict call succeeded"
-        except Exception:
-            pass
+        autocast = ddp_model.mixed_precision
+        self._train_for_several_steps(ddp_model, 1, autocast)
+        ddp_model.state_dict()
+        ddp_model.state_dict()  # second call
 
-    def test_state_dict_after_forward(self):
-        test_fn = functools.partial(self._test_module_state_dict, {"flatten_parameters": False})
+    @parameterized.expand([[False], [True]])
+    def test_state_dict_after_forward(self, mixed_precision):
+        test_fn = functools.partial(
+            self._test_module_state_dict, {"flatten_parameters": False, "mixed_precision": mixed_precision}
+        )
         spawn_and_init(test_fn)
+
+    @parameterized.expand([[False], [True]])
+    def test_state_dict_before_forward(self, mixed_precision):
+        test_fn = functools.partial(
+            self._test_state_dict_before_forward, {"flatten_parameters": False, "mixed_precision": mixed_precision}
+        )
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_state_dict_before_forward(cls, config, rank, group):
+        ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
+        assert not hasattr(ddp_model, "_fp32_to_fp16_stream")
+        sd = ddp_model.state_dict()
+        assert not hasattr(ddp_model, "_fp32_to_fp16_stream")
+        expected_dtype = torch.float16 if ddp_model.mixed_precision else torch.float32
+        wt = sd["embed_tokens.weight"]
+        assert wt.dtype == expected_dtype, f"got dtype {wt.dtype} expected {expected_dtype}"
+        cls._train_for_several_steps(ddp_model, 1, ddp_model.mixed_precision)
 
     @classmethod
     def _test_module_state_dict(cls, config, rank, group):
         ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
-        try:
-            ddp_model.state_dict()
-            assert False, "Calling state_dict before forward succeeded"
-        except Exception:
-            pass
-        cls._train_for_several_steps(ddp_model, 2, False)
+        autocast = ddp_model.mixed_precision
+        cls._train_for_several_steps(ddp_model, 2, autocast)
         state_1 = ddp_model.state_dict()
         # You must make a new ShardParamsDataParallel instance to use module.load_state_dict
         unwrapped_model = TransformerWithSharedParams()
         unwrapped_model.load_state_dict(state_1)
         new_ddp_model = ShardParamsDataParallel(unwrapped_model, group, **config).cuda()
-        cls._train_for_several_steps(new_ddp_model, 2, False)
+        cls._train_for_several_steps(new_ddp_model, 2, autocast)
         try:
             ddp_model.load_state_dict(new_ddp_model.state_dict())
             assert False, "ddp_model.load_state_dict(new_ddp_model.state_dict()) succeeded"
@@ -369,9 +381,22 @@ class TestHooks(DistributedTest):
         fn = functools.partial(self._test_output_backward_hooks, cuda_first=cuda_first)
         spawn_and_init(fn)
 
+    def test_backward_hooks_after_save(self):
+        fn = functools.partial(self._test_backward_hooks_after_save, cuda_first=False)
+        spawn_and_init(fn)
+
     @classmethod
-    def _test_output_backward_hooks(self, rank, group, cuda_first=False):
+    def _test_backward_hooks_after_save(self, rank, group, cuda_first=False):
         model = self.get_wrapped_model(group, cuda_first=cuda_first)
+        self._train_for_several_steps(model, 2, model.mixed_precision)
+        state_1 = model.local_state_dict()
+        model.load_local_state_dict(state_1)
+        self._test_output_backward_hooks(rank, group, cuda_first=cuda_first, model=model)
+
+    @classmethod
+    def _test_output_backward_hooks(self, rank, group, cuda_first=False, model=None):
+        if model is None:
+            model = self.get_wrapped_model(group, cuda_first=cuda_first)
         optim = torch.optim.Adam(model.parameters(), lr=0.0001)
         optim.zero_grad()
         # Inputs always cuda regardless of move_grads_cpu, or model.device

@@ -124,8 +124,8 @@ class ShardParamsDataParallel(nn.Module):
             self.module = module
             self.params = params
 
-        # Shard module parameters.
-        self._shard_initial_params()
+        # Shard module parameters in place
+        self._shard_parameters_()
 
         if self.mixed_precision:
             # Cast all module buffers to FP16 (buffers are not sharded).
@@ -139,9 +139,10 @@ class ShardParamsDataParallel(nn.Module):
         # ShardParamsDataParallel instances. This flag is only set after the
         # first forward pass.
         self._is_root: Optional[bool] = None
+        self._init_full_param()
 
     @torch.no_grad()
-    def _shard_initial_params(self) -> None:
+    def _shard_parameters_(self) -> None:
         """
         At initialization we wrap a module with full parameters and shard the
         parameters in-place. Sharding is implemented by viewing each parameter
@@ -239,8 +240,9 @@ class ShardParamsDataParallel(nn.Module):
         wrapped with ShardParamsDataParallel.
         """
         if self.flatten_parameters:
-            kwargs["unflatten_params"] = False
-        return self.module.state_dict(*args, **kwargs)
+            return self.module.flat_state_dict(*args, **kwargs)  # type: ignore
+        else:
+            return self.module.state_dict(*args, **kwargs)
 
     def load_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
@@ -256,6 +258,13 @@ class ShardParamsDataParallel(nn.Module):
     ) -> NamedTuple:
         """Load a local (sharded) state_dict."""
         return self.module.load_state_dict(state_dict, strict)
+
+    @torch.no_grad()
+    def _init_full_param(self) -> None:
+        """Set p._full_param if not already set."""
+        first_time_params = [p for p in self.params if not hasattr(p, "_full_param")]
+        for p in first_time_params:
+            self._init_param(p)
 
     @torch.no_grad()
     def _init_param(self, p: Parameter) -> None:
@@ -305,39 +314,37 @@ class ShardParamsDataParallel(nn.Module):
 
     @torch.no_grad()
     def _pre_forward_init(self) -> None:
-        first_time_params = [p for p in self.params if not hasattr(p, "_full_param")]
-        for p in first_time_params:
-            self._init_param(p)
+        self._set_is_root()
+        if not self.cpu_offload:
+            self._move_fp32_shard_to_cuda()
+        if self._is_root and not hasattr(self, "_fp32_to_fp16_stream"):
+            # Stream for moving FP32 master params (which may be on CPU) to
+            # FP16 for computation. We share this stream with all children
+            # instances, which allows them to overlap transfers across the
+            # forward pass without synchronizing with the default stream.
+            self._fp32_to_fp16_stream = torch.cuda.Stream()
 
-        if len(first_time_params) > 0:
-            if self._is_root is None:
-                # This implies that no other ShardParamsDataParallel instance
-                # wraps this instance, otherwise it would have already set this
-                # flag to False.
-                self._is_root = True
-
-                # As the root, we now set all children instances to False.
-                for n, m in self.named_modules():
-                    if n != "" and isinstance(m, ShardParamsDataParallel):
-                        assert m._is_root is None
-                        m._is_root = False
-
-            if self._is_root:
-                # Stream for moving FP32 master params (which may be on CPU) to
-                # FP16 for computation. We share this stream with all children
-                # instances, which allows them to overlap transfers across the
-                # forward pass without synchronizing with the default stream.
-                self._fp32_to_fp16_stream = torch.cuda.Stream()
-
-                for n, m in self.named_modules():
-                    if n != "" and isinstance(m, ShardParamsDataParallel):
-                        m._fp32_to_fp16_stream = self._fp32_to_fp16_stream
+            for n, m in self.named_modules():
+                if n != "" and isinstance(m, ShardParamsDataParallel):
+                    m._fp32_to_fp16_stream = self._fp32_to_fp16_stream
 
         assert self._is_root is not None
         if self._is_root:
             # The top-most (root) instance needs to synchronize with the default
             # stream, so we don't move the FP32 master weights prematurely.
             self._fp32_to_fp16_stream.wait_stream(torch.cuda.current_stream())
+
+    def _set_is_root(self) -> None:
+        """If true, implies that no other ShardParamsDataParallel instance. Called by forward."""
+        if self._is_root is not None:
+            return
+        # No ShardParamsDataParallel instance wraps this, else _is_root would be set to False
+        self._is_root = True
+        # As the root, we now set all children instances to False.
+        for n, m in self.named_modules():
+            if n != "" and isinstance(m, ShardParamsDataParallel):
+                assert m._is_root is None
+                m._is_root = False
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self._pre_forward_init()
@@ -417,12 +424,12 @@ class ShardParamsDataParallel(nn.Module):
                 param.grad (GPU #1): [5, 6, 7, 8]
 
             after reduce_scatter:
-                param.grad (GPU #0): [6, 8]
-                param.grad (GPU #1): [10, 12]
+                param.grad (GPU #0): [6, 8]    # 1+5, 2+6
+                param.grad (GPU #1): [10, 12]  # 3+7, 4+8
 
         The local GPU's optimizer.step is responsible for updating a single
         shard of params, also corresponding to the current GPU's rank. This
-        alignment is created by _shard_initial_params, which ensures that the
+        alignment is created by _shard_parameters_, which ensures that the
         local optimizer only sees the relevant single parameter shard.
         """
         if param.grad is None:
@@ -480,19 +487,21 @@ class ShardParamsDataParallel(nn.Module):
 
     @torch.no_grad()
     def _rebuild_full_params(self) -> None:
-        """Get all shards of params."""
-        if self.mixed_precision:
+        """Gather all shards of params."""
+        if self.mixed_precision and hasattr(self, "_fp32_to_fp16_stream"):
             self._cast_fp32_param_shards_to_fp16()
 
         for p in self.params:
-            # All-gather parameters
-            alloc_storage_(p._full_param, size=p._orig_size)
-            output_list = list(torch.flatten(p._full_param).chunk(self.world_size))
-            dist.all_gather(output_list, p.data, group=self.process_group)
+            if p._full_param.storage().size() != p._orig_size.numel():
+                # All-gather parameters
+                alloc_storage_(p._full_param, size=p._orig_size)
+                output_list = list(torch.flatten(p._full_param).chunk(self.world_size))
+                dist.all_gather(output_list, p.data, group=self.process_group)
+
             p.data = p._full_param
             p.grad = None
 
-            if self.mixed_precision:
+            if self.mixed_precision and hasattr(self, "_fp32_to_fp16_stream"):
                 self._free_fp16_param_shard([p])
 
     @torch.no_grad()
@@ -516,6 +525,12 @@ class ShardParamsDataParallel(nn.Module):
             # save memory.
             p._full_param.record_stream(current_stream)
             free_storage_(p._full_param)
+
+    @torch.no_grad()
+    def _move_fp32_shard_to_cuda(self) -> None:
+        assert not self.cpu_offload
+        for p in self.params:
+            p._fp32_shard = p._fp32_shard.to(p.data.device)
 
     @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
@@ -596,5 +611,7 @@ def free_storage_(data: torch.Tensor) -> None:
 @torch.no_grad()
 def alloc_storage_(data: torch.Tensor, size: torch.Size) -> None:
     """Allocate storage for a tensor."""
+    if data.storage().size() == size.numel():  # no need to reallocate
+        return
     assert data.storage().size() == 0
     data.storage().resize_(size.numel())
