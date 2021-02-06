@@ -89,6 +89,7 @@ class Bucket:
         self.max_size = buffer.numel()
 
         # Current status for this buffer
+        self.fill = 0
         self.params_checked_in = 0
         self.max_params_checked_in = 0  # atttribute present for convenience purposes
         self.destination = -1
