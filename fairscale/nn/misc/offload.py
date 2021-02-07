@@ -232,9 +232,7 @@ class OffloadWrapperExperimental(nn.Module):
             # Add one model handling this slice
             self.model_slices.append(
                 ModelShard(
-                    cpu_model_shard=nn.Sequential(*split), device=device,
-                                                  offload_device=offload_device,
-                                                  index=i,
+                    cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device, index=i,
                 )
             )
 
