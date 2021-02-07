@@ -46,8 +46,7 @@ def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
 
     for i, split in enumerate(splits):
         current_shard_params = sum(p.numel() for sm in split for p in sm.parameters())
-        # logging.info(f"Shard {i} holds {current_shard_params/1e6:.2f}M parameters")
-        logging.info(f"Shard {i} holds {current_shard_params:.2f} parameters")
+        logging.info(f"Shard {i} holds {current_shard_params/1e6:.2f}M parameters")
 
     return splits
 
