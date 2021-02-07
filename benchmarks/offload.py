@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.utils.data.dataloader import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.transforms import ToTensor
+from torchviz import make_dot
 
 OPTIM = torch.optim.SGD
 LR = 1e-3
@@ -21,11 +22,13 @@ from fairscale.nn.misc.offload import OffloadWrapperExperimental
 def train(args: argparse.Namespace):
     logging.basicConfig(level=logging.INFO)
     device = torch.device("cuda")
+    torch.cuda.set_device(0)
+    torch.manual_seed(5)
 
     # Setup the problem
     model = torch.nn.Sequential(
         torch.nn.Linear(args.inputs * args.inputs, args.hidden, bias=False),
-        *([torch.nn.Linear(args.hidden, args.hidden) for _ in range(args.layers)]),
+        # *([torch.nn.Linear(args.hidden, args.hidden) for _ in range(args.layers)]),
         torch.nn.Linear(args.hidden, args.outputs, bias=False)
     ).cpu()
 
@@ -52,17 +55,18 @@ def train(args: argparse.Namespace):
     def train_epoch(args):
         model.train()
         for batch_inputs, batch_outputs in dataloader:
-            # batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
+            batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
 
             start = time.time_ns()
             optimizer.zero_grad()
             inputs = batch_inputs.reshape(-1, args.inputs * args.inputs)
             output = model(inputs)
+            # make_dot(output, dict(model.named_parameters())).render("attached_mine", format="png")
             loss = criterion(output, target=batch_outputs)
-            print(f"loss {loss.item()}")
+            # print(f"loss {loss.item()}")
             loss.backward()
             optimizer.step()
-
+            # break
             print("Loss {:.2f} - throughput {:.2f}fps".format(loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9))
     train_epoch(args)
 

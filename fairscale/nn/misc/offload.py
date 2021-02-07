@@ -14,10 +14,11 @@ from typing import Any, List, Tuple
 
 import torch
 from torch import nn
+from torchviz import make_dot
 
 
 # Custom Autograd function to carry out the backward pass
-class OffloadFunction(torch.autograd.Function):
+class OffloadBackwardFunction(torch.autograd.Function):
     """
     We can implement our own custom autograd Functions by subclassing
     torch.autograd.Function and implementing the forward and backward passes
@@ -33,25 +34,9 @@ class OffloadFunction(torch.autograd.Function):
         objects for use in the backward pass using the ctx.save_for_backward method.
         """
         ctx.save_for_backward(inputs, model_instance)
-        # List of input activations starting with the given input
-        model_instance._activations = [inputs]
-        # Enumerate through layer shards and apply activations from the previous shard
-        for index, layer_shard in enumerate(model_instance.model_slices):
-            # Bring in the current activations onto the device
-            model_instance._activations[index] = model_instance._activations[index].to(
-                "cuda")
-            # Bring in the current layer shard onto the device
-            layer_shard = layer_shard.to("cuda")
-            # Run the FP on the layer shard.
-            inter_activations = layer_shard(model_instance._activations[index])
-            # Move the activations to the CPU
-            inter_activations = inter_activations.to("cpu")
-            # Apply the FP and store the activations on the CPU.
-            model_instance._activations.append(inter_activations)
-            # Move the layer shard back to the CPU
-            layer_shard = layer_shard.to("cpu") 
-        return model_instance._activations[-1]
-
+        inputs = inputs[0].clone() * 2
+        return inputs
+            
     @staticmethod
     def backward(ctx, grad_output):
         """
@@ -59,30 +44,33 @@ class OffloadFunction(torch.autograd.Function):
         with respect to the output, and we need to compute the gradient of the loss
         with respect to the input.
         """
+        print("BACKWARD....")
         _, model_instance = ctx.save_for_backward
-        final_grads = grad_output.to("cuda")
-        all_grads = [final_grads]
-        # reverse the model shards and iterate through them.
-        for model_shard, activation in zip(reverse(model_instance.model_slices), reverse(model_instance._activations[:-1])):
-            # move the activation to the device
-            activation = activation.to("cuda")
-            # move the model shard to the device
-            model_shard = model_shard.to("cuda")
-            # calculate the output of the last shard wrt to the stored activation at the slice boundary.
-            output = model_shard(activation)
-            # Get the last gradient calculation
-            final_grads = all_grads[-1]
-            # calculate the gradient wrt to the output on the CPU
-            output.backward(final_grads)
+        with torch.enable_grad():
+            final_grads = grad_output.to("cuda")
+            all_grads = [final_grads]
+            # reverse the model shards and iterate through them
+            # calculate the gradients as you go along
+            for model_shard, activation in zip(reverse(model_instance.model_slices), reverse(model_instance._activations[:-1])):
+                # move the activation to the device
+                activation = activation.to("cuda")
+                # move the model shard to the device
+                model_shard = model_shard.to("cuda")
+                # calculate the output of the last shard wrt to the stored activation at the slice boundary.
+                output = model_shard(activation)
+                # Get the last gradient calculation
+                final_grads = all_grads[-1]
+                # calculate the gradient wrt to the output on the CPU
+                output.backward(final_grads, )
+                # Move activation back to the GPU
+                activation = activation.to("cpu")
+                # Append the list of grads to the all_grads list and this should be on the CPU
+                all_grads.append(activation.grad.to("cpu"))
+                # move the shard back to the cpu
+                model_shard = model_shard.to("cpu")
+            print("all_grads ", all_grads)
+            return all_grads[-1]
 
-            # Move activation back to the GPU
-            activation = activation.to("cpu")
-            # move the shard back to the cpu
-            model_shard = model_shard.to("cpu")     
-            # Append the list of grads to the all_grads list and this should be on the CPU
-            all_grads.append(activation)   
-
-        return all_grads[-1]
 
 def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
     number_splits = min(len(modules), number_splits)
@@ -129,9 +117,11 @@ class ModelShard(nn.Module):
 
     def __init__(
         self, cpu_model_shard: nn.Module, device: torch.device, offload_device: torch.device,
+        index: int,
     ):
         super().__init__()
         self.model_shard = cpu_model_shard
+        self.index = index
 
         # Save all the parameter sizes to be able to restore them
         self.device = device
@@ -194,33 +184,50 @@ class ShardSyncLayer(torch.autograd.Function):
      """
 
     @staticmethod
-    def forward(ctx: Any, layer_window: Tuple[ModelShard, ModelShard, ModelShard, ModelShard], inputs: Any) -> Any:  # type: ignore
-        # Drop the shard we just went through, except if this is the last one in line
-        if layer_window[1] and layer_window[2]:
-            layer_window[1].forward_drop(non_blocking=True)
+    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any) -> Any:  # type: ignore
+        drop_index = index
+        load_index = index + 1
+        max_slices = len(model_slices)
 
-        # Start the load of the next shard in line, opportunistically look ahead
-        if layer_window[3]:
-            layer_window[3].forward_load(non_blocking=True)
+        if drop_index >= 0:
+            # Move shard from device to offload device.
+            # logging.info(f"Dropping shard {drop_index}")
+            model_slices[drop_index].forward_drop()
 
-        ctx.layer_window = layer_window
+        if load_index < max_slices:
+            # Load shard from offload device to device.
+            # logging.info(f"Loading shard{load_index}")
+            model_slices[load_index].forward_load()
+
+        ctx.inputs = inputs
+        ctx.index = index
+        ctx.model_slices = model_slices
 
         return inputs if isinstance(inputs, tuple) else (inputs,)
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
-        if ctx.layer_window[3]:
-            ctx.layer_window[3].backward_drop(non_blocking=True)
 
-        # Opportunistically pre-load ahead of the compute wavefront
-        if ctx.layer_window[1]:
-            ctx.layer_window[1].backward_load(non_blocking=True)
+        load_index = ctx.index
+        drop_index = load_index + 1
+        model_slices = ctx.model_slices
 
+        if drop_index < len(model_slices):
+            # Move shard from device to offload device.
+            # logging.info(f"Backward Dropping shard {drop_index}")
+            model_slices[drop_index].backward_drop()
+
+        if load_index >= 0:
+            # Load shard from offload device to device.
+            # logging.info(f"Backward Loading shard{load_index}")
+            model_slices[load_index].backward_load()
+        
         # The returned variables need to mirror the forward inputs
+        # TODO(anj-s): Why do we need to do this?
         if isinstance(grad_outputs, tuple):
-            return None, grad_outputs[0]
+            return grad_outputs[0], None, None
 
-        return None, grad_outputs
+        return grad_outputs, None, None
 
 
 class OffloadWrapperExperimental(nn.Module):
@@ -266,33 +273,30 @@ class OffloadWrapperExperimental(nn.Module):
         # Each rank either owns the slice, or temporarily helps processing it in a data parallel fashion
         self.model_slices: List[nn.Module] = []
 
-        for split in splits:
+        for i, split in enumerate(splits):
             # Add one model handling this slice
             self.model_slices.append(
-                ModelShard(cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device,)
+                ModelShard(cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device,index=i,)
             )
 
         # Expose a unified view of the slices
         self.model = torch.nn.Sequential(*self.model_slices)
 
-    def _alternate_forward(self, *inputs: Any, **_: Any) -> Any:
+        # intermediate actiavtions
+        self._activations = []
+
+
+    def forward(self, *inputs: Any, **_: Any) -> Any:
         # Slice per slice FW, sync in between
         syncRanks = ShardSyncLayer.apply
 
-        # TODO: Rewrite this and make it more flexible, this is ugly
-        for (p2, p1, n1, n2) in zip(
-            [None, None, *self.model_slices],
-            [None, *self.model_slices],
-            [*self.model_slices, None],
-            [*self.model_slices, None, None],
-        ):
-            # Per shard FW
-            inputs = p1(*inputs) if p1 else inputs
-
+        self._activations.append(inputs)
+        for index in range(-1, len(self.model_slices)):
+            if index >= 0:
+                inputs = self.model_slices[index](*inputs)
+            else:
+                inputs = inputs
             # Call the custom autograd hooks (discard/load slices FW and BW)
-            inputs = syncRanks((p2, p1, n1, n2), inputs)
+            inputs = syncRanks(inputs, index, self.model_slices)
         return inputs[0] if len(inputs) == 1 else inputs
-
-    def forward(self, *inputs: Any, **_: Any) -> Any:
-        # Defer to the overriden autograd function.
-        return OffloadFunction.apply(*inputs, self)
+        
