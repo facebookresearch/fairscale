@@ -51,7 +51,7 @@ class DistributedTest(unittest.TestCase):
                 output = model(*input)
                 loss = model.module.get_loss(input, output).to(model_device)
             assert loss.dtype == torch.float32
-            loss.backward()
+            model.module.run_backward(loss)
             optim.step()
         return loss.detach()
 
@@ -193,21 +193,9 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # This tests our streams logic, and that we don't start the FP32 -> FP16
         # transfer until after the optimization step completes.
         config = {"mixed_precision": True}
-        test_fn = functools.partial(self._test_identical_outputs, self._delayed_optim_step_model, config)
+        model_fn = functools.partial(NestedWrappedModuleWithDelay, delay_after_loss_ms=250)
+        test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
         spawn_and_init(test_fn)
-
-    @classmethod
-    def _delayed_optim_step_model(cls, rank, group, config=None):
-        def _maybe_wrap(layer):
-            if config is not None:
-                return ShardParamsDataParallel(layer, group, **config)
-            return layer
-
-        torch.manual_seed(0)  # keep everything deterministic
-        model = nn.Sequential(
-            nn.Linear(8, 4), _maybe_wrap(nn.Linear(4, 16)), _maybe_wrap(nn.Linear(16, 4)), nn.Linear(4, 8),
-        )
-        return ModuleWithDelay(model, delay_after_loss_ms=250)
 
     def test_delayed_reduce_scatter(self):
         # We insert a delay in the torch.distributed.reduce_scatter op, so that
@@ -215,14 +203,9 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # This tests that we properly block at the end of the backward pass for
         # the reductions to finish.
         config = {"mixed_precision": True}
-        with mock.patch("torch.distributed.reduce_scatter", wraps=self._delayed_reduce_scatter):
-            test_fn = functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config)
+        model_fn = functools.partial(NestedWrappedModuleWithDelay, delay_before_reduction_ms=250)
+        test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
         spawn_and_init(test_fn)
-
-    @classmethod
-    def _delayed_reduce_scatter(cls, *args, **kwargs):
-        torch.cuda._sleep(int(250 * get_cycles_per_ms()))
-        return torch.distributed.reduce_scatter(*args, **kwargs)
 
     @classmethod
     def _test_identical_outputs(cls, model_init_fn, config, rank, group, num_steps=3, use_cuda=True):
@@ -237,13 +220,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             autocast = False
 
         # Establish reference behavior with PyTorch DDP (+ optionally autocast).
-        model = model_init_fn(rank, group).cuda()
+        model = model_init_fn(group=group, wrapper_config=None).cuda()
         model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank, process_group=group)
         ref_loss = cls._train_for_several_steps(model, num_steps, autocast)
         ref_state_dict = model.module.state_dict()
 
         # Confirm we get the same behavior using ShardParamsDataParallel.
-        model = ShardParamsDataParallel(model_init_fn(rank, group, config), group, **config)
+        model = ShardParamsDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
         if use_cuda:
             model = model.cuda()
         else:
@@ -366,18 +349,6 @@ class TestSaveLoadStateDict(DistributedTest):
             pass
 
 
-def get_sharded_model():
-    sharded_model = ShardParamsDataParallel(
-        nn.Sequential(
-            nn.Linear(8, 100),
-            ShardParamsDataParallel(nn.Linear(100, 100)),
-            ShardParamsDataParallel(nn.Linear(100, 100)),
-            nn.Linear(100, 8),
-        )
-    )
-    return sharded_model
-
-
 class TestHooks(DistributedTest):
     # Feel free to modify these tests as the implementation changes.
     # They aspire to make sure that backward hooks are registered and used
@@ -464,12 +435,23 @@ class TransformerWithSharedParams(nn.Module):
         _, tgt = input
         return nn.functional.cross_entropy(output.view(-1, output.size(-1)), tgt.view(-1), reduction="sum")
 
+    def run_backward(self, loss):
+        loss.backward()
 
-class ModuleWithDelay(nn.Module):
-    def __init__(self, module, delay_after_loss_ms):
+
+class NestedWrappedModule(nn.Module):
+    def __init__(self, group, wrapper_config):
         super().__init__()
-        self.module = module
-        self.delay_after_loss_ms = delay_after_loss_ms
+
+        def _maybe_wrap(layer):
+            if wrapper_config is not None:
+                return ShardParamsDataParallel(layer, group, **wrapper_config)
+            return layer
+
+        torch.manual_seed(0)  # keep everything deterministic
+        self.module = nn.Sequential(
+            nn.Linear(8, 4), _maybe_wrap(nn.Linear(4, 16)), _maybe_wrap(nn.Linear(16, 4)), nn.Linear(4, 8),
+        )
 
     def get_input(self, device):
         torch.manual_seed(1)  # keep everything deterministic
@@ -480,8 +462,46 @@ class ModuleWithDelay(nn.Module):
 
     def get_loss(self, input, output):
         loss = output.sum()
-        torch.cuda._sleep(int(self.delay_after_loss_ms * get_cycles_per_ms()))
         return loss
+
+    def run_backward(self, loss):
+        loss.backward()
+
+
+class ModuleWithDelay(nn.Module):
+    def __init__(self, module, delay_after_loss_ms=0, delay_before_reduction_ms=0):
+        super().__init__()
+        self.delay_after_loss_ms = delay_after_loss_ms
+        self.delay_before_reduction_ms = delay_before_reduction_ms
+        self.module = module
+
+    def get_input(self, device):
+        return self.module.get_input(device)
+
+    def forward(self, x):
+        return self.module(x)
+
+    def get_loss(self, input, output):
+        loss = self.module.get_loss(input, output)
+        if self.delay_after_loss_ms > 0:
+            torch.cuda._sleep(int(self.delay_after_loss_ms * get_cycles_per_ms()))
+        return loss
+
+    def run_backward(self, loss):
+        orig_reduce_scatter = torch.distributed.reduce_scatter
+
+        def _delayed_reduce_scatter(*args, **kwargs):
+            if self.delay_before_reduction_ms > 0:
+                torch.cuda._sleep(int(self.delay_before_reduction_ms * get_cycles_per_ms()))
+            return orig_reduce_scatter(*args, **kwargs)
+
+        with mock.patch("torch.distributed.reduce_scatter", _delayed_reduce_scatter):
+            self.module.run_backward(loss)
+
+
+class NestedWrappedModuleWithDelay(ModuleWithDelay):
+    def __init__(self, group, wrapper_config, **kwargs):
+        super().__init__(NestedWrappedModule(group, wrapper_config), **kwargs)
 
 
 def spawn_and_init(fn, args=None, **spawn_kwargs):
