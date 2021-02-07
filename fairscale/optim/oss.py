@@ -52,11 +52,6 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
             (deprecated) used to cap the size of the broadcast buffers, not being used anymore.
-
-    .. warning: the communication patterns that OSS use depend on the "trainability" graph,
-        meaning that all the parameters which `require_grad` are handled differently. This is
-        not reevaluated at every step, please use `refresh_trainability()` if your model changed
-        (freeze or unfreeze for instance).
     """
 
     #: The optimizer used for a given shard
@@ -106,14 +101,6 @@ class OSS(Optimizer):
         self._device = list(self.per_device_params.keys())[0]
         self.work_handles: Deque[Workhandle] = deque()
         self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
-        self._setup_flat_buffers()
-
-    def refresh_trainability(self) -> None:
-        """ Updates the partitioning and communication patterns if the trainability (`requires_grad`)
-        of some parameters changed
-        """
-
-        self._clear_cache()
         self._setup_flat_buffers()
 
     # Partition helpers
