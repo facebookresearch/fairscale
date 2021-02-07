@@ -32,11 +32,15 @@ def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tu
 
 def pack_kwargs(*args: Any, **kwargs: Any) -> Tuple[Tuple[str, ...], Tuple[Any, ...]]:
     """
+    Turn argument list into separate key list and value list (unpack_kwargs does the opposite)
+
     Usage::
 
         kwarg_keys, flat_args = pack_kwargs(1, 2, a=3, b=4)
+        assert kwarg_keys == ("a", "b")
+        assert flat_args == (1, 2, 3, 4)
         args, kwargs = unpack_kwargs(kwarg_keys, flat_args)
-        assert args == [1, 2]
+        assert args == (1, 2)
         assert kwargs == {"a": 3, "b": 4}
     """
     kwarg_keys: List[str] = []
@@ -49,6 +53,7 @@ def pack_kwargs(*args: Any, **kwargs: Any) -> Tuple[Tuple[str, ...], Tuple[Any, 
 
 def unpack_kwargs(kwarg_keys: Tuple[str, ...], flat_args: Tuple[Any, ...]) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
     """See pack_kwargs."""
+    assert len(kwarg_keys) <= len(flat_args), f"too many keys {len(kwarg_keys)} vs. {len(flat_args)}"
     if len(kwarg_keys) == 0:
         return flat_args, {}
     args = flat_args[: -len(kwarg_keys)]
@@ -60,11 +65,19 @@ def split_non_tensors(
     mixed: Union[torch.Tensor, Tuple[Any, ...]]
 ) -> Tuple[Tuple[torch.Tensor, ...], Optional[Dict[str, List[Any]]]]:
     """
+    Split a tuple into a list of tensors and the rest with information
+    for later reconstruction.
+
     Usage::
 
         x = torch.Tensor([1])
         y = torch.Tensor([2])
         tensors, packed_non_tensors = split_non_tensors((x, y, None, 3))
+        assert tensors == (x, y)
+        assert packed_non_tensors == {
+            "is_tensor": [True, True, False, False],
+            "objects": [None, 3],
+        }
         recon = unpack_non_tensors(tensors, packed_non_tensors)
         assert recon == (x, y, None, 3)
     """
@@ -88,11 +101,13 @@ def unpack_non_tensors(
     """See split_non_tensors."""
     if packed_non_tensors is None:
         return tensors
-    assert isinstance(packed_non_tensors, dict)
+    assert isinstance(packed_non_tensors, dict), type(packed_non_tensors)
     mixed: List[Any] = []
     is_tensor_list = packed_non_tensors["is_tensor"]
     objects = packed_non_tensors["objects"]
-    assert len(tensors) + len(objects) == len(is_tensor_list)
+    assert len(tensors) + len(objects) == len(is_tensor_list), (
+        f"len(tensors) {len(tensors)} len(objects) {len(objects)} " f"len(is_tensor_list) {len(is_tensor_list)}"
+    )
     obj_i = tnsr_i = 0
     for is_tensor in is_tensor_list:
         if is_tensor:

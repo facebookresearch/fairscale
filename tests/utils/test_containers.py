@@ -57,12 +57,69 @@ def test_apply_to_tensors(devices):
 
 
 def test_pack_unpack():
-    # tbd
-    p = pack_kwargs
-    up = unpack_kwargs
+    """Test pack_kwargs and unpack_kwargs."""
+    kwarg_keys, flat_args = pack_kwargs(1, 2, 3, 4)
+    assert kwarg_keys == tuple()
+    assert flat_args == (1, 2, 3, 4)
+
+    kwarg_keys, flat_args = pack_kwargs(a=1, b={2: "2"}, c={3}, d=[4], e=(5,))
+    assert kwarg_keys == ("a", "b", "c", "d", "e")
+    assert flat_args == (1, {2: "2"}, {3}, [4], (5,))
+
+    kwarg_keys, flat_args = pack_kwargs(1, 2, a=3, b=4)
+    assert kwarg_keys == ("a", "b")
+    assert flat_args == (1, 2, 3, 4)
+
+    args, kwargs = unpack_kwargs(kwarg_keys, flat_args)
+    assert args == (1, 2)
+    assert kwargs == {"a": 3, "b": 4}
+
+    args, kwargs = unpack_kwargs([], flat_args)
+    assert kwargs == {}
+    assert args == (1, 2, 3, 4)
+
+    args, kwargs = unpack_kwargs(["a", "b", "c", "d"], flat_args)
+    assert kwargs == {"a": 1, "b": 2, "c": 3, "d": 4}
+    assert args == tuple()
+
+    with pytest.raises(AssertionError):
+        # too many keys should assert.
+        args, kwargs = unpack_kwargs(["a", "b", "c", "d", "e"], flat_args)
 
 
 def test_split_unpack():
-    # tbd
-    s = split_non_tensors
-    up = unpack_non_tensors
+    """Test split_non_tensors and unpack_non_tensors."""
+    x = torch.Tensor([1])
+    y = torch.Tensor([2])
+
+    tensors, packed_non_tensors = split_non_tensors((x, y, None, 3))
+    assert tensors == (x, y)
+    assert packed_non_tensors == {
+        "is_tensor": [True, True, False, False],
+        "objects": [None, 3],
+    }
+    recon = unpack_non_tensors(tensors, packed_non_tensors)
+    assert recon == (x, y, None, 3)
+
+    tensors, packed_non_tensors = split_non_tensors((None, 3, x, y))
+    recon = unpack_non_tensors(tensors, packed_non_tensors)
+    assert recon == (None, 3, x, y)
+
+    tensors, packed_non_tensors = split_non_tensors((None, 3))
+    recon = unpack_non_tensors(tensors, packed_non_tensors)
+    assert recon == (None, 3)
+
+    tensors, packed_non_tensors = split_non_tensors((x, y))
+    recon = unpack_non_tensors(tensors, packed_non_tensors)
+    assert recon == (x, y)
+
+    recon = unpack_non_tensors(tensors, None)
+    assert recon == (x, y)
+
+    with pytest.raises(AssertionError):
+        # assert the second arg should be a dict.
+        recon = unpack_non_tensors(tensors, set())
+
+    with pytest.raises(AssertionError):
+        # assert the content of the second arg should be sane.
+        recon = unpack_non_tensors(tensors, {"is_tensor": [], "objects": []})
