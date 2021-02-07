@@ -52,24 +52,32 @@ def train(args: argparse.Namespace):
         batch_size=args.batch_size,
     )
 
+
     def train_epoch(args):
         model.train()
+        iter_count = 2
         for batch_inputs, batch_outputs in dataloader:
             batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
-
+            iter_count -= 1
             start = time.time_ns()
-            optimizer.zero_grad()
-            inputs = batch_inputs.reshape(-1, args.inputs * args.inputs)
-            output = model(inputs)
-            # make_dot(output, dict(model.named_parameters())).render("attached_mine", format="png")
-            loss = criterion(output, target=batch_outputs)
-            # print(f"loss {loss.item()}")
-            loss.backward()
-            optimizer.step()
-            # break
+            with torch.autograd.profiler.profile(use_cuda=True, profile_memory=True) as prof:
+                optimizer.zero_grad()
+                inputs = batch_inputs.reshape(-1, args.inputs * args.inputs)
+                output = model(inputs)
+                # make_dot(output, dict(model.named_parameters())).render("attached_mine", format="png")
+                loss = criterion(output, target=batch_outputs)
+                # print(f"loss {loss.item()}")
+                loss.backward()
+                optimizer.step()
+            prof.export_chrome_trace("/tmp/mpi_prof")
+            print(prof.key_averages().table())
+
+            print(f"current model parameters {[p for p in model.parameters()]}")
+            # if iter_count == 0:
+            break
             print("Loss {:.2f} - throughput {:.2f}fps".format(loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9))
     train_epoch(args)
-
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test the CPU offload + sharding with a Transformer training")
