@@ -26,9 +26,9 @@ def train(args: argparse.Namespace):
 
     # Setup the problem
     model = torch.nn.Sequential(
-        torch.nn.Linear(args.inputs * args.inputs, args.hidden, bias=False),
+        torch.nn.Linear(args.inputs * args.inputs, args.hidden),
         *([torch.nn.Linear(args.hidden, args.hidden) for _ in range(args.layers)]),
-        torch.nn.Linear(args.hidden, args.outputs, bias=False),
+        torch.nn.Linear(args.hidden, args.outputs),
     ).cpu()
 
     # Optim loop
@@ -56,15 +56,12 @@ def train(args: argparse.Namespace):
         iter_count = 2
         for batch_inputs, batch_outputs in dataloader:
             batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
-            iter_count -= 1
             start = time.time_ns()
             with torch.autograd.profiler.profile(use_cuda=True, profile_memory=True) as prof:
                 optimizer.zero_grad()
                 inputs = batch_inputs.reshape(-1, args.inputs * args.inputs)
                 output = model(inputs)
-                # make_dot(output, dict(model.named_parameters())).render("attached_mine", format="png")
                 loss = criterion(output, target=batch_outputs)
-                # print(f"loss {loss.item()}")
                 loss.backward()
                 optimizer.step()
             prof.export_chrome_trace("/tmp/mpi_prof")
