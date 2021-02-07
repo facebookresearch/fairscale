@@ -16,63 +16,6 @@ import torch
 from torch import nn
 
 
-# Custom Autograd function to carry out the backward pass
-class OffloadBackwardFunction(torch.autograd.Function):
-    """
-    We can implement our own custom autograd Functions by subclassing
-    torch.autograd.Function and implementing the forward and backward passes
-    which operate on Tensors.
-    """
-
-    @staticmethod
-    def forward(ctx, inputs, model_instance):
-        """
-        In the forward pass we receive a Tensor containing the input and return
-        a Tensor containing the output. ctx is a context object that can be used
-        to stash information for backward computation. You can cache arbitrary
-        objects for use in the backward pass using the ctx.save_for_backward method.
-        """
-        ctx.save_for_backward(inputs, model_instance)
-        inputs = inputs[0].clone() * 2
-        return inputs
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        """
-        In the backward pass we receive a Tensor containing the gradient of the loss
-        with respect to the output, and we need to compute the gradient of the loss
-        with respect to the input.
-        """
-        print("BACKWARD....")
-        _, model_instance = ctx.save_for_backward
-        with torch.enable_grad():
-            final_grads = grad_output.to("cuda")
-            all_grads = [final_grads]
-            # reverse the model shards and iterate through them
-            # calculate the gradients as you go along
-            for model_shard, activation in zip(
-                reverse(model_instance.model_slices), reverse(model_instance._activations[:-1])
-            ):
-                # move the activation to the device
-                activation = activation.to("cuda")
-                # move the model shard to the device
-                model_shard = model_shard.to("cuda")
-                # calculate the output of the last shard wrt to the stored activation at the slice boundary.
-                output = model_shard(activation)
-                # Get the last gradient calculation
-                final_grads = all_grads[-1]
-                # calculate the gradient wrt to the output on the CPU
-                output.backward(final_grads,)
-                # Move activation back to the GPU
-                activation = activation.to("cpu")
-                # Append the list of grads to the all_grads list and this should be on the CPU
-                all_grads.append(activation.grad.to("cpu"))
-                # move the shard back to the cpu
-                model_shard = model_shard.to("cpu")
-            print("all_grads ", all_grads)
-            return all_grads[-1]
-
-
 def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
     number_splits = min(len(modules), number_splits)
     splits: List[List[nn.Module]] = [[] for _ in range(number_splits)]
@@ -111,9 +54,8 @@ def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
 
 class ModelShard(nn.Module):
     """
-    Wrap one shard of the model, make it possible to load parameters on the fly for the FW pass and gather gradients.
-    Depending on whether this rank is or is not the `owner_rank`, this ModelShard either only handles
-    a shard of the compute and is stateless or also owns the up to date state.
+    Wrap one shard of the model, make it possible to load parameters on the 
+    fly for the FW and BW pass on the given device.
     """
 
     def __init__(
@@ -214,8 +156,6 @@ class ShardSyncLayer(torch.autograd.Function):
         model_slices = ctx.model_slices
         model_instance = ctx.model_instance
 
-        logging.info(f"{model_instance._activations} are the current activations")
-
         # TODO(anj-s): Are these redundant in the backward pass?
         if drop_index == len(model_slices):
             # Drop the last activation since it is still on the CPU
@@ -253,8 +193,7 @@ class OffloadWrapperExperimental(nn.Module):
     The model is sharded, then the normal distributed data parallel algorithm can be used on a per-model shard basis.
     Each shard is offloaded and loaded following a compute wavefront, during the forward and backward pass.
 
-    All the gradients are centralized on a given rank (which is model-shard dependent, so that the gradients
-    redundancy can be removed). Each model shard can be updated by a normal pytorch optimizer.
+    Each model shard can be updated by a normal pytorch optimizer.
 
     Args:
         module (~torch.nn.Sequential): module to be parallelized
@@ -283,17 +222,19 @@ class OffloadWrapperExperimental(nn.Module):
         self.device = device
         self.offload_device = offload_device
 
-        # Slice the model into roughly equivalent sequential shards
+        # Slice the model into roughly equivalent sequential shards.
         splits = _split(model_cpu, n_slices)
 
-        # Each rank either owns the slice, or temporarily helps processing it in a data parallel fashion
+        # List of model shards that will be placed on/off the device.
         self.model_slices: List[nn.Module] = []
 
         for i, split in enumerate(splits):
             # Add one model handling this slice
             self.model_slices.append(
                 ModelShard(
-                    cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device, index=i,
+                    cpu_model_shard=nn.Sequential(*split), device=device,
+                                                  offload_device=offload_device,
+                                                  index=i,
                 )
             )
 
@@ -304,12 +245,9 @@ class OffloadWrapperExperimental(nn.Module):
         self._activations = []
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
-        # Slice per slice FW, sync in between
-        syncRanks = ShardSyncLayer.apply
+        shardSync = ShardSyncLayer.apply
         self._activations = []
-        # self._activations.append(inputs)
         for index in range(-1, len(self.model_slices)):
-            # print("self._activations ", len(self._activations))
             if index >= 0:
                 # TODO(anj-s): This might be a redundant call since we have the previous
                 # activation on the device already.
@@ -317,7 +255,7 @@ class OffloadWrapperExperimental(nn.Module):
                 inputs = self._activations[index]
                 inputs = self.model_slices[index](*inputs)
             # Call the custom autograd hooks (discard/load slices FW and BW)
-            inputs = syncRanks(inputs, index, self.model_slices, self)
+            inputs = shardSync(inputs, index, self.model_slices, self)
             self._activations.append(inputs)
             if index >= 0:
                 self._activations[index] = tuple([a.cpu() for a in list(self._activations[index])])

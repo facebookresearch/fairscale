@@ -27,7 +27,7 @@ def train(args: argparse.Namespace):
     # Setup the problem
     model = torch.nn.Sequential(
         torch.nn.Linear(args.inputs * args.inputs, args.hidden, bias=False),
-        # *([torch.nn.Linear(args.hidden, args.hidden) for _ in range(args.layers)]),
+        *([torch.nn.Linear(args.hidden, args.hidden) for _ in range(args.layers)]),
         torch.nn.Linear(args.hidden, args.outputs, bias=False),
     ).cpu()
 
@@ -70,9 +70,6 @@ def train(args: argparse.Namespace):
             prof.export_chrome_trace("/tmp/mpi_prof")
             print(prof.key_averages().table())
 
-            print(f"current model parameters {[p for p in model.parameters()]}")
-            # if iter_count == 0:
-            break
             print(
                 "Loss {:.2f} - throughput {:.2f}fps".format(
                     loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9
@@ -86,13 +83,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test the CPU offload + sharding with a Transformer training")
     parser.add_argument("--epochs", action="store", default=1, type=int)
     parser.add_argument("--batch_size", action="store", default=1, type=int)
-    parser.add_argument("--inputs", action="store", help="The dimension of the inputs", default=2, type=int)
-    parser.add_argument("--hidden", action="store", help="The dimension of the hidden state", default=2, type=int)
-    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=1, type=int)
-    parser.add_argument("--outputs", action="store", help="The number of predicted classes", default=2, type=int)
+    parser.add_argument("--inputs", action="store", help="The dimension of the inputs", default=100, type=int)
+    parser.add_argument("--hidden", action="store", help="The dimension of the hidden state", default=10000, type=int)
+    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=20, type=int)
+    parser.add_argument("--outputs", action="store", help="The number of predicted classes", default=5, type=int)
 
     parser.add_argument("--offload", action="store_true", default=False)
-    parser.add_argument("--slices", action="store", default=2, type=int)
+    parser.add_argument("--slices", action="store", default=3, type=int)
 
     args = parser.parse_args()
 
