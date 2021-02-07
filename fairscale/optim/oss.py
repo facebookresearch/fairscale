@@ -52,6 +52,11 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
             (deprecated) used to cap the size of the broadcast buffers, not being used anymore.
+
+    .. warning: the communication patterns that OSS use depend on the "trainability" graph,
+        meaning that all the parameters which `require_grad` are handled differently. This is
+        not reevaluated at every step, please use `refresh_trainability()` if your model changed
+        (freeze or unfreeze for instance).
     """
 
     #: The optimizer used for a given shard
@@ -101,6 +106,14 @@ class OSS(Optimizer):
         self._device = list(self.per_device_params.keys())[0]
         self.work_handles: Deque[Workhandle] = deque()
         self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
+        self._setup_flat_buffers()
+
+    def refresh_trainability(self) -> None:
+        """ Updates the partitioning and communication patterns if the trainability (`requires_grad`)
+        of some parameters changed
+        """
+
+        self._clear_cache()
         self._setup_flat_buffers()
 
     # Partition helpers
@@ -537,7 +550,7 @@ class OSS(Optimizer):
 
         last_work_handle = None  # Work handles are consumed within this scope, no callback
 
-        for device in self.per_device_params.keys():
+        for device in self.buckets.keys():
             for src_rank, bucket in enumerate(self.buckets[device]):
                 global_src_rank = self.get_global_rank(self.group, src_rank)
                 last_work_handle = dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True)
@@ -564,7 +577,9 @@ class OSS(Optimizer):
                 work_handle.callback()
 
     def _setup_flat_buffers(self) -> None:
-        """Make all params which are on the same device and tied to the same rank views of a single buffer
+        """Make all params which are on the same device and tied to the same rank views of a single buffer.
+        This is used at construction time, and anytime parameter trainability is changed (frozen or unfrozen) and
+        `refresh_trainability` is called.
         """
 
         for device, per_rank_params in self.per_device_params.items():
@@ -572,11 +587,12 @@ class OSS(Optimizer):
 
             for dst_rank, params in enumerate(per_rank_params):
                 if len(params) > 0:
-                    buffer_size = sum(map(lambda x: x.numel(), filter(lambda x: x.requires_grad, params)))
-                    self.buckets[device].append(torch.zeros(buffer_size, dtype=params[0].dtype, device=device))
+                    trainable_params = list(filter(lambda x: x.requires_grad, params))
+                    buffer_size = sum(map(lambda x: x.numel(), trainable_params))
+                    self.buckets[device].append(torch.empty(buffer_size, dtype=params[0].dtype, device=device))
                     offset = 0
 
-                    for param in filter(lambda x: x.requires_grad, params):
+                    for param in trainable_params:
                         # This parameter becomes a view of the bucket
                         offset_next = offset + param.numel()
 
