@@ -476,3 +476,15 @@ def get_cycles_per_ms() -> float:
     end.synchronize()
     cycles_per_ms = 1000000 / start.elapsed_time(end)
     return cycles_per_ms
+
+
+class DummyProcessGroup:
+    def __init__(self, rank: int, size: int):
+        self._rank = rank
+        self._size = size
+
+    def rank(self) -> int:
+        return self._rank
+
+    def size(self) -> int:
+        return self._size

@@ -14,7 +14,6 @@ class Parameter(Tensor):
     _full_param: Tensor
     _fp32_shard: Tensor
     _fp16_shard: Optional[Tensor]
-    _post_backward_stream: Stream
 
     def __init__(self, data: Tensor, requires_grad: builtins.bool = True): ...
 

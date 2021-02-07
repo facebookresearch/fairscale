@@ -57,27 +57,26 @@ class ShardParamsDataParallel(nn.Module):
     Args:
         module (nn.Module): module to checkpoint
         process_group (Optional): process group for sharding
-        reshard_after_forward (bool, Optional): if True, reshard parameters
+        reshard_after_forward (bool, Optional): if ``True``, reshard parameters
             after the forward pass. This saves memory but slows training.
-        mixed_precision (bool, Optional): if True, inputs, activations and
+        mixed_precision (bool, Optional): if ``True``, inputs, activations and
             gradients will be kept in FP16; computation and communication will
             occur in FP16; and a (sharded) master copy of the model weights will
             be maintained in FP32.
-        fp32_reduce_scatter (bool, Optional): if True, then reduce-scatter
-            gradients in FP32. This is only relevant when *mixed_precision* is
-            ``True``.
-        flatten_parameters (bool, Optional): if True, flatten parameters into a
-            single contiguous tensor, which improves training speed.
-        cpu_offload (bool, Optional): if True, offload FP32 params to CPU. This
-            is only relevant when *mixed_precision* is ``True``.
-        compute_device (torch.device, Optional): device to move params to for
-            computation. This is primarily relevant with *cpu_offload* and
-            defaults to "cuda".
+        fp32_reduce_scatter (bool, Optional): if ``True``, then reduce-scatter
+            gradients in FP32. This is only relevant when *``mixed_precision``*
+            is ``True``.
+        flatten_parameters (bool, Optional): if ``True``, flatten parameters
+            into a single contiguous tensor, which improves training speed.
+        cpu_offload (bool, Optional): if ``True``, offload FP32 params to CPU.
+            This is only relevant when *``mixed_precision``* is ``True``.
         compute_dtype (torch.dtype, Optional): dtype for full parameters for
-            computation. This defaults to torch.float32 unless *mixed_precision*
-            is set, in which case it defaults to torch.float16.
-        move_grads_to_cpu (bool, Optional): move grad shard to CPU after
+            computation. This defaults to ``torch.float32`` unless
+            *``mixed_precision``* is set, in which case it defaults to
+            ``torch.float16``.
+        move_grads_to_cpu (bool, Optional): move gradient shard to CPU after
             reduction. This is useful when combined with CPU-based optimizers.
+            It defaults to the value of *``cpu_offload``*.
     """
 
     def __init__(
@@ -89,7 +88,6 @@ class ShardParamsDataParallel(nn.Module):
         fp32_reduce_scatter: bool = False,
         flatten_parameters: bool = True,
         cpu_offload: bool = False,
-        compute_device: Optional[torch.device] = None,
         compute_dtype: Optional[torch.dtype] = None,
         move_grads_to_cpu: Optional[bool] = None,
     ):
@@ -102,7 +100,6 @@ class ShardParamsDataParallel(nn.Module):
         self.fp32_reduce_scatter = fp32_reduce_scatter
         self.flatten_parameters = flatten_parameters
         self.cpu_offload = cpu_offload
-        self.compute_device = compute_device or torch.device("cuda")
         self.compute_dtype = compute_dtype or (torch.float16 if mixed_precision else torch.float32)
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
 
@@ -135,11 +132,7 @@ class ShardParamsDataParallel(nn.Module):
         for n, p in self.named_parameters():
             assert getattr(p, "_is_sharded", False), f"found unsharded parameter: {n} ; {p.size()}"
 
-        # Flag to indicate if this instance is wrapped by any other
-        # ShardParamsDataParallel instances. This flag is only set after the
-        # first forward pass.
-        self._is_root: Optional[bool] = None
-        self._init_full_param()
+        self._reset_lazy_init()
 
     @torch.no_grad()
     def _shard_parameters_(self) -> None:
@@ -200,8 +193,7 @@ class ShardParamsDataParallel(nn.Module):
         state["orig_sizes"] = [p._orig_size for p in self.params]
         if state["process_group"] is not None:
             state["process_group"] = "MISSING"  # process_group isn't pickleable
-        if "_fp32_to_fp16_stream" in state:
-            del state["_fp32_to_fp16_stream"]
+        self._reset_lazy_init()
         return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
@@ -217,6 +209,7 @@ class ShardParamsDataParallel(nn.Module):
 
         self.params = [fixup(p, size) for p, size in zip(self.params, self.orig_sizes)]
         del self.orig_sizes
+        self._reset_lazy_init()
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
     def state_dict(self, *args, **kwargs):  # type: ignore
@@ -226,11 +219,15 @@ class ShardParamsDataParallel(nn.Module):
         wrapped Module without any sharding-specific logic.
         """
         torch.cuda.synchronize()
+        self._lazy_init()
         self._rebuild_full_params()
+        state_dict = self.module.state_dict(*args, **kwargs)
         # We don't free the params after generating the state dict, since
         # freeing is done in-place (via the Storage) and would corrupt the
-        # returned state dict.
-        return self.module.state_dict(*args, **kwargs)
+        # returned state dict. However, we need to maintain the invariant that
+        # p.data corresponds to the FP32 param shard, so we do that here.
+        self._use_fp32_param_shard()
+        return state_dict
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
     def local_state_dict(self, *args, **kwargs):  # type: ignore
@@ -248,6 +245,8 @@ class ShardParamsDataParallel(nn.Module):
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
         """Load a whole (unsharded) state_dict."""
+        torch.cuda.synchronize()
+        self._lazy_init()
         self._rebuild_full_params()
         output = self.module.load_state_dict(state_dict, strict)
         self._free_full_params()
@@ -259,21 +258,55 @@ class ShardParamsDataParallel(nn.Module):
         """Load a local (sharded) state_dict."""
         return self.module.load_state_dict(state_dict, strict)
 
-    @torch.no_grad()
-    def _init_full_param(self) -> None:
-        """Set p._full_param if not already set."""
-        first_time_params = [p for p in self.params if not hasattr(p, "_full_param")]
-        for p in first_time_params:
-            self._init_param(p)
+    def _reset_lazy_init(self) -> None:
+        """Reset instance so :func:`_lazy_init` will run on the next forward."""
+        self._is_root: Optional[bool] = None
+        self._streams: Dict[str, torch.cuda.Stream] = {}
+
+    def _lazy_init(self) -> None:
+        """Initialization steps that should happen lazily, typically right
+        before the first forward pass."""
+        # Initialize param attributes lazily, in case the param's dtype or
+        # device changes after __init__.
+        for p in self.params:
+            self._init_param_attributes(p)
+
+        # Initialize _is_root and setup streams. These steps would ideally
+        # happen in __init__, but _is_root can only be determined after the
+        # entire model hierarchy is setup, thus we run it lazily.
+        if self._is_root is None:
+            self._set_is_root()
+            self._setup_streams()
 
     @torch.no_grad()
-    def _init_param(self, p: Parameter) -> None:
-        assert p._is_sharded
-        assert not hasattr(p, "_full_param")
+    def _init_param_attributes(self, p: Parameter) -> None:
+        """
+        We manage several attributes on each Parameter instance. The first two
+        are set by :func:`_shard_parameters_`:
 
-        # _fp32_shard will correspond to a single shard of the parameters in
-        # full precision (typically FP32, but this is dependent on the dtype of
-        # the model as it's passed in by the user).
+            ``_is_sharded``: ``True`` after the Parameter is initially sharded
+            ``_orig_size``: the size of the original Parameter (before sharding)
+
+        The remaining attributes are set here:
+            ``_fp32_shard``: a single shard of the parameters in full precision
+                (typically FP32, but this is dependent on the dtype of the model
+                as it's passed in by the user). This can be on CPU or GPU
+                depending on the value of *``cpu_offload``*.
+            ``_fp16_shard``: if *``mixed_precision``* is ``True``, this will be
+                a single shard of the parameters in FP16, used for all-gather.
+            ``_full_param``: the full weight, used for computation in the
+                forward/backward pass. This will be resized in place and only
+                materialized (via all-gather) as needed.
+        """
+        assert p._is_sharded and hasattr(p, "_orig_size")
+        if hasattr(p, "_full_param"):
+            return
+
+        # Compute device defaults to CUDA when *cpu_offload* is enabled, or the
+        # param's current device otherwise (could be CPU).
+        compute_device = torch.device("cuda") if self.cpu_offload else p.device
+
+        # A single shard of the parameters in full precision.
         p._fp32_shard = p.data
 
         if self.mixed_precision:
@@ -283,16 +316,16 @@ class ShardParamsDataParallel(nn.Module):
                 assert p._fp32_shard.device == torch.device("cpu")
                 # If we plan to keep the FP32 parameters on CPU, then pinning
                 # memory allows us to later use non-blocking transfers when moving
-                # the FP32 param shard to self.compute_device.
+                # the FP32 param shard to compute_device.
                 p._fp32_shard = p._fp32_shard.pin_memory()
                 p.data = p._fp32_shard
 
             # In mixed precision mode, we maintain a reduced precision
-            # (typically FP16) parameter shard on self.compute_device for
-            # performing the computation in the forward/backward pass. We resize
-            # the storage to size 0 at init (here) and re-materialize
-            # (by copying from _fp32_shard) as needed.
-            p._fp16_shard = torch.zeros_like(p._fp32_shard, device=self.compute_device, dtype=self.compute_dtype)
+            # (typically FP16) parameter shard on compute_device for performing
+            # the computation in the forward/backward pass. We resize the
+            # storage to size 0 at init (here) and re-materialize (by copying
+            # from _fp32_shard) as needed.
+            p._fp16_shard = torch.zeros_like(p._fp32_shard, device=compute_device, dtype=self.compute_dtype)
             free_storage_(p._fp16_shard)
         else:
             p._fp16_shard = None  # use _fp32_shard
@@ -300,7 +333,7 @@ class ShardParamsDataParallel(nn.Module):
         # We also maintain a full-sized parameter of type self.compute_dtype
         # (FP16 for mixed_precision or FP32 otherwise). We resize the
         # storage to size 0 at init (here) and only materialize as needed.
-        p._full_param = torch.zeros(p._orig_size, device=self.compute_device, dtype=self.compute_dtype)
+        p._full_param = torch.zeros(p._orig_size, device=compute_device, dtype=self.compute_dtype)
         free_storage_(p._full_param)
 
         if self.move_grads_to_cpu:
@@ -309,33 +342,9 @@ class ShardParamsDataParallel(nn.Module):
             # shard in pinned memory so that we can do a non-blocking transfer.
             p._cpu_grad = torch.zeros_like(p.data, device="cpu").pin_memory()
 
-        # Stream for overlapping the backward pass and gradient reductions.
-        p._post_backward_stream = torch.cuda.Stream()
-
-    @torch.no_grad()
-    def _pre_forward_init(self) -> None:
-        self._set_is_root()
-        if not self.cpu_offload:
-            self._move_fp32_shard_to_cuda()
-        if self._is_root and not hasattr(self, "_fp32_to_fp16_stream"):
-            # Stream for moving FP32 master params (which may be on CPU) to
-            # FP16 for computation. We share this stream with all children
-            # instances, which allows them to overlap transfers across the
-            # forward pass without synchronizing with the default stream.
-            self._fp32_to_fp16_stream = torch.cuda.Stream()
-
-            for n, m in self.named_modules():
-                if n != "" and isinstance(m, ShardParamsDataParallel):
-                    m._fp32_to_fp16_stream = self._fp32_to_fp16_stream
-
-        assert self._is_root is not None
-        if self._is_root:
-            # The top-most (root) instance needs to synchronize with the default
-            # stream, so we don't move the FP32 master weights prematurely.
-            self._fp32_to_fp16_stream.wait_stream(torch.cuda.current_stream())
-
     def _set_is_root(self) -> None:
-        """If true, implies that no other ShardParamsDataParallel instance. Called by forward."""
+        """If ``True``, implies that no other :class:`ShardParamsDataParallel`
+        instance wraps this one. Called once by :func:`_lazy_init`."""
         if self._is_root is not None:
             return
         # No ShardParamsDataParallel instance wraps this, else _is_root would be set to False
@@ -346,13 +355,42 @@ class ShardParamsDataParallel(nn.Module):
                 assert m._is_root is None
                 m._is_root = False
 
+    def _setup_streams(self) -> None:
+        """Create streams to overlap data transfer and computation."""
+        if len(self._streams) > 0 or not self._is_root:
+            return
+        # Stream to move main FP32 params (may be on CPU) to FP16 for forward.
+        self._streams["fp32_to_fp16"] = torch.cuda.Stream()
+        # Stream for overlapping grad reduction with the backward pass.
+        self._streams["post_backward"] = torch.cuda.Stream()
+        # We share streams with all children instances, which allows them to
+        # overlap transfers across the forward pass without synchronizing with
+        # the default stream.
+        for n, m in self.named_modules():
+            if n != "" and isinstance(m, ShardParamsDataParallel):
+                m._streams = self._streams
+
+    def _wait_for_previous_optim_step(self) -> None:
+        """
+        The outer-most :class:`ShardParamsDataParallel` instance (i.e., the root
+        instance) needs to synchronize with the default stream to ensure the
+        previous optimizer step is done.
+        """
+        self._streams["fp32_to_fp16"].wait_stream(torch.cuda.current_stream())
+
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        self._pre_forward_init()
+        self._lazy_init()
+
+        # Due to the use of streams, we need to make sure the previous
+        # ``optim.step()`` is done before we all-gather parameters.
+        if self._is_root:
+            self._wait_for_previous_optim_step()
 
         if self.mixed_precision:
             args, kwargs = cast_inputs_to_fp16(*args, **kwargs)
 
-        # All-gather full parameters.
+        # All-gather full parameters. This will also transfer FP32 parameters to
+        # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
         self._rebuild_full_params()
 
         # Register backward hooks to reshard params and reduce-scatter grads.
@@ -364,8 +402,11 @@ class ShardParamsDataParallel(nn.Module):
         if self.reshard_after_forward:
             self._free_full_params()
 
-        # Switch to FP32 param shard after forward so that the optimizer will be
-        # initialized with the correct dtype and size.
+        # Switch to main FP32 param shard. We maintain this invariant throughout
+        # the code, i.e., ``p.data == p._fp32_shard`` after each function. This
+        # also ensures that after the first forward, the optimizer state will be
+        # initialized with the correct dtype and (sharded) size, since optimizer
+        # state is typically initialized lazily in ``optim.step()``.
         self._use_fp32_param_shard()
 
         if torch.is_grad_enabled():
@@ -374,8 +415,8 @@ class ShardParamsDataParallel(nn.Module):
         return outputs
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
-
-        # Register pre-backward hook to run before the wrapped module's backward.
+        """Register pre-backward hook to run before the wrapped module's
+        backward. Hooks should be attached to all outputs from the forward."""
         pre_backward_hook_has_run = [False]
 
         def _pre_backward_hook(*unused: Any) -> None:
@@ -398,7 +439,7 @@ class ShardParamsDataParallel(nn.Module):
         return outputs
 
     def _register_post_backward_hooks(self) -> None:
-        # Register backward hooks to reshard params and reduce-scatter grads.
+        """Register backward hooks to reshard params and reduce-scatter grads."""
         if not torch.is_grad_enabled():
             return  # don't register grad hooks if grad isn't enabled
         self._post_backward_callback_queued = False
@@ -414,10 +455,10 @@ class ShardParamsDataParallel(nn.Module):
     @torch.no_grad()
     def _post_backward_hook(self, param: Parameter, *unused: Any) -> None:
         """
-        At the start of _post_backward_hook, param.grad contains the full
-        gradient for the local batch. The reduce_scatter op will replace
-        param.grad with a single shard of the summed gradient across all GPUs.
-        This shard will align with the current GPU rank. For example::
+        At the start of :func:`_post_backward_hook`, ``param.grad`` contains the
+        full gradient for the local batch. The reduce-scatter op will replace
+        ``param.grad`` with a single shard of the summed gradient across all
+        GPUs.  This shard will align with the current GPU rank. For example::
 
             before reduce_scatter:
                 param.grad (GPU #0): [1, 2, 3, 4]
@@ -427,10 +468,10 @@ class ShardParamsDataParallel(nn.Module):
                 param.grad (GPU #0): [6, 8]    # 1+5, 2+6
                 param.grad (GPU #1): [10, 12]  # 3+7, 4+8
 
-        The local GPU's optimizer.step is responsible for updating a single
+        The local GPU's ``optim.step`` is responsible for updating a single
         shard of params, also corresponding to the current GPU's rank. This
-        alignment is created by _shard_parameters_, which ensures that the
-        local optimizer only sees the relevant single parameter shard.
+        alignment is created by :func:`_shard_parameters_`, which ensures that
+        the local optimizer only sees the relevant parameter shard.
         """
         if param.grad is None:
             return
@@ -447,9 +488,9 @@ class ShardParamsDataParallel(nn.Module):
             self._free_fp16_param_shard([param])
 
         # Wait for all work in the current stream to finish, then start the
-        # reductions in _post_backward_stream.
-        param._post_backward_stream.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(param._post_backward_stream):
+        # reductions in post_backward stream.
+        self._streams["post_backward"].wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(self._streams["post_backward"]):
             if self.mixed_precision and self.fp32_reduce_scatter:
                 # Cast grad to FP32.
                 param.grad.data = param.grad.data.to(param.dtype)
@@ -479,8 +520,8 @@ class ShardParamsDataParallel(nn.Module):
     @torch.no_grad()
     def _wait_for_post_backward(self) -> None:
         """Wait for all post-backward work to finish."""
-        for p in self.params:
-            torch.cuda.current_stream().wait_stream(p._post_backward_stream)
+        if self._is_root:
+            torch.cuda.current_stream().wait_stream(self._streams["post_backward"])
         if self.move_grads_to_cpu:
             # Wait for the non-blocking GPU -> CPU grad transfers to finish.
             torch.cuda.current_stream().synchronize()
@@ -488,7 +529,7 @@ class ShardParamsDataParallel(nn.Module):
     @torch.no_grad()
     def _rebuild_full_params(self) -> None:
         """Gather all shards of params."""
-        if self.mixed_precision and hasattr(self, "_fp32_to_fp16_stream"):
+        if self.mixed_precision and len(self._streams) > 0:
             self._cast_fp32_param_shards_to_fp16()
 
         for p in self.params:
@@ -501,7 +542,7 @@ class ShardParamsDataParallel(nn.Module):
             p.data = p._full_param
             p.grad = None
 
-            if self.mixed_precision and hasattr(self, "_fp32_to_fp16_stream"):
+            if self.mixed_precision and len(self._streams) > 0:
                 self._free_fp16_param_shard([p])
 
     @torch.no_grad()
@@ -527,12 +568,6 @@ class ShardParamsDataParallel(nn.Module):
             free_storage_(p._full_param)
 
     @torch.no_grad()
-    def _move_fp32_shard_to_cuda(self) -> None:
-        assert not self.cpu_offload
-        for p in self.params:
-            p._fp32_shard = p._fp32_shard.to(p.data.device)
-
-    @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
         """Use FP32 shard for a list of params."""
         if params is None:
@@ -545,13 +580,13 @@ class ShardParamsDataParallel(nn.Module):
         """Cast FP32 param shard to FP16 for a list of params."""
         if params is None:
             params = self.params
-        with torch.cuda.stream(self._fp32_to_fp16_stream):
+        with torch.cuda.stream(self._streams["fp32_to_fp16"]):
             for p in params:
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
                 p._fp16_shard.copy_(p._fp32_shard, non_blocking=True)
                 p.data = p._fp16_shard
-        torch.cuda.current_stream().wait_stream(self._fp32_to_fp16_stream)
+        torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
 
     @torch.no_grad()
     def _free_fp16_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
@@ -567,11 +602,12 @@ class ShardParamsDataParallel(nn.Module):
                 free_storage_(p._fp16_shard)
 
     @torch.no_grad()
-    def _reduce_scatter(self, tensor: torch.Tensor, output: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _reduce_scatter(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Reduce-scatter a Tensor (gradient from the local worker) and return
+        the result (a single shard of the summed gradient across workers)."""
         assert tensor.numel() % self.world_size == 0
         tensor = tensor.view(self.world_size, -1)
-        if output is None:
-            output = torch.zeros_like(tensor[0])
+        output = torch.zeros_like(tensor[0])
         dist.reduce_scatter(output, list(tensor.unbind(0)), group=self.process_group)
         return output
 

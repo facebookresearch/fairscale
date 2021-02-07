@@ -5,6 +5,7 @@
 
 import functools
 import itertools
+import pickle
 import sys
 from typing import Dict
 import unittest
@@ -17,6 +18,7 @@ from torch import nn
 from fairscale.nn.data_parallel import ShardParamsDataParallel
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
+    DummyProcessGroup,
     dist_init,
     get_cycles_per_ms,
     objects_are_equal,
@@ -241,6 +243,81 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             raise Exception(f"ShardParamsDataParallel didn't match PyTorch DDP using config: {config}" "\n\n{e}")
 
 
+class TestParamInit(DistributedTest):
+    def test_param_change_after_init(self):
+        test_fn = functools.partial(self._test_param_change_after_init, config={"mixed_precision": True})
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_param_change_after_init(self, rank, group, config):
+        # Establish reference behavior.
+        model = self.get_wrapped_model(group, cuda_first=False, config=config)
+        model.eval()  # no dropout for this test
+        input = model.module.get_input(torch.device("cuda"))
+        ref_output = model(*input)
+
+        # Change the weights in place.
+        model = self.get_wrapped_model(group, cuda_first=False, config=config)
+        model.eval()  # no dropout for this test
+        first_param = next(model.parameters())
+        nn.init.normal_(first_param.data)
+        new_output = model(*input)
+
+        assert not objects_are_equal(ref_output, new_output), "new_output did not reflect change to param after init"
+
+
+class TestSerialization(DistributedTest):
+    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    def test_pickle(self, mixed_precision, cpu_offload):
+        """Ensure that wrapped modules can be pickled/unpickled."""
+        config = {"mixed_precision": mixed_precision, "cpu_offload": cpu_offload}
+        test_fn = functools.partial(self._test_pickle, config=config)
+        spawn_and_init(test_fn, world_sizes=[2])
+
+    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    def test_multiprocessing(self, mixed_precision, cpu_offload):
+        """Ensure that wrapped modules can be sent via multiprocessing."""
+        config = {"mixed_precision": mixed_precision, "cpu_offload": cpu_offload}
+        test_fn = functools.partial(self._test_multiprocessing, config=config)
+        spawn_and_init(test_fn, world_sizes=[2])
+
+    @classmethod
+    def _test_pickle(self, rank, group, config):
+        model = self._get_model(group, config)
+        model = pickle.loads(pickle.dumps(model))
+        if not config["cpu_offload"]:
+            model = model.cuda()
+        self._one_step(model, group)
+
+    @classmethod
+    def _test_multiprocessing(self, rank, group, config):
+        mp = torch.multiprocessing.Pool(1)
+        dummy_group = DummyProcessGroup(rank=group.rank(), size=group.size())
+        model = mp.apply(self._get_model, (dummy_group, config))
+        if not config["cpu_offload"]:
+            model = model.cuda()
+        self._one_step(model, group)
+
+    @classmethod
+    def _get_model(self, group, config):
+        with torch.no_grad():  # required for multiprocessing
+            model = NestedWrappedModule(group, wrapper_config=config)
+            return ShardParamsDataParallel(model, group, **config)
+
+    @classmethod
+    def _one_step(self, model, group):
+        # reset the process group (required after unpickling)
+        for m in model.modules():
+            if isinstance(m, ShardParamsDataParallel):
+                m.process_group = group
+        optim = torch.optim.Adam(model.parameters(), lr=0.0001)
+        input = model.module.get_input(torch.device("cuda"))
+        output = model(*input)
+        loss = model.module.get_loss(input, output)
+        model.module.run_backward(loss)
+        optim.step()
+
+
 class TestLocalStateDict(DistributedTest):
     @parameterized.expand([[True, True], [False, False]], name_func=rename_test)
     def test_load_local_state_dict(self, flatten_params, mixed_precision):
@@ -323,9 +400,7 @@ class TestSaveLoadStateDict(DistributedTest):
     @classmethod
     def _test_state_dict_before_forward(cls, config, rank, group):
         ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
-        assert not hasattr(ddp_model, "_fp32_to_fp16_stream")
         sd = ddp_model.state_dict()
-        assert not hasattr(ddp_model, "_fp32_to_fp16_stream")
         expected_dtype = torch.float16 if ddp_model.mixed_precision else torch.float32
         wt = sd["embed_tokens.weight"]
         assert wt.dtype == expected_dtype, f"got dtype {wt.dtype} expected {expected_dtype}"
