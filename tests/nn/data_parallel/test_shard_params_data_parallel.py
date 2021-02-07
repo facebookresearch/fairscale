@@ -153,18 +153,24 @@ class TestMixedPrecision(DistributedTest):
             loss.backward()
 
 
+keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters"]
+CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
+
+
+def rename_test(testcase_func, param_num, param):
+    return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
+
+
 class TestComparisonToPyTorchDDP(DistributedTest):
     """
     Compare losses and parameter values after several updates when using
     PyTorch DDP vs. ShardParamsDataParallel.
     """
 
-    def test_transformer(self):
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_transformer_parameterized(self, config):
         # Test every combination of these options:
-        keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters"]
-        for config in itertools.product([True, False], repeat=len(keys)):
-            config = dict(zip(keys, config))
-            spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config),)
+        spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config))
 
     def test_cpu_offload_and_cpu_grads(self):
         # We don't test the False condition because that requires the optimizer to internally do
@@ -253,7 +259,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
 
 
 class TestLocalStateDict(DistributedTest):
-    @parameterized.expand([[True, True], [False, False]])
+    @parameterized.expand([[True, True], [False, False]], name_func=rename_test)
     def test_load_local_state_dict(self, flatten_params, mixed_precision):
         test_fn = functools.partial(
             self._load_local_and_train, {"flatten_parameters": flatten_params, "mixed_precision": mixed_precision}
@@ -302,8 +308,8 @@ class TestLocalStateDict(DistributedTest):
 
 
 class TestSaveLoadStateDict(DistributedTest):
-    @parameterized.expand([[False], [True]])
-    def test_calling_state_dict_twice(self, mixed_precision):
+    @parameterized.expand([[False], [True]], name_func=rename_test)
+    def test_calling_state_dict_twice_mixed_precision(self, mixed_precision):
         test_fn = functools.partial(
             self._test_calling_state_dict_twice, {"flatten_parameters": False, "mixed_precision": mixed_precision}
         )
@@ -317,14 +323,14 @@ class TestSaveLoadStateDict(DistributedTest):
         ddp_model.state_dict()
         ddp_model.state_dict()  # second call
 
-    @parameterized.expand([[False], [True]])
-    def test_state_dict_after_forward(self, mixed_precision):
+    @parameterized.expand([[False], [True]], name_func=rename_test)
+    def test_state_dict_after_forward_mixed_precision(self, mixed_precision):
         test_fn = functools.partial(
             self._test_module_state_dict, {"flatten_parameters": False, "mixed_precision": mixed_precision}
         )
         spawn_and_init(test_fn)
 
-    @parameterized.expand([[False], [True]])
+    @parameterized.expand([[False], [True]], name_func=rename_test)
     def test_state_dict_before_forward(self, mixed_precision):
         test_fn = functools.partial(
             self._test_state_dict_before_forward, {"flatten_parameters": False, "mixed_precision": mixed_precision}
