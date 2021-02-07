@@ -290,16 +290,16 @@ class ShardParamsDataParallel(nn.Module):
             # In mixed precision mode, we maintain a reduced precision
             # (typically FP16) parameter shard on self.compute_device for
             # performing the computation in the forward/backward pass. We resize
-            # the storage to size 0 at init and rematerialize this (by copying
-            # from _fp32_shard) as needed.
+            # the storage to size 0 at init (here) and re-materialize
+            # (by copying from _fp32_shard) as needed.
             p._fp16_shard = torch.zeros_like(p._fp32_shard, device=self.compute_device, dtype=self.compute_dtype)
             free_storage_(p._fp16_shard)
         else:
             p._fp16_shard = None  # use _fp32_shard
 
         # We also maintain a full-sized parameter of type self.compute_dtype
-        # (typically FP16 for mixed_precision or FP32 otherwise). We resize the
-        # storage to size 0 at init and only materialize this when needed.
+        # (FP16 for mixed_precision or FP32 otherwise). We resize the
+        # storage to size 0 at init (here) and only materialize as needed.
         p._full_param = torch.zeros(p._orig_size, device=self.compute_device, dtype=self.compute_dtype)
         free_storage_(p._full_param)
 
