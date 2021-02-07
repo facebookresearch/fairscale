@@ -10,11 +10,10 @@ A wrapper which streams the model in and out of the GPU automatically during FW 
 
 from builtins import isinstance
 import logging
-from typing import Any, List, Tuple
+from typing import Any, List
 
 import torch
 from torch import nn
-from torchviz import make_dot
 
 
 # Custom Autograd function to carry out the backward pass
@@ -36,7 +35,7 @@ class OffloadBackwardFunction(torch.autograd.Function):
         ctx.save_for_backward(inputs, model_instance)
         inputs = inputs[0].clone() * 2
         return inputs
-            
+
     @staticmethod
     def backward(ctx, grad_output):
         """
@@ -51,7 +50,9 @@ class OffloadBackwardFunction(torch.autograd.Function):
             all_grads = [final_grads]
             # reverse the model shards and iterate through them
             # calculate the gradients as you go along
-            for model_shard, activation in zip(reverse(model_instance.model_slices), reverse(model_instance._activations[:-1])):
+            for model_shard, activation in zip(
+                reverse(model_instance.model_slices), reverse(model_instance._activations[:-1])
+            ):
                 # move the activation to the device
                 activation = activation.to("cuda")
                 # move the model shard to the device
@@ -61,7 +62,7 @@ class OffloadBackwardFunction(torch.autograd.Function):
                 # Get the last gradient calculation
                 final_grads = all_grads[-1]
                 # calculate the gradient wrt to the output on the CPU
-                output.backward(final_grads, )
+                output.backward(final_grads,)
                 # Move activation back to the GPU
                 activation = activation.to("cpu")
                 # Append the list of grads to the all_grads list and this should be on the CPU
@@ -116,8 +117,7 @@ class ModelShard(nn.Module):
     """
 
     def __init__(
-        self, cpu_model_shard: nn.Module, device: torch.device, offload_device: torch.device,
-        index: int,
+        self, cpu_model_shard: nn.Module, device: torch.device, offload_device: torch.device, index: int,
     ):
         super().__init__()
         self.model_shard = cpu_model_shard
@@ -214,28 +214,29 @@ class ShardSyncLayer(torch.autograd.Function):
         model_slices = ctx.model_slices
         model_instance = ctx.model_instance
 
-        logging.info(f"{model_instance._activations} are the current activations")        
+        logging.info(f"{model_instance._activations} are the current activations")
 
         # TODO(anj-s): Are these redundant in the backward pass?
         if drop_index == len(model_slices):
             # Drop the last activation since it is still on the CPU
             # after the loss.backward() call.
-            model_instance._activations[-1] = \
-                tuple([a.cuda() for a in list(model_instance._activations[-1])])
+            model_instance._activations[-1] = tuple([a.cuda() for a in list(model_instance._activations[-1])])
 
         if drop_index < len(model_slices):
             # Move shard from device to offload device.
             logging.info(f"Backward Dropping shard {drop_index}")
             model_slices[drop_index].backward_drop()
-            model_instance._activations[drop_index] = \
-                tuple([a.cpu() for a in list(model_instance._activations[drop_index])])
+            model_instance._activations[drop_index] = tuple(
+                [a.cpu() for a in list(model_instance._activations[drop_index])]
+            )
 
         if load_index >= 0:
             # Load shard from offload device to device.
             logging.info(f"Backward Loading shard{load_index}")
             model_slices[load_index].backward_load()
-            model_instance._activations[load_index] = \
-                tuple([a.cuda() for a in list(model_instance._activations[load_index])])
+            model_instance._activations[load_index] = tuple(
+                [a.cuda() for a in list(model_instance._activations[load_index])]
+            )
 
         # The returned variables need to mirror the forward inputs
         # TODO(anj-s): Why do we need to do this?
@@ -291,7 +292,9 @@ class OffloadWrapperExperimental(nn.Module):
         for i, split in enumerate(splits):
             # Add one model handling this slice
             self.model_slices.append(
-                ModelShard(cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device,index=i,)
+                ModelShard(
+                    cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device, index=i,
+                )
             )
 
         # Expose a unified view of the slices
@@ -299,7 +302,6 @@ class OffloadWrapperExperimental(nn.Module):
 
         # intermediate actiavtions
         self._activations = []
-
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
         # Slice per slice FW, sync in between
@@ -325,5 +327,4 @@ class OffloadWrapperExperimental(nn.Module):
         # TODO(anj-s): It is now a requirement that the target tensors be placed on the
         # device.
         result = self._activations[-1]
-        return  result[0] if len(result) == 1 else result
-        
+        return result[0] if len(result) == 1 else result

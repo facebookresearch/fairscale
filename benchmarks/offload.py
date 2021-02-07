@@ -11,7 +11,6 @@ import torch.nn as nn
 from torch.utils.data.dataloader import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.transforms import ToTensor
-from torchviz import make_dot
 
 OPTIM = torch.optim.SGD
 LR = 1e-3
@@ -29,7 +28,7 @@ def train(args: argparse.Namespace):
     model = torch.nn.Sequential(
         torch.nn.Linear(args.inputs * args.inputs, args.hidden, bias=False),
         # *([torch.nn.Linear(args.hidden, args.hidden) for _ in range(args.layers)]),
-        torch.nn.Linear(args.hidden, args.outputs, bias=False)
+        torch.nn.Linear(args.hidden, args.outputs, bias=False),
     ).cpu()
 
     # Optim loop
@@ -51,7 +50,6 @@ def train(args: argparse.Namespace):
         FakeData(image_size=(1, args.inputs, args.inputs), num_classes=args.outputs, transform=transform),
         batch_size=args.batch_size,
     )
-
 
     def train_epoch(args):
         model.train()
@@ -75,9 +73,14 @@ def train(args: argparse.Namespace):
             print(f"current model parameters {[p for p in model.parameters()]}")
             # if iter_count == 0:
             break
-            print("Loss {:.2f} - throughput {:.2f}fps".format(loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9))
+            print(
+                "Loss {:.2f} - throughput {:.2f}fps".format(
+                    loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9
+                )
+            )
+
     train_epoch(args)
-    
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test the CPU offload + sharding with a Transformer training")
