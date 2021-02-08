@@ -52,6 +52,14 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
             (deprecated) used to cap the size of the broadcast buffers, not being used anymore.
+
+
+    .. warning: the communication patterns that OSS use depend on the "trainability" graph,
+        meaning that all the parameters which `require_grad` are handled differently. This is
+        not reevaluated at every step, please use `refresh_trainability()` if your model changed
+        (freeze or unfreeze for instance).
+        If used with :class:<fairscale.nn.ShardedDDP> then an automatic change detection is possible,
+        via the `auto_refresh_trainable` parameter.
     """
 
     #: The optimizer used for a given shard
@@ -410,6 +418,14 @@ class OSS(Optimizer):
         # Sync with the optimizer param groups
         OSS._sync_param_groups(state_dict["param_groups"], self.param_groups)
         OSS._sync_param_groups(self.param_groups, self.optim.param_groups)
+
+    def refresh_trainable(self) -> None:
+        """ Updates the partitioning and communication patterns if the trainability (`requires_grad`)
+        of some parameters changed
+        """
+
+        self._clear_cache()
+        self._setup_flat_buffers()
 
     def _broadcast_state_dict(self) -> None:
         """Broadcast this rank's state shard, discard others"""

@@ -23,6 +23,10 @@ from fairscale.optim import OSS
 from fairscale.optim.utils import Bucket, Workhandle
 
 
+def _trainable(param: torch.Tensor) -> bool:
+    return param.requires_grad
+
+
 class ShardedDataParallel(nn.Module):
     """ Wrap the model, and reduce the gradients to the right rank during the backward pass.
 
@@ -46,9 +50,11 @@ class ShardedDataParallel(nn.Module):
             Synchronize the models in between the ranks when starting up. Not needed if each rank has the same seed,
             or the training restarts from a saved state
         reduce_buffer_size (int):
-            the max size of the buffer used to batch the small parameter tensors, in number of elements (default 8M).
+            The max size of the buffer used to batch the small parameter tensors, in number of elements (default 8M).
             this will impact the long term memory consumption, because these buckets correspond to parameters which will not be sharded.
             Set to 0 to remove all bucketing.
+        auto_refresh_trainable (bool):
+            Check whether the parameters trainability (`requires_grad`) has changed
 
 
     .. warning:
@@ -74,8 +80,11 @@ class ShardedDataParallel(nn.Module):
         or set `reduce_buffer_size` to 0
 
     .. warning:
-        ShardedDDP does not refresh its assumptions with respect to trainable parameters for every forward pass, in the hope of saving some time.
-        If some parameters are frozen or unfrozen over time, please refresh ShardedDDP assumptions by calling `refresh_trainable()`
+        If `auto_refresh_trainable` is set to `True` (this is the default) then any trainability change in the model graph will be handled
+        automatically.
+        If `auto_refresh_trainable` is set to `False`, ShardedDDP will not refresh its assumptions with respect to trainable parameters
+        for every forward pass, in the hope of saving some time. If some parameters are frozen or unfrozen over time, please refresh
+        ShardedDDP assumptions by calling `refresh_trainable()` just after said change (before the next forward pass).
 
     """
 
@@ -87,12 +96,14 @@ class ShardedDataParallel(nn.Module):
         broadcast_buffers: bool = True,
         sync_models_at_startup: bool = True,
         reduce_buffer_size: int = 2 ** 23,
+        auto_refresh_trainable: bool = True,
     ):
         super().__init__()
 
         self.module = module
         self.sharded_optimizers = [sharded_optimizer] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
         self.enable_broadcast_buffers = broadcast_buffers
+        self.auto_refresh_trainable = auto_refresh_trainable
 
         # Handle a no_sync() context which prevents the gradient synchronization,
         # accumulate in place
@@ -131,6 +142,7 @@ class ShardedDataParallel(nn.Module):
         self._trainable_params: List[torch.Tensor] = []
         self._grad_to_be_reduced: List[bool] = []
         self._trainable_param_to_rank: Dict[torch.Tensor, int] = {}
+        self._reference_trainable_mask = list(map(_trainable, self._all_params))
 
         # - keep track of the grads which have already been reduced
         self._reduced_grads = 0
@@ -173,6 +185,16 @@ class ShardedDataParallel(nn.Module):
         Module forward pass, handles any DDP-specific work in the background. Primes the
         backward pass for gradient reduction to the proper ranks.
         """
+
+        # Optionally check whether the trainable parameters have changed
+        if self.auto_refresh_trainable:
+            trainable_mask = list(map(_trainable, self._all_params))
+            if trainable_mask != self._reference_trainable_mask:
+                logging.info("ShardedDDP detected that the trainable params changed, updating the partitioning")
+
+                self.refresh_trainable()
+                self._reference_trainable_mask = trainable_mask
+
         if self.enable_broadcast_buffers:
             # NCCL communications are on a different stream, needs to be blocking
             # for the subsequent FW to be correct
@@ -230,6 +252,10 @@ class ShardedDataParallel(nn.Module):
 
         self._trainable_param_to_rank = {}
         for optim in self.sharded_optimizers:
+            # OSS may change the partitioning
+            # optim.refresh_trainable()
+
+            # Update ShardedDDP given the new partitions
             for (
                 device_per_rank_params
             ) in optim.per_device_params.values():  # all the params on this device (inc all ranks)
