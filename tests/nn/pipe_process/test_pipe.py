@@ -367,7 +367,7 @@ def no_grad(pipe_class):
         latent = output
 
     partition = model.partition
-    partition.module.register_forward_hook(hook)
+    partition.register_forward_hook(hook)
 
     with torch.no_grad():
         model(input)
