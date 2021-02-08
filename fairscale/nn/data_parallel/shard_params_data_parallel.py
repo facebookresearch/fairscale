@@ -409,14 +409,18 @@ class ShardParamsDataParallel(nn.Module):
         # state is typically initialized lazily in ``optim.step()``.
         self._use_fp32_param_shard()
 
-        if torch.is_grad_enabled():
-            outputs = self._register_pre_backward_hooks(outputs)
+        # Register pre-backward hooks to all-gather the params for the backward
+        # pass (if needed).
+        outputs = self._register_pre_backward_hooks(outputs)
 
         return outputs
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
         """Register pre-backward hook to run before the wrapped module's
         backward. Hooks should be attached to all outputs from the forward."""
+        if not torch.is_grad_enabled():
+            return outputs  # don't register hooks if grad isn't enabled
+
         pre_backward_hook_has_run = [False]
 
         def _pre_backward_hook(*unused: Any) -> None:

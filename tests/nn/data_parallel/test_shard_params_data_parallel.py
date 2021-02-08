@@ -482,6 +482,33 @@ class TestHooks(DistributedTest):
         assert model._register_pre_backward_hooks.called
 
 
+class TestNoGrad(DistributedTest):
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_transformer_parameterized(self, config):
+        test_fn = functools.partial(self._test_transformer, config=config)
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_transformer(self, rank, group, config):
+        autocast = config["mixed_precision"]
+
+        # Train model for a step
+        model = self.get_wrapped_model(group, cuda_first=False, config=config)
+        self._train_for_several_steps(model, 1, autocast)
+
+        model.eval()  # no dropout for this test
+
+        # Eval in standard mode (i.e., without no_grad)
+        input = model.module.get_input(torch.device("cuda"))
+        ref_output = model(*input)
+
+        # Eval with no_grad and compare
+        with torch.no_grad():
+            no_grad_output = model(*input)
+
+        assert objects_are_equal(ref_output, no_grad_output), "no_grad_output did not match ref_output"
+
+
 class TransformerWithSharedParams(nn.Module):
     def __init__(self, *unused_args, d_vocab=32, d_model=16, **unused_kwargs):
         super().__init__()
