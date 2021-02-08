@@ -66,18 +66,11 @@ class AsyncPipe(Module):
     """Wraps an arbitrary :class:`nn.Sequential <torch.nn.Sequential>` module
     to train on Pipe_. If the module requires lots of memory, Pipe will be
     very efficient.
-    ::
-
-        model = nn.Sequential(a, b, c, d)
-        model = Pipe(model, balance=[1, 1, 1, 1], chunks=8)
-        output = model(input)
-
-    .. _Pipe: https://arxiv.org/abs/1811.06965
 
     Pipe combines pipeline parallelism with checkpointing to reduce peak
     memory required to train while minimizing device under-utilization.
 
-    You should determine the balance when defining a :class:`Pipe` module, as
+    You should determine the balance when defining a :class:`AsyncPipe` module, as
     balancing will not be done automatically. The module will be partitioned
     into multiple devices according to the given balance. You may rely on
     heuristics to find your own optimal configuration.
@@ -354,7 +347,7 @@ class AsyncPipe(Module):
             yield from partition.module
 
     def forward(self, input: TensorOrTensors, *, event=None) -> TensorOrTensors:  # type: ignore
-        """:class:`MultiProcessPipe` is a fairly transparent module wrapper. It doesn't
+        """:class:`AsyncPipe` is a fairly transparent module wrapper. It doesn't
         modify the input and output signature of the underlying module. But
         there's type restriction. Input and output have to be a
         :class:`~torch.Tensor` or a tuple of tensors. This restriction is
