@@ -15,7 +15,7 @@ from torchvision.transforms import ToTensor
 OPTIM = torch.optim.SGD
 LR = 1e-3
 
-from fairscale.nn.misc.offload import OffloadWrapperExperimental
+from fairscale.nn.misc.offload import OffloadModel
 
 
 def train(args: argparse.Namespace):
@@ -35,7 +35,7 @@ def train(args: argparse.Namespace):
     criterion = nn.CrossEntropyLoss()
     if args.offload:
         logging.info("Using sharded offloading for training")
-        model = OffloadWrapperExperimental(
+        model = OffloadModel(
             model_cpu=model, device=device, offload_device=torch.device("cpu"), n_slices=args.slices,
         )  # type: ignore
 
@@ -60,14 +60,15 @@ def train(args: argparse.Namespace):
             with torch.autograd.profiler.profile(use_cuda=True, profile_memory=True) as prof:
                 optimizer.zero_grad()
                 inputs = batch_inputs.reshape(-1, args.inputs * args.inputs)
-                output = model(inputs)
-                loss = criterion(output, target=batch_outputs)
-                loss.backward()
-                optimizer.step()
+                with torch.autograd.profiler.record_function("model_training"):
+                    output = model(inputs)
+                    loss = criterion(output, target=batch_outputs)
+                    loss.backward()
+                    optimizer.step()
             prof.export_chrome_trace("/tmp/mpi_prof")
-            print(prof.key_averages().table())
-
-            print(
+            logging.info(f"Memory table {prof.key_averages().table()}")
+            logging.info("Memory stats are " + str(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] / 2 ** 30))
+            logging.info(
                 "Loss {:.2f} - throughput {:.2f}fps".format(
                     loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9
                 )
