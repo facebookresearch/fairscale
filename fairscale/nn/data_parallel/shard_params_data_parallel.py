@@ -58,7 +58,8 @@ class ShardParamsDataParallel(nn.Module):
         module (nn.Module): module to checkpoint
         process_group (Optional): process group for sharding
         reshard_after_forward (bool, Optional): if ``True``, reshard parameters
-            after the forward pass. This saves memory but slows training.
+            after the forward pass. This saves memory but slows training. This
+            is only relevant when resharding individual layers.
         mixed_precision (bool, Optional): if ``True``, inputs, activations and
             gradients will be kept in FP16; computation and communication will
             occur in FP16; and a (sharded) master copy of the model weights will
@@ -278,6 +279,11 @@ class ShardParamsDataParallel(nn.Module):
             self._set_is_root()
             self._setup_streams()
 
+        # Don't free the full params for the outer-most (root) instance, since
+        # those params will be needed immediately after for the backward pass.
+        if self._is_root:
+            self.reshard_after_forward = False
+
     @torch.no_grad()
     def _init_param_attributes(self, p: Parameter) -> None:
         """
@@ -361,6 +367,8 @@ class ShardParamsDataParallel(nn.Module):
             return
         # Stream to move main FP32 params (may be on CPU) to FP16 for forward.
         self._streams["fp32_to_fp16"] = torch.cuda.Stream()
+        # Stream for all-gathering parameters.
+        self._streams["all_gather"] = torch.cuda.Stream()
         # Stream for overlapping grad reduction with the backward pass.
         self._streams["post_backward"] = torch.cuda.Stream()
         # We share streams with all children instances, which allows them to
@@ -376,7 +384,10 @@ class ShardParamsDataParallel(nn.Module):
         instance) needs to synchronize with the default stream to ensure the
         previous optimizer step is done.
         """
-        self._streams["fp32_to_fp16"].wait_stream(torch.cuda.current_stream())
+        if self.mixed_precision:
+            self._streams["fp32_to_fp16"].wait_stream(torch.cuda.current_stream())
+        else:
+            self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self._lazy_init()
@@ -511,13 +522,16 @@ class ShardParamsDataParallel(nn.Module):
             if self.mixed_precision:
                 param.grad.data = param.grad.data.to(dtype=param.data.dtype)
 
+            # Optionally move gradients to CPU, typically used if one is running
+            # the optimizer on the CPU.
             if self.move_grads_to_cpu:
                 param._cpu_grad.copy_(param.grad.data, non_blocking=True)
                 param.grad.data = param._cpu_grad
 
         # Enqueue a callback at the end of the backward pass to ensure that all
-        # post-backward work has finished. We only need one callback.
-        if not self._post_backward_callback_queued:
+        # post-backward work has finished. We only need one callback and it only
+        # needs to be called from the outer-most (root) instance.
+        if self._is_root and not self._post_backward_callback_queued:
             self._post_backward_callback_queued = True
             Variable._execution_engine.queue_callback(self._wait_for_post_backward)
 
@@ -533,21 +547,23 @@ class ShardParamsDataParallel(nn.Module):
     @torch.no_grad()
     def _rebuild_full_params(self) -> None:
         """Gather all shards of params."""
-        if self.mixed_precision and len(self._streams) > 0:
-            self._cast_fp32_param_shards_to_fp16()
+        with torch.cuda.stream(self._streams["all_gather"]):
+            if self.mixed_precision:
+                self._cast_fp32_param_shards_to_fp16()
 
-        for p in self.params:
-            if p._full_param.storage().size() != p._orig_size.numel():
-                # All-gather parameters
-                alloc_storage_(p._full_param, size=p._orig_size)
-                output_list = list(torch.flatten(p._full_param).chunk(self.world_size))
-                dist.all_gather(output_list, p.data, group=self.process_group)
+            for p in self.params:
+                if p._full_param.storage().size() != p._orig_size.numel():
+                    # All-gather parameters
+                    alloc_storage_(p._full_param, size=p._orig_size)
+                    output_list = list(torch.flatten(p._full_param).chunk(self.world_size))
+                    dist.all_gather(output_list, p.data, group=self.process_group)
 
-            p.data = p._full_param
-            p.grad = None
+                p.data = p._full_param
+                p.grad = None
 
-            if self.mixed_precision and len(self._streams) > 0:
-                self._free_fp16_param_shard([p])
+                if self.mixed_precision:
+                    self._free_fp16_param_shard([p])
+        torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
 
     @torch.no_grad()
     def _use_full_params(self) -> None:
@@ -561,15 +577,16 @@ class ShardParamsDataParallel(nn.Module):
         if params is None:
             params = self.params
         current_stream = torch.cuda.current_stream()
-        for p in params:
-            # There may be external references to the Tensor Storage that we
-            # can't modify, such as references that are created by
-            # ctx.save_for_backward in the forward pass. Thus when we unshard
-            # parameters, we should reuse the original Tensor Storage object
-            # and unshard it in-place. For now, just resize the Storage to 0 to
-            # save memory.
-            p._full_param.record_stream(current_stream)
-            free_storage_(p._full_param)
+        with torch.cuda.stream(self._streams["all_gather"]):
+            for p in params:
+                # There may be external references to the Tensor Storage that we
+                # can't modify, such as references that are created by
+                # ctx.save_for_backward in the forward pass. Thus when we
+                # unshard parameters, we should reuse the original Tensor
+                # Storage object and unshard it in-place. For now, just resize
+                # the Storage to 0 to save memory.
+                p._full_param.record_stream(current_stream)
+                free_storage_(p._full_param)
 
     @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
@@ -588,7 +605,11 @@ class ShardParamsDataParallel(nn.Module):
             for p in params:
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
-                p._fp16_shard.copy_(p._fp32_shard, non_blocking=True)
+                p._fp16_shard.copy_(
+                    # If cpu_offload is True, this will be non-blocking because
+                    # _fp32_shard is pinned, otherwise it's a no-op.
+                    p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
+                )
                 p.data = p._fp16_shard
         torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
 
