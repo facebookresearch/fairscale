@@ -14,13 +14,12 @@ from torch.distributed.distributed_c10d import _get_global_rank
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 
 from .async_pipe import AsyncPipe
-from .multiprocess_pipe import MultiProcessPipe
 from .types import EVENT_LOOP_QUEUE, PipeMessage, TensorOrTensors
 
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
 
-PipeModel: MultiProcessPipe
+PipeModel: AsyncPipe
 PipeResult: TensorOrTensors
 
 
@@ -72,7 +71,7 @@ class PipeBackRedirect(torch.autograd.Function):
         return (None, None, None, None, None, None)
 
 
-def callback_with_model(callback: Callable[[Any, MultiProcessPipe], None], ctx: Any) -> None:
+def callback_with_model(callback: Callable[[Any, AsyncPipe], None], ctx: Any) -> None:
     try:
         group = get_pipeline_parallel_group()  # FIXME(tom) handle dynamic group
         set_device_based_on_group(group)
@@ -121,7 +120,7 @@ class PipeRPCWrapper(nn.Module):
         futures = [f.wait() for f in futures]
 
     def foreach_worker(
-        self, callback: Callable[[Any, MultiProcessPipe], None], ctx: Any = None, *, include_self: bool = False
+        self, callback: Callable[[Any, AsyncPipe], None], ctx: Any = None, *, include_self: bool = False
     ) -> None:
         """Call `callback` on each worker with the `ctx` and model local to that
         worker. e.g.
@@ -197,7 +196,7 @@ class PipeRPCWrapper(nn.Module):
 
     @staticmethod
     def _recv_result(
-        model: MultiProcessPipe, shapes: SizeOrSizes, dtypes: DtypeOrDtypes, message: PipeMessage
+        model: AsyncPipe, shapes: SizeOrSizes, dtypes: DtypeOrDtypes, message: PipeMessage
     ) -> TensorOrTensors:
         group = get_pipeline_parallel_group()
         set_device_based_on_group(group)
@@ -245,7 +244,7 @@ class PipeRPCWrapper(nn.Module):
         set_device_based_on_group(group)
         kwargs["group"] = group
         kwargs["input_device"] = torch.device("cuda", torch.cuda.current_device())
-        model = MultiProcessPipe(*args, **kwargs)
+        model = AsyncPipe(*args, **kwargs)
         model.cuda()
         global PipeModel
         PipeModel = model
