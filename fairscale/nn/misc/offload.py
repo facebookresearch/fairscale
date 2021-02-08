@@ -165,17 +165,19 @@ class ShardSyncLayer(torch.autograd.Function):
             # Move shard from device to offload device.
             logging.info(f"Backward Dropping shard {drop_index}")
             model_slices[drop_index].backward_drop()
-            model_instance._activations[drop_index] = tuple(
-                [a.cpu() for a in list(model_instance._activations[drop_index])]
-            )
+            with torch.autograd.profiler.record_function("backward:single_slice_to_cpu"):
+                model_instance._activations[drop_index] = tuple(
+                    [a.cpu() for a in list(model_instance._activations[drop_index])]
+                )
 
         if load_index >= 0:
             # Load shard from offload device to device.
             logging.info(f"Backward Loading shard{load_index}")
             model_slices[load_index].backward_load()
-            model_instance._activations[load_index] = tuple(
-                [a.cuda() for a in list(model_instance._activations[load_index])]
-            )
+            with torch.autograd.profiler.record_function("single_slice_to_cuda"):
+                model_instance._activations[load_index] = tuple(
+                    [a.cuda() for a in list(model_instance._activations[load_index])]
+                )
 
         # The returned variables need to mirror the forward inputs
         # TODO(anj-s): Why do we need to do this?
@@ -185,7 +187,7 @@ class ShardSyncLayer(torch.autograd.Function):
         return grad_outputs, None, None, None
 
 
-class OffloadWrapperExperimental(nn.Module):
+class OffloadModel(nn.Module):
     """Implements training with optimizer state sharding and model sharding.
 
     This experiments with a different way to get to the full zero suite

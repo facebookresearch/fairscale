@@ -12,7 +12,7 @@ import copy
 import numpy as np
 import torch
 
-from fairscale.nn.misc.offload import OffloadWrapperExperimental
+from fairscale.nn.misc.offload import OffloadModel
 
 
 def _init():
@@ -28,7 +28,7 @@ def test_single_run():
     device, offload_device = _init()
     model = _get_model()
 
-    offload_model = OffloadWrapperExperimental(
+    offload_model = OffloadModel(
         model_cpu=model, device=device, offload_device=offload_device, n_slices=2,
     )
     offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
@@ -90,7 +90,7 @@ def test_correctness():
 
     def train_offload_model():
         omodel = copy.deepcopy(model)
-        offload_model = OffloadWrapperExperimental(
+        offload_model = OffloadModel(
             model_cpu=omodel, device=device, offload_device=offload_device, n_slices=2,
         )
         offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
