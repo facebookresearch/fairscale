@@ -1,7 +1,7 @@
 import copy
 import os
 import sys
-from typing import Any, Dict, List, Type
+from typing import Any, Dict, List, Tuple, Type
 import unittest
 
 import gossip
@@ -83,7 +83,7 @@ class Net(nn.Module):
 
 
 class LargeNet(Net):
-    def __init__(self):
+    def __init__(self) -> None:
         super(LargeNet, self).__init__()
         self.fc2 = nn.Linear(10, 5000000, bias=False)
         self.fc3 = nn.Linear(5000000, 4, bias=False)
@@ -123,7 +123,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
 
     def _prepare_single_device_module(
         self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], global_batch_size: int,
-    ):
+    ) -> Tuple[nn.Module, gossip.GossipDataParallel, torch.Tensor, torch.Tensor]:
         if not torch.distributed.is_initialized():
             torch.distributed.init_process_group(
                 "nccl", init_method=f"file://{self.file_name}", rank=self.rank, world_size=self.world_size,
@@ -292,7 +292,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
                 for param in model.parameters():
                     torch.distributed.all_reduce(param)
                     with torch.no_grad():
-                        param /= self.world_size
+                        param /= self.world_size  # type: ignore
             slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
 
             self.assertEqual(list(model.parameters()), list(slowmo_model.module.parameters()))
@@ -373,9 +373,15 @@ class GossipDataParallelTest(MultiProcessTestCase):
     def test_nccl_backend_device_ids_torch_device_list(self) -> None:
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_1(  # type: ignore
-            devices, {"slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD, "localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},  # type: ignore
-        )  # type: ignore
+        self._test_slowmo_with_slowmo_freq_1(
+            devices,
+            {
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+                "localsgd_frequency": 1,
+                "nprocs_per_node": 1,
+                "slowmo": False,
+            },
+        )
 
     @requires_nccl()
     @skip_if_not_multigpu

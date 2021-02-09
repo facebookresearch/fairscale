@@ -87,7 +87,7 @@ def communicate(tensors: List[torch.Tensor], communication_op: Any, logger: logg
         flat_tensor = flatten_tensors(tensors_by_dtype[dtype])
         if logger is not None:
             logger.debug("Flatten completed")
-        communication_op(tensor=flat_tensor)  # type: ignore
+        communication_op(tensor=flat_tensor)
         if logger is not None:
             logger.debug("Commmunication completed")
         with torch.no_grad():
