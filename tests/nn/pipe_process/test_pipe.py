@@ -366,8 +366,8 @@ def no_grad(pipe_class):
         nonlocal latent
         latent = output
 
-    partition = model.partitions[0]
-    partition.module.register_forward_hook(hook)
+    partition = model.partition
+    partition.register_forward_hook(hook)
 
     with torch.no_grad():
         model(input)
@@ -616,9 +616,7 @@ def partitions(pipe_class):
     model = nn.Sequential(a, b)
     model = pipe_class(model, [1, 1], worker_map=get_worker_map())
 
-    assert isinstance(model.partitions, list)
-    assert len(model) == 1
-    assert isinstance(model.partitions[0].module, nn.Sequential)
+    assert isinstance(model.partition, nn.Sequential)
 
     if model.group.rank() == 0:
         assert model[0].weight == a.weight

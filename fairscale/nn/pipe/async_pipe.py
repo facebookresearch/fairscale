@@ -192,6 +192,8 @@ class AsyncPipe(Module):
             warnings.warn("More ranks than partitions, some ranks unused")
             self.partitions: List[ModuleWrapper] = []
             self.pipeline = None
+            # TODO(msb) remove this hack
+            self.partition = None
         else:
             self.partitions = self.instantiate_partition(module, self.balance, self.group)
             if deferred_batch_norm:
@@ -200,6 +202,8 @@ class AsyncPipe(Module):
             for name, part in enumerate(self.partitions):
                 self.add_module(str(name), part.module)
             self.create_pipeline()
+            # TODO(msb) remove this hack
+            self.partition = self.partitions[0].module
 
         del module
 
