@@ -26,13 +26,6 @@ def _get_fp16_context(use_fp16=False):
         return contextlib.nullcontext()
 
 
-def _get_fp16_context(use_fp16=False):
-    if use_fp16:
-        return torch.cuda.amp.autocast()
-    else:
-        return contextlib.nullcontext()
-
-
 def _get_profiler_context(use_profiler=False):
     if use_profiler:
         return torch.autograd.profiler.profile(use_cuda=True, profile_memory=True)
@@ -101,7 +94,6 @@ def train(args: argparse.Namespace):
                     loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9
                 )
             )
-            break
         if args.use_profiler:
             prof.export_chrome_trace("/tmp/offload_prof")
 
