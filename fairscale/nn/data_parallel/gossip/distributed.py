@@ -118,46 +118,7 @@ class GossipDataParallel(Module):
             # Set custom adapter on top of logger
             self.logger = cast(logging.Logger, MultiProcessAdapter(self.logger, {"process_num": self.process_rank}))
 
-        # TODO: move initialization of process groups to a helper function
-        if global_group is None:
-            # Using private member to avoid creating another process group
-            self.global_group = _get_default_group()
-        else:
-            self.global_group = global_group
-        self.logger.debug("Global group set")
-
-        self.process_group = self.global_group
-        if self.nprocs_per_node > 1:
-            self.local_rank = self.process_rank % self.nprocs_per_node
-            world_size //= nprocs_per_node
-            rank //= nprocs_per_node
-            if local_node_group is None:
-                self.logger.debug("Initializing local process groups")
-                for node in range(world_size):
-                    node_processes_ranks = list(range(node * self.nprocs_per_node, (node + 1) * self.nprocs_per_node,))
-                    # Process group to communicate between processes on this
-                    # machine
-                    new_local_group = create_process_group(node_processes_ranks)
-                    if self.process_rank in node_processes_ranks:
-                        self.local_node_group = new_local_group
-                self.logger.debug("Initialization of local groups complete")
-            else:
-                self.local_node_group = local_node_group
-            if master_group is None:
-                self.logger.debug("Maybe initializing master process group")
-                master_nodes = [i for i in range(dist.get_world_size()) if i % nprocs_per_node == 0]
-                self.master_group = create_process_group(master_nodes) if len(master_nodes) > 1 else None
-                if self.master_group is not None and self.process_rank in master_nodes:
-                    self.logger.debug("Initialization of master group complete")
-            else:
-                self.master_group = master_group
-        else:
-            self.local_rank = 0
-            if master_group is None:
-                self.master_group = self.global_group
-            else:
-                self.master_group = master_group
-        self.logger.debug("Initialization of all process groups complete")
+        rank, world_size = self.maybe_create_process_groups(rank, world_size, nprocs_per_node, global_group, master_group, local_node_group)
 
         # put model on output device
         self.module = module
@@ -238,6 +199,48 @@ class GossipDataParallel(Module):
         self.__register_hooks()
 
         self.logger.debug("Initialization of GossipDataParallel complete")
+
+    def maybe_create_process_groups(self, rank, world_size, nprocs_per_node, global_group, master_group, local_node_group):
+        if global_group is None:
+            # Using private member to avoid creating another process group
+            self.global_group = _get_default_group()
+        else:
+            self.global_group = global_group
+        self.logger.debug("Global group set")
+
+        self.process_group = self.global_group
+        if self.nprocs_per_node > 1:
+            self.local_rank = self.process_rank % self.nprocs_per_node
+            world_size //= nprocs_per_node
+            rank //= nprocs_per_node
+            if local_node_group is None:
+                self.logger.debug("Initializing local process groups")
+                for node in range(world_size):
+                    node_processes_ranks = list(range(node * self.nprocs_per_node, (node + 1) * self.nprocs_per_node,))
+                    # Process group to communicate between processes on this
+                    # machine
+                    new_local_group = create_process_group(node_processes_ranks)
+                    if self.process_rank in node_processes_ranks:
+                        self.local_node_group = new_local_group
+                self.logger.debug("Initialization of local groups complete")
+            else:
+                self.local_node_group = local_node_group
+            if master_group is None:
+                self.logger.debug("Initializing master process group")
+                master_nodes = [i for i in range(dist.get_world_size()) if i % nprocs_per_node == 0]
+                self.master_group = create_process_group(master_nodes) if len(master_nodes) > 1 else None
+                if self.master_group is not None and self.process_rank in master_nodes:
+                    self.logger.debug("Initialization of master group complete")
+            else:
+                self.master_group = master_group
+        else:
+            self.local_rank = 0
+            if master_group is None:
+                self.master_group = self.global_group
+            else:
+                self.master_group = master_group
+        self.logger.debug("Initialization of all process groups complete")
+        return rank, world_size
 
     def sgp_init(
         self,
