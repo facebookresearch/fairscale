@@ -361,7 +361,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         self._test_slowmo_with_slowmo_freq_1(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 1,
                 "nprocs_per_node": 1,
                 "slowmo": False,
@@ -374,7 +374,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
         devices = [torch.device("cuda:" + str(i)) for i in int_devices]
         self._test_slowmo_with_slowmo_freq_1(  # type: ignore
-            devices, {"slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD, "localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},  # type: ignore
+            devices, {"slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD, "localsgd_frequency": 1, "nprocs_per_node": 1, "slowmo": False},  # type: ignore
         )  # type: ignore
 
     @requires_nccl()
@@ -385,7 +385,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         self._test_slowmo_with_slowmo_freq_1(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in GossipDataParallel in the one node case
                 "nprocs_per_node": 2,
                 "slowmo": False,
@@ -407,7 +407,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
     #         process_group,
     #         devices,
     #         {
-    #             "slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD,
+    #             "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
     #             "localsgd_frequency": 1,
     #             "rank": self.rank,
     #             "world_size": self.world_size,
@@ -426,7 +426,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         self._test_slowmo_with_slowmo_freq_1(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 1,
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
@@ -443,7 +443,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         self._test_slowmo_with_slowmo_freq_1(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.SGP,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
                 "slowmo_frequency": 1,
@@ -459,7 +459,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         self._test_slowmo_with_slowmo_freq_ge_2(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 1,
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
@@ -475,7 +475,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         self._test_slowmo_with_slowmo_freq_ge_2(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.SGP,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
                 "slowmo_frequency": 2,
@@ -490,7 +490,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         self._test_slowmo_with_slowmo_freq_ge_2(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 1,
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
@@ -507,7 +507,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         self._test_localsgd_with_freq_ge_2(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 2,
                 "nprocs_per_node": 1,
                 "slowmo": False,
@@ -529,7 +529,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         max_memory_localsgd_slowmo = self._test_memory_usage_localsgd_with_slowmo(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 1,
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
@@ -571,7 +571,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
         max_memory_slowmo = self._test_memory_usage_localsgd_with_slowmo(
             devices,
             {
-                "slowmo_base_algorithm": gossip.SlowMoAlgorithms.LOCALSGD,
+                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 100,  # This is so that localsgd does not occur
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,

@@ -46,7 +46,7 @@ from .utils.cuda_metering import EventRecorder, create_event_recorder
 HEARTBEAT_TIMEOUT = 300  # maximum time to wait for message (seconds)
 
 
-class SlowMoAlgorithms(Enum):
+class SlowmoBaseAlgorithm(Enum):
     LOCALSGD = 1
     SGP = 2
     NONE = 3
@@ -72,7 +72,7 @@ class GossipDataParallel(Module):
         slowmo_world_size: int = 32,
         #
         # SlowMo algorithm parameters
-        slowmo_base_algorithm: SlowMoAlgorithms = SlowMoAlgorithms.LOCALSGD,
+        slowmo_base_algorithm: SlowmoBaseAlgorithm = SlowmoBaseAlgorithm.LOCALSGD,
         # LocalSGD
         localsgd_frequency: int = 3,
         # SGP
@@ -151,8 +151,8 @@ class GossipDataParallel(Module):
         self.slowmo_frequency = slowmo_frequency
         self.slowmo_sgp_average_params = slowmo_sgp_average_params
         self.slowmo_base_algorithm = slowmo_base_algorithm
-        self.localsgd = slowmo_base_algorithm == SlowMoAlgorithms.LOCALSGD
-        self.sgp = slowmo_base_algorithm == SlowMoAlgorithms.SGP
+        self.localsgd = slowmo_base_algorithm == SlowmoBaseAlgorithm.LOCALSGD
+        self.sgp = slowmo_base_algorithm == SlowmoBaseAlgorithm.SGP
 
         self.localsgd_frequency = localsgd_frequency
         self.ef1: Optional[List[torch.Tensor]] = None
