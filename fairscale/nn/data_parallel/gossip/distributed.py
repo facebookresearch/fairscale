@@ -272,7 +272,7 @@ class GossipDataParallel(Module):
 
         # push-sum weight=1.0 ==> distributed averaging
         self.ps_weight = torch.ones(1, device=comm_device, dtype=first_param_dtype)
-        self.is_ps_numerator = False
+        self.is_sgp_ps_numerator = False
         self.gossip_enable = True
         self.gossiping = False
         self.params_mixed = True
@@ -298,7 +298,7 @@ class GossipDataParallel(Module):
 
         if self.process_rank % self.nprocs_per_node == 0:
             self.gossip_thread = threading.Thread(
-                target=GossipDataParallel._gossip_target,
+                target=GossipDataParallel.sgp_gossip_target,
                 args=(
                     self.dist_config,
                     self.gossip_flag,
@@ -325,24 +325,6 @@ class GossipDataParallel(Module):
         self.lazy_mixing = not self.asynch and cast(MixingManager, self.dist_config["mixing"]).is_regular()
         self.lazy_ps_factor = self.gossip_ps_factor.clone()
         self.logger.debug("lazy mixing: %r", self.lazy_mixing)
-
-    def state_dict(self) -> Dict[str, Union[torch.Tensor, bool]]:  # type: ignore
-        state_dict = super(GossipDataParallel, self).state_dict()
-        if self.sgp:
-            state_dict["ps_weight"] = self.ps_weight.cpu()
-            state_dict["is_ps_numerator"] = self.is_ps_numerator  # type: ignore
-        return state_dict  # type: ignore
-
-    def load_state_dict(self, state_dict: Dict[str, Union[torch.Tensor, bool]]) -> None:  # type: ignore
-        if self.sgp:
-            assert isinstance(state_dict, dict)
-            self.ps_weight = cast(torch.Tensor, state_dict.pop("ps_weight")).to(
-                device=cast(torch.device, self.dist_config["comm_device"])
-            )
-            self.is_ps_numerator = cast(bool, state_dict.pop("is_ps_numerator"))
-            super(GossipDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
-        else:
-            super(GossipDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Union[torch.Tensor, List[torch.Tensor]]:
         """ Forward pass performed in parallel across all devices on node """
@@ -376,98 +358,9 @@ class GossipDataParallel(Module):
     def _distributed_broadcast_coalesced(self, tensors: List[torch.Tensor], buffer_size: int) -> None:
         dist._broadcast_coalesced(self.process_group, tensors, buffer_size)
 
-    def ps_numerator(self) -> None:
-        """ Convert model params to ps-numerator """
-        if not self.is_ps_numerator:
-            ps_weight = self.ps_weight
-            if not self.lazy_mixing:
-                with torch.no_grad():
-                    for p in self.module.parameters():
-                        p.mul_(cast(torch.Tensor, ps_weight.type(p.dtype)))
-            self.is_ps_numerator = True
-
-    def unbias(self) -> None:
-        """ Convert moel params to de-biased estimate """
-        if self.is_ps_numerator:
-            ps_weight = self.ps_weight
-            if not self.lazy_mixing:
-                with torch.no_grad():
-                    for p in self.module.parameters():
-                        p.div_(cast(torch.Tensor, ps_weight.type(p.dtype)))  # type: ignore
-            self.is_ps_numerator = False
-
-    def train(self, mode: bool = True) -> "GossipDataParallel":
-        super(GossipDataParallel, self).train(mode)
-        if self.sgp:
-            self.gossip_enable = True
-        return self
-
-    def eval(self) -> "GossipDataParallel":
-        super(GossipDataParallel, self).eval()
-        if self.sgp:
-            self.gossip_enable = False
-        if self.sgp:
-            self._query_gossip_queue(non_blocking=self.asynch)
-        return self
-
     def block(self) -> None:
         self.logger.debug("blocking")
         dist.barrier()
-
-    def _query_gossip_queue(self, non_blocking: bool = False) -> bool:
-        """ Check gossip-queue for push-sum residuals and update model """
-        if not self.gossip_enable:
-            return False
-
-        self.logger.debug("querying gossip queue")
-
-        # no gossip happening right now so just return
-        if not self.gossiping:
-            if self.process_rank % self.nprocs_per_node == 0:
-                self.logger.warning("not gossiping right now")
-            return False
-
-        if not non_blocking:
-            if not self.gossip_flag.wait(timeout=HEARTBEAT_TIMEOUT):
-                raise NameError("Gossip flag timeout")
-                sys.exit()  # HEARTBEAT monitor
-
-        # query gossip thread
-        if self.gossip_flag.is_set():
-            self.logger.debug("received gossip flag")
-
-            # atomic gossip was interrupted so try again
-            if self.gossip_ps_weight[0] == -1:
-                self.gossip_flag.clear()
-                self.params_mixed = True
-                self.gossiping = False
-                self.transfer_params(mix=False)
-                return False
-
-            self.lazy_ps_factor.copy_(self.gossip_ps_factor)
-
-            # convert model-params to ps numerators b4 adding residuals
-            self.ps_numerator()
-
-            # add residuals
-            self.ps_weight += self.gossip_ps_weight
-            if self.lazy_mixing:
-                self.ps_weight *= self.lazy_ps_factor
-            with torch.no_grad():
-                for p, r in zip(self.module.parameters(), self.gossip_device_buffer):
-                    p.add_(r)  # type: ignore
-                    if self.lazy_mixing:
-                        p.mul_(cast(torch.Tensor, self.lazy_ps_factor.type(p.dtype)))
-
-            # update flags
-            self.logger.debug("updated ps-weight %f", self.ps_weight)
-            self.logger.debug("updated model params")
-            self.gossip_flag.clear()
-            self.params_mixed = True
-            self.gossiping = False
-            return True
-
-        return False
 
     def create_event_recorder(self, event_name: str) -> EventRecorder:
         return create_event_recorder(event_name, dummy=not self.profile_mode)
@@ -541,8 +434,8 @@ class GossipDataParallel(Module):
         if self.sgp and not self.overlap:
             sgp_rec = self.create_event_recorder("SGP")
             if not self.should_allreduce_params():
-                self.transfer_params()
-                self._query_gossip_queue()
+                self.sgp_transfer_params()
+                self.sgp_query_gossip_queue()
                 torch.cuda.synchronize()
             sgp_rec.stop()
             self.logger.debug("SGP completed")
@@ -647,144 +540,6 @@ class GossipDataParallel(Module):
             self.sgp_overlap_pre_communicate_error_feedback(fp16_fp32_list)
 
         self.num_updates += 1
-
-    def transfer_params(self, mix: bool = True) -> bool:
-        """ Transfers COPY of model parameters to gossip queue """
-        if not self.gossip_enable or self.process_rank % self.nprocs_per_node != 0:
-            return False
-
-        self.logger.debug("transferring model params")
-
-        # don't transfer new params if old params haven't been mixed yet
-        if not self.params_mixed:
-            self.logger.warning("params not mixed")
-            return False
-
-        # using lazy mixing ==> mix on query not transfer
-        mix = mix and not self.lazy_mixing
-
-        # Transfer ps-numerators to gossip-process:
-        # --
-        self.ps_numerator()
-        if mix:
-            self.ps_weight *= self.gossip_ps_factor
-        self.gossip_ps_weight.copy_(self.ps_weight)
-        # --
-        # params gpu-gpu copy (fast)
-        # --
-        with torch.no_grad():
-            for p, gossip_device_buffer_elem in zip(self.module.parameters(), self.gossip_device_buffer):
-                if mix:
-                    p.mul_(cast(torch.Tensor, self.gossip_ps_factor.type(p.dtype)))
-                gossip_device_buffer_elem.copy_(p)
-        # --
-        # buffer to gossip-thread copy (potentially slow, but asynchronous)
-        # --
-        self.gossip_stream.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(self.gossip_stream):
-            for b, gp in zip(self.gossip_device_buffer, self.gossip_params):
-                gp.copy_(b, non_blocking=True)
-
-        # --
-
-        # update flags
-        self.logger.debug("transferred model params")
-        self.params_mixed = False
-        self.gossiping = True
-        self.train_flag.set()
-        return True
-
-    @staticmethod
-    def _gossip_into_receive_buffer(
-        send_buffer: List[torch.Tensor],
-        gossiper: Gossiper,
-        receive_buffer: List[torch.Tensor],
-        gossip_ps_weight: torch.Tensor,
-        gossip_lock: threading.Lock,
-        dist_config: Dict[Any, Any],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # flatten parameters before sending
-        out_msg = flatten_tensors(send_buffer)
-
-        # send and receive parameters
-        with gossip_lock:
-            in_msg, ps_weight = gossiper.mix(out_msg, gossip_ps_weight, residual=True)
-            ps_factor = gossiper.mixing_weights["lo"]
-
-        # unflatten parameters
-        with torch.no_grad():
-            for r, g in zip(unflatten_tensors(in_msg, send_buffer), receive_buffer):
-                if dist_config["cpu_comm"]:
-                    g.copy_(r, non_blocking=True)
-                else:
-                    g.copy_(r)
-
-        return ps_weight, ps_factor
-
-    @staticmethod
-    def _gossip_target(
-        dist_config: Dict[Any, Any],
-        gossip_flag: threading.Event,
-        train_flag: threading.Event,
-        gossip_lock: threading.Lock,
-        gossip_params: List[torch.Tensor],
-        gossip_device_buffer: List[torch.Tensor],
-        gossip_ps_weight: torch.Tensor,
-        gossip_ps_factor: torch.Tensor,
-        gossip_stream: torch.cuda.Stream,
-    ) -> None:
-        """ Gossip thread, which performs push-sum on model params """
-        logger = make_logger(cast(int, dist_config["rank"]), cast(bool, dist_config["verbose"]))
-
-        gossip_params_by_dtype = group_by_dtype(gossip_params)
-        gossip_device_buffer_by_dtype = group_by_dtype(gossip_device_buffer)
-
-        gossipers = {}
-        # init gossip instance
-        gossiper_class = PushSum if cast(bool, dist_config["push_sum"]) else PushPull
-        for dtype in gossip_params_by_dtype:
-            gossipers[dtype] = gossiper_class(
-                flatten_tensors(gossip_params_by_dtype[dtype]),
-                device=cast(torch.device, dist_config["comm_device"]),
-                graph=cast(GraphManager, dist_config["graph"]),
-                mixing=cast(MixingManager, dist_config["mixing"]),
-                rank=cast(int, dist_config["process_rank"]),
-                world_size=cast(int, dist_config["world_size"]),
-                logger=logger,
-            )
-
-        dist_config["gossipers"] = gossipers
-        gossip_ps_factor.copy_(gossipers[list(gossipers)[0]].mixing_weights["lo"])
-        gossip_flag.set()
-
-        # gossip loop
-        while True:
-            train_flag.wait()
-            logger.debug("received train-flag")
-            try:
-                with torch.cuda.stream(gossip_stream):
-                    for dtype in gossip_params_by_dtype:
-                        (ps_weight, ps_factor,) = GossipDataParallel._gossip_into_receive_buffer(
-                            gossip_params_by_dtype[dtype],
-                            gossipers[dtype],
-                            gossip_device_buffer_by_dtype[dtype],
-                            gossip_ps_weight,
-                            gossip_lock,
-                            dist_config,
-                        )
-                    gossip_ps_weight.copy_(ps_weight)
-                    gossip_ps_factor.copy_(ps_factor)
-            except RuntimeError as e:
-                logger.warning("received runtime error {}".format(e))
-                for gossiper in gossipers.values():
-                    gossiper.clean_msg_buffers_()
-                gossip_ps_weight.fill_(-1)
-            finally:
-                # Make sure all queued operations are complete
-                gossip_stream.synchronize()
-                # give main thread go-ahead to read our gossip buffer
-                train_flag.clear()
-                gossip_flag.set()
 
     def init_global_momentum_buffers(self, optimizer: torch.optim.Optimizer) -> None:
         if not self.slowmo:
@@ -958,12 +713,12 @@ class GossipDataParallel(Module):
 
             if self.sgp:
                 # convert model back to ps-numerator
-                self.ps_numerator()
+                self.sgp_ps_numerator()
 
                 # gossip during training (not inference)
                 if self.gossip_enable:
                     if self.overlap:
-                        self._query_gossip_queue()
+                        self.sgp_query_gossip_queue()
 
         def queue_hook(*unused: Any) -> None:
             Variable._execution_engine.queue_callback(hook)
@@ -982,9 +737,254 @@ class GossipDataParallel(Module):
             if self.sgp:
                 if self.gossip_enable:
                     if self.overlap:
-                        self.transfer_params()
+                        self.sgp_transfer_params()
 
                 # convert model to de-biased estimate
-                self.unbias()
+                self.sgp_unbias()
 
         return hook
+
+    def state_dict(self) -> Dict[str, Union[torch.Tensor, bool]]:  # type: ignore
+        state_dict = super(GossipDataParallel, self).state_dict()
+        if self.sgp:
+            state_dict["ps_weight"] = self.ps_weight.cpu()
+            state_dict["is_sgp_ps_numerator"] = self.is_sgp_ps_numerator  # type: ignore
+        return state_dict  # type: ignore
+
+    def load_state_dict(self, state_dict: Dict[str, Union[torch.Tensor, bool]]) -> None:  # type: ignore
+        if self.sgp:
+            assert isinstance(state_dict, dict)
+            self.ps_weight = cast(torch.Tensor, state_dict.pop("ps_weight")).to(
+                device=cast(torch.device, self.dist_config["comm_device"])
+            )
+            self.is_sgp_ps_numerator = cast(bool, state_dict.pop("is_sgp_ps_numerator"))
+            super(GossipDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
+        else:
+            super(GossipDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
+
+    def sgp_ps_numerator(self) -> None:
+        """ Convert model params to ps-numerator """
+        if not self.is_sgp_ps_numerator:
+            ps_weight = self.ps_weight
+            if not self.lazy_mixing:
+                with torch.no_grad():
+                    for p in self.module.parameters():
+                        p.mul_(cast(torch.Tensor, ps_weight.type(p.dtype)))
+            self.is_sgp_ps_numerator = True
+
+    def sgp_unbias(self) -> None:
+        """ Convert moel params to de-biased estimate """
+        if self.is_sgp_ps_numerator:
+            ps_weight = self.ps_weight
+            if not self.lazy_mixing:
+                with torch.no_grad():
+                    for p in self.module.parameters():
+                        p.div_(cast(torch.Tensor, ps_weight.type(p.dtype)))  # type: ignore
+            self.is_sgp_ps_numerator = False
+
+    def train(self, mode: bool = True) -> "GossipDataParallel":
+        super(GossipDataParallel, self).train(mode)
+        if self.sgp:
+            self.gossip_enable = True
+        return self
+
+    def eval(self) -> "GossipDataParallel":
+        super(GossipDataParallel, self).eval()
+        if self.sgp:
+            self.gossip_enable = False
+        if self.sgp:
+            self.sgp_query_gossip_queue(non_blocking=self.asynch)
+        return self
+
+    def sgp_query_gossip_queue(self, non_blocking: bool = False) -> bool:
+        """ Check gossip-queue for push-sum residuals and update model """
+        if not self.gossip_enable:
+            return False
+
+        self.logger.debug("querying gossip queue")
+
+        # no gossip happening right now so just return
+        if not self.gossiping:
+            if self.process_rank % self.nprocs_per_node == 0:
+                self.logger.warning("not gossiping right now")
+            return False
+
+        if not non_blocking:
+            if not self.gossip_flag.wait(timeout=HEARTBEAT_TIMEOUT):
+                raise NameError("Gossip flag timeout")
+                sys.exit()  # HEARTBEAT monitor
+
+        # query gossip thread
+        if self.gossip_flag.is_set():
+            self.logger.debug("received gossip flag")
+
+            # atomic gossip was interrupted so try again
+            if self.gossip_ps_weight[0] == -1:
+                self.gossip_flag.clear()
+                self.params_mixed = True
+                self.gossiping = False
+                self.sgp_transfer_params(mix=False)
+                return False
+
+            self.lazy_ps_factor.copy_(self.gossip_ps_factor)
+
+            # convert model-params to ps numerators b4 adding residuals
+            self.sgp_ps_numerator()
+
+            # add residuals
+            self.ps_weight += self.gossip_ps_weight
+            if self.lazy_mixing:
+                self.ps_weight *= self.lazy_ps_factor
+            with torch.no_grad():
+                for p, r in zip(self.module.parameters(), self.gossip_device_buffer):
+                    p.add_(r)  # type: ignore
+                    if self.lazy_mixing:
+                        p.mul_(cast(torch.Tensor, self.lazy_ps_factor.type(p.dtype)))
+
+            # update flags
+            self.logger.debug("updated ps-weight %f", self.ps_weight)
+            self.logger.debug("updated model params")
+            self.gossip_flag.clear()
+            self.params_mixed = True
+            self.gossiping = False
+            return True
+
+        return False
+
+    def sgp_transfer_params(self, mix: bool = True) -> bool:
+        """ Transfers COPY of model parameters to gossip queue """
+        if not self.gossip_enable or self.process_rank % self.nprocs_per_node != 0:
+            return False
+
+        self.logger.debug("transferring model params")
+
+        # don't transfer new params if old params haven't been mixed yet
+        if not self.params_mixed:
+            self.logger.warning("params not mixed")
+            return False
+
+        # using lazy mixing ==> mix on query not transfer
+        mix = mix and not self.lazy_mixing
+
+        # Transfer ps-numerators to gossip-process:
+        # --
+        self.sgp_ps_numerator()
+        if mix:
+            self.ps_weight *= self.gossip_ps_factor
+        self.gossip_ps_weight.copy_(self.ps_weight)
+        # --
+        # params gpu-gpu copy (fast)
+        # --
+        with torch.no_grad():
+            for p, gossip_device_buffer_elem in zip(self.module.parameters(), self.gossip_device_buffer):
+                if mix:
+                    p.mul_(cast(torch.Tensor, self.gossip_ps_factor.type(p.dtype)))
+                gossip_device_buffer_elem.copy_(p)
+        # --
+        # buffer to gossip-thread copy (potentially slow, but asynchronous)
+        # --
+        self.gossip_stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(self.gossip_stream):
+            for b, gp in zip(self.gossip_device_buffer, self.gossip_params):
+                gp.copy_(b, non_blocking=True)
+
+        # --
+
+        # update flags
+        self.logger.debug("transferred model params")
+        self.params_mixed = False
+        self.gossiping = True
+        self.train_flag.set()
+        return True
+
+    @staticmethod
+    def sgp_gossip_into_receive_buffer(
+        send_buffer: List[torch.Tensor],
+        gossiper: Gossiper,
+        receive_buffer: List[torch.Tensor],
+        gossip_ps_weight: torch.Tensor,
+        gossip_lock: threading.Lock,
+        dist_config: Dict[Any, Any],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # flatten parameters before sending
+        out_msg = flatten_tensors(send_buffer)
+
+        # send and receive parameters
+        with gossip_lock:
+            in_msg, ps_weight = gossiper.mix(out_msg, gossip_ps_weight, residual=True)
+            ps_factor = gossiper.mixing_weights["lo"]
+
+        # unflatten parameters
+        with torch.no_grad():
+            for r, g in zip(unflatten_tensors(in_msg, send_buffer), receive_buffer):
+                if dist_config["cpu_comm"]:
+                    g.copy_(r, non_blocking=True)
+                else:
+                    g.copy_(r)
+
+        return ps_weight, ps_factor
+
+    @staticmethod
+    def sgp_gossip_target(
+        dist_config: Dict[Any, Any],
+        gossip_flag: threading.Event,
+        train_flag: threading.Event,
+        gossip_lock: threading.Lock,
+        gossip_params: List[torch.Tensor],
+        gossip_device_buffer: List[torch.Tensor],
+        gossip_ps_weight: torch.Tensor,
+        gossip_ps_factor: torch.Tensor,
+        gossip_stream: torch.cuda.Stream,
+    ) -> None:
+        """ Gossip thread, which performs push-sum on model params """
+        logger = make_logger(cast(int, dist_config["rank"]), cast(bool, dist_config["verbose"]))
+
+        gossip_params_by_dtype = group_by_dtype(gossip_params)
+        gossip_device_buffer_by_dtype = group_by_dtype(gossip_device_buffer)
+
+        gossipers = {}
+        # init gossip instance
+        gossiper_class = PushSum if cast(bool, dist_config["push_sum"]) else PushPull
+        for dtype in gossip_params_by_dtype:
+            gossipers[dtype] = gossiper_class(
+                flatten_tensors(gossip_params_by_dtype[dtype]),
+                device=cast(torch.device, dist_config["comm_device"]),
+                graph=cast(GraphManager, dist_config["graph"]),
+                mixing=cast(MixingManager, dist_config["mixing"]),
+                rank=cast(int, dist_config["process_rank"]),
+                world_size=cast(int, dist_config["world_size"]),
+                logger=logger,
+            )
+
+        dist_config["gossipers"] = gossipers
+        gossip_ps_factor.copy_(gossipers[list(gossipers)[0]].mixing_weights["lo"])
+        gossip_flag.set()
+
+        # gossip loop
+        while True:
+            train_flag.wait()
+            logger.debug("received train-flag")
+            try:
+                with torch.cuda.stream(gossip_stream):
+                    for dtype in gossip_params_by_dtype:
+                        (ps_weight, ps_factor,) = GossipDataParallel.sgp_gossip_into_receive_buffer(
+                            gossip_params_by_dtype[dtype],
+                            gossipers[dtype],
+                            gossip_device_buffer_by_dtype[dtype],
+                            gossip_ps_weight,
+                            gossip_lock,
+                            dist_config,
+                        )
+                    gossip_ps_weight.copy_(ps_weight)
+                    gossip_ps_factor.copy_(ps_factor)
+            except RuntimeError as e:
+                logger.warning("received runtime error {}".format(e))
+                for gossiper in gossipers.values():
+                    gossiper.clean_msg_buffers_()
+                gossip_ps_weight.fill_(-1)
+            finally:
+                # Make sure all queued operations are complete
+                gossip_stream.synchronize()
+                # give main thread go-ahead to read our gossip buffer
+                train_flag.clear()
+                gossip_flag.set()
