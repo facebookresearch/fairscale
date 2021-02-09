@@ -14,7 +14,7 @@ from typing import Any, List
 
 import torch
 from torch import nn
-from torch.cuda.amp import custom_fwd, custom_bwd
+from torch.cuda.amp import custom_bwd, custom_fwd
 
 
 def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:

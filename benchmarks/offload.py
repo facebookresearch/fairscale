@@ -3,15 +3,15 @@
 # Apply CPU offload and problem sharding to a big transformer model
 
 import argparse
+import contextlib
 import logging
 import time
-import contextlib
+
 import torch
 import torch.nn as nn
 from torch.utils.data.dataloader import DataLoader
 from torchvision.datasets import FakeData
 from torchvision.transforms import ToTensor
-from torch.cuda.amp import autocast
 
 OPTIM = torch.optim.SGD
 LR = 1e-3
@@ -88,7 +88,9 @@ def train(args: argparse.Namespace):
                         loss = criterion(output, target=batch_outputs)
                         loss.backward()
                     optimizer.step()
-            logging.info("Memory stats are {:.2f}GB".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] / 2 ** 30))
+            logging.info(
+                "Memory stats are {:.2f}GB".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] / 2 ** 30)
+            )
             logging.info(
                 "Loss {:.2f} - throughput {:.2f}fps".format(
                     loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9

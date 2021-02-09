@@ -7,13 +7,13 @@
 Testing Offload Module
 """
 
-import copy
 import contextlib
+import copy
+
 import numpy as np
 import torch
 
 from fairscale.nn.misc.offload import OffloadModel
-from torch.cuda.amp import autocast
 
 
 def _init():
@@ -64,6 +64,7 @@ def _check_parity(rmodel, omodel, ropt, oopt, rloss, oloss):
 
         for o_buf, reg_buf in zip(omodel.buffers(), rmodel.buffers()):
             assert torch.allclose(o_buf, reg_buf, atol=1e-2), "Model buffers differ in between Offload and Vanilla."
+
 
 def _get_fp16_context(use_fp16=False):
     if use_fp16:
