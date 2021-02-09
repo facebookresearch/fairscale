@@ -60,6 +60,7 @@ class GossipDataParallel(Module):
         module: torch.nn.Module,
         nprocs_per_node: int = 1,  # To be specified as the number of GPUs in a node
         broadcast_buffers: bool = True,  # Copy from Pytorch DDP
+        #
         # SlowMo parameters
         slowmo: bool = True,
         # Might need to be tuned depending on the use case
@@ -69,6 +70,7 @@ class GossipDataParallel(Module):
         slowmo_lr: float = 1.0,
         # Only to be tuned if slow momentum is becoming a bottleneck
         slowmo_world_size: int = 32,
+        #
         # SlowMo algorithm parameters
         slowmo_base_algorithm: SlowMoAlgorithms = SlowMoAlgorithms.LOCALSGD,
         # LocalSGD
@@ -81,9 +83,11 @@ class GossipDataParallel(Module):
         synch_freq: int = 0,
         use_streams: bool = True,
         slowmo_sgp_average_params: bool = False,
+        #
         # For debugging
         verbose: bool = False,
         profile_mode: bool = False,
+        #
         # Most probably not needed. Process groups can be specified only if they are to be re-used to save memory
         rank: Optional[int] = None,
         world_size: Optional[int] = None,
