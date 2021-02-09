@@ -141,10 +141,10 @@ class GossipDataParallel(Module):
         self.num_updates = 0
         self.portion_start: Optional[int] = None
 
-        self.slowmo = False if slowmo_lr == 1 and slowmo_momentum == 0 else slowmo
-
         # slowmo being set to False is equivalent to slowmo_lr being set to 1 and slowmo_momentum being set to 0
         # This condition is ensuring the values are safe to use even when slowmo is disabled
+        self.slowmo = False if slowmo_lr == 1 and slowmo_momentum == 0 else slowmo
+
         self.slowmo_lr = slowmo_lr if self.slowmo else 1
         self.slowmo_momentum = slowmo_momentum if self.slowmo else 0
 
