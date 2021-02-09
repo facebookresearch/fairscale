@@ -74,7 +74,7 @@ class GossipDataParallel(Module):
         # SlowMo algorithm parameters
         slowmo_base_algorithm: SlowMoAlgorithms = SlowMoAlgorithms.LOCALSGD,
         # LocalSGD
-        localsgd_frequency: int = 48,
+        localsgd_frequency: int = 3,
         # SGP
         graph: Optional[GraphManager] = None,
         mixing: Optional[MixingManager] = None,
