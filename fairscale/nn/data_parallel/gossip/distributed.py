@@ -357,11 +357,11 @@ class GossipDataParallel(Module):
         if self.broadcast_buffers and len(self.module_buffers) > 0:
             # Synchronize buffers across processes.
             # The process with rank 0 is considered the authoritative copy.
-            self._distributed_broadcast_coalesced(self.module_buffers, self.broadcast_bucket_size)
+            self._distributed_broadcast_coalesced(self.process_group, self.module_buffers, self.broadcast_bucket_size)
         self.logger.debug("Intra-node buffer sync complete")
 
-    def _distributed_broadcast_coalesced(self, tensors: List[torch.Tensor], buffer_size: int) -> None:
-        dist._broadcast_coalesced(self.process_group, tensors, buffer_size)
+    def _distributed_broadcast_coalesced(self, process_group: torch.distributed.ProcessGroup, tensors: List[torch.Tensor], buffer_size: int) -> None:
+        dist._broadcast_coalesced(process_group, tensors, buffer_size)
 
     def block(self) -> None:
         self.logger.debug("blocking")
