@@ -502,7 +502,7 @@ class GossipDataParallel(Module):
 
     def perform_additional_optimizer_actions(
         self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor] = None
-    ) -> None:
+    ) -> None:  # TODO: rename this function
         """Perform additional steps needed for SGP/LocalSGD/SlowMo"""
         # Done here in case the global momentum buffers has not been initialized by the caller.
         # In an ideal implementation, this would be called by the caller. We do it here instead of
