@@ -364,7 +364,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
                 "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 1,
                 "nprocs_per_node": 1,
-                "slowmo_momentum": 0.,
+                "slowmo_momentum": 0.0,
             },
         )
 
@@ -379,7 +379,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
                 "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 1,
                 "nprocs_per_node": 1,
-                "slowmo_momentum": 0.,
+                "slowmo_momentum": 0.0,
             },
         )
 
@@ -394,7 +394,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
                 "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in GossipDataParallel in the one node case
                 "nprocs_per_node": 2,
-                "slowmo_momentum": 0.,
+                "slowmo_momentum": 0.0,
             },
         )
 
@@ -516,7 +516,7 @@ class GossipDataParallelTest(MultiProcessTestCase):
                 "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
                 "localsgd_frequency": 2,
                 "nprocs_per_node": 1,
-                "slowmo_momentum": 0.,
+                "slowmo_momentum": 0.0,
             },
         )
 
@@ -540,7 +540,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
                 "slowmo_frequency": 1,
-                "slowmo_momentum": 0.,
             },
             use_gossip_data_parallel=True,
         )
@@ -582,7 +581,6 @@ class GossipDataParallelTest(MultiProcessTestCase):
                 "nprocs_per_node": 1,
                 "slowmo_momentum": 0.5,
                 "slowmo_frequency": 1,
-                "slowmo_momentum": 0.,
             },
             use_gossip_data_parallel=True,
         )
