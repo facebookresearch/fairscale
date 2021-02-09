@@ -27,6 +27,8 @@ from fairscale.utils.testing import (
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 
+_BUFFER_NAME = "vocab_bias"
+
 
 class DistributedTest(unittest.TestCase):
     def setUp(self):
@@ -42,9 +44,9 @@ class DistributedTest(unittest.TestCase):
             raise unittest.SkipTest("distributed tests require 2+ GPUs, skipping")
 
     @staticmethod
-    def _train_for_several_steps(model, num_steps, autocast):
+    def _train_for_several_steps(model, num_steps, autocast, lr=0.01):
         model_device = next(model.parameters()).device
-        optim = torch.optim.Adam(model.parameters(), lr=0.01)
+        optim = torch.optim.Adam(model.parameters(), lr=lr)
         for _ in range(num_steps):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
@@ -178,7 +180,11 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # We don't test the False condition because that requires the optimizer to internally do
         # the device transfer and PyTorch optimizers don't support this.
         config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": True}
-        test_fn = functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False)
+        test_fn = functools.partial(
+            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.001
+        )
+        # We use lower lr to reduce this test's sensitivity to slightly different CPU vs CUDA behavior of pytorch.
+        # With lr=0.01, it fails on torch 1.6.0.
         spawn_and_init(test_fn)
 
     def test_cpu_offload_and_cuda_grads_breaks(self):
@@ -210,7 +216,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_identical_outputs(cls, model_init_fn, config, rank, group, num_steps=3, use_cuda=True):
+    def _test_identical_outputs(cls, model_init_fn, config, rank, group, num_steps=3, use_cuda=True, lr=0.01):
         if config["mixed_precision"]:
             autocast = True
             # Force the compute dtype to be torch.float32 so that we get
@@ -224,7 +230,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # Establish reference behavior with PyTorch DDP (+ optionally autocast).
         model = model_init_fn(group=group, wrapper_config=None).cuda()
         model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank, process_group=group)
-        ref_loss = cls._train_for_several_steps(model, num_steps, autocast)
+        ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr)
         ref_state_dict = model.module.state_dict()
 
         # Confirm we get the same behavior using ShardParamsDataParallel.
@@ -233,14 +239,14 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             model = model.cuda()
         else:
             assert next(model.parameters()).device == torch.device("cpu")
-        shard_loss = cls._train_for_several_steps(model, num_steps, autocast)
+        shard_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr)
         shard_state_dict = model.state_dict()
 
         try:
             torch.testing.assert_allclose(ref_loss, shard_loss)
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
         except (AssertionError, RuntimeError) as e:
-            raise Exception(f"ShardParamsDataParallel didn't match PyTorch DDP using config: {config}" "\n\n{e}")
+            raise Exception(f"ShardParamsDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
 
 
 class TestParamInit(DistributedTest):
@@ -332,7 +338,7 @@ class TestLocalStateDict(DistributedTest):
             spawn_and_init(test_fn)
 
     @classmethod
-    def _load_local_and_train(self, config, rank, group, d_model=32, d_vocab=32):
+    def _load_local_and_train(self, config, rank, group, d_model=16, d_vocab=16):
         """Check that local_state_dict can be saved and loaded for a given worker, and that training updates it"""
         model = ShardParamsDataParallel(
             TransformerWithSharedParams(d_model=d_model, d_vocab=d_vocab), group, **config
@@ -346,11 +352,11 @@ class TestLocalStateDict(DistributedTest):
         state_1_weight = state_1[weight_key]
         assert state_1_weight.dtype == torch.float32, f"got dtype {state_1_weight.dtype} expected torch.float32"
         if not model.flatten_parameters:
-            # This weight will be sharded since we access module.state_dict directly
+            # The weight will be sharded since we access module.state_dict directly
             state_1_module_weight = model.module.state_dict()[weight_key]
             torch.testing.assert_allclose(state_1_weight, state_1_module_weight)
             torch.testing.assert_allclose(state_1_weight, model.module.embed_tokens.weight)
-        self._train_for_several_steps(model, 4, model.mixed_precision)
+        self._train_for_several_steps(model, 1, model.mixed_precision)
 
         state_2 = model.local_state_dict()
         state_after_training = {k: v.cpu().clone() for k, v in state_2.items()}
@@ -361,7 +367,7 @@ class TestLocalStateDict(DistributedTest):
         # Assert that parameters were updated since before training
         unchanged = []
         for k in state_1:
-            if (state_before_training[k] == state_after_training[k]).all():
+            if (state_before_training[k] == state_after_training[k]).all() and (_BUFFER_NAME not in k):
                 unchanged.append(k)
         if unchanged:
             raise AssertionError(f"params {unchanged} not changed after training")
@@ -520,6 +526,7 @@ class TransformerWithSharedParams(nn.Module):
         self.output_proj = nn.Linear(d_model, d_vocab)
         # share the embedding and output projection weights
         self.output_proj.weight = self.embed_tokens.weight
+        self.register_buffer(_BUFFER_NAME, self.embed_tokens.weight.new_ones((d_model,)))
 
     def get_input(self, device):
         torch.manual_seed(1)  # keep everything deterministic
@@ -529,6 +536,7 @@ class TransformerWithSharedParams(nn.Module):
 
     def forward(self, src_ids, tgt_ids):
         src = self.embed_tokens(src_ids)
+        src = src + self.vocab_bias
         tgt = self.embed_tokens(tgt_ids)
         x = self.transformer(src, tgt)
         return self.output_proj(x)

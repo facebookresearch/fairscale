@@ -125,15 +125,17 @@ class ShardParamsDataParallel(nn.Module):
         # Shard module parameters in place
         self._shard_parameters_()
 
-        if self.mixed_precision:
-            # Cast all module buffers to FP16 (buffers are not sharded).
-            self.apply(cast_buffers_to_fp16)
-
         # Make sure all parameters are sharded.
         for n, p in self.named_parameters():
             assert getattr(p, "_is_sharded", False), f"found unsharded parameter: {n} ; {p.size()}"
 
         self._reset_lazy_init()
+
+    @torch.no_grad()
+    def _all_buffers_to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> None:
+        """Move all buffers to the specified device and dtype, recursively."""
+        cast_fn = functools.partial(cast_buffers_, device=device, dtype=dtype)
+        self.apply(cast_fn)
 
     @torch.no_grad()
     def _shard_parameters_(self) -> None:
@@ -217,17 +219,19 @@ class ShardParamsDataParallel(nn.Module):
         """
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
-        wrapped Module without any sharding-specific logic.
+        wrapped Module without any sharding-specific logic. Returned tensors will always be typed float32
         """
         torch.cuda.synchronize()
         self._lazy_init()
         self._rebuild_full_params()
+        self._all_buffers_to(dtype=torch.float32)  # Buffers dtype stays consistent with parameters.
         state_dict = self.module.state_dict(*args, **kwargs)
         # We don't free the params after generating the state dict, since
         # freeing is done in-place (via the Storage) and would corrupt the
         # returned state dict. However, we need to maintain the invariant that
         # p.data corresponds to the FP32 param shard, so we do that here.
         self._use_fp32_param_shard()
+        self._all_buffers_to(dtype=self.compute_dtype)
         return state_dict
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
@@ -278,6 +282,10 @@ class ShardParamsDataParallel(nn.Module):
         if self._is_root is None:
             self._set_is_root()
             self._setup_streams()
+        if self.cpu_offload:  # Buffers stay on GPU, and dont get sharded
+            self._all_buffers_to(device=torch.device("cuda"), dtype=self.compute_dtype)
+        else:
+            self._all_buffers_to(dtype=self.compute_dtype)
 
         # Don't free the full params for the outer-most (root) instance, since
         # those params will be needed immediately after for the backward pass.
@@ -652,11 +660,14 @@ def cast_inputs_to_fp16(*args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     return args, kwargs
 
 
-def cast_buffers_to_fp16(module: nn.Module) -> None:
-    """Cast buffers of a module to FP16."""
+def cast_buffers_(
+    module: nn.Module, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None
+) -> None:
+    """Cast all of module.named_buffers to device, dtype."""
+    # if buffers are already on the right device and/or dtype this is just python loop cost
     for key, buf in module.named_buffers(recurse=False):
         if buf is not None:
-            setattr(module, key, buf.half())
+            setattr(module, key, buf.to(dtype=dtype, device=device))
 
 
 def free_storage_(data: torch.Tensor) -> None:
