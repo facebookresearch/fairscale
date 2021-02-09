@@ -127,7 +127,6 @@ class GossipDataParallel(Module):
 
         # prepare local intra-node all-reduce objects
         self.broadcast_bucket_size = 10 * 1024 * 1024  # bytes
-        self.nccl_reduce_bucket_size = 256 * 1024 * 1024  # bytes  # TODO: Maybe not needed
         self.module_buffers = list(self.module.buffers())
 
         # choose communication device based on backend
