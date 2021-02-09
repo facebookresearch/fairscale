@@ -101,10 +101,6 @@ class GossipDataParallel(Module):
         # NCCL_BLOCKING_WAIT causes issues with using multiple process groups
         assert os.environ.get("NCCL_BLOCKING_WAIT", "0") == "0"
 
-        self.logger = logging.getLogger(__name__)
-        if verbose:
-            self.logger.setLevel(logging.DEBUG)
-
         self.nprocs_per_node = nprocs_per_node
 
         if world_size is None or rank is None:
@@ -113,10 +109,7 @@ class GossipDataParallel(Module):
             world_size = dist.get_world_size()
         self.process_rank = rank
 
-        # Only create an adapter if debug logging is enabled to avoid additional overhead
-        if self.logger.isEnabledFor(logging.DEBUG):
-            # Set custom adapter on top of logger
-            self.logger = cast(logging.Logger, MultiProcessAdapter(self.logger, {"process_num": self.process_rank}))
+        self.initialize_logger(verbose, self.process_rank)
 
         rank, world_size = self.maybe_create_process_groups(rank, world_size, nprocs_per_node, global_group, master_group, local_node_group)
 
@@ -198,6 +191,16 @@ class GossipDataParallel(Module):
         self.__register_hooks()
 
         self.logger.debug("Initialization of GossipDataParallel complete")
+
+    def initialize_logger(self, verbose: bool, process_rank: int) -> None:
+        self.logger = logging.getLogger(__name__)
+        if verbose:
+            self.logger.setLevel(logging.DEBUG)
+
+        # Only create an adapter if debug logging is enabled to avoid additional overhead
+        if self.logger.isEnabledFor(logging.DEBUG):
+            # Set custom adapter on top of logger
+            self.logger = cast(logging.Logger, MultiProcessAdapter(self.logger, {"process_num": process_rank}))
 
     def maybe_create_process_groups(self, rank, world_size, nprocs_per_node, global_group, master_group, local_node_group):
         if global_group is None:
