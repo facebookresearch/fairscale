@@ -387,18 +387,30 @@ class GossipDataParallel(Module):
         self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor]
     ) -> Iterable[Tuple[torch.Tensor, torch.Tensor]]:
         """Iterator for those fp16 parameters which have a fp32 copy"""
+        # Handle apex fp16 optimizer
         if hasattr(optimizer, "_amp_stash") and hasattr(optimizer._amp_stash, "fp16_groups"):  # type: ignore
             for p_fp16_group, p_fp32_group in zip(
                 optimizer._amp_stash.fp16_groups, optimizer._amp_stash.fp32_from_fp16_groups,  # type: ignore
             ):
                 for p_fp16, p_fp32 in zip(p_fp16_group, p_fp32_group):
                     yield p_fp16, p_fp32
+
+        # Handle fairseq fp16 optimizer
         elif fp32_params is not None:
+            if isinstance(fp32_params, dict):
+                fp32_params_list = list(fp32_params.values())
+                assert len(fp32_params_list) == 1
+                fp32_params = fp32_params_list[0]
+
             offset = 0
-            for p in self.parameters():
+            for i, p in enumerate(self.parameters()):
                 numel = p.numel()
-                yield p.view(-1), fp32_params[offset : offset + numel]
-                offset += numel
+                # The fairseq implementation could contain fp32 parameters either as a
+                # list, or as a single tensor
+                if isinstance(fp32_params, list):
+                    yield p.view(-1), fp32_params[i]
+                else:
+                    yield p.view(-1), fp32_params[offset : offset + numel]
 
     def should_perform_slowmo(self) -> bool:
         return self.slowmo and (self.num_updates + 1) % self.slowmo_frequency == 0
