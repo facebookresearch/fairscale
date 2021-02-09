@@ -112,7 +112,9 @@ class GossipDataParallel(Module):
 
         self.initialize_logger(verbose, self.process_rank)
 
-        rank, world_size = self.maybe_create_process_groups(rank, world_size, nprocs_per_node, global_group, master_group, local_node_group)
+        rank, world_size = self.maybe_create_process_groups(
+            rank, world_size, nprocs_per_node, global_group, master_group, local_node_group
+        )
 
         # put model on output device
         self.module = module
@@ -203,7 +205,15 @@ class GossipDataParallel(Module):
             # Set custom adapter on top of logger
             self.logger = cast(logging.Logger, MultiProcessAdapter(self.logger, {"process_num": process_rank}))
 
-    def maybe_create_process_groups(self, rank: int, world_size: int, nprocs_per_node: int, global_group: Optional[torch.distributed.ProcessGroup], master_group: Optional[torch.distributed.ProcessGroup], local_node_group: Optional[torch.distributed.ProcessGroup]) -> Tuple[int, int]:
+    def maybe_create_process_groups(
+        self,
+        rank: int,
+        world_size: int,
+        nprocs_per_node: int,
+        global_group: Optional[torch.distributed.ProcessGroup],
+        master_group: Optional[torch.distributed.ProcessGroup],
+        local_node_group: Optional[torch.distributed.ProcessGroup],
+    ) -> Tuple[int, int]:
         if global_group is None:
             # Using private member to avoid creating another process group
             self.global_group = _get_default_group()
@@ -361,7 +371,9 @@ class GossipDataParallel(Module):
             self._distributed_broadcast_coalesced(self.process_group, self.module_buffers, self.broadcast_bucket_size)
         self.logger.debug("Intra-node buffer sync complete")
 
-    def _distributed_broadcast_coalesced(self, process_group: torch.distributed.ProcessGroup, tensors: List[torch.Tensor], buffer_size: int) -> None:
+    def _distributed_broadcast_coalesced(
+        self, process_group: torch.distributed.ProcessGroup, tensors: List[torch.Tensor], buffer_size: int
+    ) -> None:
         dist._broadcast_coalesced(process_group, tensors, buffer_size)
 
     def block(self) -> None:
@@ -488,7 +500,9 @@ class GossipDataParallel(Module):
         ef_copy_rec.stop()
         self.logger.debug("Error feedback copy-back completed")
 
-    def sgp_overlap_pre_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
+    def sgp_overlap_pre_communicate_error_feedback(
+        self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]
+    ) -> None:
         if self.sgp and self.overlap and fp16_fp32_list:
             # Initialize error feedback for SGP-overlap
             if self.ef1 is None:
