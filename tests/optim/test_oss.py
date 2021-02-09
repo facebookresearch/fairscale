@@ -11,7 +11,7 @@
 import copy
 from math import inf
 import tempfile
-from typing import Any, Type, cast
+from typing import Any, Dict, Type, cast
 import unittest
 
 import numpy as np
@@ -768,7 +768,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     out_channels = 3
     batch = 64
 
-    def check_optimizer_equivalence(optimizer: Type[torch.optim.Optimizer]):
+    def check_optimizer_equivalence(optimizer: Type[torch.optim.Optimizer], change_train_graph: bool = False):
         # Any model works. Add one different buffer per rank
         trunk = torch.nn.Sequential(torch.nn.Linear(in_channels, hidden), torch.nn.Linear(hidden, hidden))
         trunk.register_buffer("test_buffer", torch.ones((1)) * rank)
@@ -783,8 +783,8 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             {"params": head.parameters(), "lr": 1e-4},
         ]
 
-        optimizer_settings = {}
-        if isinstance(optim, torch.optim.SGD):
+        optimizer_settings: Dict[Any, Any] = {}
+        if isinstance(optimizer, torch.optim.SGD):
             optimizer_settings["momentum"] = 0.9
 
         sharded_optimizer = optim.OSS(
@@ -795,7 +795,11 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             **optimizer_settings,
         )
 
-        oss_ddp_model = DDP(module=oss_model, device_ids=[rank], broadcast_buffers=True)
+        oss_ddp_model = DDP(module=oss_model, device_ids=[rank], broadcast_buffers=True, find_unused_parameters=True)
+
+        if change_train_graph:
+            next(oss_model.parameters()).requires_grad = False
+            sharded_optimizer.refresh_trainable()
 
         # Define a model to be trained by normal pytorch + DDP
         ddp_trunk = copy.deepcopy(trunk)
@@ -807,7 +811,10 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             {"params": ddp_head.parameters(), "lr": 1e-4},
         ]
         ddp_optimizer = optimizer(ddp_trainable_params, **optimizer_settings)  # type: ignore
-        ddp_model = DDP(module=ddp_module, device_ids=[rank], broadcast_buffers=True)
+        ddp_model = DDP(module=ddp_module, device_ids=[rank], broadcast_buffers=True, find_unused_parameters=True)
+
+        if change_train_graph:
+            next(ddp_module.parameters()).requires_grad = False
 
         def check_same_model_params():
             for pg, ddp_pg in zip(sharded_optimizer.param_groups, ddp_optimizer.param_groups):
@@ -866,8 +873,9 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         check_step()
         check_same_model_params()
 
-    for opt in [torch.optim.SGD, torch.optim.Adam]:
-        check_optimizer_equivalence(opt)
+    for opt in [torch.optim.Adam, torch.optim.SGD]:
+        check_optimizer_equivalence(opt, change_train_graph=False)
+        check_optimizer_equivalence(opt, change_train_graph=True)
 
     dist.destroy_process_group()
 

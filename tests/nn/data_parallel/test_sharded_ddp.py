@@ -213,12 +213,14 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             check_same_model_params(sharded_ddp_model, ddp_model)
 
     check_parity(amp=False, accumulate=False, change_train_graph=False)
-    check_parity(amp=False, accumulate=False, change_train_graph=True)
+    # check_parity(amp=False, accumulate=False, change_train_graph=True)
 
     # Catch a version of pytorch which would not support AMP
     if hasattr(torch.cuda.amp, "autocast"):
+        check_parity(amp=True, accumulate=False, change_train_graph=False)
         check_parity(amp=True, accumulate=False, change_train_graph=True)
-        check_parity(amp=False, accumulate=False, change_train_graph=True)
+
+    # TODO @lefaudeux (another PR): Add the checkpointing/accumulation tests
 
     dist.destroy_process_group()
 

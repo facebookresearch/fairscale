@@ -253,7 +253,7 @@ class ShardedDataParallel(nn.Module):
         self._trainable_param_to_rank = {}
         for optim in self.sharded_optimizers:
             # OSS may change the partitioning
-            # optim.refresh_trainable()
+            optim.refresh_trainable()
 
             # Update ShardedDDP given the new partitions
             for (

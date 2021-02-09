@@ -56,7 +56,7 @@ class OSS(Optimizer):
 
     .. warning: the communication patterns that OSS use depend on the "trainability" graph,
         meaning that all the parameters which `require_grad` are handled differently. This is
-        not reevaluated at every step, please use `refresh_trainability()` if your model changed
+        not reevaluated at every step, please use `refresh_trainable()` if your model changed
         (freeze or unfreeze for instance).
         If used with :class:<fairscale.nn.ShardedDDP> then an automatic change detection is possible,
         via the `auto_refresh_trainable` parameter.
@@ -89,26 +89,22 @@ class OSS(Optimizer):
         self._param_to_index: Dict[int, int] = {}
         self._local_params: Optional[List[torch.Tensor]] = None
 
-        # Build the wrapped optimizer, responsible for a shard of the params
+        # Default empty values + immutables
+        self._optim_defaults = default
+        self._optim_constructor = optim
+
         self.group = group if group is not None else dist.group.WORLD
         self.world_size = dist.get_world_size(self.group)
         self.rank = dist.get_rank(self.group)
         self.global_rank = self.get_global_rank(self.group, self.rank)
-        self.optim = optim(self.partition_parameters()[self.rank], **default)
-
-        # - Sync local and global param_groups keys
-        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
-            for key, value in local_group.items():
-                if key != "params":
-                    global_group[key] = value
-
-        #  Optional consolidated optimizer state
-        self._all_states: List[Dict[str, Any]] = []
-
-        # Current default device is set by the parameters allocated to this rank
-        self._device = list(self.per_device_params.keys())[0]
         self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
-        self._setup_flat_buffers()
+
+        self._all_states: List[Dict[str, Any]] = []  # Optional consolidated optimizer state
+        self._default_device = torch.device("cpu")
+
+        # Setup everything which is related to the parameters to be trained
+        # (partition and optimizer for the shard)
+        self.refresh_trainable()
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
@@ -284,12 +280,12 @@ class OSS(Optimizer):
         # Compute the norm on this grad set,
         # then sync all the norms from all ranks
         if norm_type == inf:
-            total_norm = max(p.grad.detach().abs().max().to(self._device) for p in local_params)
+            total_norm = max(p.grad.detach().abs().max().to(self._default_device) for p in local_params)
             # all reduce over data parallel and model parallel workers
             dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=dist.group.WORLD)
         else:
             local_norm = torch.norm(
-                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type, dtype=torch.float32).to(self._device) for p in local_params]),  # type: ignore
+                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type, dtype=torch.float32).to(self._default_device) for p in local_params]),  # type: ignore
                 p=norm_type,
             )
 
@@ -425,6 +421,12 @@ class OSS(Optimizer):
         """
 
         self._clear_cache()
+        self._default_device = list(self.per_device_params.keys())[0]
+
+        # (re) create the optim which will work on the param shard
+        self.optim = self._optim_constructor(self.partition_parameters()[self.rank], **self._optim_defaults)
+        OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
+
         self._setup_flat_buffers()
 
     def _broadcast_state_dict(self) -> None:
@@ -436,7 +438,7 @@ class OSS(Optimizer):
         )
 
         # Tensor cannot be really empty, even if its size is meaningless
-        dummy_sync_tensor = torch.tensor([1], device=self._device)
+        dummy_sync_tensor = torch.tensor([1], device=self._default_device)
 
         for rank in range(self.world_size):
             if rank == self.rank:
@@ -446,17 +448,20 @@ class OSS(Optimizer):
                 )
                 # legacy compatibility for old torch versions
                 broadcast_object(
-                    self.local_state_dict(), src_rank=self.global_rank, group=self.group, dist_device=self._device
+                    self.local_state_dict(),
+                    src_rank=self.global_rank,
+                    group=self.group,
+                    dist_device=self._default_device,
                 )
             else:
                 global_rank = self.get_global_rank(self.group, rank)
 
                 # Discard this tensor/rank, broadcast necessary for syncing and because NCCL does not support gather
                 broadcast_object(
-                    torch.tensor([dummy_sync_tensor], dtype=torch.uint8, device=self._device),
+                    torch.tensor([dummy_sync_tensor], dtype=torch.uint8, device=self._default_device),
                     src_rank=global_rank,
                     group=self.group,
-                    dist_device=self._device,
+                    dist_device=self._default_device,
                 )
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
@@ -472,19 +477,19 @@ class OSS(Optimizer):
 
                 # Sync with other replicas
                 broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=self._device),
+                    torch.tensor([0], dtype=torch.uint8, device=self._default_device),
                     src_rank=self.global_rank,
                     group=self.group,
-                    dist_device=self._device,
+                    dist_device=self._default_device,
                 )
             else:
                 # Fetch the optim state from the other replicas
                 global_rank = self.get_global_rank(self.group, rank)
                 replica_state = broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=self._device),
+                    torch.tensor([0], dtype=torch.uint8, device=self._default_device),
                     src_rank=global_rank,
                     group=self.group,
-                    dist_device=self._device,
+                    dist_device=self._default_device,
                 )
 
                 all_states.append(
