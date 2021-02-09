@@ -23,7 +23,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
-from fairscale.utils.testing import GPT2, skip_if_no_cuda, skip_if_py38, skip_if_single_gpu
+from fairscale.utils.testing import GPT2, check_same_model_params, skip_if_no_cuda, skip_if_py38, skip_if_single_gpu
 
 
 def run_one_step(rank, world_size, backend, device, temp_file_name):
@@ -137,14 +137,9 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     INPUTS = 2
     BATCH_SIZE = 32
 
-    def check_parity(amp: bool, accumulate: bool, change_train_graph: bool):
-        # Helper, check that models are the same
-        def check_same_model_params(model_a, model_b):
-            for pa, pb in zip(model_a.parameters(), model_b.parameters()):
-                assert torch.allclose(pa, pb, rtol=1e-3), f"Model parameters differ {pa} {pb}"
+    print(f"Testing DDP parity {rank}", flush=True)
 
-            for ba, bb in zip(model_a.buffers(), model_b.buffers()):
-                assert torch.allclose(ba, bb, rtol=1e-3), f"Model buffers differ. AMP {amp}"
+    def check_parity(amp: bool, accumulate: bool, change_train_graph: bool):
 
         # The API should be the exact same in between the sharded and non-sharded variants, generic closure
         def closure(model, scaler, input_tensor, should_accumulate):
@@ -170,14 +165,10 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         sharded_ddp_model = ShardedDataParallel(
             module=model, sharded_optimizer=sharded_optimizer, broadcast_buffers=True
         )
-        if change_train_graph:
-            next(model.parameters()).requires_grad = False
 
         ddp_model_single = copy.deepcopy(model)
         ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-3, momentum=0.99)
-        ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True)
-        if change_train_graph:
-            next(ddp_model.parameters()).requires_grad = False
+        ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True, find_unused_parameters=True)
 
         ddp_scaler = TorchGradScaler() if amp else None
         sharded_ddp_scaler = ShardedGradScaler() if amp else None
@@ -210,17 +201,23 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             else:
                 sharded_optimizer.step(closure=closure_sharded)
 
-            check_same_model_params(sharded_ddp_model, ddp_model)
+            check_same_model_params(sharded_ddp_model, ddp_model, "Step broke")
 
+            # Flip the trainability of the first parameter back and forth
+            if change_train_graph:
+                next(model.parameters()).requires_grad = not next(model.parameters()).requires_grad
+                next(ddp_model.parameters()).requires_grad = not next(ddp_model.parameters()).requires_grad
+                check_same_model_params(sharded_ddp_model, ddp_model, "Trainability refresh broke")
+
+    # Test all combinations: AMP, Accumulate, Change train graph
+    # TODO @lefaudeux (another PR): Add the checkpointing/accumulation tests
     check_parity(amp=False, accumulate=False, change_train_graph=False)
-    # check_parity(amp=False, accumulate=False, change_train_graph=True)
+    check_parity(amp=False, accumulate=False, change_train_graph=True)
 
     # Catch a version of pytorch which would not support AMP
     if hasattr(torch.cuda.amp, "autocast"):
         check_parity(amp=True, accumulate=False, change_train_graph=False)
         check_parity(amp=True, accumulate=False, change_train_graph=True)
-
-    # TODO @lefaudeux (another PR): Add the checkpointing/accumulation tests
 
     dist.destroy_process_group()
 

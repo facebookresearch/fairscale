@@ -420,22 +420,17 @@ class OSS(Optimizer):
         of some parameters changed
         """
 
-        self._clear_cache()
-        self._default_device = list(self.per_device_params.keys())[0]
-
-        # (re) create the optim which will work on the param shard
-        self.optim = self._optim_constructor(self.partition_parameters()[self.rank], **self._optim_defaults)
-        OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
+        # Create the optim which will work on the param shard
+        if not hasattr(self, "optim"):
+            self._clear_cache()
+            self._default_device = list(self.per_device_params.keys())[0]
+            self.optim = self._optim_constructor(self.partition_parameters()[self.rank], **self._optim_defaults)
+            OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
 
         self._setup_flat_buffers()
 
     def _broadcast_state_dict(self) -> None:
         """Broadcast this rank's state shard, discard others"""
-
-        # Default to CPU space to gain some memory headroom
-        local_cpu_state = recursive_copy_to_device(
-            self.optim.state_dict(), non_blocking=True, device=torch.device("cpu")
-        )
 
         # Tensor cannot be really empty, even if its size is meaningless
         dummy_sync_tensor = torch.tensor([1], device=self._default_device)
@@ -572,20 +567,38 @@ class OSS(Optimizer):
         `refresh_trainability` is called.
         """
 
-        for device, per_rank_params in self.per_device_params.items():
-            self.buckets[device] = []
+        # FIXME: Catch a parameter which is not trainable anymore and is in a lost bucket
 
+        for device, per_rank_params in self.per_device_params.items():
+            # Only wipe the existing buckets if there are none
+            # (could be that this is called twice, when trainability changes)
+            if device not in self.buckets.keys():
+                self.buckets[device] = []
+
+            # Make parameters a view of the bucket
             for dst_rank, params in enumerate(per_rank_params):
                 if len(params) > 0:
+
+                    # Clone the non-trainable params, if in a bucket it will get destroyed
+                    for param in filter(lambda x: not x.requires_grad, params):
+                        param.data = param.data.detach().clone()
+
+                    # Merge all the trainable params in a single bucket
                     trainable_params = list(filter(lambda x: x.requires_grad, params))
                     buffer_size = sum(map(lambda x: x.numel(), trainable_params))
-                    self.buckets[device].append(torch.empty(buffer_size, dtype=params[0].dtype, device=device))
+                    bucket = torch.empty(buffer_size, dtype=params[0].dtype, device=device)
                     offset = 0
 
                     for param in trainable_params:
-                        # This parameter becomes a view of the bucket
                         offset_next = offset + param.numel()
-
-                        self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.flatten())
-                        param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
+                        bucket[offset:offset_next].copy_(param.data.flatten())
+                        param.data = bucket[offset:offset_next].view_as(param.data)
                         offset = offset_next
+
+                    # Either replace the existing bucket, or move it
+                    if len(self.buckets[device]) == dst_rank:
+                        self.buckets[device].append(bucket)
+                    else:
+                        self.buckets[device][dst_rank] = bucket
+                else:
+                    self.buckets[device].append(torch.zeros(1))
