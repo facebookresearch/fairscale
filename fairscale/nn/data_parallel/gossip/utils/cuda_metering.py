@@ -34,7 +34,24 @@ def create_event_recorder(event_name: str, dummy: bool = False) -> EventRecorder
 
 
 class CudaEventRecorder(EventRecorder):
-    """ Allows recording cuda events in an easy manner """
+    """ Allows profiling in an easy-to-use manner. CudaEventRecorder can be used
+    in a loop. When it is used in a loop (or when an event recorder is created
+    multiple times with the same name), get_timings returns the statistics of the
+    timings since the last reset
+
+    Usage:
+    >>> event_recorder1 = CudaEventRecorder('1')
+    >>> # Sequence of events whose time is to be measured
+    >>> event_recorder1.stop()
+    >>> event_recorder2 = CudaEventRecorder('2')
+    >>> # Sequence of events whose time is to be measured
+    >>> event_recorder2.stop()
+    >>> print(CudaEventRecorder.get_timings())
+
+    Args:
+        event_name (str): The name by which the cuda event is to be referred later on
+
+    """
 
     event_recorders: ClassVar[Dict[str, List["CudaEventRecorder"]]] = collections.defaultdict(list)
     all_event_recorders: ClassVar[Dict[str, List["CudaEventRecorder"]]] = collections.defaultdict(list)
@@ -82,10 +99,12 @@ class CudaEventRecorder(EventRecorder):
 
     @classmethod
     def get_timings(cls) -> str:
+        """ Returns the timings since last reset was called """
         return cls.get_common_timings(cls.event_recorders, "Timings since last reset")
 
     @classmethod
     def get_all_timings(cls) -> str:
+        """ Returns the statistics of all the timings """
         return cls.get_common_timings(cls.all_event_recorders, "All timings")
 
 

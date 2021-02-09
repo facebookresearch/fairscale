@@ -31,7 +31,17 @@ class dist_backend:
 
 
 class Gossiper(object):
-    """ Generic gossip averaging object for multi-peer communication """
+    """ Generic gossip averaging object for multi-peer communication
+
+    Args:
+        msg (torch.Tensor): message used to initialize recv buffer
+        graph (GraphManager): Subclass of GraphManager
+        device: (torch.Device) device on which to initialize recv buffer
+        mixing (MixingManager): Subclass of MixingManager
+        logger (logging.Logger): Module used to log results
+        rank (int): Rank of the current process
+        world_size (int): World size of the current process
+    """
 
     def __init__(
         self,
@@ -46,11 +56,6 @@ class Gossiper(object):
         """
         Initialize generic averaging class designed for multi-peer comms
 
-        :param msg: (tensor) message used to initialize recv buffer
-        :param device: (device) device on which to initialize recv buffer
-        :param graph: (GraphManager) Subclass of GraphManager
-        :param mixing: (MixingManager) Subclass of MixingManager
-        :param logger: (python logger) module used to log results
         """
 
         self.logger = logger

@@ -11,7 +11,6 @@ from .helpers import (
     create_process_group,
     flatten_tensors,
     group_by_dtype,
-    is_power_of,
     make_logger,
     unflatten_tensors,
 )

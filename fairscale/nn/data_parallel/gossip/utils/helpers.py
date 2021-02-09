@@ -18,8 +18,6 @@ from typing import Any, Dict, List, MutableMapping, Set, Tuple
 import torch
 import torch.distributed as dist
 
-# Might need to install typing_extensions separately for Python 3.7 and below
-
 
 def flatten_tensors(tensors: List[torch.Tensor]) -> torch.Tensor:
     """
@@ -27,11 +25,11 @@ def flatten_tensors(tensors: List[torch.Tensor]) -> torch.Tensor:
     same dense type.
     Since inputs are dense, the resulting tensor will be a concatenated 1D
     buffer. Element-wise operation on this buffer will be equivalent to
-    operating individually.
-    Arguments:
-        tensors (Iterable[Tensor]): dense tensors to flatten.
+    operating individually
+    Args:
+        tensors (Iterable[Tensor]): dense tensors to flatten
     Returns:
-        A 1D buffer containing input tensors.
+        A 1D buffer containing input tensors
     """
     if len(tensors) == 1:
         return tensors[0].view(-1).clone()
@@ -43,13 +41,13 @@ def unflatten_tensors(flat: torch.Tensor, tensors: List[torch.Tensor]) -> List[t
     """
     View a flat buffer using the sizes of tensors. Assume that tensors are of
     same dense type, and that flat is given by flatten_dense_tensors.
-    Arguments:
-        flat (Tensor): flattened dense tensors to unflatten.
+    Args:
+        flat (Tensor): flattened dense tensors to unflatten
         tensors (Iterable[Tensor]): dense tensors whose sizes will be used to
-            unflatten flat.
+            unflatten flat
     Returns:
         Unflattened dense tensors with sizes same as tensors and values from
-        flat.
+        flat
     """
     outputs = []
     offset = 0
@@ -64,8 +62,8 @@ def group_by_dtype(tensors: List[torch.Tensor]) -> Dict[torch.dtype, List[torch.
     """
     Returns a dict mapping from the tensor dtype to a list containing all
     tensors of that dtype.
-    Arguments:
-        tensors (Iterable[Tensor]): list of tensors.
+    Arg:
+        tensors (Iterable[Tensor]): list of tensors
     """
     tensors_by_dtype = collections.defaultdict(list)
     for tensor in tensors:
@@ -75,12 +73,12 @@ def group_by_dtype(tensors: List[torch.Tensor]) -> Dict[torch.dtype, List[torch.
 
 def communicate(tensors: List[torch.Tensor], communication_op: Any, logger: logging.Logger = None) -> None:
     """
-    Communicate a list of tensors.
-    Arguments:
-        tensors (Iterable[Tensor]): list of tensors.
+    Communicate a list of tensors
+    Args:
+        tensors (Iterable[Tensor]): list of tensors
         communication_op: a method or partial object which takes a tensor as
             input and communicates it. It can be a partial object around
-            something like torch.distributed.all_reduce.
+            something like torch.distributed.all_reduce
     """
     tensors_by_dtype = group_by_dtype(tensors)
     for dtype in tensors_by_dtype:
@@ -99,11 +97,11 @@ def communicate(tensors: List[torch.Tensor], communication_op: Any, logger: logg
 
 HANDLER_AND_LEVEL_SET: Set[logging.Logger] = set()
 
-# TODO: need to deprecate this function
+# TODO: deprecate this function
 def make_logger(rank: int, verbose: bool = True) -> logging.Logger:
     """
-    Return a logger for writing to stdout;
-    Arguments:
+    Return a logger for writing to stdout
+    Args:
         rank (int): rank of node making logger
         verbose (bool): whether to set log-level to INFO; o.w. WARNING
     Returns:
@@ -126,30 +124,15 @@ def make_logger(rank: int, verbose: bool = True) -> logging.Logger:
     return logger
 
 
-# TODO: deprecate this
-def is_power_of(N: int, k: int) -> bool:
-    """
-    Returns True if N is a power of k
-    """
-    assert isinstance(N, int) and isinstance(k, int)
-    assert k >= 0 and N > 0
-    if k == 0 and N == 1:
-        return True
-    if k in (0, 1) and N != 1:
-        return False
-
-    return k ** int(round(math.log(N, k))) == N
-
-
 def create_process_group(ranks: List[int]) -> torch.distributed.ProcessGroup:
     """
     Creates and intializes a new process group. Assumes init_process_group
-    has already been called.
+    has already been called
     Arguments:
         ranks (list<int>): ranks corresponding to the processes which should
             belong the created process group
     Returns:
-        new process group
+        New process group
     """
     new_group = dist.new_group(ranks=ranks)
     init_tensor_fp32, init_tensor_fp16 = torch.zeros(1), torch.zeros(1).half()
@@ -165,7 +148,7 @@ def create_process_group(ranks: List[int]) -> torch.distributed.ProcessGroup:
 
 class MultiProcessAdapter(logging.LoggerAdapter):
     """
-    Creates an adapter to make logging for multiple processes cleaner.
+    Creates an adapter to make logging for multiple processes cleaner
     """
 
     def process(self, msg: str, kwargs: Any) -> Tuple[str, MutableMapping[str, Any]]:
