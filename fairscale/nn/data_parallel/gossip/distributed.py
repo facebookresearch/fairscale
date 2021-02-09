@@ -69,7 +69,7 @@ class GossipDataParallel(Module):
         slowmo_frequency: int = 48,
         slowmo_lr: float = 1.0,
         # Only to be tuned if slow momentum is becoming a bottleneck
-        slowmo_world_size: int = 32,
+        slowmo_num_shards: int = 32,
         #
         # SlowMo algorithm parameters
         slowmo_base_algorithm: SlowmoBaseAlgorithm = SlowmoBaseAlgorithm.LOCALSGD,
@@ -169,8 +169,8 @@ class GossipDataParallel(Module):
         if self.slowmo and not self.localsgd and not self.sgp:
             self.logger.warning("SlowMo is being used without LocalSGD and SGP")
 
-        self.slowmo_world_size = min(dist.get_world_size(), slowmo_world_size)
-        self.is_computing_slowmo = self.process_rank < self.slowmo_world_size
+        self.slowmo_num_shards = min(dist.get_world_size(), slowmo_num_shards)
+        self.is_computing_slowmo = self.process_rank < self.slowmo_num_shards
 
         self.nprocs_per_node_device = torch.tensor([self.nprocs_per_node], device=comm_device, dtype=first_param_dtype)
 
@@ -593,7 +593,7 @@ class GossipDataParallel(Module):
                 assert p.dtype == params_dtype == torch.float32
                 assert p.device == params_device
 
-        self.world_portion_length = (total_elements + self.slowmo_world_size - 1) // self.slowmo_world_size
+        self.world_portion_length = (total_elements + self.slowmo_num_shards - 1) // self.slowmo_num_shards
 
         rank = dist.get_rank()
         if not self.is_computing_slowmo:
@@ -634,7 +634,7 @@ class GossipDataParallel(Module):
 
     def distributed_comm(self, optimizer: torch.optim.Optimizer, mode: str) -> None:
         offset = 0
-        slowmo_comm_lists: List[List[torch.Tensor]] = [[] for _ in range(self.slowmo_world_size)]
+        slowmo_comm_lists: List[List[torch.Tensor]] = [[] for _ in range(self.slowmo_num_shards)]
         with torch.no_grad():
             for group in optimizer.param_groups:
                 # aggregate different parts of p in required node
