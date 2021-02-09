@@ -26,6 +26,7 @@ from fairscale.utils.testing import (
 )
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
+# All helper functions called by spawn must be either @classmethod, @staticmethod
 
 _BUFFER_NAME = "vocab_bias"
 
@@ -332,17 +333,10 @@ class TestLocalStateDict(DistributedTest):
         )
         spawn_and_init(test_fn)
 
-    def test_local_state_dict_odd_vocab_shape_breaks(self):
-        test_fn = functools.partial(self._load_local_and_train, {"flatten_parameters": False}, d_model=16, d_vocab=37)
-        with self.assertRaises(Exception):
-            spawn_and_init(test_fn)
-
     @classmethod
-    def _load_local_and_train(self, config, rank, group, d_model=16, d_vocab=16):
+    def _load_local_and_train(self, config, rank, group, d_model=16, d_vocab=23):
         """Check that local_state_dict can be saved and loaded for a given worker, and that training updates it"""
-        model = ShardParamsDataParallel(
-            TransformerWithSharedParams(d_model=d_model, d_vocab=d_vocab), group, **config
-        ).cuda()
+        model = self.get_wrapped_model(group, cuda_first=False, config=config, d_vocab=d_vocab, d_model=d_model)
         state_1 = model.local_state_dict()
         state_before_training = {k: v.cpu().clone() for k, v in state_1.items()}
         assert len(state_1) > 0
@@ -382,8 +376,8 @@ class TestSaveLoadStateDict(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_calling_state_dict_twice(self, config, rank, group):
-        ddp_model = self.get_wrapped_model(group, cuda_first=False, config=config)
+    def _test_calling_state_dict_twice(self, config, rank, group, **model_kwargs):
+        ddp_model = self.get_wrapped_model(group, cuda_first=False, config=config, **model_kwargs)
         autocast = ddp_model.mixed_precision
         self._train_for_several_steps(ddp_model, 1, autocast)
         ddp_model.state_dict()
@@ -516,9 +510,10 @@ class TestNoGrad(DistributedTest):
 
 
 class TransformerWithSharedParams(nn.Module):
-    def __init__(self, *unused_args, d_vocab=32, d_model=16, **unused_kwargs):
+    def __init__(self, *unused_args, d_vocab=23, d_model=16, **unused_kwargs):
         super().__init__()
         torch.manual_seed(0)  # keep everything deterministic
+        assert d_vocab >= 12  # we use torch.arange(12) as input
         self.embed_tokens = nn.Embedding(d_vocab, d_model)
         self.transformer = nn.Transformer(
             d_model=d_model, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=8, dropout=0.1,

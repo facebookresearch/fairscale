@@ -5,6 +5,7 @@
 
 import copy
 import functools
+import math
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import torch
@@ -13,6 +14,7 @@ import torch.distributed as dist
 from torch.distributed import ProcessGroup
 import torch.nn as nn
 from torch.nn import Parameter
+import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.utils.containers import (
@@ -170,14 +172,47 @@ class ShardParamsDataParallel(nn.Module):
 
             p._is_sharded = True
             p._orig_size = p.data.size()
-
-            shard_size = p.data.numel() // self.world_size
+            # shard p.data such that all elements are part of a shard and the last shard is <= all other shards
+            shard_size = math.ceil(p.data.numel() / self.world_size)
             s = self.rank * shard_size
-            e = (self.rank + 1) * shard_size
+            e = min(s + shard_size, p.data.numel())
 
             orig_data = p.data
             p.data = torch.flatten(p.data)[s:e].clone()
             free_storage_(orig_data)
+
+    @property
+    def is_last_rank(self) -> bool:
+        return self.rank == (self.world_size - 1)
+
+    def _calc_num_to_pad(self, numel: int) -> int:
+        num_extra = numel % self.world_size
+        num_to_pad = self.world_size - num_extra if num_extra > 0 else 0
+        return num_to_pad
+
+    @torch.no_grad()
+    def _all_gather_full_param(self, p: nn.Parameter) -> None:
+        """Fill p.full_param with gathered p.data values (using torch.distributed.all_gather).
+        If the last shard is smaller than the other shards, we pad it with zeroes.
+        """
+        full_param_chunks = list(torch.flatten(p._full_param).chunk(self.world_size))
+        # We overwrite the last chunk with zeroes if it is smaller than the other entries.
+        num_to_pad = self._calc_num_to_pad(p._orig_size.numel())
+        pointer_to_last_chunk = full_param_chunks[-1]
+        assert pointer_to_last_chunk.numel() + num_to_pad == full_param_chunks[0].numel()
+
+        param_shard = p.data  # we will gather this from each worker
+        if num_to_pad > 0:  # add padding to param_shard and full_param_chunks[-1]
+            full_param_chunks[-1] = torch.zeros_like(full_param_chunks[0])  # no longer shares memory with full_param
+            if self.is_last_rank:
+                param_shard = F.pad(p.data, [0, num_to_pad])
+        dist.all_gather(full_param_chunks, param_shard, group=self.process_group)
+        # ^ updates p._full_param
+
+        # remove padding from full_param_chunks[-1] and p.data
+        if num_to_pad > 0:  # copy shard associated with the padded chunk to full_param
+            pointer_to_last_chunk.copy_(full_param_chunks[-1][:-num_to_pad])
+            # ^ updates p._full_param
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -522,7 +557,7 @@ class ShardParamsDataParallel(nn.Module):
             param.grad.data.div_(self.world_size)
 
             # Reduce-scatter grad.
-            param.grad.data = self._reduce_scatter(torch.flatten(param.grad.data))
+            param.grad.data = self._reduce_scatter(param.grad.data)
 
             # Cast grad to param's dtype (typically FP32). Note: we do this
             # before the move_grads_to_cpu step so that this entire hook remains
@@ -561,10 +596,8 @@ class ShardParamsDataParallel(nn.Module):
 
             for p in self.params:
                 if p._full_param.storage().size() != p._orig_size.numel():
-                    # All-gather parameters
                     alloc_storage_(p._full_param, size=p._orig_size)
-                    output_list = list(torch.flatten(p._full_param).chunk(self.world_size))
-                    dist.all_gather(output_list, p.data, group=self.process_group)
+                    self._all_gather_full_param(p)  # Fill p._full_param with (p.data for each shard in self.world_size)
 
                 p.data = p._full_param
                 p.grad = None
@@ -638,10 +671,17 @@ class ShardParamsDataParallel(nn.Module):
     def _reduce_scatter(self, tensor: torch.Tensor) -> torch.Tensor:
         """Reduce-scatter a Tensor (gradient from the local worker) and return
         the result (a single shard of the summed gradient across workers)."""
+        tensor = torch.flatten(tensor)
+        num_to_pad = self._calc_num_to_pad(tensor.numel())
+        if num_to_pad > 0:  # pad the gradient to be divisible by world_size
+            tensor = F.pad(tensor, [0, num_to_pad])
         assert tensor.numel() % self.world_size == 0
         tensor = tensor.view(self.world_size, -1)
-        output = torch.zeros_like(tensor[0])
-        dist.reduce_scatter(output, list(tensor.unbind(0)), group=self.process_group)
+        output = torch.zeros_like(tensor[0])  # filled with gradient summed across workers
+        to_scatter = list(tensor.unbind(0))  # world size tensors of shape (shard_size,)
+        dist.reduce_scatter(output, to_scatter, group=self.process_group)
+        if self.is_last_rank and num_to_pad > 0:
+            output = output[:-num_to_pad]
         return output
 
 
