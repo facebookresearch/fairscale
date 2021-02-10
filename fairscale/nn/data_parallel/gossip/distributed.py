@@ -52,7 +52,7 @@ class SlowmoBaseAlgorithm(Enum):
     NONE = 3
 
 
-class GossipDataParallel(Module):
+class SlowMoDistributedDataParallel(Module):
     """Wraps an arbitrary :class:`nn.Module <torch.nn.Module>` module and allows
     it to be run on multiple GPUs (distributed) in a data parallel setting.
 
@@ -62,55 +62,10 @@ class GossipDataParallel(Module):
     each such replica handles a portion of the input. After the optimizer update,
     it synchronizes the parameters on the different nodes using SlowMo
     (https://arxiv.org/abs/1910.00643).
-    The batch size should be larger than the number of GPUs used locally.
-    Creation of this class requires that ``torch.distributed`` to be already
-    initialized, by calling :func:`torch.distributed.init_process_group`.
 
-    To use ``DistributedDataParallel`` on a host with N GPUs, you should spawn
-    up ``N`` processes, ensuring that each process exclusively works on a single
-    GPU from 0 to N-1. This can be done by either setting
-    ``CUDA_VISIBLE_DEVICES`` for every process or by calling:
-        >>> torch.cuda.set_device(i)
-    where i is from 0 to N-1. In each process, you should refer the following
-    to construct this module:
-        >>> torch.distributed.init_process_group(
-        >>>     backend='nccl', world_size=N, init_method='...'
-        >>> )
-        >>> model = fairscale.data_parallel.GossipDataParallel(model, nprocs_per_node)
-    In order to spawn up multiple processes per node, you can use either
-    ``torch.distributed.launch`` or ``torch.multiprocessing.spawn``.
-    .. note ::
-        Please refer to `PyTorch Distributed Overview <https://pytorch.org/tutorials/beginner/dist_overview.html>`__
-        for a brief introduction to all features related to distributed training.
-    .. note:: ``nccl`` backend is currently the fastest and highly recommended
-        backend when using GPUs. This applies to both single-node and
-        multi-node distributed training.
-    .. note:: This module also supports mixed-precision distributed training.
-        This means that your model can have different types of parameters such
-        as mixed types of ``fp16`` and ``fp32``, the gradient reduction on these
-        mixed types of parameters will just work fine.
-    .. note::You can just treat a GossipDataParallel wrapped model and an
-        ordinary model on a single GPU as the
-        same (E.g. using the same learning rate for equivalent batch size).
-    .. warning::
-        Constructor, forward method, backward method and the perform_slowmo
-        method are distributed synchronization points. Take that into account
-        in case different processes might be executing different code.
-    .. warning::
-        This module assumes all parameters are registered in the model by the
-        time it is created. No parameters should be added nor removed later.
-        Same applies to buffers.
-    .. warning::
-        This module allows parameters with non-rowmajor-contiguous strides.
-        For example, your model may contain some parameters whose
-        :class:`torch.memory_format` is ``torch.contiguous_format``
-        and others whose format is ``torch.channels_last``.  However,
-        corresponding parameters in different processes must have the
-        same strides.
-    .. warning::
-        Forward and backward hooks defined on :attr:`module` and its submodules
-        won't be invoked anymore, unless the hooks are initialized in the
-        :meth:`forward` method.
+    Please refer to the documentation of ``torch.nn.parallel.DistributedDataParallel``
+    for other useful tips for using this container.
+
     Args:
         module (Module): module to be parallelized
         nprocs_per_node (int): Number of GPUs per node. This needs to be specified for
@@ -126,10 +81,10 @@ class GossipDataParallel(Module):
                               this module. The base algorithm, combined with SlowMo, results in
                               significant speedups without accuracy loss.
                               Either Stochastic Gradient Push (https://arxiv.org/abs/1811.10792)
-                              or LocalSGD () can be used here (default:
-                              SlowmoBaseAlgorithm.LOCALSGD)
+                              or LocalSGD (https://arxiv.org/abs/1808.07217) can be used here
+                              (default: SlowmoBaseAlgorithm.LOCALSGD)
 
-        SlowMo parameters
+        # SlowMo Args
 
         slowmo_momentum (float): This specifies the value of slowmo momentum to be used (read
                         https://arxiv.org/abs/1910.00643 for more details). This parameter
@@ -139,42 +94,44 @@ class GossipDataParallel(Module):
                         transfomers on the WMT 16 En-De dataset, we have found the optimal
                         values to be 0 for less than 4 nodes, 0.2 for 4 nodes, 0.5 for 8
                         nodes and 0.6 for 16 nodes (default: 0.5)
-        slowmo_frequency (int): This specifies how often slow momentum is to be performed.
-                         This does not need to be tuned generally (default: 48)
+        slowmo_frequency (int): This specifies how often (number of iterations) slow momentum
+                         is to be performed (default: 48)
         slowmo_lr (float): This specifies the value of slowmo learning rate to be used (read
-                  https://arxiv.org/abs/1910.00643 for more details). This does not need to
-                  be tuned generally (default: 1.0)
+                  https://arxiv.org/abs/1910.00643 for more details). We do not recommend
+                  changing this (default: 1.0)
         slowmo_num_shards (int): The number of shards between which slow momentum parameters
-                          are distributed (default: 32),
+                          are distributed. This is only used when memory_efficient is set to
+                          True (default: 32),
 
-        LocalSGD parameters
+        # LocalSGD Args
 
         localsgd_frequency (int): LocalSGD typically averages the parameters once every few
                            iterations. This parameter specifices the frequency of averaging
                            (default: 3)
 
-        process_group: The process group to be used for distributed data
-                       all-reduction. If ``None``, the default process group, which
-                       is created by :func:`torch.distributed.init_process_group`,
-                       will be used. (default: ``None``)
+        # SGP Args
 
-        SGP parameters
+        graph (Optional[GraphManager): Graph to be used for gossip communication. This is used
+              to specify the interaction graph between the different nodes (default: None)
+        mixing (Optional[MixingManager]): Mixing manager to be used for gossip
+               communication. This is used to specify weights given to outgoing and incoming
+               messages (default: None)
+        push_sum (bool): Whether to use PushSum or PushPull gossip (default: True)
+        overlap (bool): Whether to use the overlap form of SGP (default: False)
+        synch_freq (int): How often (number of iterations) to synchronize for overlap SGP
+                   (default: 0)
+        use_streams (bool): Whether to use CUDA streams to speed up SGP overlap (default: True)
+        slowmo_sgp_average_params (bool): Whether to complete average the parameters when slowmo
+                                  is done instead of a partial averaging that happens every
+                                  iteration (default: False)
 
-        graph: Optional[GraphManager] = None,
-        mixing: Optional[MixingManager] = None,
-        push_sum: bool = True,
-        overlap: bool = False,
-        synch_freq: int = 0,
-        use_streams: bool = True,
-        slowmo_sgp_average_params: bool = False,
-
-        Debugging
+        # Debugging Args
 
         verbose (bool): prints various logs which are useful for debugging (default: False)
         profile_mode (bool): prints the time taken by different parts of the code, which can help
                      in finding bottlenecks (default: False)
 
-        Only for advanced users
+        # Args for advanced users (these are automatically handled otherwise)
 
         rank (Optional[int]): Rank of the current process in the process group (default: None)
         world_size (Optional[int]): Size of the process group (default: None)
@@ -188,34 +145,29 @@ class GossipDataParallel(Module):
                      placed before communication (default: None)
     Example:
         >>> torch.distributed.init_process_group(backend='nccl', world_size=4, init_method='...')
-        >>> net = fairscale.data_parallel.GossipDataParallel(model, pg, nprocs_per_node)
+        >>> net = fairscale.data_parallel.SlowMoDistributedDataParallel(model, nprocs_per_node=8)
         >>> loss = criterion(net(inputs), targets)
         >>> loss.backward()
         >>> optimizer.step()
         >>> net.perform_slowmo(optimizer)
-        If fp16 training is being done, the last line changes to
-        >>> net.perform_slowmo(optimizer, fp32_params)
     """
 
     def __init__(
         self,
         module: torch.nn.Module,
-        nprocs_per_node: int = 1,
+        nprocs_per_node: int,
         broadcast_buffers: bool = True,
-        #
-        # SlowMo parameters
+        slowmo_base_algorithm: SlowmoBaseAlgorithm = SlowmoBaseAlgorithm.LOCALSGD,
+        # SlowMo Args
         slowmo_momentum: float = 0.5,
         slowmo_memory_efficient: bool = False,  # TODO: add documentation for this parameter
         # Most probably don't need to be changed
         slowmo_frequency: int = 48,
         slowmo_lr: float = 1.0,
         slowmo_num_shards: int = 32,
-        #
-        # SlowMo algorithm parameters
-        slowmo_base_algorithm: SlowmoBaseAlgorithm = SlowmoBaseAlgorithm.LOCALSGD,
-        # LocalSGD
+        # LocalSGD Args
         localsgd_frequency: int = 3,
-        # SGP
+        # SGP Args
         graph: Optional[GraphManager] = None,
         mixing: Optional[MixingManager] = None,
         push_sum: bool = True,
@@ -223,12 +175,10 @@ class GossipDataParallel(Module):
         synch_freq: int = 0,
         use_streams: bool = True,
         slowmo_sgp_average_params: bool = False,
-        #
-        # For debugging
+        # Debugging Args
         verbose: bool = False,
         profile_mode: bool = False,
-        #
-        # Advanced options
+        # Args for advanced users (these are automatically handled otherwise)
         rank: Optional[int] = None,
         world_size: Optional[int] = None,
         global_group: Optional[torch.distributed.ProcessGroup] = None,
@@ -236,7 +186,7 @@ class GossipDataParallel(Module):
         local_node_group: Optional[torch.distributed.ProcessGroup] = None,
         comm_device: Optional[torch.device] = None,
     ) -> None:
-        super(GossipDataParallel, self).__init__()
+        super(SlowMoDistributedDataParallel, self).__init__()
 
         # NCCL_BLOCKING_WAIT causes issues with using multiple process groups
         assert os.environ.get("NCCL_BLOCKING_WAIT", "0") == "0"
@@ -286,7 +236,7 @@ class GossipDataParallel(Module):
 
         # slowmo being set to False is equivalent to slowmo_lr being set to 1 and slowmo_momentum being set to 0
         # This condition is ensuring the values are safe to use even when slowmo is disabled
-        self.slowmo = False if slowmo_lr == 1 and slowmo_momentum == 0 else True
+        self.slowmo = slowmo_lr != 1 or slowmo_momentum != 0
 
         self.slowmo_lr = slowmo_lr if self.slowmo else 1
         self.slowmo_momentum = slowmo_momentum if self.slowmo else 0
@@ -334,7 +284,7 @@ class GossipDataParallel(Module):
         # register ps/grad-reduction hooks
         self.__register_hooks()
 
-        self.logger.debug("Initialization of GossipDataParallel complete")
+        self.logger.debug("Initialization of SlowMoDistributedDataParallel complete")
 
     def initialize_logger(self, verbose: bool, process_rank: int) -> None:
         """ Initializes the logger """
@@ -458,7 +408,7 @@ class GossipDataParallel(Module):
 
         if self.process_rank % self.nprocs_per_node == 0:
             self.gossip_thread = threading.Thread(
-                target=GossipDataParallel.sgp_gossip_target,
+                target=SlowMoDistributedDataParallel.sgp_gossip_target,
                 args=(
                     self.dist_config,
                     self.gossip_flag,
@@ -952,7 +902,7 @@ class GossipDataParallel(Module):
         return hook
 
     def state_dict(self) -> Dict[str, Union[torch.Tensor, bool]]:  # type: ignore
-        state_dict = super(GossipDataParallel, self).state_dict()
+        state_dict = super(SlowMoDistributedDataParallel, self).state_dict()
         if self.sgp:
             state_dict["ps_weight"] = self.ps_weight.cpu()
             state_dict["is_sgp_ps_numerator"] = self.is_sgp_ps_numerator  # type: ignore
@@ -965,9 +915,9 @@ class GossipDataParallel(Module):
                 device=cast(torch.device, self.dist_config["comm_device"])
             )
             self.is_sgp_ps_numerator = cast(bool, state_dict.pop("is_sgp_ps_numerator"))
-            super(GossipDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
+            super(SlowMoDistributedDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
         else:
-            super(GossipDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
+            super(SlowMoDistributedDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
 
     def sgp_ps_numerator(self) -> None:
         """ Convert model params to ps-numerator """
@@ -989,14 +939,14 @@ class GossipDataParallel(Module):
                         p.div_(cast(torch.Tensor, ps_weight.type(p.dtype)))  # type: ignore
             self.is_sgp_ps_numerator = False
 
-    def train(self, mode: bool = True) -> "GossipDataParallel":
-        super(GossipDataParallel, self).train(mode)
+    def train(self, mode: bool = True) -> "SlowMoDistributedDataParallel":
+        super(SlowMoDistributedDataParallel, self).train(mode)
         if self.sgp:
             self.gossip_enable = True
         return self
 
-    def eval(self) -> "GossipDataParallel":
-        super(GossipDataParallel, self).eval()
+    def eval(self) -> "SlowMoDistributedDataParallel":
+        super(SlowMoDistributedDataParallel, self).eval()
         if self.sgp:
             self.gossip_enable = False
         if self.sgp:
@@ -1174,7 +1124,7 @@ class GossipDataParallel(Module):
             try:
                 with torch.cuda.stream(gossip_stream):
                     for dtype in gossip_params_by_dtype:
-                        (ps_weight, ps_factor,) = GossipDataParallel.sgp_gossip_into_receive_buffer(
+                        (ps_weight, ps_factor,) = SlowMoDistributedDataParallel.sgp_gossip_into_receive_buffer(
                             gossip_params_by_dtype[dtype],
                             gossipers[dtype],
                             gossip_device_buffer_by_dtype[dtype],

@@ -111,13 +111,13 @@ def find_memory_used_by_model(model_class: Type[nn.Module], device: torch.device
 
 def _prepare_single_device_module(
     rank, world_size, tempfile, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], global_batch_size: int,
-) -> Tuple[nn.Module, gossip.GossipDataParallel, torch.Tensor, torch.Tensor]:
+) -> Tuple[nn.Module, gossip.SlowMoDistributedDataParallel, torch.Tensor, torch.Tensor]:
     if not torch.distributed.is_initialized():
         torch.distributed.init_process_group(
             "nccl", init_method=f"file://{tempfile}", rank=rank, world_size=world_size,
         )
     model = Net()
-    slowmo_model = gossip.GossipDataParallel(
+    slowmo_model = gossip.SlowMoDistributedDataParallel(
         copy.deepcopy(model).to(devices[0]),
         comm_device=devices[0],
         rank=rank,
@@ -137,7 +137,7 @@ def run_test_slowmo_with_slowmo_freq_1(
     rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0
 ) -> None:
     """
-    Note: we pass down `device_ids` all the way to GossipDataParallel
+    Note: we pass down `device_ids` all the way to SlowMoDistributedDataParallel
     as part of the test. Below you find tests that either use a list of
     integers, a list of `torch.Device` instances, or an empty list.
     The `devices` argument is used to control placement of the model and
@@ -252,7 +252,7 @@ def run_test_slowmo_with_slowmo_freq_ge_2(
     rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], *_args: Any
 ) -> None:
     """
-    Note: we pass down `device_ids` all the way to GossipDataParallel
+    Note: we pass down `device_ids` all the way to SlowMoDistributedDataParallel
     as part of the test. Below you find tests that either use a list of
     integers, a list of `torch.Device` instances, or an empty list.
     The `devices` argument is used to control placement of the model and
@@ -337,7 +337,7 @@ def run_test_memory_usage_localsgd_with_slowmo(
             "nccl", init_method=f"file://{tempfile}", rank=rank, world_size=world_size,
         )
     if use_gossip_data_parallel:
-        model: nn.Module = gossip.GossipDataParallel(
+        model: nn.Module = gossip.SlowMoDistributedDataParallel(
             LargeNet().to(devices[0]), comm_device=devices[0], rank=rank, world_size=world_size, **slowmo_init_dict,
         )
     else:
@@ -389,7 +389,7 @@ _SLOWMO_TEST_SETTINGS = [
     {
         "slowmo_settings": {
             "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-            "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in GossipDataParallel in the one node case
+            "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in SlowMoDistributedDataParallel in the one node case
             "nprocs_per_node": 2,
             "slowmo_momentum": 0.0,
         },
