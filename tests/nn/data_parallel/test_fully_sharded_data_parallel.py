@@ -15,7 +15,7 @@ from parameterized import parameterized
 import torch
 from torch import nn
 
-from fairscale.nn.data_parallel import ShardParamsDataParallel
+from fairscale.nn.data_parallel import FullyShardedDataParallel
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,
@@ -61,11 +61,11 @@ class DistributedTest(unittest.TestCase):
         return loss.detach()
 
     @staticmethod
-    def get_wrapped_model(group, cuda_first=False, config={}, **model_kwargs) -> ShardParamsDataParallel:
+    def get_wrapped_model(group, cuda_first=False, config={}, **model_kwargs) -> FullyShardedDataParallel:
         if cuda_first:
-            model = ShardParamsDataParallel(TransformerWithSharedParams(**model_kwargs).cuda(), group, **config)
+            model = FullyShardedDataParallel(TransformerWithSharedParams(**model_kwargs).cuda(), group, **config)
         else:
-            model = ShardParamsDataParallel(TransformerWithSharedParams(**model_kwargs), group, **config).cuda()
+            model = FullyShardedDataParallel(TransformerWithSharedParams(**model_kwargs), group, **config).cuda()
         return model
 
 
@@ -139,7 +139,7 @@ class TestMixedPrecision(DistributedTest):
     @staticmethod
     def _test_dtypes(cfg: Dict, autocast, in_dtype, p_dtype, loss_dtype, reduce_dtype, rank, group):
         # Patch _reduce_scatter op to check the dtype of the reduction
-        orig_reduce_scatter = ShardParamsDataParallel._reduce_scatter
+        orig_reduce_scatter = FullyShardedDataParallel._reduce_scatter
 
         model = DeviceAndTypeCheckModule(
             expected_input_dtype=in_dtype, expected_param_dtype=p_dtype, expected_loss_dtype=loss_dtype,
@@ -149,8 +149,8 @@ class TestMixedPrecision(DistributedTest):
             model._check("reduce_scatter.dtype", tensor.dtype, expected=reduce_dtype)
             return orig_reduce_scatter(self, tensor)
 
-        with mock.patch.object(ShardParamsDataParallel, "_reduce_scatter", new=_reduce_scatter):
-            model = ShardParamsDataParallel(model, group, **cfg).cuda()
+        with mock.patch.object(FullyShardedDataParallel, "_reduce_scatter", new=_reduce_scatter):
+            model = FullyShardedDataParallel(model, group, **cfg).cuda()
             device = next(model.parameters()).device
             x = torch.rand(2, 5).to(device)
             with torch.cuda.amp.autocast(enabled=autocast):
@@ -169,7 +169,7 @@ def rename_test(testcase_func, param_num, param):
 class TestComparisonToPyTorchDDP(DistributedTest):
     """
     Compare losses and parameter values after several updates when using
-    PyTorch DDP vs. ShardParamsDataParallel.
+    PyTorch DDP vs. FullyShardedDataParallel.
     """
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
@@ -234,8 +234,8 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr)
         ref_state_dict = model.module.state_dict()
 
-        # Confirm we get the same behavior using ShardParamsDataParallel.
-        model = ShardParamsDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
+        # Confirm we get the same behavior using FullyShardedDataParallel.
+        model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
         if use_cuda:
             model = model.cuda()
         else:
@@ -247,7 +247,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             torch.testing.assert_allclose(ref_loss, shard_loss)
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
         except (AssertionError, RuntimeError) as e:
-            raise Exception(f"ShardParamsDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
+            raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
 
 
 class TestParamInit(DistributedTest):
@@ -309,13 +309,13 @@ class TestSerialization(DistributedTest):
     def _get_model(self, group, config):
         with torch.no_grad():  # required for multiprocessing
             model = NestedWrappedModule(group, wrapper_config=config)
-            return ShardParamsDataParallel(model, group, **config)
+            return FullyShardedDataParallel(model, group, **config)
 
     @classmethod
     def _one_step(self, model, group):
         # reset the process group (required after unpickling)
         for m in model.modules():
-            if isinstance(m, ShardParamsDataParallel):
+            if isinstance(m, FullyShardedDataParallel):
                 m.process_group = group
         optim = torch.optim.Adam(model.parameters(), lr=0.0001)
         input = model.module.get_input(torch.device("cuda"))
@@ -412,10 +412,10 @@ class TestSaveLoadStateDict(DistributedTest):
         autocast = ddp_model.mixed_precision
         cls._train_for_several_steps(ddp_model, 2, autocast)
         state_1 = ddp_model.state_dict()
-        # You must make a new ShardParamsDataParallel instance to use module.load_state_dict
+        # You must make a new FullyShardedDataParallel instance to use module.load_state_dict
         unwrapped_model = TransformerWithSharedParams()
         unwrapped_model.load_state_dict(state_1)
-        new_ddp_model = ShardParamsDataParallel(unwrapped_model, group, **config).cuda()
+        new_ddp_model = FullyShardedDataParallel(unwrapped_model, group, **config).cuda()
         cls._train_for_several_steps(new_ddp_model, 2, autocast)
         try:
             ddp_model.load_state_dict(new_ddp_model.state_dict())
@@ -530,7 +530,7 @@ class TestNoSync(DistributedTest):
     @classmethod
     def _test_nested_wrapper(self, rank, group, config):
         model = NestedWrappedModule(group, config)
-        model = ShardParamsDataParallel(model, group, **config).cuda()
+        model = FullyShardedDataParallel(model, group, **config).cuda()
         self._test_no_sync(model, batch_dim=0)
 
     @classmethod
@@ -615,7 +615,7 @@ class NestedWrappedModule(nn.Module):
 
         def _maybe_wrap(layer):
             if wrapper_config is not None:
-                return ShardParamsDataParallel(layer, group, **wrapper_config)
+                return FullyShardedDataParallel(layer, group, **wrapper_config)
             return layer
 
         torch.manual_seed(0)  # keep everything deterministic

@@ -30,13 +30,13 @@ if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
 
 
-class ShardParamsDataParallel(nn.Module):
+class FullyShardedDataParallel(nn.Module):
     """
     A wrapper for sharding Module parameters.
 
     Usage::
 
-        sharded_module = ShardParamsDataParallel(my_module)
+        sharded_module = FullyShardedDataParallel(my_module)
         optim = torch.optim.Adam(sharded_module.parameters(), lr=0.0001)
         x = sharded_module(x, y=3, z=torch.Tensor([1]))
         loss = x.sum()
@@ -48,11 +48,11 @@ class ShardParamsDataParallel(nn.Module):
     reduce memory usage and to improve training speed by distributing the
     unsharding (all-gather) across the forward pass. For example::
 
-        sharded_model = ShardParamsDataParallel(
+        sharded_model = FullyShardedDataParallel(
             nn.Sequential(
                 nn.Linear(5, 100),
-                ShardParamsDataParallel(nn.Linear(100, 100)),
-                ShardParamsDataParallel(nn.Linear(100, 100)),
+                FullyShardedDataParallel(nn.Linear(100, 100)),
+                FullyShardedDataParallel(nn.Linear(100, 100)),
                 nn.Linear(100, 5),
             )
         )
@@ -227,7 +227,7 @@ class ShardParamsDataParallel(nn.Module):
             return getattr(self.module, name)
 
     def __getstate__(self) -> Dict[str, str]:
-        """Serialize the state of the current ShardParamsDataParallel instance.
+        """Serialize the state of the current FullyShardedDataParallel instance.
 
         Some properties are not serializable (e.g., process groups, streams), so
         we remove them and try to reconstruct them in :func:`__setstate__`.
@@ -279,7 +279,7 @@ class ShardParamsDataParallel(nn.Module):
         """
         Returns the local (sharded) state of the module. Parameters are sharded,
         so the resulting state_dict can only be loaded after the Module has been
-        wrapped with ShardParamsDataParallel.
+        wrapped with FullyShardedDataParallel.
         """
         if self.flatten_parameters:
             return self.module.flat_state_dict(*args, **kwargs)  # type: ignore
@@ -311,11 +311,11 @@ class ShardParamsDataParallel(nn.Module):
         variables, which will later be synchronized in the first
         forward-backward pass exiting the context.
         """
-        # This instance may wrap other ShardParamsDataParallel instances and we
+        # This instance may wrap other FullyShardedDataParallel instances and we
         # need to set all of them to accumulate gradients.
         old_flags = []
         for m in self.modules():  # includes self
-            if isinstance(m, ShardParamsDataParallel):
+            if isinstance(m, FullyShardedDataParallel):
                 old_flags.append((m, m.require_backward_grad_sync))
                 m.require_backward_grad_sync = False
         try:
@@ -418,15 +418,15 @@ class ShardParamsDataParallel(nn.Module):
             p._cpu_grad = torch.zeros_like(p.data, device="cpu").pin_memory()
 
     def _set_is_root(self) -> None:
-        """If ``True``, implies that no other :class:`ShardParamsDataParallel`
+        """If ``True``, implies that no other :class:`FullyShardedDataParallel`
         instance wraps this one. Called once by :func:`_lazy_init`."""
         if self._is_root is not None:
             return
-        # No ShardParamsDataParallel instance wraps this, else _is_root would be set to False
+        # No FullyShardedDataParallel instance wraps this, else _is_root would be set to False
         self._is_root = True
         # As the root, we now set all children instances to False.
         for n, m in self.named_modules():
-            if n != "" and isinstance(m, ShardParamsDataParallel):
+            if n != "" and isinstance(m, FullyShardedDataParallel):
                 assert m._is_root is None
                 m._is_root = False
 
@@ -444,12 +444,12 @@ class ShardParamsDataParallel(nn.Module):
         # overlap transfers across the forward pass without synchronizing with
         # the default stream.
         for n, m in self.named_modules():
-            if n != "" and isinstance(m, ShardParamsDataParallel):
+            if n != "" and isinstance(m, FullyShardedDataParallel):
                 m._streams = self._streams
 
     def _wait_for_previous_optim_step(self) -> None:
         """
-        The outer-most :class:`ShardParamsDataParallel` instance (i.e., the root
+        The outer-most :class:`FullyShardedDataParallel` instance (i.e., the root
         instance) needs to synchronize with the default stream to ensure the
         previous optimizer step is done.
         """
@@ -562,7 +562,7 @@ class ShardParamsDataParallel(nn.Module):
         if param.grad is None:
             return
         if param.grad.requires_grad:
-            raise RuntimeError("ShardParamsDataParallel only works with gradients that don't require grad")
+            raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require grad")
 
         # Free full params and switch to FP32 shard after backward.
         self._free_full_params([param])
