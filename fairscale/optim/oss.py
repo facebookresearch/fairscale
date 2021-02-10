@@ -599,4 +599,4 @@ class OSS(Optimizer):
                     else:
                         self.buckets[device][dst_rank] = bucket
                 else:
-                    self.buckets[device].append(torch.zeros(1))
+                    self.buckets[device].append(torch.zeros(1, device=device))
