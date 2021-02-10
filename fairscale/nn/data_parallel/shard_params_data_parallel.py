@@ -3,10 +3,11 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextlib
 import copy
 import functools
 import math
-from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
 from torch.autograd import Variable
@@ -132,6 +133,10 @@ class ShardParamsDataParallel(nn.Module):
             assert getattr(p, "_is_sharded", False), f"found unsharded parameter: {n} ; {p.size()}"
 
         self._reset_lazy_init()
+
+        # Flag to indicate if we require gradient reduction in the backward
+        # pass. This will be False when inside the no_sync context manager.
+        self.require_backward_grad_sync: bool = True
 
     @torch.no_grad()
     def _all_buffers_to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> None:
@@ -297,6 +302,27 @@ class ShardParamsDataParallel(nn.Module):
     ) -> NamedTuple:
         """Load a local (sharded) state_dict."""
         return self.module.load_state_dict(state_dict, strict)
+
+    @contextlib.contextmanager
+    def no_sync(self) -> Generator:
+        """
+        A context manager to disable gradient synchronizations across DDP
+        processes. Within this context, gradients will be accumulated on module
+        variables, which will later be synchronized in the first
+        forward-backward pass exiting the context.
+        """
+        # This instance may wrap other ShardParamsDataParallel instances and we
+        # need to set all of them to accumulate gradients.
+        old_flags = []
+        for m in self.modules():  # includes self
+            if isinstance(m, ShardParamsDataParallel):
+                old_flags.append((m, m.require_backward_grad_sync))
+                m.require_backward_grad_sync = False
+        try:
+            yield
+        finally:
+            for m, old_flag in old_flags:
+                m.require_backward_grad_sync = old_flag
 
     def _reset_lazy_init(self) -> None:
         """Reset instance so :func:`_lazy_init` will run on the next forward."""
@@ -481,11 +507,13 @@ class ShardParamsDataParallel(nn.Module):
             if pre_backward_hook_has_run[0]:
                 return  # only run once
             pre_backward_hook_has_run[0] = True
-
+            # All-gather full parameters.
             if self.reshard_after_forward:
                 self._rebuild_full_params()
             else:
                 self._use_full_params()
+            # Make sure p.grad has the correct size/device (or set it to None).
+            self._prep_grads_for_backward()
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
             t.register_hook(_pre_backward_hook)
@@ -545,6 +573,9 @@ class ShardParamsDataParallel(nn.Module):
             # pre_backward_hook.
             self._free_fp16_param_shard([param])
 
+        if not self.require_backward_grad_sync:
+            return
+
         # Wait for all work in the current stream to finish, then start the
         # reductions in post_backward stream.
         self._streams["post_backward"].wait_stream(torch.cuda.current_stream())
@@ -580,9 +611,9 @@ class ShardParamsDataParallel(nn.Module):
 
     @torch.no_grad()
     def _wait_for_post_backward(self) -> None:
-        """Wait for all post-backward work to finish."""
-        if self._is_root:
-            torch.cuda.current_stream().wait_stream(self._streams["post_backward"])
+        """Wait for post-backward work to finish. Only called on root instance."""
+        assert self._is_root
+        torch.cuda.current_stream().wait_stream(self._streams["post_backward"])
         if self.move_grads_to_cpu:
             # Wait for the non-blocking GPU -> CPU grad transfers to finish.
             torch.cuda.current_stream().synchronize()
@@ -600,7 +631,6 @@ class ShardParamsDataParallel(nn.Module):
                     self._all_gather_full_param(p)  # Fill p._full_param with (p.data for each shard in self.world_size)
 
                 p.data = p._full_param
-                p.grad = None
 
                 if self.mixed_precision:
                     self._free_fp16_param_shard([p])
@@ -611,6 +641,13 @@ class ShardParamsDataParallel(nn.Module):
         for p in self.params:
             assert p._full_param.storage().size() != 0
             p.data = p._full_param
+
+    @torch.no_grad()
+    def _prep_grads_for_backward(self) -> None:
+        """Make sure p.grad has the correct size/device, otherwise set it to None."""
+        for p in self.params:
+            if p.grad is not None and (p.grad.size() != p._orig_size or p.grad.device != p.data.device):
+                p.grad = None
 
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
