@@ -423,8 +423,14 @@ class GossipDataParallel(Module):
     def skip_averaging_memory_efficient_slowmo(self) -> bool:
         return self.should_perform_slowmo() and self.slowmo_memory_efficient
 
-    def should_perform_sgp(self) -> bool:
+    def should_perform_sgp_common(self) -> bool:
         return self.sgp and not self.overlap and not self.skip_averaging_memory_efficient_slowmo()
+
+    def should_perform_sgp(self) -> bool:
+        return self.should_perform_sgp_common() and not self.overlap
+
+    def should_perform_sgp_overlap(self) -> bool:
+        return self.should_perform_sgp_common() and self.overlap
 
     def should_allreduce_params(self) -> bool:
         # We do not all-reduce parameters with local SGD if a slow momentum step is
@@ -437,7 +443,7 @@ class GossipDataParallel(Module):
 
     def maybe_pre_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
         ef_rec = self.create_event_recorder("Error feedback")
-        if self.sgp or self.should_allreduce_params():
+        if self.should_perform_sgp() or self.should_allreduce_params():
             with torch.no_grad():
                 for p_fp16, p_fp32 in fp16_fp32_list:
                     if self.should_allreduce_params():
@@ -460,7 +466,7 @@ class GossipDataParallel(Module):
 
     def maybe_post_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
         ef_unroll_rec = self.create_event_recorder("Sync and error feedback unroll rec")
-        if self.sgp or self.should_allreduce_params():
+        if self.should_perform_sgp() or self.should_allreduce_params():
             # Error Feedback Reversal
             with torch.no_grad():
                 for p, p_fp32 in fp16_fp32_list:
@@ -500,7 +506,7 @@ class GossipDataParallel(Module):
         localsgd_rec.stop()
 
     def maybe_sync_locally(self) -> None:
-        if self.sgp or self.should_allreduce_params():
+        if self.should_perform_sgp() or self.should_allreduce_params():
             self._sync_params()
             torch.cuda.synchronize()
 
@@ -513,17 +519,17 @@ class GossipDataParallel(Module):
 
     def maybe_copy_back_fp32_parameters(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
         ef_copy_rec = self.create_event_recorder("Error feedback copy back")
-        if (self.sgp or self.should_allreduce_params() or self.should_perform_slowmo()) and fp16_fp32_list:
+        if (self.should_perform_sgp() or self.should_allreduce_params() or self.should_perform_slowmo()) and fp16_fp32_list:
             with torch.no_grad():
                 for idx, (p_fp16, p_fp32) in enumerate(fp16_fp32_list):
                     p_fp16.copy_(p_fp32)
         ef_copy_rec.stop()
         self.logger.debug("Error feedback copy-back completed")
 
-    def sgp_overlap_pre_communicate_error_feedback(
+    def maybe_sgp_overlap_pre_communicate_error_feedback(
         self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]
     ) -> None:
-        if self.sgp and self.overlap and fp16_fp32_list:
+        if self.should_perform_sgp_overlap() and fp16_fp32_list:
             # Initialize error feedback for SGP-overlap
             if self.ef1 is None:
                 self.ef1 = []
@@ -576,8 +582,7 @@ class GossipDataParallel(Module):
         self.maybe_post_communicate_error_feedback(fp16_fp32_list)
         self.maybe_perform_slowmo(optimizer)
         self.maybe_copy_back_fp32_parameters(fp16_fp32_list)
-        if self.sgp and self.overlap:
-            self.sgp_overlap_pre_communicate_error_feedback(fp16_fp32_list)
+        self.maybe_sgp_overlap_pre_communicate_error_feedback(fp16_fp32_list)
 
         self.num_updates += 1
 
