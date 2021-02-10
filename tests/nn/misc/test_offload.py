@@ -111,6 +111,8 @@ def test_correctness():
 
 
 def test_correctness_fp16():
+    if not hasattr(torch.cuda.amp, "autocast"):
+        return
     device, offload_device = _init()
     model = _get_model()
     use_fp16 = True

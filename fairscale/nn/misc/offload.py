@@ -10,7 +10,7 @@ A wrapper which streams the model in and out of the GPU automatically during FW 
 
 from builtins import isinstance
 import logging
-from typing import Any, List
+from typing import Any, List, Tuple
 
 import torch
 from torch import nn
@@ -127,7 +127,7 @@ class ShardSyncLayer(torch.autograd.Function):
 
     @staticmethod
     @custom_fwd
-    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, model_instance: Any) -> Any:  # type: ignore
+    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, model_instance: Any) -> Any:
         drop_index = index
         load_index = index + 1
         max_slices = len(model_slices)
@@ -142,7 +142,6 @@ class ShardSyncLayer(torch.autograd.Function):
             logging.info(f"Loading shard{load_index}")
             model_slices[load_index].forward_load()
 
-        ctx.inputs = inputs
         ctx.index = index
         ctx.model_slices = model_slices
         ctx.model_instance = model_instance
@@ -242,7 +241,7 @@ class OffloadModel(nn.Module):
         self.model = torch.nn.Sequential(*self.model_slices)
 
         # intermediate actiavtions
-        self._activations = []
+        self._activations: List[Tuple] = []
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
         shardSync = ShardSyncLayer.apply
