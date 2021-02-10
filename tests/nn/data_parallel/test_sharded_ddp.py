@@ -141,10 +141,11 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
 
         # The API should be the exact same in between the sharded and non-sharded variants, generic closure
         def closure(model, scaler, input_tensor, should_accumulate):
-            # accumulate_steps = 3 if should_accumulate else 1
+            accumulate_steps = 3 if should_accumulate else 1
 
             model.zero_grad()
-            with model.no_sync() if should_accumulate else suppress():
+
+            def step():
                 if scaler is not None:
                     with torch.cuda.amp.autocast():
                         loss = model(input_tensor).abs().sum()
@@ -152,7 +153,12 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                 else:
                     loss = model(input_tensor).abs().sum()
                     loss.backward()
-            return loss
+
+            with model.no_sync() if should_accumulate else suppress():
+                for _ in range(accumulate_steps - 1):
+                    step()
+
+            step()
 
         # Any model works. Add one different buffer per rank
         model = Sequential(Linear(INPUTS, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
@@ -212,14 +218,14 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                 check_same_model_params(sharded_ddp_model, ddp_model, f"Rank: {rank} - Trainability refresh {i} broke")
 
     # Test all combinations: AMP, Accumulate, Change train graph
-    # TODO @lefaudeux (another PR): Add the checkpointing/accumulation tests
-    check_parity(amp=False, accumulate=False, change_train_graph=False)
-    check_parity(amp=False, accumulate=False, change_train_graph=True)
+    for accumulate in [False, True]:
+        for change_train_graph in [False, True]:
+            print(f"Checking configuration: accumulate {accumulate} - change train graph {change_train_graph}")
+            check_parity(amp=False, accumulate=accumulate, change_train_graph=change_train_graph)
 
-    # Catch a version of pytorch which would not support AMP
-    if hasattr(torch.cuda.amp, "autocast"):
-        check_parity(amp=True, accumulate=False, change_train_graph=False)
-        check_parity(amp=True, accumulate=False, change_train_graph=True)
+            # Catch a version of pytorch which would not support AMP
+            if hasattr(torch.cuda.amp, "autocast"):
+                check_parity(amp=True, accumulate=accumulate, change_train_graph=change_train_graph)
 
     dist.destroy_process_group()
 
