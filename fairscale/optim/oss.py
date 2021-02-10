@@ -567,8 +567,6 @@ class OSS(Optimizer):
         `refresh_trainability` is called.
         """
 
-        # FIXME: Catch a parameter which is not trainable anymore and is in a lost bucket
-
         for device, per_rank_params in self.per_device_params.items():
             # Only wipe the existing buckets if there are none
             # (could be that this is called twice, when trainability changes)
