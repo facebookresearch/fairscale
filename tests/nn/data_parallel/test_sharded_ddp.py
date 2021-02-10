@@ -169,13 +169,13 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         # properly reassigned when/if this changes
         next(model.parameters()).requires_grad = False
 
-        sharded_optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+        sharded_optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-5, momentum=0.99)
         sharded_ddp_model = ShardedDataParallel(
             module=model, sharded_optimizer=sharded_optimizer, broadcast_buffers=True
         )
 
         ddp_model_single = copy.deepcopy(model)
-        ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-3, momentum=0.99)
+        ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-5, momentum=0.99)
         ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True, find_unused_parameters=True)
 
         ddp_scaler = TorchGradScaler() if amp else None
@@ -213,19 +213,24 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
 
             # Flip the trainability of the first parameter back and forth
             if i == 0 and change_train_graph:
-                next(model.parameters()).requires_grad = not next(model.parameters()).requires_grad
+                next(sharded_ddp_model.parameters()).requires_grad = not next(
+                    sharded_ddp_model.parameters()
+                ).requires_grad
                 next(ddp_model.parameters()).requires_grad = not next(ddp_model.parameters()).requires_grad
                 check_same_model_params(sharded_ddp_model, ddp_model, f"Rank: {rank} - Trainability refresh {i} broke")
 
     # Test all combinations: AMP, Accumulate, Change train graph
+    amp_tests = [False]
+    if hasattr(torch.cuda.amp, "autocast"):
+        amp_tests.append(True)
+
     for accumulate in [False, True]:
         for change_train_graph in [False, True]:
-            print(f"Checking configuration: accumulate {accumulate} - change train graph {change_train_graph}")
-            check_parity(amp=False, accumulate=accumulate, change_train_graph=change_train_graph)
-
-            # Catch a version of pytorch which would not support AMP
-            if hasattr(torch.cuda.amp, "autocast"):
-                check_parity(amp=True, accumulate=accumulate, change_train_graph=change_train_graph)
+            for amp in amp_tests:
+                print(
+                    f"Checking configuration: accumulate {accumulate} - change train graph {change_train_graph} - amp {amp}"
+                )
+                check_parity(amp=amp, accumulate=accumulate, change_train_graph=change_train_graph)
 
     dist.destroy_process_group()
 
@@ -426,6 +431,8 @@ def run_test_ddp_sync_batch_norm(rank, world_size, backend, device, temp_file_na
 
     model = Sequential(Linear(2, 3), torch.nn.BatchNorm1d(3), Linear(3, 3)).to(device)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    model.to(device)  # in pytorch 1.5 syncBN switches to the default device/cpu
+
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
     ddp_model = ShardedDataParallel(model, optimizer)
 

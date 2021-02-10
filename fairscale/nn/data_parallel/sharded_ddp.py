@@ -190,7 +190,7 @@ class ShardedDataParallel(nn.Module):
         if self.auto_refresh_trainable:
             trainable_mask = list(map(_trainable, self._all_params))
             if trainable_mask != self._reference_trainable_mask:
-                logging.info("ShardedDDP detected that the trainable params changed, updating the partitioning")
+                logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")
 
                 self.refresh_trainable()
                 self._reference_trainable_mask = trainable_mask
@@ -326,21 +326,20 @@ class ShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _clear_counters(self) -> None:
         """Reset all the grad reduce and call counters"""
-        if not self.should_accumulate_grads:
+        self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
+        self._reduced_grads = 0
 
-            self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
-            self._reduced_grads = 0
+        # Do not reset the buckets
+        if self.use_buckets:
+            assert self._bucket_list is not None
 
-            if self.use_buckets:
-                assert self._bucket_list is not None
+            for bucket in self._bucket_list:
+                assert self.should_accumulate_grads or bucket.sent, (
+                    "A bucket failed to be sent, probably unused parameters."
+                    + "Either remove the unused parameter or de-activate ShardedDDP buckets -set reduce_buffer_size to 0-"
+                )
 
-                for bucket in self._bucket_list:
-                    assert bucket.sent, (
-                        "A bucket failed to be sent, probably unused parameters."
-                        + "Either remove the unused parameter or de-activate ShardedDDP buckets -set reduce_buffer_size to 0-"
-                    )
-
-                    bucket.reset()
+                bucket.reset()
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
