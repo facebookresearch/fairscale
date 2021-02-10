@@ -140,7 +140,6 @@ class ShardSyncLayer(torch.autograd.Function):
             logging.info(f"Loading shard{load_index}")
             model_slices[load_index].forward_load()
 
-        ctx.inputs = inputs
         ctx.index = index
         ctx.model_slices = model_slices
         ctx.model_instance = model_instance
