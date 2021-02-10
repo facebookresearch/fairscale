@@ -65,6 +65,7 @@ class GossipDataParallel(Module):
         slowmo: bool = True,
         # Might need to be tuned depending on the use case
         slowmo_momentum: float = 0.5,
+        slowmo_memory_efficient: bool = False,  # TODO: add documentation for this parameter
         # Most probably don't need to be changed
         slowmo_frequency: int = 48,
         slowmo_lr: float = 1.0,
@@ -169,8 +170,9 @@ class GossipDataParallel(Module):
         if self.slowmo and not self.localsgd and not self.sgp:
             self.logger.warning("SlowMo is being used without LocalSGD and SGP")
 
-        self.slowmo_num_shards = min(dist.get_world_size(), slowmo_num_shards)
-        self.is_computing_slowmo = self.process_rank < self.slowmo_num_shards
+        self.slowmo_memory_efficient = slowmo_memory_efficient
+        self.slowmo_num_shards = min(dist.get_world_size(), slowmo_num_shards) if self.slowmo_memory_efficient else 1
+        self.is_computing_slowmo = self.process_rank < self.slowmo_num_shards if self.slowmo_memory_efficient else True
 
         self.nprocs_per_node_device = torch.tensor([self.nprocs_per_node], device=comm_device, dtype=first_param_dtype)
 
@@ -418,13 +420,19 @@ class GossipDataParallel(Module):
     def should_perform_localsgd(self) -> bool:
         return self.localsgd and (self.num_updates + 1) % self.localsgd_frequency == 0
 
+    def skip_averaging_memory_efficient_slowmo(self) -> bool:
+        return self.should_perform_slowmo() and self.slowmo_memory_efficient
+
+    def should_perform_sgp(self) -> bool:
+        return self.sgp and not self.overlap and not self.skip_averaging_memory_efficient_slowmo()
+
     def should_allreduce_params(self) -> bool:
         # We do not all-reduce parameters with local SGD if a slow momentum step is
         # performed, since this step contains a reduce operation already. Note that this
         # also means there is no error feedback correction in that case: it is not needed
         # since communication within the slow momentum step happens in fp32.
         return (self.sgp and self.should_perform_slowmo() and self.slowmo_sgp_average_params) or (
-            self.should_perform_localsgd() and not self.should_perform_slowmo()
+            self.should_perform_localsgd() and not self.skip_averaging_memory_efficient_slowmo()
         )
 
     def maybe_pre_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
@@ -461,7 +469,7 @@ class GossipDataParallel(Module):
         self.logger.debug("Error feedback unroll completed")
 
     def maybe_perform_sgp(self) -> None:
-        if self.sgp and not self.overlap:
+        if self.should_perform_sgp():
             sgp_rec = self.create_event_recorder("SGP")
             if not self.should_allreduce_params():
                 self.sgp_transfer_params()
@@ -599,8 +607,12 @@ class GossipDataParallel(Module):
         if not self.is_computing_slowmo:
             return
 
-        self.portion_start = rank * self.world_portion_length
-        self.portion_end = min((rank + 1) * self.world_portion_length, total_elements)
+        self.portion_start = rank * self.world_portion_length if self.slowmo_memory_efficient else 0
+        self.portion_end = (
+            min((rank + 1) * self.world_portion_length, total_elements)
+            if self.slowmo_memory_efficient
+            else total_elements
+        )
 
         self.old_params = torch.empty(self.world_portion_length, dtype=params_dtype).to(params_device).detach()
 
@@ -674,13 +686,15 @@ class GossipDataParallel(Module):
         if not self.global_momentum_buffers_initialized:
             self.init_global_momentum_buffers(optimizer)
 
-        # actual global_momentum_step
-        self.distributed_comm(optimizer, mode="gather")
+        if self.slowmo_memory_efficient:
+            # actual global_momentum_step
+            self.distributed_comm(optimizer, mode="gather")
 
         if self.is_computing_slowmo:
             self.perform_local_optimization(optimizer)
 
-        self.distributed_comm(optimizer, mode="scatter")
+        if self.slowmo_memory_efficient:
+            self.distributed_comm(optimizer, mode="scatter")
 
     def perform_local_optimization(self, optimizer: torch.optim.Optimizer) -> None:
         assert self.portion_start is not None
@@ -749,7 +763,7 @@ class GossipDataParallel(Module):
 
                 # gossip during training (not inference)
                 if self.gossip_enable:
-                    if self.overlap:
+                    if self.overlap and not self.skip_averaging_memory_efficient_slowmo():
                         self.sgp_query_gossip_queue()
 
         def queue_hook(*unused: Any) -> None:
@@ -768,7 +782,7 @@ class GossipDataParallel(Module):
             # gossip during training (not inference)
             if self.sgp:
                 if self.gossip_enable:
-                    if self.overlap:
+                    if self.overlap and not self.skip_averaging_memory_efficient_slowmo():
                         self.sgp_transfer_params()
 
                 # convert model to de-biased estimate
