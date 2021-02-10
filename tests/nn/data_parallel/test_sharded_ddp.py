@@ -133,11 +133,9 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     torch.cuda.set_device(rank)
     torch.manual_seed(rank)
     np.random.seed(rank)
-    NUMBER_BATCHS = 10
+    NUMBER_BATCHS = 5
     INPUTS = 2
     BATCH_SIZE = 32
-
-    print(f"Testing DDP parity {rank}", flush=True)
 
     def check_parity(amp: bool, accumulate: bool, change_train_graph: bool):
 
@@ -160,6 +158,10 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         model = Sequential(Linear(INPUTS, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
         model.register_buffer("test_buffer", torch.ones((1)) * rank)
         model.to(device)
+
+        # Make sure that the model starts with non-trainable, so that we check for the buckets to be
+        # properly reassigned when/if this changes
+        next(model.parameters()).requires_grad = False
 
         sharded_optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
         sharded_ddp_model = ShardedDataParallel(
@@ -201,13 +203,13 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             else:
                 sharded_optimizer.step(closure=closure_sharded)
 
-            check_same_model_params(sharded_ddp_model, ddp_model, "Step broke")
+            check_same_model_params(sharded_ddp_model, ddp_model, f"Rank: {rank} - Step {i} broke")
 
             # Flip the trainability of the first parameter back and forth
-            if change_train_graph:
+            if i == 0 and change_train_graph:
                 next(model.parameters()).requires_grad = not next(model.parameters()).requires_grad
                 next(ddp_model.parameters()).requires_grad = not next(ddp_model.parameters()).requires_grad
-                check_same_model_params(sharded_ddp_model, ddp_model, "Trainability refresh broke")
+                check_same_model_params(sharded_ddp_model, ddp_model, f"Rank: {rank} - Trainability refresh {i} broke")
 
     # Test all combinations: AMP, Accumulate, Change train graph
     # TODO @lefaudeux (another PR): Add the checkpointing/accumulation tests

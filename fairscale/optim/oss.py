@@ -595,7 +595,7 @@ class OSS(Optimizer):
                         param.data = bucket[offset:offset_next].view_as(param.data)
                         offset = offset_next
 
-                    # Either replace the existing bucket, or move it
+                    # Either replace the existing bucket, or create it
                     if len(self.buckets[device]) == dst_rank:
                         self.buckets[device].append(bucket)
                     else:
