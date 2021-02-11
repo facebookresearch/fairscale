@@ -118,7 +118,7 @@ class ActivationCheckpointing(torch.autograd.Function):
      loads parameters for the next shard. No graph is constructed in the FW pass.
 
      - In the BW pass, it does the reverse. We run the forward pass and
-     calculate gradients as needed.
+     calculate gradients as needed. The trade-off is latency vs memory.
 
      NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
      """
@@ -127,56 +127,59 @@ class ActivationCheckpointing(torch.autograd.Function):
     @custom_fwd
     def forward(ctx: Any, inputs: Any, model_instance: Any) -> Any:
         inputs = inputs if isinstance(inputs, tuple) else (inputs,)
+
+        ctx.inputs = inputs
+        ctx.model_instance = model_instance
+        # TODO(anj-s): We might need to store this for each boundary activation.
+        # Currently we assume all boundary activation inputs require
+        ctx.grad_requirements = tuple(x.requires_grad for x in inputs)
+        ctx.fwd_rng_state = torch.get_rng_state()
+
         # List of input activations starting with the given input.
         model_instance._activations = [inputs]
         # Enumerate through layer shards and apply activations from the previous shard.
         for index, layer_shard in enumerate(model_instance.model_slices):
-            # Bring in the current activations onto the device
+            # Bring in the current activations onto the device.
             model_instance._activations[index] = tuple([a.cuda() for a in list(model_instance._activations[index])])
-            # Bring in the current layer shard onto the device
+            # Bring in the current layer shard onto the device.
             layer_shard.forward_load()
             # Apply the FP and store the activations on the CPU.
-            if index < len(model_instance.model_slices)-1:
-                with torch.no_grad():
-                    inputs = model_instance._activations[index]
-                    output = layer_shard(*inputs)
-            else:
-                with torch.enable_grad():
-                    inputs = model_instance._activations[index]
-                    output = layer_shard(*inputs)
-            model_instance._activations.append(output.to("cpu"))
-            # Move the layer shard back to the CPU
+            with torch.no_grad():
+                inputs = model_instance._activations[index]
+                output = layer_shard(*inputs)
+            output = output if isinstance(output, tuple) else (output,)
+            model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
+            # Move the layer shard back to the CPU.
             layer_shard.forward_drop()
-
-        ctx.inputs = inputs
-        ctx.model_instance = model_instance
-        ctx.grad_requirements = tuple(x.requires_grad for x in inputs)
-        ctx.fwd_rng_state = torch.get_rng_state()
 
         # Move the output to the device since the user is expecting the output on the device.
         # TODO(anj-s): Check device to make sure the outputs and targets match device.
-        model_instance._activations[-1] = model_instance._activations[-1].cuda()
-        return model_instance._activations[-1]    
+        model_instance._activations[-1] = tuple([a.cuda() for a in list(model_instance._activations[-1])])
+        result = model_instance._activations[-1]
+        return result[0] if len(result) == 1 else result    
 
     @staticmethod
     @custom_bwd
     def backward(ctx, *grad_outputs):  # type: ignore
+        if not torch.autograd._is_checkpoint_valid():
+            raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
 
         inputs = ctx.inputs
         model_instance = ctx.model_instance
 
-        # inputs = checkpoint.detach_variable(inputs)
         for i, need_grad in enumerate(ctx.grad_requirements):
             inputs[i].requires_grad = need_grad
 
         all_grads = [grad_outputs]
-        # reverse the model shards and iterate through them
-        # calculate the gradients as you go along
-        # logging.info("model_instance._activations ", model_instance._activations)
-        for model_shard, activation in zip(reversed(model_instance.model_slices), reversed(model_instance._activations[:-1])):
-            # move the activation to the device
+        for model_shard, activation in zip(reversed(model_instance.model_slices),
+                                           reversed(model_instance._activations[:-1])):
+            # Move the activation to the device.
             activation = tuple([a.cuda() for a in list(activation)])
-            # move the model shard to the device
+            # One of the inputs to the FW pass must require grad.
+            for a in activation:
+                a.requires_grad = True
+
+            # Move the model shard to the device.
             model_shard.backward_load()
             # Store the BW pass state.
             bwd_rng_state = torch.get_rng_state()
@@ -188,24 +191,22 @@ class ActivationCheckpointing(torch.autograd.Function):
                 # calculate the output of the last shard wrt to the stored activation at the slice boundary.
                 # TODO(anj-s): Why detach inputs?
                 activation = torch.utils.checkpoint.detach_variable(activation)
-                print(f"activation inside BW {activation}")
                 outputs = model_shard(*activation)
 
             # Set the states back to what it was at the start of this function.
             torch.set_rng_state(bwd_rng_state)
             
-            # Get the last gradient calculation
+            # Get the last gradient calculation.
             final_grads = all_grads[-1]
             if isinstance(outputs, torch.Tensor):
                 outputs = (outputs,)
-            print(f"outputs {outputs}, final_grads {final_grads}")
             torch.autograd.backward(outputs, final_grads)
-            # Move activation back to the CPU
-            activation = tuple([a.cpu() for a in list(activation)])
-            # Append the list of grads to the all_grads list and this should be on the CPU
+            # Append the list of grads to the all_grads list and this should be on the CPU.
             all_grads.append(tuple([a.grad for a in activation]))
-            print(f"all_grads {all_grads}")
-            # move the shard back to the cpu
+            # Move activation back to the CPU.
+            # TODO(anj-s): Why does moving activations to CPU cause the .grad property to be None?
+            activation = tuple([a.cpu() for a in list(activation)])
+            # Move the shard back to the CPU.
             model_shard.backward_drop()
 
         detached_inputs = model_instance._activations[0]

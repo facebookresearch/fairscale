@@ -83,14 +83,12 @@ def train(args: argparse.Namespace):
                 optimizer.zero_grad()
                 inputs = batch_inputs.reshape(-1, args.inputs * args.inputs)
                 inputs.requires_grad = True
-                print(f"inputs {inputs}")    
                 with _get_profiler_record_context("model_training"):
                     with _get_fp16_context(use_fp16=args.use_fp16):
                         output = model(inputs)
+                        # print(f"In benchmarks output: {output}")
                         loss = criterion(output, target=batch_outputs)
-                        print(f"before BW model_activations ", model._activations)
                         loss.backward()
-                        print(f"after BW model_activations ", model._activations)
                     optimizer.step()
             logging.info(
                 "Memory stats are {:.2f}GB".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] / 2 ** 30)
@@ -110,13 +108,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test the CPU offload + sharding with a Transformer training")
     parser.add_argument("--epochs", action="store", default=1, type=int)
     parser.add_argument("--batch_size", action="store", default=1, type=int)
-    parser.add_argument("--inputs", action="store", help="The dimension of the inputs", default=2, type=int)
-    parser.add_argument("--hidden", action="store", help="The dimension of the hidden state", default=2, type=int)
-    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=0, type=int)
-    parser.add_argument("--outputs", action="store", help="The number of predicted classes", default=2, type=int)
+    parser.add_argument("--inputs", action="store", help="The dimension of the inputs", default=100, type=int)
+    parser.add_argument("--hidden", action="store", help="The dimension of the hidden state", default=1000, type=int)
+    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=100, type=int)
+    parser.add_argument("--outputs", action="store", help="The number of predicted classes", default=5, type=int)
 
     parser.add_argument("--offload", action="store_true", default=False)
-    parser.add_argument("--slices", action="store", default=1, type=int)
+    parser.add_argument("--slices", action="store", default=3, type=int)
     parser.add_argument("--use_fp16", action="store_true", default=False)
     parser.add_argument("--use_profiler", action="store_true", default=False)
 
