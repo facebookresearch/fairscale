@@ -110,6 +110,124 @@ class ModelShard(nn.Module):
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
 
+class ActivationCheckpointing(torch.autograd.Function):
+    """
+     This Function enables us to override the forward and backward pass of the nn.Module.
+
+     - In the FW pass, it drops parameters in the previous shard and
+     loads parameters for the next shard. No graph is constructed in the FW pass.
+
+     - In the BW pass, it does the reverse. We run the forward pass and
+     calculate gradients as needed.
+
+     NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
+     """
+
+    @staticmethod
+    @custom_fwd
+    def forward(ctx: Any, inputs: Any, model_instance: Any) -> Any:
+        inputs = inputs if isinstance(inputs, tuple) else (inputs,)
+        # List of input activations starting with the given input.
+        model_instance._activations = [inputs]
+        # Enumerate through layer shards and apply activations from the previous shard.
+        for index, layer_shard in enumerate(model_instance.model_slices):
+            # Bring in the current activations onto the device
+            model_instance._activations[index] = tuple([a.cuda() for a in list(model_instance._activations[index])])
+            # Bring in the current layer shard onto the device
+            layer_shard.forward_load()
+            # Apply the FP and store the activations on the CPU.
+            if index < len(model_instance.model_slices)-1:
+                with torch.no_grad():
+                    inputs = model_instance._activations[index]
+                    print(f"input inside FW {inputs}")
+                    output = layer_shard(*inputs)
+                    print(f"output inside FW {output}")
+            else:
+                with torch.enable_grad():
+                    inputs = model_instance._activations[index]
+                    # print(f"input inside FW {inputs}")
+                    output = layer_shard(*inputs)
+                    # print(f"output inside FW {output}")
+            model_instance._activations.append(output.to("cpu"))
+            # Move the layer shard back to the CPU
+            layer_shard.forward_drop()
+
+        ctx.inputs = inputs
+        ctx.model_instance = model_instance
+        ctx.grad_requirements = tuple(x.requires_grad for x in inputs)
+        ctx.fwd_rng_state = torch.get_rng_state()
+
+        # Move the output to the device since the user is expecting the output on the device.
+        # TODO(anj-s): Check device to make sure the outputs and targets match device.
+        model_instance._activations[-1] = model_instance._activations[-1].cuda()
+        return model_instance._activations[-1]    
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, *grad_outputs):  # type: ignore
+
+        inputs = ctx.inputs
+        model_instance = ctx.model_instance
+
+        # inputs = checkpoint.detach_variable(inputs)
+        for i, need_grad in enumerate(ctx.grad_requirements):
+            inputs[i].requires_grad = need_grad
+
+        all_grads = [grad_outputs]
+        # reverse the model shards and iterate through them
+        # calculate the gradients as you go along
+        # logging.info("model_instance._activations ", model_instance._activations)
+        for model_shard, activation in zip(reversed(model_instance.model_slices), reversed(model_instance._activations[:-1])):
+            # move the activation to the device
+            activation = tuple([a.cuda() for a in list(activation)])
+            # move the model shard to the device
+            model_shard.backward_load()
+            # Store the BW pass state.
+            bwd_rng_state = torch.get_rng_state()
+
+            # Set the states to what it used to be before the forward pass.
+            torch.set_rng_state(ctx.fwd_rng_state)
+            # Run the FW pass.
+            with torch.enable_grad():
+                # calculate the output of the last shard wrt to the stored activation at the slice boundary.
+                print(f"activation inside BW {activation}")
+                outputs = model_shard(*activation)
+
+            # Set the states back to what it was at the start of this function.
+            torch.set_rng_state(bwd_rng_state)
+            
+            # Get the last gradient calculation
+            final_grads = all_grads[-1]
+            # Run backward() with only Tensors that require grad
+            outputs_with_grad = []
+            args_with_grad = []
+            print("num_outputs ", len(outputs))
+            for i in range(len(outputs)):
+                if outputs[i].requires_grad:
+                    outputs_with_grad.append(outputs[i])
+                    args_with_grad.append(final_grads[i])
+            if len(outputs_with_grad) == 0:
+                raise RuntimeError(
+                    "None of the outputs have requires_grad=True, "
+                    "this checkpoint() is not necessary"
+                )
+            print(f"outputs_with_grad {outputs_with_grad}, args_with_grad {args_with_grad}")
+            torch.autograd.backward(outputs_with_grad, args_with_grad)
+            # Move activation back to the CPU
+            activation = tuple([a.cpu() for a in list(activation)])
+            # Append the list of grads to the all_grads list and this should be on the CPU
+            all_grads.append(activation.grad.to("cpu"))
+            # move the shard back to the cpu
+            model_shard.backward_drop()
+
+        # The returned variables need to mirror the forward inputs
+        # TODO(anj-s): Why do we need to do this?
+        if isinstance(grad_outputs, tuple):
+            return grad_outputs[0], None, None, None
+
+        return grad_outputs, None, None, None
+
+
 class ShardSyncLayer(torch.autograd.Function):
     """
      The shard sync layer is a synchronization point between model shards.
@@ -244,6 +362,10 @@ class OffloadModel(nn.Module):
         self._activations: List[Tuple] = []
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
+        activation_checkpoint = True
+        if activation_checkpoint:
+            return ActivationCheckpointing.apply(*inputs, self)
+
         shardSync = ShardSyncLayer.apply
         self._activations = []
         for index in range(-1, len(self.model_slices)):
@@ -252,6 +374,7 @@ class OffloadModel(nn.Module):
                 # activation on the device already.
                 self._activations[index] = tuple([a.cuda() for a in list(self._activations[index])])
                 inputs = self._activations[index]
+                print("inputs before layer shard ", *inputs)
                 inputs = self.model_slices[index](*inputs)
             # Call the custom autograd hooks (discard/load slices FW and BW)
             inputs = shardSync(inputs, index, self.model_slices, self)
