@@ -49,5 +49,5 @@ from .upsampling import Upsample as Upsample, UpsamplingBilinear2d as Upsampling
     UpsamplingNearest2d as UpsamplingNearest2d
 
 #MODIFIED BY TORCHGPIPE
- from .modules.flatten import Flatten as Flatten
+from .modules.flatten import Flatten as Flatten
 #END

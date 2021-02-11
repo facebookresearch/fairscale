@@ -25,6 +25,7 @@ Collection of some testing utilities for the Fairscale library. Please complemen
 within the different feature sets and relative imports.
 """
 
+import contextlib
 import functools
 import inspect
 import logging
@@ -193,8 +194,20 @@ def worker_process(
 
     initialize_model_parallel(1, world_size, **kwargs)
 
+    # Make sure that CUDA operations are repeatable
+    context = (
+        torch.backends.cudnn.flags(benchmark=False, deterministic=True)  # type: ignore
+        if torch.cuda.is_available() and hasattr(torch.backends.cudnn, "flags")
+        else contextlib.suppress()
+    )
+
+    if torch.cuda.is_available() and not hasattr(torch.backends.cudnn, "flags"):
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+
     try:
-        func(*args)
+        with context:
+            func(*args)
         teardown()
     except BaseException as e:
         logging.warning(f" Rank {rank}: {e}")

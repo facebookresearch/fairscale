@@ -1,6 +1,5 @@
 import copy
 import os
-import sys
 from typing import Any, Dict, List, Tuple, Type
 import unittest
 
@@ -12,10 +11,6 @@ from torch.testing._internal.common_distributed import MultiProcessTestCase, req
 from torch.testing._internal.common_utils import TEST_WITH_TSAN
 
 import fairscale.nn.data_parallel.gossip as gossip
-
-if not torch.distributed.is_available():
-    print("torch.distributed is not available, skipping tests")
-    sys.exit(0)
 
 
 def get_gpus_for_rank(world_size: int) -> List[List[int]]:
