@@ -1,22 +1,9 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """Checkpointing with preceding recomputation.
 
 PyTorch already provides the official checkpointing utilities in
@@ -40,10 +27,19 @@ copied entirely.
 from collections import deque
 from contextlib import contextmanager
 import threading
-from typing import TYPE_CHECKING, Deque, Generator, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Deque,
+    Generator,
+    List,
+    Optional,
+    Union,
+    Sequence,
+    Tuple
+)
 
 import torch
-from torch import ByteTensor, Tensor
+from torch import Tensor
 import torch.autograd
 
 from .dependency import fork, join
@@ -53,12 +49,12 @@ from .phony import get_phony
 __all__ = ["is_checkpointing", "is_recomputing"]
 
 
-Tensors = Tuple[Tensor, ...]
+Tensors = Sequence[Tensor]
 TensorOrTensors = Union[Tensor, Tensors]
 
 # Types for shared memory between Checkpoint and Recompute.
 Recomputed = Tuple[TensorOrTensors, Tensors]  # (output, input_leaf)
-RNGStates = Tuple[ByteTensor, Optional[ByteTensor]]  # (cpu_rng_state, gpu_rng_state)
+RNGStates = Tuple[Tensor, Optional[Tensor]]  # (cpu_rng_state, gpu_rng_state)
 
 
 if TYPE_CHECKING:
@@ -220,7 +216,7 @@ def save_rng_states(device: torch.device, rng_states: Deque[RNGStates],) -> None
     """
     cpu_rng_state = torch.get_rng_state()
 
-    gpu_rng_state: Optional[ByteTensor]
+    gpu_rng_state: Optional[Tensor]
     if device.type == "cuda":
         gpu_rng_state = torch.cuda.get_rng_state(device)
     else:

@@ -1,28 +1,15 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """Tracks the running statistics per mini-batch instead of micro-batch."""
 from typing import Optional, TypeVar, cast
 
 import torch
 from torch import Tensor, nn
-import torch.nn.functional as F
+from torch.nn.functional import batch_norm
 from torch.nn.modules.batchnorm import _BatchNorm
 
 from .checkpoint import is_recomputing
@@ -40,6 +27,8 @@ class DeferredBatchNorm(_BatchNorm):
 
     sum: Tensor
     sum_squares: Tensor
+    running_mean: Tensor
+    running_var: Tensor
 
     def __init__(
         self,
@@ -108,7 +97,7 @@ class DeferredBatchNorm(_BatchNorm):
     def forward(self, input: Tensor) -> Tensor:  # type: ignore
         if not self.training:
             # Don't train parameters on the evaluation mode.
-            return F.batch_norm(
+            return batch_norm(
                 input,
                 running_mean=self.running_mean,
                 running_var=self.running_var,
@@ -130,7 +119,7 @@ class DeferredBatchNorm(_BatchNorm):
                 self._commit()
 
         # Normalize a micro-batch and train the parameters.
-        return F.batch_norm(
+        return batch_norm(
             input,
             running_mean=None,
             running_var=None,
@@ -162,6 +151,8 @@ class DeferredBatchNorm(_BatchNorm):
             if module.affine:
                 module_output.register_parameter("weight", module.weight)
                 module_output.register_parameter("bias", module.bias)
+            assert isinstance(module.running_mean, Tensor)
+            assert isinstance(module.running_var, Tensor)
             module_output.register_buffer("running_mean", module.running_mean)
             module_output.register_buffer("running_var", module.running_var)
             module_output.register_buffer("num_batches_tracked", module.num_batches_tracked)

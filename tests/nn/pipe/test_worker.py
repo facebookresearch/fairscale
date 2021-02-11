@@ -1,31 +1,19 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import threading
 import time
 
 import pytest
 import torch
 
-from fairscale.nn.pipe.microbatch import Batch
-from fairscale.nn.pipe.stream import CPUStream
-from fairscale.nn.pipe.worker import Task, spawn_workers
+from torch.distributed.pipeline.sync.microbatch import Batch
+from torch.distributed.pipeline.sync.stream import CPUStream
+from torch.distributed.pipeline.sync.worker import Task, spawn_workers
+from torch.testing._internal.common_utils import TEST_WITH_TSAN
 
 
 class fake_device:
@@ -37,6 +25,7 @@ class fake_device:
     index = None
 
 
+@pytest.mark.skipif(TEST_WITH_TSAN, reason="False positive in TSAN")
 def test_join_running_workers():
     count = 0
 
@@ -60,6 +49,7 @@ def test_join_running_workers():
     assert count == 10
 
 
+@pytest.mark.skipif(TEST_WITH_TSAN, reason="False positive in TSAN")
 def test_join_running_workers_with_exception():
     class ExpectedException(Exception):
         pass

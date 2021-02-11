@@ -1,30 +1,17 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import time
 
 import pytest
 import torch
 from torch import nn
 
-from fairscale.nn.pipe.balance import balance_by_size, balance_by_time, blockpartition
-from fairscale.nn.pipe.balance.profile import layerwise_sandbox
+from torch.distributed.pipeline.sync._balance import balance_by_size, balance_by_time, blockpartition
+from torch.distributed.pipeline.sync._balance.profile import layerwise_sandbox
 
 skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 
@@ -56,6 +43,7 @@ def test_blockpartition_short_sequence():
 
 
 @pytest.mark.parametrize("device", devices)
+@pytest.mark.skip(reason="Flaky due to time.sleep()")
 def test_balance_by_time(device):
     class Delay(nn.Module):
         def __init__(self, seconds):
@@ -66,7 +54,7 @@ def test_balance_by_time(device):
             time.sleep(self.seconds)
             return x
 
-    model = nn.Sequential(*[Delay(i / 100) for i in [1, 2, 3, 4, 5, 6]])
+    model = nn.Sequential(*[Delay(i / 10) for i in [1, 2, 3, 4, 5, 6]])
     sample = torch.rand(1)
     balance = balance_by_time(2, model, sample, device=device)
     assert balance == [4, 2]

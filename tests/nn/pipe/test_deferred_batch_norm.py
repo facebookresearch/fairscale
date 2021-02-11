@@ -1,22 +1,9 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from copy import deepcopy
 from itertools import chain
 
@@ -24,7 +11,7 @@ import pytest
 import torch
 from torch import nn, optim
 
-from fairscale.nn.pipe.batchnorm import DeferredBatchNorm
+from torch.distributed.pipeline.sync.batchnorm import DeferredBatchNorm
 
 CHUNKS = 4
 
@@ -195,8 +182,9 @@ def test_conv_bn():
 def test_input_requiring_grad():
     dbn = DeferredBatchNorm(3, chunks=CHUNKS)
 
-    input = torch.rand(16, 3, 224, 224, requires_grad=True)
+    input = torch.rand(16, 3, 224, 224)
     input = tilt_dist(input)
+    input.requires_grad = True
 
     chunked_forward(dbn, input)
 

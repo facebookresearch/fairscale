@@ -1,31 +1,18 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import pytest
 import torch
 from torch import nn
 import torch.nn.functional as F
 
-from fairscale.nn.pipe import Pipe
+from torch.distributed.pipeline.sync import Pipe
 
 
-def test_python_autograd_function():
+def test_python_autograd_function(setup_rpc):
     # A Python autograd function might fail with this error:
     #
     #   RuntimeError: Returning Variables sharing storage with other Variables
@@ -50,14 +37,14 @@ def test_python_autograd_function():
             return Identity.apply(input)
 
     model = nn.Sequential(M(), M())
-    model = Pipe(model, [1, 1], devices=["cpu", "cpu"], checkpoint="always")
+    model = Pipe(model, checkpoint="always")
 
     x = torch.rand(42)
     y = model(x)
-    assert torch.allclose(x, y)
+    assert torch.allclose(x, y.local_value())
 
 
-def test_exception_no_hang():
+def test_exception_no_hang(setup_rpc):
     # In v0.0.2, once a failed partition receives a normal message
     # (non-closing) for the next micro-batch, a hang occured. The reason was
     # that a failed partition didn't call in_queue.task_done() on a normal
@@ -75,14 +62,14 @@ def test_exception_no_hang():
             raise ExpectedException()
 
     model = nn.Sequential(Pass(), Pass(), Raise())
-    model = Pipe(model, [1, 1, 1], devices=["cpu", "cpu", "cpu"], chunks=3)
+    model = Pipe(model, chunks=3)
 
     with pytest.raises(ExpectedException):
         model(torch.rand(3))
 
 
 @pytest.mark.skipif(torch.cuda.device_count() < 2, reason="2 cuda devices required")
-def test_tuple_wait(cuda_sleep):
+def test_tuple_wait(cuda_sleep, setup_rpc):
     # In v0.0.3, Wait is applied to only the first tensor on a micro-batch.
     # Under this behavior, if checkpointing was disabled, there's a possibility
     # that gradient accumulations on other tensors are not synchronized
@@ -99,24 +86,34 @@ def test_tuple_wait(cuda_sleep):
             return grad
 
     class Layer1(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.ones = nn.Parameter(torch.ones(32, 3, 32, 32, requires_grad=True))
+
         def forward(self, pair):
             a, b = pair
+            a = a * self.ones
             return a * 1, b * 2, b * 3
 
     class Layer2(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.ones = nn.Parameter(torch.ones(32, 3, 32, 32, requires_grad=True))
+
         def forward(self, triple):
             a, b, c = triple
+            a = a * self.ones
             b = Sleep.apply(b)
             return a + b + c
 
-    model = nn.Sequential(Layer1(), Layer2())
-    model = Pipe(model, [1, 1], devices=[0, 1], chunks=32, checkpoint="never")
+    model = nn.Sequential(Layer1().cuda(0), Layer2().cuda(1))
+    model = Pipe(model, chunks=32, checkpoint="never")
 
     a = torch.rand(1024, 3, 32, 32, device=0, requires_grad=True)
     b = torch.rand(1024, 3, 32, 32, device=0, requires_grad=True)
 
     y = model((a, b))
-    y.norm().backward()
+    y.local_value().norm().backward()
 
     torch.cuda.synchronize(0)
     torch.cuda.synchronize(1)
@@ -124,7 +121,7 @@ def test_tuple_wait(cuda_sleep):
     assert torch.isclose(b.grad.norm().cpu(), torch.tensor(5.000))
 
 
-def test_parallel_randoms():
+def test_parallel_randoms(setup_rpc):
     class Dropouts(nn.Module):
         def forward(self, x):
             for _ in range(100):
@@ -134,8 +131,9 @@ def test_parallel_randoms():
     model = nn.Sequential(Dropouts(), Dropouts())
 
     x = torch.rand(10, 10, requires_grad=True)
-    model = Pipe(model, [1, 1], devices=["cpu", "cpu"], chunks=10, checkpoint="always")
+    model = Pipe(model, chunks=10, checkpoint="always")
     y = model(x)
+    y = y.local_value()
     y.norm().backward()
 
     assert y.to(torch.bool).tolist() == x.grad.to(torch.bool).tolist()

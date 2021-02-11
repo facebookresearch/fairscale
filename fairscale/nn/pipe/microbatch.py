@@ -1,25 +1,12 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """Manipulation of micro-batches."""
 import typing
-from typing import Callable, Iterable, Iterator, List, Tuple, Union, cast
+from typing import Callable, Iterable, Iterator, List, Union, cast, Sequence
 
 import torch
 from torch import Tensor
@@ -28,7 +15,7 @@ import torch.cuda.comm
 __all__: List[str] = []
 
 
-Tensors = Tuple[Tensor, ...]
+Tensors = Sequence[Tensor]
 TensorOrTensors = Union[Tensor, Tensors]
 Function = Callable[[TensorOrTensors], TensorOrTensors]
 
@@ -123,7 +110,7 @@ class Batch:
     def _setitem_by_index(self, index: int, value: Tensor) -> None:
         if not self.atomic:
             i = index
-            self.value = self.value[:i] + (value,) + self.value[i + 1 :]
+            self.value = self.value[:i] + (value,) + self.value[i + 1 :]  # type: ignore
             return
 
         if index != 0:
@@ -152,9 +139,10 @@ def check(input: TensorOrTensors) -> None:
         TypeError: input is not a tensor or tensors.
 
     """
-    if isinstance(input, tuple):
+    if isinstance(input, Sequence):
         for x in input:
-            check(x)
+            if not isinstance(x, Tensor):
+                raise TypeError(f"expected Tensor, but got {input.__class__.__name__}")
         return
 
     if not isinstance(input, Tensor):

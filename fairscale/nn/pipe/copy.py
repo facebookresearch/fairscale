@@ -1,27 +1,14 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """Autograd functions for stream-aware CUDA copy. It is used to overlap copy
 and computation on the same GPU.
 """
 from collections import deque
-from typing import Deque, List, Optional, Tuple
+from typing import Deque, List, Optional, Tuple, Sequence
 
 import torch
 from torch import Tensor
@@ -31,7 +18,7 @@ from .stream import AbstractStream, current_stream, get_device, record_stream, u
 __all__: List[str] = []
 
 
-Tensors = Tuple[Tensor, ...]
+Tensors = Sequence[Tensor]
 
 
 # Common interface between :class:`Copy` and :class:`Wait`.

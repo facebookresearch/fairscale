@@ -1,26 +1,13 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from torch import nn
 
-from fairscale.nn.pipe.skip import Namespace, pop, skippable, stash
-from fairscale.nn.pipe.skip.layout import inspect_skip_layout
+from torch.distributed.pipeline.sync.skip import Namespace, pop, skippable, stash
+from torch.distributed.pipeline.sync.skip.layout import inspect_skip_layout
 
 
 class Pass(nn.Module):
@@ -32,7 +19,7 @@ class Pass(nn.Module):
 class StashFoo(nn.Module):
     def forward(self, input):
         yield stash("foo", input)
-        return input
+        return input # noqa
 
 
 @skippable(pop=["foo"])
@@ -46,7 +33,7 @@ class PopFoo(nn.Module):
 class StashBar(nn.Module):
     def forward(self, input):
         yield stash("bar", input)
-        return input
+        return input # noqa
 
 
 @skippable(pop=["bar"])

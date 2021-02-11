@@ -1,36 +1,23 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import pytest
 import torch
 from torch import nn
 
-from fairscale.nn.pipe import Pipe, is_checkpointing, is_recomputing
-from fairscale.nn.pipe.skip import pop, skippable, stash
-from fairscale.nn.pipe.skip.tracker import current_skip_tracker
+from torch.distributed.pipeline.sync import Pipe, is_checkpointing, is_recomputing
+from torch.distributed.pipeline.sync.skip import pop, skippable, stash
+from torch.distributed.pipeline.sync.skip.tracker import current_skip_tracker
 
 
 @skippable(stash=["skip"])
 class Stash(nn.Module):
     def forward(self, input):
         yield stash("skip", input)
-        return input
+        return input # noqa
 
 
 @skippable(pop=["skip"])
@@ -42,7 +29,7 @@ class Pop(nn.Module):
 
 @pytest.mark.parametrize("train", [True, False], ids=["train", "eval"])
 @pytest.mark.parametrize("checkpoint", ["always", "except_last", "never"])
-def test_delete_portal_tensor(train, checkpoint):
+def test_delete_portal_tensor(train, checkpoint, setup_rpc):
     # Without checkpointing:
     # +- Stash --+  +--- Pop ----+ - - - layers
     # | 2,blue,1 |--| 1,orange,0 | - - - tensor_life and portal function
@@ -104,13 +91,13 @@ def test_delete_portal_tensor(train, checkpoint):
             return self.F.apply(input)
 
     model = nn.Sequential(NoPortalTensorAtBackward(), stash_, pop_)
-    model = Pipe(model, balance=[2, 1], devices=["cpu", "cpu"], chunks=2, checkpoint=checkpoint)
+    model = Pipe(model, chunks=2, checkpoint=checkpoint)
 
     input = torch.rand(10, requires_grad=True)
 
     if train:
         model.train()
-        output = model(input)
+        output = model(input).local_value()
         output.norm().backward()
     else:
         model.eval()
@@ -119,11 +106,11 @@ def test_delete_portal_tensor(train, checkpoint):
 
 
 @pytest.mark.parametrize("train", [True, False], ids=["train", "eval"])
-def test_no_portal_without_pipe(train, monkeypatch):
+def test_no_portal_without_pipe(train, monkeypatch, setup_rpc):
     def deny(*args, **kwargs):
         raise AssertionError("tried to create Portal without Pipe")
 
-    monkeypatch.setattr("fairscale.nn.pipe.skip.portal.Portal.__init__", deny)
+    monkeypatch.setattr("torch.distributed.pipeline.sync.skip.portal.Portal.__init__", deny)
 
     model = nn.Sequential(Stash(), Pop())
 

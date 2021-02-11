@@ -1,28 +1,16 @@
+# Copyright 2019 Kakao Brain
+#
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
-# Copyright 2019 Kakao Brain
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """The Pipe interface."""
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union, cast, Sequence
 
 import torch
 from torch import Tensor, nn
+from torch.distributed.rpc import RRef
 import torch.autograd
 import torch.cuda
 
@@ -39,27 +27,28 @@ __all__ = ["Pipe"]
 Device = Union[torch.device, int, str]
 Devices = Union[Iterable[Device], List[Device]]
 
-Tensors = Tuple[Tensor, ...]
+Tensors = Sequence[Tensor]
 TensorOrTensors = Union[Tensor, Tensors]
 
 if TYPE_CHECKING:
-    Module = nn.Module[TensorOrTensors]
+    # Typechecking: nn.Module is not a Generic
+    Module = nn.Module[TensorOrTensors]  # type: ignore[type-arg]
     NamedModules = OrderedDict[str, Module]
 else:
     Module = nn.Module
     NamedModules = OrderedDict
 
 
-def recommend_auto_balance(message: str) -> str:
+def _recommend_auto_balance(message: str) -> str:
     """Expands a message with recommendation to :mod:`torchpipe.balance`."""
     return f"""{message}
 
 If your model is still under development, its optimal balance would change
-frequently. In this case, we highly recommend 'fairscale.nn.pipe.balance' for
+frequently. In this case, we highly recommend 'torch.distributed.pipeline.sync.balance' for
 naive automatic balancing:
 
-  from fairscale.nn import Pipe
-  from fairscale.nn.pipe.balance import balance_by_time
+  from torch.distributed.pipeline.sync import Pipe
+  from torch.distributed.pipeline.sync.balance import balance_by_time
 
   partitions = torch.cuda.device_count()
   sample = torch.empty(...)
@@ -69,7 +58,7 @@ naive automatic balancing:
 """
 
 
-def verify_module(module: nn.Sequential) -> None:
+def _verify_module(module: nn.Sequential) -> None:
     if not isinstance(module, nn.Sequential):
         raise TypeError("module must be nn.Sequential to be partitioned")
 
@@ -78,8 +67,8 @@ def verify_module(module: nn.Sequential) -> None:
         raise ValueError("module with duplicate children is not supported")
 
 
-def verify_splitting(
-    module: nn.Sequential, partitions: List[nn.Sequential], balance: Iterable[int], devices: List[torch.device]
+def _verify_splitting(
+    module: nn.Sequential, partitions: List[nn.Sequential], devices: List[torch.device]
 ) -> None:
     num_parameters = len(list(module.parameters()))
     num_child_parameters = sum(len(list(child.parameters())) for child in module.children())
@@ -102,155 +91,127 @@ class BalanceError(ValueError):
     pass
 
 
-def split_module(
-    module: nn.Sequential, balance: Iterable[int], devices: List[torch.device],
-) -> Tuple[List[nn.Sequential], List[int], List[torch.device]]:
-    """Splits a module into multiple partitions.
+def _retrieve_device(module: nn.Module) -> torch.device:
+    """Validates all parameters in the Module have the same device and returns
+    the appropriate device.
+
+    Args:
+        An ``nn.Module`` to process.
 
     Returns:
-        A tuple of (partitions, balance, devices).
-
-        Partitions are represented as a :class:`~torch.nn.ModuleList` whose
-        item is a partition. All layers in a partition are placed in the
-        same device.
+        ``torch.Device`` for the entire module.
 
     Raises:
-        BalanceError:
-            wrong balance
-        IndexError:
-            the number of devices is fewer than the number of partitions.
-
+        ValueError:
+            If devices for ``nn.Module`` parameters are not all same.
     """
-    balance = list(balance)
 
-    if len(module) != sum(balance):
-        raise BalanceError(
-            "module and sum of balance have different length "
-            f"(module: {len(module)}, sum of balance: {sum(balance)})"
-        )
+    device = None
+    for parameter in module.parameters():
+        if device is None:
+            device = parameter.device
+        elif device != parameter.device:
+            raise ValueError(
+                'nn.Module: {}, should have all parameters on a single device,'
+                ' please use .to() to place the module on a single device'.format(module))
 
-    if any(x <= 0 for x in balance):
-        raise BalanceError(f"all balance numbers must be positive integer (balance: {balance})")
+    return device if device is not None else torch.device("cpu")
 
-    if len(balance) > len(devices):
-        raise IndexError(
-            "too few devices to hold given partitions " f"(devices: {len(devices)}, partitions: {len(balance)})"
-        )
-
-    j = 0
+def _split_module(modules: nn.Sequential) -> Tuple[List[nn.Sequential], List[torch.device]]:
     partitions = []
-    layers: NamedModules = OrderedDict()
-
-    for name, layer in module.named_children():
-        layers[name] = layer
-
-        if len(layers) == balance[j]:
-            # Group buffered layers as a partition.
-            partition = nn.Sequential(layers)
-
-            device = devices[j]
-            partition.to(device)
-
-            partitions.append(partition)
-
-            # Prepare for the next partition.
-            layers.clear()
-            j += 1
+    devices = []
+    for name, module in modules.named_children():
+        devices.append(_retrieve_device(module))
+        if isinstance(module, nn.Sequential):
+            partition = module
+        else:
+            partition = nn.Sequential(OrderedDict([(name, module)]))
+        partitions.append(partition)
 
     partitions = cast(List[nn.Sequential], nn.ModuleList(partitions))
-    del devices[j:]
 
-    return partitions, balance, devices
-
+    return partitions, devices
 
 MOVING_DENIED = TypeError("denied to move parameters and buffers, " "because Pipe should manage device placement")
 
 
 class Pipe(Module):
     """Wraps an arbitrary :class:`nn.Sequential <torch.nn.Sequential>` module
-    to train on Pipe_. If the module requires lots of memory, Pipe will be
-    very efficient.
-    ::
+    to train on using synchronous pipeline parallelism. If the module requires
+    lots of memory and doesn't fit on a single GPU, pipeline parallelism is a
+    useful technique to employ for training.
 
-        model = nn.Sequential(a, b, c, d)
-        model = Pipe(model, balance=[1, 1, 1, 1], chunks=8)
-        output = model(input)
+    The implementation is based on the torchgpipe_ paper.
 
-    .. _Pipe: https://arxiv.org/abs/1811.06965
+    .. _torchgpipe: https://arxiv.org/abs/2004.09910
 
     Pipe combines pipeline parallelism with checkpointing to reduce peak
     memory required to train while minimizing device under-utilization.
 
-    You should determine the balance when defining a :class:`Pipe` module, as
-    balancing will not be done automatically. The module will be partitioned
-    into multiple devices according to the given balance. You may rely on
-    heuristics to find your own optimal configuration.
+    You should place all the modules on the appropriate devices and wrap them
+    into an :class:`nn.Sequential <torch.nn.Sequential>` module defining the
+    desired order of execution.
 
     Args:
-        module (torch.nn.Sequential):
-            sequential module to be parallelized
-        balance (ints):
-            list of number of layers in each partition
-
-    Keyword Args:
-        devices (iterable of devices):
-            devices to use (default: all CUDA devices)
+        module (:class:`nn.Sequential <torch.nn.Sequential>`):
+            sequential module to be parallelized using pipelining. Each module
+            in the sequence has to have all of its parameters on a single
+            device. Each module in the sequence has to either be an nn.Module
+            or :class:`nn.Sequential <torch.nn.Sequential>` (to combine multiple
+            sequential modules on a single device)
         chunks (int):
             number of micro-batches (default: ``1``)
         checkpoint (str):
             when to enable checkpointing, one of ``'always'``,
-            ``'except_last'``, or ``'never'`` (default: ``'except_last'``)
+            ``'except_last'``, or ``'never'`` (default: ``'except_last'``).
+            ``'never'`` disables checkpointing completely, ``'except_last'``
+            enables checkpointing for all micro-batches except the last one
+            and ``'always'`` enables checkpointing for all micro-batches.
         deferred_batch_norm (bool):
-            whether to use deferred BatchNorm moving statistics (default:
-            :data:`False`, see :ref:`Deferred Batch Normalization` for more
-            details)
+            whether to use deferred ``BatchNorm`` moving statistics (default:
+            :data:`False`). If set to :data:`True`, we track statistics across
+            multiple micro-batches to update the running statistics per
+            mini-batch.
 
     Raises:
         TypeError:
             the module is not a :class:`nn.Sequential <torch.nn.Sequential>`.
         ValueError:
-            invalid arguments, or wrong balance
-        IndexError:
-            the number of devices is fewer than the number of partitions.
+            invalid arguments
 
+    Example::
+        Pipeline of two FC layers across GPUs 0 and 1.
+
+        >>> fc1 = nn.Linear(16, 8).cuda(0)
+        >>> fc2 = nn.Linear(8, 4).cuda(1)
+        >>> model = nn.Sequential(fc1, fc2)
+        >>> model = Pipe(model, chunks=8)
+        >>> input = torch.rand(16, 16).cuda(0)
+        >>> output_rref = model(input)
+
+    .. note::
+        You can wrap a :class:`Pipe` model with
+        :class:`torch.nn.parallel.DistributedDataParallel` only when the
+        checkpoint parameter of :class:`Pipe` is ``'never'``.
+
+    .. note::
+        :class:`Pipe` only supports intra-node pipelining currently, but
+        will be expanded to support inter-node pipelining in the future.
+        The forward function returns an :class:`~torch.distributed.rpc.RRef`
+        to allow for inter-node pipelining in the future, where the output
+        might be on a remote host. For intra-node pipelinining you can use
+        :meth:`~torch.distributed.rpc.RRef.local_value` to retrieve the
+        output locally.
+
+    .. warning::
+        :class:`Pipe` is experimental and subject to change.
     """
-
-    #: The number of layers in each partition.
-    balance: List[int] = []
-    #                    ^^
-    # The default value [] required for Sphinx's autoattribute.
-
-    #: The devices mapped to each partition.
-    #:
-    #: ``devices[-1]`` refers to the device of the last partition, which means
-    #: it is the output device. Probably, you need to use it to transfer the
-    #: target to calculate the loss without a device mismatch
-    #: :exc:`RuntimeError`. For example::
-    #:
-    #:     out_device = pipe.devices[-1]
-    #:
-    #:     for input, target in loader:
-    #:         target = target.to(out_device, non_blocking=True)
-    #:         output = pipe(input)
-    #:         loss = F.cross_entropy(output, target)
-    #:
-    devices: List[torch.device] = []
-
-    #: The number of micro-batches.
-    chunks: int = 1
-
-    #: The checkpoint mode to determine when to enable checkpointing. It is one
-    #: of ``'always'``, ``'except_last'``, or ``'never'``.
-    checkpoint: str = "except_last"
 
     def __init__(
         self,
         module: nn.Sequential,
-        balance: Optional[Iterable[int]] = None,
-        *,
-        devices: Optional[Devices] = None,
-        chunks: int = chunks,
-        checkpoint: str = checkpoint,
+        chunks: int = 1,
+        checkpoint: str = "except_last",
         deferred_batch_norm: bool = False,
     ) -> None:
         super().__init__()
@@ -258,14 +219,12 @@ class Pipe(Module):
         chunks = int(chunks)
         checkpoint = str(checkpoint)
 
-        if balance is None:
-            raise ValueError(recommend_auto_balance("balance is required"))
         if chunks <= 0:
             raise ValueError("number of chunks must be positive integer")
         if checkpoint not in ["always", "except_last", "never"]:
             raise ValueError("checkpoint is not one of 'always', 'except_last', or 'never'")
 
-        verify_module(module)
+        _verify_module(module)
 
         # Verify if the underlying skippable modules satisfy integrity. The
         # integrity can be verified before forward() because it is static.
@@ -277,17 +236,8 @@ class Pipe(Module):
         if deferred_batch_norm:
             module = DeferredBatchNorm.convert_deferred_batch_norm(module, chunks)
 
-        if devices is None:
-            devices = range(torch.cuda.device_count())
-        devices = [torch.device(d) for d in devices]
-        devices = cast(List[torch.device], devices)
-
-        try:
-            self.partitions, self.balance, self.devices = split_module(module, balance, devices)
-        except BalanceError as exc:
-            raise ValueError(recommend_auto_balance(str(exc)))
-
-        verify_splitting(module, self.partitions, self.balance, self.devices)
+        self.partitions, self.devices = _split_module(module)
+        _verify_splitting(module, self.partitions, self.devices)
 
         self._copy_streams: List[List[AbstractStream]] = []
         self._skip_layout = inspect_skip_layout(self.partitions)
@@ -373,28 +323,37 @@ class Pipe(Module):
 
         return self._copy_streams
 
-    def forward(self, input: TensorOrTensors) -> TensorOrTensors:  # type: ignore
-        """:class:`Pipe` is a fairly transparent module wrapper. It doesn't
+    def forward(self, input) -> RRef:  # type: ignore
+        """
+        Processes a single input mini-batch through the pipe and returns an
+        :class:`~torch.distributed.rpc.RRef` pointing to the output.
+        :class:`Pipe` is a fairly transparent module wrapper. It doesn't
         modify the input and output signature of the underlying module. But
         there's type restriction. Input and output have to be a
-        :class:`~torch.Tensor` or a tuple of tensors. This restriction is
+        :class:`~torch.Tensor` or a sequence of tensors. This restriction is
         applied at partition boundaries too.
 
+        The input tensor is split into multiple micro-batches based on the
+        ``chunks`` parameter used to initialize :class:`Pipe`. The batch size
+        is assumed to be the first dimension of the tensor and if the batch
+        size is less than ``chunks``, the number of micro-batches is equal to
+        the batch size.
+
         Args:
-            input (torch.Tensor or tensors): input mini-batch
+            input (torch.Tensor or sequence of :class:`~torch.Tensor`): input mini-batch
 
         Returns:
-            tensor or tensors: output mini-batch
+            :class:`~torch.distributed.rpc.RRef` to the output of the mini-batch
 
         Raises:
-            TypeError: input is not a tensor or tensors.
+            TypeError: input is not a tensor or sequence of tensors.
 
         """
         microbatch.check(input)
 
         if not self.devices:
             # Empty sequential module is not illegal.
-            return input
+            return RRef(input)
 
         # Divide a mini-batch into micro-batches.
         batches = microbatch.scatter(input, self.chunks)
@@ -404,4 +363,4 @@ class Pipe(Module):
 
         # Merge the micro-batches into one mini-batch.
         output = microbatch.gather(batches)
-        return output
+        return RRef(output)
