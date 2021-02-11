@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - ShardedDDP and OSS handle model trainability changes during training ([#369](https://github.com/facebookresearch/fairscale/issues/369))
 
+## [0.1.6] - 2021-02-10
+### Added
+- Checkpointing model wrapper (#376)
+- Faster OSS, flatbuffers (#371)
+- Small speedup in OSS clipgradnorm (#363)
+
+### Fixed
+- Bug in ShardedDDP with 0.1.5 depending the init (KeyError / OSS)
+- Much refactoring in Pipe (#357, #358, #360, #362, #370, #373)
+- Better pip integration / resident pytorch (#375)
+
 ## [0.1.5] - 2021-02-03
 ### Added
 - Pytorch compatibility for OSS checkpoints (#310)
