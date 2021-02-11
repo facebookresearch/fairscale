@@ -49,10 +49,11 @@ class ShardedGradScaler(TorchGradScaler):
 
         # Synchronize the detected inf across the ranks
         optimizer_state = self._per_optimizer_states[id(optimizer)]
-        handles = [
-            dist.all_reduce(v, async_op=True, group=self.group)
-            for v in optimizer_state["found_inf_per_device"].values()
-        ]
+        last_handle = None
+        for v in optimizer_state["found_inf_per_device"].values():
+            last_handle = dist.all_reduce(v, async_op=True, group=self.group)
 
-        # Make sure that the calls are done before moving out
-        _ = list(map(lambda x: x.wait(), handles))
+        # Make sure that the calls are done before moving out.
+        # The calls are executed in sequence, waiting for the last one is enough
+        if last_handle is not None:
+            last_handle.wait()
