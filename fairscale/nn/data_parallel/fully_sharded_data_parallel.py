@@ -197,7 +197,7 @@ class FullyShardedDataParallel(nn.Module):
 
     @torch.no_grad()
     def _all_gather_full_param(self, p: nn.Parameter) -> None:
-        """Fill p.full_param with gathered p.data values (using torch.distributed.all_gather).
+        """Fill p._full_param with gathered p.data values (using torch.distributed.all_gather).
         If the last shard is smaller than the other shards, we pad it with zeroes.
         """
         full_param_chunks = list(torch.flatten(p._full_param).chunk(self.world_size))
@@ -584,11 +584,14 @@ class FullyShardedDataParallel(nn.Module):
                 # Cast grad to FP32.
                 param.grad.data = param.grad.data.to(param.dtype)
 
-            # Average grad by world_size for consistency with PyTorch DDP.
-            param.grad.data.div_(self.world_size)
+            if self.world_size > 1:
+                # Average grad by world_size for consistency with PyTorch DDP.
+                param.grad.data.div_(self.world_size)
 
-            # Reduce-scatter grad.
-            param.grad.data = self._reduce_scatter(param.grad.data)
+                # Reduce-scatter grad.
+                param.grad.data = self._reduce_scatter(param.grad.data)
+            else:
+                param.grad.data = torch.flatten(param.grad.data)
 
             # Cast grad to param's dtype (typically FP32). Note: we do this
             # before the move_grads_to_cpu step so that this entire hook remains
@@ -628,7 +631,11 @@ class FullyShardedDataParallel(nn.Module):
             for p in self.params:
                 if p._full_param.storage().size() != p._orig_size.numel():
                     alloc_storage_(p._full_param, size=p._orig_size)
-                    self._all_gather_full_param(p)  # Fill p._full_param with (p.data for each shard in self.world_size)
+                    if self.world_size > 1:
+                        # Fill p._full_param with (p.data for each shard in self.world_size).
+                        self._all_gather_full_param(p)
+                    else:
+                        torch.flatten(p._full_param).copy_(p.data)
 
                 p.data = p._full_param
 
