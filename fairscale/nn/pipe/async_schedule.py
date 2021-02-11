@@ -17,6 +17,7 @@ from fairscale.nn.model_parallel import get_pipeline_parallel_ranks
 
 from .messages import Transport
 from .microbatch import Batch
+from .multiprocess_pipeline import create_task
 from .skip.tracker import SkipTrackerThroughPotals
 from .types import EVENT_LOOP_QUEUE, PipeMessage, Tensors
 
@@ -190,10 +191,6 @@ class AsyncEventLoop:
     ) -> Batch:
         """Actually run the forward pass for a given module, and send the result
         to the next stage in the pipeline if needed."""
-
-        # We import here to avoid a cyclic dependency.
-        # TODO(msb) Break the cyclic dependency.
-        from .multiprocess_pipeline import create_task
 
         task = create_task(
             self.checkpoint_stop, batch.index, self.group.rank(), batch, partition.module, skip_trackers,

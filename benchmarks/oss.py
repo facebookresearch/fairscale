@@ -28,7 +28,6 @@ from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
 
-OPTIM = torch.optim.RMSprop
 TEMPDIR = tempfile.gettempdir()
 
 
@@ -78,7 +77,7 @@ class OptimType(str, Enum):
     everyone = "everyone"
 
 
-def validate_benchmark(measurements, args, check_regression):
+def validate_benchmark(measurements, final_loss, args, check_regression):
     """Validate the measurments against the golden benchmark config."""
 
     golden_data = oss_mnist.get_golden_real_stats()
@@ -117,6 +116,10 @@ def train(
     check_regression: bool = True,
 ):
     logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
+
+    use_multi_tensor = args.multi_tensor_optim and hasattr(torch.optim, "_multi_tensor")
+    OPTIM = torch.optim._multi_tensor.RMSprop if use_multi_tensor else torch.optim.RMSprop  # type: ignore  # attr is  checked but mypy misses that
+    logging.info("Multi tensor optimizer: {}".format(use_multi_tensor))
 
     # DDP
     dist_init(rank=rank, world_size=args.world_size, backend=backend)
@@ -260,7 +263,7 @@ def train(
     img_per_sec = n_items / (training_stop - training_start) * args.epochs
     logging.info(f"[{dist.get_rank()}] : Training done. {img_per_sec:.2f} img per sec inc. checkpoint")
 
-    validate_benchmark(measurements, args, check_regression)
+    validate_benchmark(measurements, final_loss, args, check_regression)
 
     dist.destroy_process_group()  # type: ignore
 
@@ -273,9 +276,6 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", action="store", default=10, type=int)
     parser.add_argument("--batch_size", action="store", default=256, type=int)
     parser.add_argument("--check_regression", action="store_true", default=False)
-    parser.add_argument("--reference_speed", action="store", default=1430, type=float)
-    parser.add_argument("--reference_memory", action="store", default=1220, type=float)
-    parser.add_argument("--reference_loss", action="store", default=0.006, type=float)
     parser.add_argument(
         "--optim_type", type=OptimType, choices=[o.value for o in OptimType], default=OptimType.everyone
     )
@@ -285,6 +285,9 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, help="Any torchvision or timm model name (str)", default="resnet101")
     parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
     parser.add_argument("--amp", action="store_true", default=False, help="Activate torch AMP")
+    parser.add_argument(
+        "--multi_tensor_optim", action="store_true", default=False, help="Use the faster multi-tensor optimizers"
+    )
 
     args = parser.parse_args()
 
@@ -332,12 +335,7 @@ if __name__ == "__main__":
         logging.info("\n*** Benchmark OSS with ShardedDDP")
         mp.spawn(
             train,  # type: ignore
-            args=(
-                args,
-                BACKEND,
-                OptimType.oss_sharded_ddp,
-                False,
-            ),  # FIXME: @lefaudeux - SDP should give the same results
+            args=(args, BACKEND, OptimType.oss_sharded_ddp, args.check_regression,),
             nprocs=args.world_size,
             join=True,
         )

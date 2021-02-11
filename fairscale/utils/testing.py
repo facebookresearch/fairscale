@@ -31,6 +31,7 @@ import logging
 import multiprocessing
 import os
 import random
+import sys
 import tempfile
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -57,6 +58,15 @@ skip_if_no_cuda = pytest.mark.skipif(
 
 skip_if_single_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 2, reason="multiple GPUs required"
+)
+
+skip_if_py38 = pytest.mark.skipif(
+    sys.version_info.major == 3 and sys.version_info.minor == 8, reason="Python3.8 is skipped"
+)
+
+skip_if_py39_no_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available() and sys.version_info.major == 3 and sys.version_info.minor == 9,
+    reason="Python3.9 wo CUDA is skipped",
 )
 
 _, filename_mpi = tempfile.mkstemp()

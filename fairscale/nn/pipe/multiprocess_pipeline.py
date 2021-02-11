@@ -30,7 +30,6 @@ from torch.autograd.profiler import record_function
 
 from fairscale.nn.model_parallel import get_pipeline_parallel_ranks
 
-from .async_schedule import ModuleWrapper
 from .checkpoint import Checkpointing
 from .messages import MakeTransport, Transport
 from .microbatch import Batch
@@ -162,7 +161,7 @@ class MultiProcessPipeline:
 
     def __init__(
         self,
-        partitions: List[ModuleWrapper],
+        partition: nn.Sequential,
         skip_layout: SkipLayout,
         checkpoint_stop: int,
         group: torch.distributed.ProcessGroup,
@@ -171,7 +170,7 @@ class MultiProcessPipeline:
         input_device: Union[None, int, str, torch.device] = None,
         final_stage: bool = False,
     ) -> None:
-        self.partitions = partitions
+        self.partition = partition
         self.skip_layout = skip_layout
         self.__checkpoint_stop = checkpoint_stop
         self.group = group
@@ -187,7 +186,7 @@ class MultiProcessPipeline:
     @property
     def checkpoint_stop(self) -> int:
         # Disable checkpointing if in eval mode.
-        training = self.partitions[0].module.training
+        training = self.partition.training
         if not training:
             return 0
         return self.__checkpoint_stop
@@ -208,15 +207,12 @@ class MultiProcessPipeline:
         schedule = [(i, self.group.rank()) for i in range(m)]
 
         for i, j in schedule:
-            assert len(self.partitions) == 1
-            partition = self.partitions[0]
-
             if self.group.rank() != 0:
                 batch = self.get_batch_from_previous_stage(i, skip_trackers, batches)
             else:
                 batch = batches[i]
 
-            task = create_task(self.checkpoint_stop, i, j, batch, partition.module, skip_trackers)
+            task = create_task(self.checkpoint_stop, i, j, batch, self.partition, skip_trackers)
 
             batches[i] = self.execute_task(task, i, skip_trackers)
 

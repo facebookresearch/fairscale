@@ -423,7 +423,6 @@ def run_mp_worker(args, available_workers):
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
-        pipelined_backward=False,
         checkpoint=args.checkpoint,
     )
     if torch.cuda.is_available():
