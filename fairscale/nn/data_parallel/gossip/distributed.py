@@ -519,7 +519,9 @@ class GossipDataParallel(Module):
 
     def maybe_copy_back_fp32_parameters(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
         ef_copy_rec = self.create_event_recorder("Error feedback copy back")
-        if (self.should_perform_sgp() or self.should_allreduce_params() or self.should_perform_slowmo()) and fp16_fp32_list:
+        if (
+            self.should_perform_sgp() or self.should_allreduce_params() or self.should_perform_slowmo()
+        ) and fp16_fp32_list:
             with torch.no_grad():
                 for idx, (p_fp16, p_fp32) in enumerate(fp16_fp32_list):
                     p_fp16.copy_(p_fp32)
