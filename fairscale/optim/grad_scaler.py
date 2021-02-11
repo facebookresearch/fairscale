@@ -55,4 +55,4 @@ class ShardedGradScaler(TorchGradScaler):
         ]
 
         # Make sure that the calls are done before moving out
-        _ = list(map(lambda x: x.wait(), handles))
+        handles[-1].wait()
