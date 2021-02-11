@@ -10,6 +10,7 @@ reduction automatically.
 
 from collections import deque
 import contextlib
+import functools
 from itertools import chain
 import logging
 from typing import Any, Callable, Deque, Dict, Generator, List, Optional, Tuple, Union
@@ -54,7 +55,9 @@ class ShardedDataParallel(nn.Module):
             this will impact the long term memory consumption, because these buckets correspond to parameters which will not be sharded.
             Set to 0 to remove all bucketing.
         auto_refresh_trainable (bool):
-            Check whether the parameters trainability (`requires_grad`) has changed
+            (default: True) Check whether the parameters trainability (`requires_grad`) has changed and update both ShardedDDP
+            and OSS automatically if this is the case. If set to False, `refresh_trainable()` needs to be called anytime
+            a parameter is frozen or unfrozen.
 
 
     .. warning:
@@ -245,6 +248,9 @@ class ShardedDataParallel(nn.Module):
 
     def refresh_trainable(self) -> None:
         """ If the module trainability has changed, update all the assumptions """
+
+        # Make sure that this is not done while gradients are waiting to be reduced (if no_sync context for instance)
+        assert not functools.reduce(lambda x, y: x or y, self._grad_to_be_reduced, False), "Grads waiting to be reduced"
 
         self._trainable_params = list(filter(lambda x: x.requires_grad, self._all_params))
         self._trainable_params.sort(key=lambda x: x.numel())
