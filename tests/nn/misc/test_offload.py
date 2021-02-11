@@ -75,28 +75,29 @@ def _get_fp16_context(use_fp16=False):
 
 def _train(model, optimizer, use_fp16, device):
 
-    input = torch.ones(2, 2).to(device)
+    inputs = torch.ones(2, 2).to(device)
     labels = torch.ones(2, 2).to(device)
     loss_fn = torch.nn.MSELoss(reduction="sum")
     model.train()
     with _get_fp16_context(use_fp16):
-        pred = model(input)
+        pred = model(inputs)
         loss = loss_fn(pred, labels)
         loss.backward()
     optimizer.step()
     return model, optimizer, loss
 
 
-def _train_reg_model(model, device, offload_device, use_fp16):
+def _train_reg_model(model, device, offload_device, use_fp16=False):
     reg_model = copy.deepcopy(model)
     reg_model = reg_model.cuda()
     reg_optimizer = torch.optim.SGD(reg_model.parameters(), lr=0.001)
     return _train(reg_model, reg_optimizer, use_fp16, device)
 
 
-def _train_offload_model(model, device, offload_device, use_fp16):
+def _train_offload_model(model, device, offload_device, use_fp16=False, checkpoint_activation=False):
     omodel = copy.deepcopy(model)
-    offload_model = OffloadModel(model_cpu=omodel, device=device, offload_device=offload_device, n_slices=2,)
+    offload_model = OffloadModel(model_cpu=omodel, device=device, offload_device=offload_device, n_slices=2,
+                                 checkpoint_activation=checkpoint_activation)
     offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
     return _train(offload_model, offload_optimizer, use_fp16, device)
 
@@ -104,9 +105,8 @@ def _train_offload_model(model, device, offload_device, use_fp16):
 def test_correctness():
     device, offload_device = _init()
     model = _get_model()
-    use_fp16 = False
-    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device, use_fp16)
-    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, use_fp16)
+    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
+    omodel, oopt, oloss = _train_offload_model(model, device, offload_device)
     _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
 
 
@@ -115,7 +115,26 @@ def test_correctness_fp16():
         return
     device, offload_device = _init()
     model = _get_model()
-    use_fp16 = True
-    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device, use_fp16)
-    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, use_fp16)
+    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device, use_fp16=True)
+    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, use_fp16=True)
+    _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
+
+
+def test_correctness_activation_checkpointing():
+    if not hasattr(torch.cuda.amp, "autocast"):
+        return
+    device, offload_device = _init()
+    model = _get_model()
+    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
+    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, checkpoint_activation=True)
+    _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
+
+
+def test_correctness_activation_checkpointing_fp16():
+    if not hasattr(torch.cuda.amp, "autocast"):
+        return
+    device, offload_device = _init()
+    model = _get_model()
+    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device, use_fp16=True)
+    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, use_fp16=True, checkpoint_activation=True)
     _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)

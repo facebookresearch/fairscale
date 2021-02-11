@@ -120,6 +120,8 @@ class ActivationCheckpointing(torch.autograd.Function):
      - In the BW pass, it does the reverse. We run the forward pass and
      calculate gradients as needed. The trade-off is latency vs memory.
 
+     - Follows heavily from https://pytorch.org/docs/stable/_modules/torch/utils/checkpoint.html#checkpoint.
+
      NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
      """
 
@@ -322,8 +324,10 @@ class OffloadModel(nn.Module):
         device: torch.device,
         offload_device: torch.device = torch.device("cpu"),
         n_slices: int = 5,
+        checkpoint_activation=False,
     ):
         super().__init__()
+        # TODO(anj-s): Add error checks for cuda and sequential model.
 
         self.device = device
         self.offload_device = offload_device
@@ -345,12 +349,17 @@ class OffloadModel(nn.Module):
         # Expose a unified view of the slices
         self.model = torch.nn.Sequential(*self.model_slices)
 
-        # intermediate actiavtions
+        # intermediate activations at the slice boundaries.
         self._activations: List[Tuple] = []
 
+        self._checkpoint_activation = checkpoint_activation
+
     def forward(self, *inputs: Any, **_: Any) -> Any:
-        activation_checkpoint = True
-        if activation_checkpoint:
+        # At least one of the inputs needs to have `requires_grad` set.
+        # TODO(anj-s): Should we require users to set this or should we set it here?
+        for inp in inputs:
+            inp.requires_grad = True
+        if self._checkpoint_activation:
             return ActivationCheckpointing.apply(*inputs, self)
 
         shardSync = ShardSyncLayer.apply
