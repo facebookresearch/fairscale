@@ -395,21 +395,40 @@ class OSS(Optimizer):
         for i_param, (key, value) in enumerate(state_dict["state"].items()):
             param = self.index_to_param[i_param]
 
-            # Populate the sharded optimizer state on the fly
+            # If this rank does not own this param, eagerly wipe the state
             if self.param_to_rank[param] != self.rank:
                 state_dict["state"][key] = None
 
-            if key in self.index_to_param:
+        # Populate the base param_groups and state dict
+        super().load_state_dict(state_dict)
+
+        # If this rank does not own this param, eagerly wipe the state
+        delete_keys = []
+        for i_param, key in enumerate(state_dict["state"].keys()):
+            param = self.index_to_param[i_param]
+            if self.param_to_rank[param] != self.rank:
+                delete_keys.append(key)
+
+        for key in delete_keys:
+            del state_dict["state"][key]
+
+        # Remove the params that the shard optim does not own, and re-index
+        # TODO: Ben
+        for state_pg, pg, spg in zip(state_dict["param_groups"], self.param_groups, self.optim.param_groups):
+            # global_index_to_local_index = {
+            #     i_param: id(global_pg["params"][i]) for i, i_param in enumerate(self.param_group)
+            # }
+
+            params = []
+            for i_param in state_pg["params"]:
                 param = self.index_to_param[i_param]
 
-                # Only add this state to the sharded optimizer if it owns this param
-                for pg in self.optim.param_groups:
-                    if id(param) in [id(p) for p in pg["params"]]:
-                        self.optim.state[param] = recursive_copy_to_device(
-                            value, non_blocking=True, device=param.device
-                        )
+                # If this rank does not own this param, eagerly wipe the state
+                if self.param_to_rank[param] == self.rank:
+                    params.append(pg["params"][i_param])
+            pg["params"] = params
 
-        super().load_state_dict(state_dict)
+        self.optim.load_state_dict(state_dict)
 
         # Sync with the optimizer param groups
         OSS._sync_param_groups(state_dict["param_groups"], self.param_groups)
