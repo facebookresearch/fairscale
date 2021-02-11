@@ -158,7 +158,7 @@ class ActivationCheckpointing(torch.autograd.Function):
         # TODO(anj-s): Check device to make sure the outputs and targets match device.
         model_instance._activations[-1] = tuple([a.cuda() for a in list(model_instance._activations[-1])])
         result = model_instance._activations[-1]
-        return result[0] if len(result) == 1 else result    
+        return result[0] if len(result) == 1 else result
 
     @staticmethod
     @custom_bwd
@@ -173,8 +173,9 @@ class ActivationCheckpointing(torch.autograd.Function):
             inputs[i].requires_grad = need_grad
 
         all_grads = [grad_outputs]
-        for model_shard, activation in zip(reversed(model_instance.model_slices),
-                                           reversed(model_instance._activations[:-1])):
+        for model_shard, activation in zip(
+            reversed(model_instance.model_slices), reversed(model_instance._activations[:-1])
+        ):
             # Move the activation to the device.
             activation = tuple([a.cuda() for a in list(activation)])
             # One of the inputs to the FW pass must require grad.
@@ -197,7 +198,7 @@ class ActivationCheckpointing(torch.autograd.Function):
 
             # Set the states back to what it was at the start of this function.
             torch.set_rng_state(bwd_rng_state)
-            
+
             # Get the last gradient calculation.
             final_grads = all_grads[-1]
             if isinstance(outputs, torch.Tensor):
@@ -212,8 +213,7 @@ class ActivationCheckpointing(torch.autograd.Function):
             model_shard.backward_drop()
 
         detached_inputs = model_instance._activations[0]
-        grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp
-                      for inp in detached_inputs)
+        grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp for inp in detached_inputs)
         return (None, None) + grads
 
 

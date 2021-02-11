@@ -58,8 +58,11 @@ def train(args: argparse.Namespace):
     if args.offload:
         logging.info("Using sharded offloading for training")
         model = OffloadModel(
-            model_cpu=model, device=device, offload_device=torch.device("cpu"), n_slices=args.slices,
-            checkpoint_activation=args.checkpoint_activation
+            model_cpu=model,
+            device=device,
+            offload_device=torch.device("cpu"),
+            n_slices=args.slices,
+            checkpoint_activation=args.checkpoint_activation,
         )  # type: ignore
 
     else:
@@ -100,6 +103,7 @@ def train(args: argparse.Namespace):
             break
         if args.use_profiler:
             prof.export_chrome_trace("/tmp/offload_prof")
+
     train_epoch(args)
 
 

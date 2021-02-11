@@ -96,8 +96,13 @@ def _train_reg_model(model, device, offload_device, use_fp16=False):
 
 def _train_offload_model(model, device, offload_device, use_fp16=False, checkpoint_activation=False):
     omodel = copy.deepcopy(model)
-    offload_model = OffloadModel(model_cpu=omodel, device=device, offload_device=offload_device, n_slices=2,
-                                 checkpoint_activation=checkpoint_activation)
+    offload_model = OffloadModel(
+        model_cpu=omodel,
+        device=device,
+        offload_device=offload_device,
+        n_slices=2,
+        checkpoint_activation=checkpoint_activation,
+    )
     offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
     return _train(offload_model, offload_optimizer, use_fp16, device)
 
