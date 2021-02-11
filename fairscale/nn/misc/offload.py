@@ -10,7 +10,7 @@ A wrapper which streams the model in and out of the GPU automatically during FW 
 
 from builtins import isinstance
 import logging
-from typing import Any, List
+from typing import Any, List, Tuple
 
 import torch
 from torch import nn
@@ -238,7 +238,7 @@ class OffloadModel(nn.Module):
         self.model = torch.nn.Sequential(*self.model_slices)
 
         # intermediate actiavtions
-        self._activations = []
+        self._activations: List[Tuple] = []
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
         shardSync = ShardSyncLayer.apply
