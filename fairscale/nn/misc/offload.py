@@ -139,15 +139,11 @@ class ActivationCheckpointing(torch.autograd.Function):
             if index < len(model_instance.model_slices)-1:
                 with torch.no_grad():
                     inputs = model_instance._activations[index]
-                    print(f"input inside FW {inputs}")
                     output = layer_shard(*inputs)
-                    print(f"output inside FW {output}")
             else:
                 with torch.enable_grad():
                     inputs = model_instance._activations[index]
-                    # print(f"input inside FW {inputs}")
                     output = layer_shard(*inputs)
-                    # print(f"output inside FW {output}")
             model_instance._activations.append(output.to("cpu"))
             # Move the layer shard back to the CPU
             layer_shard.forward_drop()
@@ -190,6 +186,8 @@ class ActivationCheckpointing(torch.autograd.Function):
             # Run the FW pass.
             with torch.enable_grad():
                 # calculate the output of the last shard wrt to the stored activation at the slice boundary.
+                # TODO(anj-s): Why detach inputs?
+                activation = torch.utils.checkpoint.detach_variable(activation)
                 print(f"activation inside BW {activation}")
                 outputs = model_shard(*activation)
 
@@ -198,34 +196,22 @@ class ActivationCheckpointing(torch.autograd.Function):
             
             # Get the last gradient calculation
             final_grads = all_grads[-1]
-            # Run backward() with only Tensors that require grad
-            outputs_with_grad = []
-            args_with_grad = []
-            print("num_outputs ", len(outputs))
-            for i in range(len(outputs)):
-                if outputs[i].requires_grad:
-                    outputs_with_grad.append(outputs[i])
-                    args_with_grad.append(final_grads[i])
-            if len(outputs_with_grad) == 0:
-                raise RuntimeError(
-                    "None of the outputs have requires_grad=True, "
-                    "this checkpoint() is not necessary"
-                )
-            print(f"outputs_with_grad {outputs_with_grad}, args_with_grad {args_with_grad}")
-            torch.autograd.backward(outputs_with_grad, args_with_grad)
+            if isinstance(outputs, torch.Tensor):
+                outputs = (outputs,)
+            print(f"outputs {outputs}, final_grads {final_grads}")
+            torch.autograd.backward(outputs, final_grads)
             # Move activation back to the CPU
             activation = tuple([a.cpu() for a in list(activation)])
             # Append the list of grads to the all_grads list and this should be on the CPU
-            all_grads.append(activation.grad.to("cpu"))
+            all_grads.append(tuple([a.grad for a in activation]))
+            print(f"all_grads {all_grads}")
             # move the shard back to the cpu
             model_shard.backward_drop()
 
-        # The returned variables need to mirror the forward inputs
-        # TODO(anj-s): Why do we need to do this?
-        if isinstance(grad_outputs, tuple):
-            return grad_outputs[0], None, None, None
-
-        return grad_outputs, None, None, None
+        detached_inputs = model_instance._activations[0]
+        grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp
+                      for inp in detached_inputs)
+        return (None, None) + grads
 
 
 class ShardSyncLayer(torch.autograd.Function):
@@ -374,7 +360,6 @@ class OffloadModel(nn.Module):
                 # activation on the device already.
                 self._activations[index] = tuple([a.cuda() for a in list(self._activations[index])])
                 inputs = self._activations[index]
-                print("inputs before layer shard ", *inputs)
                 inputs = self.model_slices[index](*inputs)
             # Call the custom autograd hooks (discard/load slices FW and BW)
             inputs = shardSync(inputs, index, self.model_slices, self)

@@ -87,9 +87,10 @@ def train(args: argparse.Namespace):
                 with _get_profiler_record_context("model_training"):
                     with _get_fp16_context(use_fp16=args.use_fp16):
                         output = model(inputs)
-                        print(f"outputs  {output}")
                         loss = criterion(output, target=batch_outputs)
+                        print(f"before BW model_activations ", model._activations)
                         loss.backward()
+                        print(f"after BW model_activations ", model._activations)
                     optimizer.step()
             logging.info(
                 "Memory stats are {:.2f}GB".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] / 2 ** 30)
