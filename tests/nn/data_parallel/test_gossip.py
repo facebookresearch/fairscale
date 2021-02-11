@@ -4,13 +4,14 @@ import sys
 from typing import Any, Dict, List, Tuple, Type
 import unittest
 
-import gossip
 import torch
 from torch import nn
 import torch.distributed
 import torch.nn.functional as F
 from torch.testing._internal.common_distributed import MultiProcessTestCase, requires_nccl, skip_if_not_multigpu
 from torch.testing._internal.common_utils import TEST_WITH_TSAN
+
+import fairscale.nn.data_parallel.gossip as gossip
 
 if not torch.distributed.is_available():
     print("torch.distributed is not available, skipping tests")
