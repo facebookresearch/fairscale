@@ -11,13 +11,27 @@ import torch
 from torch import nn
 import torch.cuda
 
-from torch.distributed.pipeline.sync.checkpoint import Checkpointing, checkpoint, is_checkpointing, is_recomputing
-from torch.distributed.pipeline.sync.dependency import fork, join
-from torch.distributed.pipeline.sync.microbatch import Batch
+from fairscale.nn.pipe.checkpoint import Checkpointing, Function, TensorOrTensors, is_checkpointing, is_recomputing
+from fairscale.nn.pipe.dependency import fork, join
+from fairscale.nn.pipe.microbatch import Batch
 
 devices = ["cpu"]
 if torch.cuda.is_available():
     devices.append("cuda")
+
+
+def make_checkpoint(function: Function, input: TensorOrTensors, index: int) -> TensorOrTensors:
+    """Makes a checkpoint with a simple interface like
+    :func:`torch.utils.checkpoint.checkpoint`. It's only used to test or debug
+    :class:`Checkpoint` and :class:`Recompute` without boilerplate.
+    """
+    batch = Batch(input, index)
+
+    chk = Checkpointing(function, batch)
+    batch = chk.checkpoint()
+    chk.recompute(batch)
+
+    return batch.tensor_or_tensors
 
 
 @pytest.mark.parametrize("device", devices)
@@ -44,12 +58,12 @@ def test_serial_checkpoints(device):
     # Increase the next function sequence number.
     _ = a + 1 + 2 + 3 + 4 + 5
 
-    a = checkpoint(partial(Log.apply, "a"), a)
+    a = make_checkpoint(partial(Log.apply, "a"), a, 0)
 
     a, phony = fork(a)
     b = join(b, phony)
 
-    b = checkpoint(partial(Log.apply, "b"), b)
+    b = make_checkpoint(partial(Log.apply, "b"), b, 0)
 
     c = torch.cat((a, b))
 
@@ -66,7 +80,7 @@ def test_serial_checkpoints(device):
 
 
 def test_not_requires_grad():
-    x = Batch(torch.rand(1, requires_grad=False))
+    x = Batch(torch.rand(1, requires_grad=False), 0)
     assert not x[0].requires_grad
 
     def f(x):
@@ -89,7 +103,7 @@ def test_not_requires_grad_with_parameter():
     def f(x):
         return x * a
 
-    y = checkpoint(f, x)
+    y = make_checkpoint(f, x, 0)
     y.backward()
 
     assert a.grad is not None
@@ -106,7 +120,7 @@ def test_random_in_checkpoint(device):
 
     torch.manual_seed(0)
     chk_x = torch.randn(3, 3, device=device, requires_grad=True)
-    chk_y = checkpoint(dropout, chk_x)
+    chk_y = make_checkpoint(dropout, chk_x, 0)
     chk_y.norm().backward()
 
     assert torch.allclose(x.grad, chk_x.grad)
@@ -123,7 +137,7 @@ def test_detect_checkpointing_recomputing():
     model = Detect()
     input = torch.rand(1, requires_grad=True)
 
-    output = checkpoint(model, input)
+    output = make_checkpoint(model, input, 0)
     output.backward()
 
     assert logs == [(True, False), (False, True)]
@@ -154,5 +168,5 @@ def test_non_grad_output():
     model = ForkNonGrad()
     input = torch.rand(1, requires_grad=True)
 
-    output = checkpoint(model, input)
+    output = make_checkpoint(model, input, 0)
     output[0].backward()

@@ -70,20 +70,6 @@ class Function(Protocol):
         ...
 
 
-def checkpoint(function: Function, input: TensorOrTensors) -> TensorOrTensors:
-    """Makes a checkpoint with a simple interface like
-    :func:`torch.utils.checkpoint.checkpoint`. It's only used to test or debug
-    :class:`Checkpoint` and :class:`Recompute` without boilerplate.
-    """
-    batch = Batch(input)
-
-    chk = Checkpointing(function, batch)
-    batch = chk.checkpoint()
-    chk.recompute(batch)
-
-    return batch.tensor_or_tensors
-
-
 class Checkpointing:
     """Generates a pair of :class:`Checkpoint` and :class:`Recompute`."""
 
@@ -112,7 +98,7 @@ class Checkpointing:
         if isinstance(output, tuple):
             output = tuple([x if x.is_floating_point() else x.detach() for x in output])
 
-        return Batch(output)
+        return Batch(output, self.batch.index)
 
     def recompute(self, batch: Batch) -> None:
         """Applies :class:`Recompute` to the batch in place."""
@@ -222,6 +208,7 @@ def save_rng_states(device: torch.device, rng_states: Deque[RNGStates],) -> None
     else:
         gpu_rng_state = None
 
+    rng_states.clear()
     rng_states.append((cpu_rng_state, gpu_rng_state))
 
 
@@ -233,7 +220,7 @@ def restore_rng_states(device: torch.device, rng_states: Deque[RNGStates],) -> G
     .. seealso:: :ref:`Referential Transparency`
 
     """
-    cpu_rng_state, gpu_rng_state = rng_states.pop()
+    cpu_rng_state, gpu_rng_state = rng_states[0]
 
     gpu_devices: List[torch.device] = []
     if device.type == "cuda":

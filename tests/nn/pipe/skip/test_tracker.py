@@ -59,9 +59,9 @@ def test_default_skip_tracker_by_data_parallel():
 
 def test_reuse_portal():
     skip_layout = SkipLayout(num_partitions=2, skip_routes={(None, "test"): (0, 1)})
-    skip_tracker = SkipTrackerThroughPotals(skip_layout)
+    skip_tracker = SkipTrackerThroughPotals(skip_layout, 0)
 
-    batch = Batch(torch.tensor([1.0]))
+    batch = Batch(torch.tensor([1.0]), 0)
     a = torch.tensor([2.0])
     b = torch.tensor([2.0])
 
@@ -74,9 +74,9 @@ def test_reuse_portal():
 
 def test_no_copy_no_portal():
     skip_layout = SkipLayout(num_partitions=2, skip_routes={(None, "copy"): (0, 1), (None, "not_copy"): (0, 0)})
-    skip_tracker = SkipTrackerThroughPotals(skip_layout)
+    skip_tracker = SkipTrackerThroughPotals(skip_layout, 0)
 
-    batch = Batch(torch.tensor([1.0]))
+    batch = Batch(torch.tensor([1.0]), 0)
     a = torch.tensor([2.0])
     b = torch.tensor([2.0])
 
@@ -91,9 +91,9 @@ def test_no_copy_no_portal():
 
 def test_tensor_life_without_checkpointing():
     skip_layout = SkipLayout(num_partitions=2, skip_routes={(None, "test"): (0, 1)})
-    skip_tracker = SkipTrackerThroughPotals(skip_layout)
+    skip_tracker = SkipTrackerThroughPotals(skip_layout, 0)
 
-    batch = Batch(torch.tensor([1.0]))
+    batch = Batch(torch.tensor([1.0]), 0)
     tensor = torch.tensor([2.0])
 
     skip_tracker.save(batch, None, "test", tensor)
@@ -105,9 +105,9 @@ def test_tensor_life_without_checkpointing():
 
 def test_tensor_life_with_checkpointing():
     skip_layout = SkipLayout(num_partitions=2, skip_routes={(None, "test"): (0, 1)})
-    skip_tracker = SkipTrackerThroughPotals(skip_layout)
+    skip_tracker = SkipTrackerThroughPotals(skip_layout, 0)
 
-    batch = Batch(torch.tensor([1.0]))
+    batch = Batch(torch.tensor([1.0]), 0)
     tensor = torch.tensor([2.0])
 
     with enable_checkpointing():

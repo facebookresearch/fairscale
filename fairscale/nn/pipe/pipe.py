@@ -289,15 +289,13 @@ class Pipe(Module):
         raise MOVING_DENIED
 
     def to(self, *args: Any, **kwargs: Any) -> "Pipe":
-        # Deny these usages:
-        #
-        # - to(device[, dtype, non_blocking])
-        # - to(tensor[, non_blocking])
-        #
-        # But allow this:
-        #
-        # - to(dtype[, non_blocking])
-        #
+        """ Deny these usages:
+         - to(device[, dtype, non_blocking])
+         - to(tensor[, non_blocking])
+
+         But allow this:
+         - to(dtype[, non_blocking])"""
+
         if "device" in kwargs or "tensor" in kwargs:
             raise MOVING_DENIED
 

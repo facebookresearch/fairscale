@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 from .. import Tensor, _size
-from typing import Any, Optional, Tuple, Dict, List, Callable
+from typing import Any, Optional, Tuple, Dict, List, Callable, Union
 from .common_types import _ratio_any_t
 
 # 'TypedDict' is a new accepted type that represents a dictionary with a fixed set of allowed keys.

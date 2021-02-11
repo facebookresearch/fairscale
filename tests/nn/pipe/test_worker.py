@@ -33,7 +33,7 @@ def test_join_running_workers():
         nonlocal count
         time.sleep(0.1)
         count += 1
-        return Batch(())
+        return Batch((), 0)
 
     with spawn_workers([fake_device() for _ in range(10)]) as (in_queues, out_queues):
 
@@ -60,7 +60,7 @@ def test_join_running_workers_with_exception():
         nonlocal count
         time.sleep(0.1)
         count += 1
-        return Batch(())
+        return Batch((), 0)
 
     with pytest.raises(ExpectedException):
         with spawn_workers([fake_device() for _ in range(10)]) as (in_queues, out_queues):
@@ -86,7 +86,7 @@ def test_compute_multithreading():
     def log_thread_id():
         thread_id = threading.current_thread().ident
         thread_ids.add(thread_id)
-        return Batch(())
+        return Batch((), 0)
 
     with spawn_workers([fake_device() for _ in range(2)]) as (in_queues, out_queues):
         for i in range(2):
@@ -102,7 +102,7 @@ def test_compute_success():
     """Task.compute returns (True, (task, batch)) on success."""
 
     def _42():
-        return Batch(torch.tensor(42))
+        return Batch(torch.tensor(42), 0)
 
     with spawn_workers([torch.device("cpu")]) as (in_queues, out_queues):
         t = Task(CPUStream, compute=_42, finalize=None)
@@ -135,7 +135,7 @@ def test_compute_exception():
 def test_grad_mode(grad_mode):
     def detect_grad_enabled():
         x = torch.rand(1, requires_grad=torch.is_grad_enabled())
-        return Batch(x)
+        return Batch(x, 0)
 
     with torch.set_grad_enabled(grad_mode):
         with spawn_workers([torch.device("cpu")]) as (in_queues, out_queues):

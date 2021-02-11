@@ -48,6 +48,10 @@ class SkipTracker:
     ) -> None:
         raise TypeError("copy is not supported for non-portal skip tensors")
 
+    @property
+    def index(self) -> int:
+        return 0
+
 
 class SkipTrackerThroughPotals(SkipTracker):
     """Tracks saved skip tensors through portals. The skip tensors will be
@@ -58,10 +62,15 @@ class SkipTrackerThroughPotals(SkipTracker):
 
     """
 
-    def __init__(self, skip_layout: SkipLayout) -> None:
+    def __init__(self, skip_layout: SkipLayout, index: int) -> None:
         super().__init__()
         self.skip_layout = skip_layout
         self.portals: Dict[Tuple[Namespace, str], Portal] = {}
+        self.__index = index
+
+    @property
+    def index(self) -> int:
+        return self.__index
 
     def save(self, batch: Batch, ns: Namespace, name: str, tensor: Optional[Tensor]) -> None:
         """Saves the stashed skip tensor in a portal. The portal is then
@@ -93,7 +102,9 @@ class SkipTrackerThroughPotals(SkipTracker):
             else:
                 tensor_life = 2  # Delete at [6. PortalOrange.forward]
 
-            portal = Portal(tensor, tensor_life)
+            assert batch.index == self.index
+            portal = Portal(tensor, tensor_life, batch.index)
+            portal.ns_name = (ns, name)
             self.portals[(ns, name)] = portal
 
         else:

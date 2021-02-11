@@ -9,7 +9,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from torch.distributed.pipeline.sync import Pipe
+from fairscale.nn.pipe import Pipe
+from fairscale.utils.testing import skip_if_single_gpu
 
 
 def test_python_autograd_function(setup_rpc):

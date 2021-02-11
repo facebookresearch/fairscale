@@ -48,7 +48,11 @@ class Task:
     """
 
     def __init__(
-        self, stream: AbstractStream, *, compute: Callable[[], Batch], finalize: Optional[Callable[[Batch], None]],
+        self,
+        stream: Optional[AbstractStream],
+        *,
+        compute: Callable[[], Batch],
+        finalize: Optional[Callable[[Batch], None]],
     ) -> None:
         self.stream = stream
         self._compute = compute

@@ -3,3 +3,5 @@
 #MODIFIED BY TORCHGPIPE
 def version() -> int: ...
 #END
+deterministic : bool
+benchmark: bool

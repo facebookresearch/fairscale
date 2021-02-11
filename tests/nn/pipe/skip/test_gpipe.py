@@ -8,13 +8,13 @@ import pytest
 import torch
 from torch import nn
 
-from torch.distributed.pipeline.sync import Pipe
-from torch.distributed.pipeline.sync.skip import pop, skippable, stash
-from torch.distributed.pipeline.sync.skip.portal import PortalBlue, PortalCopy, PortalOrange
-from torch.distributed.pipeline.sync.utils import partition_model
+from . import Pipe
+from .skip import pop, skippable, stash
+from .skip.portal import PortalBlue, PortalCopy, PortalOrange
+from .utils import partition_model
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
+@skip_if_single_gpu
 @pytest.mark.parametrize("balance", [[3], [1, 2], [2, 1], [1, 1, 1]], ids=["3", "1:2", "2:1", "1:1:1"])
 @pytest.mark.parametrize("checkpoint", ["never", "always", "except_last"])
 def test_1to3(balance, checkpoint, setup_rpc):

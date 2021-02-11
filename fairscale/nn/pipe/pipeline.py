@@ -110,7 +110,7 @@ class Pipeline:
         m = len(batches)
         n = len(partitions)
 
-        skip_trackers = [SkipTrackerThroughPotals(skip_layout) for _ in batches]
+        skip_trackers = [SkipTrackerThroughPotals(skip_layout, i) for i in range(m)]
 
         for schedule in _clock_cycles(m, n):
             self.fence(batches, schedule, skip_trackers)

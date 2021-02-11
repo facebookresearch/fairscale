@@ -6,9 +6,13 @@ from .grad_mode import no_grad as no_grad, enable_grad as enable_grad, \
     set_grad_enabled as set_grad_enabled
 from .profiler import record_function
 
+# This is defined in CPP in PyTorch source
+class ImperativeEngine:
+    def queue_callback(self, callback: Callable[..., None]): ...
+
 # TODO make Variable and Function more precise
 class Variable:
-    ...
+    _execution_engine: ImperativeEngine
 
 class Function:
     @staticmethod
@@ -51,3 +55,4 @@ class set_detect_anomaly:
 _TensorOrTensors = Union[Tensor, Sequence[Tensor]]
 def backward(tensors: _TensorOrTensors, grad_tensors: Optional[_TensorOrTensors]=..., retain_graph: Optional[bool]=..., create_graph: bool=...) -> None: ...
 def grad(outputs: _TensorOrTensors, inputs: _TensorOrTensors, grad_outputs: Optional[_TensorOrTensors]=..., retain_graph: Optional[bool]=..., create_graph: bool=..., only_inputs: bool=..., allow_unused: bool=...) -> Tuple[Tensor, ...]: ...
+def _is_checkpoint_valid() -> bool: ...

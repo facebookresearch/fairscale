@@ -46,7 +46,7 @@ def profile_times(module: nn.Sequential, sample: TensorOrTensors, timeout: float
     if any(p.grad is not None for p in module.parameters()):
         raise ValueError("some parameter already has gradient")
 
-    _batch = Batch(sample)
+    _batch = Batch(sample, 0)
     for i, x in enumerate(_batch):
         _batch[i] = x.detach().to(device).requires_grad_(x.requires_grad)
 
@@ -88,7 +88,7 @@ def profile_sizes(
     if device.type != "cuda":
         raise ValueError("size profiler supports only CUDA device")
 
-    batch = Batch(input)
+    batch = Batch(input, 0)
     sizes: List[int] = []
 
     latent_scale = batch[0].size(0) / chunks
