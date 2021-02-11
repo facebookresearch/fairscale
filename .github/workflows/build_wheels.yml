@@ -18,11 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Build wheels for CPython
-        uses: joerick/cibuildwheel@v1.9.0
-        env:
-          # only build on 3.6+
-          CIBW_BUILD: cp36-* cp37-* cp38-* cp39-*
+      - name: Install Python
+        uses: actions/setup-python@v2
+
+      - name: Build wheel
+        run: pip install . && pip wheel -w wheelhouse .
 
       - uses: actions/upload-artifact@v2
         with:
