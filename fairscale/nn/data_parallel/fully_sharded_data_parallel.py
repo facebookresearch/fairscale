@@ -25,6 +25,7 @@ from fairscale.utils.containers import (
     unpack_kwargs,
     unpack_non_tensors,
 )
+from fairscale.utils.parallel import validate_process_group
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -32,7 +33,11 @@ if TYPE_CHECKING:
 
 class FullyShardedDataParallel(nn.Module):
     """
-    A wrapper for sharding Module parameters.
+    A wrapper for sharding Module parameters. This is inspired by `Xu et al.`_
+    as well as the ZeRO Stage 3 from the DeepSpeed_ work.
+
+    .. _`Xu et al.`: https://arxiv.org/abs/2004.13336
+    .. _DeepSpeed: https://www.deepspeed.ai/
 
     Usage::
 
@@ -111,6 +116,9 @@ class FullyShardedDataParallel(nn.Module):
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
         if self.cpu_offload and not self.mixed_precision:
             raise ValueError("cpu_offload requires mixed_precision=True")
+
+        compute_device = torch.device("cuda") if self.cpu_offload else next(module.parameters()).device
+        validate_process_group(compute_device, self.process_group)
 
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to
