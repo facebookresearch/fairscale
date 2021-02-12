@@ -14,6 +14,7 @@ from typing import Any, List, Tuple
 
 import torch
 from torch import nn
+from torch.cuda.amp import custom_bwd, custom_fwd
 
 
 def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
@@ -125,7 +126,8 @@ class ShardSyncLayer(torch.autograd.Function):
      """
 
     @staticmethod
-    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, model_instance: Any) -> Any:  # type: ignore
+    @custom_fwd
+    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, model_instance: Any) -> Any:
         drop_index = index
         load_index = index + 1
         max_slices = len(model_slices)
@@ -147,6 +149,7 @@ class ShardSyncLayer(torch.autograd.Function):
         return inputs if isinstance(inputs, tuple) else (inputs,)
 
     @staticmethod
+    @custom_bwd
     def backward(ctx, *grad_outputs):  # type: ignore
 
         load_index = ctx.index

@@ -7,6 +7,7 @@
 Testing Offload Module
 """
 
+import contextlib
 import copy
 
 import numpy as np
@@ -46,7 +47,7 @@ def _get_model(num_inputs=2, num_hidden=2, num_layers=1, num_outputs=2):
         torch.nn.Linear(num_inputs, num_hidden),
         *([torch.nn.Linear(num_hidden, num_hidden) for _ in range(num_layers)]),
         torch.nn.Linear(num_hidden, num_outputs),
-    ).cuda()
+    )
     return model
 
 
@@ -65,33 +66,56 @@ def _check_parity(rmodel, omodel, ropt, oopt, rloss, oloss):
             assert torch.allclose(o_buf, reg_buf, atol=1e-2), "Model buffers differ in between Offload and Vanilla."
 
 
-def test_correctness():
-    device, offload_device = _init()
-    model = _get_model().cuda()
+def _get_fp16_context(use_fp16=False):
+    if use_fp16:
+        return torch.cuda.amp.autocast()
+    else:
+        return contextlib.nullcontext()
 
-    def train(model, optimizer):
 
-        input = torch.ones(2, 2).to(device)
-        labels = torch.ones(2, 2).to(device)
-        model.train()
+def _train(model, optimizer, use_fp16, device):
+
+    input = torch.ones(2, 2).to(device)
+    labels = torch.ones(2, 2).to(device)
+    loss_fn = torch.nn.MSELoss(reduction="sum")
+    model.train()
+    with _get_fp16_context(use_fp16):
         pred = model(input)
-        loss_fn = torch.nn.MSELoss(reduction="sum")
         loss = loss_fn(pred, labels)
         loss.backward()
-        optimizer.step()
-        return model, optimizer, loss
+    optimizer.step()
+    return model, optimizer, loss
 
-    def train_reg_model():
-        reg_model = copy.deepcopy(model)
-        reg_optimizer = torch.optim.SGD(reg_model.parameters(), lr=0.001)
-        return train(reg_model, reg_optimizer)
 
-    def train_offload_model():
-        omodel = copy.deepcopy(model)
-        offload_model = OffloadModel(model_cpu=omodel, device=device, offload_device=offload_device, n_slices=2,)
-        offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
-        return train(offload_model, offload_optimizer)
+def _train_reg_model(model, device, offload_device, use_fp16):
+    reg_model = copy.deepcopy(model)
+    reg_model = reg_model.cuda()
+    reg_optimizer = torch.optim.SGD(reg_model.parameters(), lr=0.001)
+    return _train(reg_model, reg_optimizer, use_fp16, device)
 
-    rmodel, ropt, rloss = train_reg_model()
-    omodel, oopt, oloss = train_offload_model()
+
+def _train_offload_model(model, device, offload_device, use_fp16):
+    omodel = copy.deepcopy(model)
+    offload_model = OffloadModel(model_cpu=omodel, device=device, offload_device=offload_device, n_slices=2,)
+    offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
+    return _train(offload_model, offload_optimizer, use_fp16, device)
+
+
+def test_correctness():
+    device, offload_device = _init()
+    model = _get_model()
+    use_fp16 = False
+    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device, use_fp16)
+    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, use_fp16)
+    _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
+
+
+def test_correctness_fp16():
+    if not hasattr(torch.cuda.amp, "autocast"):
+        return
+    device, offload_device = _init()
+    model = _get_model()
+    use_fp16 = True
+    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device, use_fp16)
+    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, use_fp16)
     _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
