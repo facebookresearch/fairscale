@@ -391,16 +391,16 @@ class OSS(Optimizer):
 
         # NOTE: PyTorch 1.5 does not index linearly but with the id(params) at saving time
         # we work around that here by using the fact that the params are ordered as in the param_groups
+        pytorch15_index_redirect = {k: i for i, k in enumerate(state_dict["state"].keys())}
 
-        for i_param, (key, value) in enumerate(state_dict["state"].items()):
-            param = self.index_to_param[i_param]
+        for key, value in state_dict["state"].items():
+            param = self.index_to_param[pytorch15_index_redirect[key]]
 
             # Populate the sharded optimizer state on the fly
             if self.param_to_rank[param] != self.rank:
                 state_dict["state"][key] = None
 
-            if key in self.index_to_param:
-                param = self.index_to_param[i_param]
+            else:
 
                 # Only add this state to the sharded optimizer if it owns this param
                 for pg in self.optim.param_groups:
