@@ -58,7 +58,11 @@ def train(args: argparse.Namespace):
     if args.offload:
         logging.info("Using sharded offloading for training")
         model = OffloadModel(
-            model_cpu=model, device=device, offload_device=torch.device("cpu"), n_slices=args.slices,
+            model_cpu=model,
+            device=device,
+            offload_device=torch.device("cpu"),
+            n_slices=args.slices,
+            checkpoint_activation=args.checkpoint_activation,
         )  # type: ignore
 
     else:
@@ -105,15 +109,16 @@ def train(args: argparse.Namespace):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test the CPU offload + sharding with a Transformer training")
     parser.add_argument("--epochs", action="store", default=1, type=int)
-    parser.add_argument("--batch_size", action="store", default=20, type=int)
+    parser.add_argument("--batch_size", action="store", default=16, type=int)
     parser.add_argument("--inputs", action="store", help="The dimension of the inputs", default=100, type=int)
-    parser.add_argument("--hidden", action="store", help="The dimension of the hidden state", default=10000, type=int)
-    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=20, type=int)
+    parser.add_argument("--hidden", action="store", help="The dimension of the hidden state", default=1000, type=int)
+    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=100, type=int)
     parser.add_argument("--outputs", action="store", help="The number of predicted classes", default=5, type=int)
 
     parser.add_argument("--offload", action="store_true", default=False)
     parser.add_argument("--slices", action="store", default=3, type=int)
     parser.add_argument("--use_fp16", action="store_true", default=False)
+    parser.add_argument("--checkpoint_activation", action="store_true", default=False)
     parser.add_argument("--use_profiler", action="store_true", default=False)
 
     args = parser.parse_args()
