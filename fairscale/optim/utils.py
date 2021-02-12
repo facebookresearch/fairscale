@@ -3,11 +3,11 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+import collections
 import io
 from typing import Any, Callable, Dict, Optional
 
 import torch
-from torch._six import container_abcs
 import torch.distributed as dist
 
 
@@ -38,7 +38,7 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
 
         return values if isinstance(value, list) else tuple(values)
 
-    if isinstance(value, container_abcs.Mapping):
+    if isinstance(value, collections.abc.Mapping):
         device_val: Dict[str, Any] = {}
         for key, val in value.items():
             device_val[key] = recursive_copy_to_device(val, non_blocking=non_blocking, device=device)
@@ -89,6 +89,7 @@ class Bucket:
         self.max_size = buffer.numel()
 
         # Current status for this buffer
+        self.fill = 0
         self.params_checked_in = 0
         self.max_params_checked_in = 0  # atttribute present for convenience purposes
         self.destination = -1
