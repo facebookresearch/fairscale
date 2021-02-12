@@ -53,16 +53,16 @@ def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
 
 class ModelShard(nn.Module):
     """
-    Wrap one shard of the model, make it possible to load parameters on the fly for the FW pass and gather gradients.
-    Depending on whether this rank is or is not the `owner_rank`, this ModelShard either only handles
-    a shard of the compute and is stateless or also owns the up to date state.
+    Wrap one shard of the model, make it possible to load parameters on the 
+    fly for the FW and BW pass on the given device.
     """
 
     def __init__(
-        self, cpu_model_shard: nn.Module, device: torch.device, offload_device: torch.device,
+        self, cpu_model_shard: nn.Module, device: torch.device, offload_device: torch.device, index: int,
     ):
         super().__init__()
         self.model_shard = cpu_model_shard
+        self.index = index
 
         # Save all the parameter sizes to be able to restore them
         self.device = device
@@ -125,44 +125,73 @@ class ShardSyncLayer(torch.autograd.Function):
      """
 
     @staticmethod
-    def forward(ctx: Any, layer_window: Tuple[ModelShard, ModelShard, ModelShard, ModelShard], inputs: Any) -> Any:  # type: ignore
-        # Drop the shard we just went through, except if this is the last one in line
-        if layer_window[1] and layer_window[2]:
-            layer_window[1].forward_drop(non_blocking=True)
+    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, model_instance: Any) -> Any:  # type: ignore
+        drop_index = index
+        load_index = index + 1
+        max_slices = len(model_slices)
 
-        # Start the load of the next shard in line, opportunistically look ahead
-        if layer_window[3]:
-            layer_window[3].forward_load(non_blocking=True)
+        if drop_index >= 0:
+            # Move shard from device to offload device.
+            logging.info(f"Dropping shard {drop_index}")
+            model_slices[drop_index].forward_drop()
 
-        ctx.layer_window = layer_window
+        if load_index < max_slices:
+            # Load shard from offload device to device.
+            logging.info(f"Loading shard{load_index}")
+            model_slices[load_index].forward_load()
+
+        ctx.index = index
+        ctx.model_slices = model_slices
+        ctx.model_instance = model_instance
 
         return inputs if isinstance(inputs, tuple) else (inputs,)
 
     @staticmethod
     def backward(ctx, *grad_outputs):  # type: ignore
-        if ctx.layer_window[3]:
-            ctx.layer_window[3].backward_drop(non_blocking=True)
 
-        # Opportunistically pre-load ahead of the compute wavefront
-        if ctx.layer_window[1]:
-            ctx.layer_window[1].backward_load(non_blocking=True)
+        load_index = ctx.index
+        drop_index = load_index + 1
+        model_slices = ctx.model_slices
+        model_instance = ctx.model_instance
+
+        # TODO(anj-s): Are these redundant in the backward pass?
+        if drop_index == len(model_slices):
+            # Drop the last activation since it is still on the CPU
+            # after the loss.backward() call.
+            model_instance._activations[-1] = tuple([a.cuda() for a in list(model_instance._activations[-1])])
+
+        if drop_index < len(model_slices):
+            # Move shard from device to offload device.
+            logging.info(f"Backward Dropping shard {drop_index}")
+            model_slices[drop_index].backward_drop()
+            model_instance._activations[drop_index] = tuple(
+                [a.cpu() for a in list(model_instance._activations[drop_index])]
+            )
+
+        if load_index >= 0:
+            # Load shard from offload device to device.
+            logging.info(f"Backward Loading shard{load_index}")
+            model_slices[load_index].backward_load()
+            model_instance._activations[load_index] = tuple(
+                [a.cuda() for a in list(model_instance._activations[load_index])]
+            )
 
         # The returned variables need to mirror the forward inputs
+        # TODO(anj-s): Why do we need to do this?
         if isinstance(grad_outputs, tuple):
-            return None, grad_outputs[0]
+            return grad_outputs[0], None, None, None
 
-        return None, grad_outputs
+        return grad_outputs, None, None, None
 
 
-class OffloadWrapperExperimental(nn.Module):
+class OffloadModel(nn.Module):
     """Implements training with optimizer state sharding and model sharding.
 
     This experiments with a different way to get to the full zero suite
     The model is sharded, then the normal distributed data parallel algorithm can be used on a per-model shard basis.
     Each shard is offloaded and loaded following a compute wavefront, during the forward and backward pass.
 
-    All the gradients are centralized on a given rank (which is model-shard dependent, so that the gradients
-    redundancy can be removed). Each model shard can be updated by a normal pytorch optimizer.
+    Each model shard can be updated by a normal pytorch optimizer.
 
     Args:
         module (~torch.nn.Sequential): module to be parallelized
@@ -191,37 +220,45 @@ class OffloadWrapperExperimental(nn.Module):
         self.device = device
         self.offload_device = offload_device
 
-        # Slice the model into roughly equivalent sequential shards
+        # Slice the model into roughly equivalent sequential shards.
         splits = _split(model_cpu, n_slices)
 
-        # Each rank either owns the slice, or temporarily helps processing it in a data parallel fashion
+        # List of model shards that will be placed on/off the device.
         self.model_slices: List[nn.Module] = []
 
-        for split in splits:
+        for i, split in enumerate(splits):
             # Add one model handling this slice
             self.model_slices.append(
-                ModelShard(cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device,)
+                ModelShard(
+                    cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device, index=i,
+                )
             )
 
         # Expose a unified view of the slices
         self.model = torch.nn.Sequential(*self.model_slices)
 
+        # intermediate actiavtions
+        self._activations: List[Tuple] = []
+
     def forward(self, *inputs: Any, **_: Any) -> Any:
-        # Slice per slice FW, sync in between
-        syncRanks = ShardSyncLayer.apply
-
-        # TODO: Rewrite this and make it more flexible, this is ugly
-        for (p2, p1, n1, n2) in zip(
-            [None, None, *self.model_slices],
-            [None, *self.model_slices],
-            [*self.model_slices, None],
-            [*self.model_slices, None, None],
-        ):
-
-            # Per shard FW
-            inputs = p1(*inputs) if p1 else inputs
-
+        shardSync = ShardSyncLayer.apply
+        self._activations = []
+        for index in range(-1, len(self.model_slices)):
+            if index >= 0:
+                # TODO(anj-s): This might be a redundant call since we have the previous
+                # activation on the device already.
+                self._activations[index] = tuple([a.cuda() for a in list(self._activations[index])])
+                inputs = self._activations[index]
+                inputs = self.model_slices[index](*inputs)
             # Call the custom autograd hooks (discard/load slices FW and BW)
-            inputs = syncRanks((p2, p1, n1, n2), inputs)
+            inputs = shardSync(inputs, index, self.model_slices, self)
+            self._activations.append(inputs)
+            if index >= 0:
+                self._activations[index] = tuple([a.cpu() for a in list(self._activations[index])])
 
-        return inputs[0] if len(inputs) == 1 else inputs
+        # We don't move the last activation/output since the target is present
+        # on the device.
+        # TODO(anj-s): It is now a requirement that the target tensors be placed on the
+        # device.
+        result = self._activations[-1]
+        return result[0] if len(result) == 1 else result
