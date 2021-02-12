@@ -100,7 +100,6 @@ def train(args: argparse.Namespace):
                     loss.item(), args.batch_size / (time.time_ns() - start) * 10 ** 9
                 )
             )
-            break
         if args.use_profiler:
             prof.export_chrome_trace("/tmp/offload_prof")
 
