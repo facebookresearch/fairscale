@@ -1,16 +1,18 @@
 import copy
-import os
+import tempfile
 from typing import Any, Dict, List, Tuple, Type
 import unittest
 
+import pytest
 import torch
 from torch import nn
 import torch.distributed
+import torch.multiprocessing as mp
 import torch.nn.functional as F
-from torch.testing._internal.common_distributed import MultiProcessTestCase, requires_nccl, skip_if_not_multigpu
-from torch.testing._internal.common_utils import TEST_WITH_TSAN
+from torch.testing._internal.common_distributed import requires_nccl
 
 import fairscale.nn.data_parallel.gossip as gossip
+from fairscale.utils.testing import skip_if_single_gpu
 
 
 def get_gpus_for_rank(world_size: int) -> List[List[int]]:
@@ -98,571 +100,675 @@ def find_memory_used_by_model(model_class: Type[nn.Module], device: torch.device
     return model_memory
 
 
-@unittest.skipIf(
-    TEST_WITH_TSAN, "TSAN is not fork-safe since we're forking in a multi-threaded environment",
-)
-class GossipDataParallelTest(MultiProcessTestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self._fork_processes()
+def _prepare_single_device_module(
+    rank, world_size, tempfile, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], global_batch_size: int,
+) -> Tuple[nn.Module, gossip.GossipDataParallel, torch.Tensor, torch.Tensor]:
+    if not torch.distributed.is_initialized():
+        torch.distributed.init_process_group(
+            "nccl", init_method=f"file://{tempfile}", rank=rank, world_size=world_size,
+        )
+    model = Net()
+    slowmo_model = gossip.GossipDataParallel(
+        copy.deepcopy(model).to(devices[0]),
+        comm_device=devices[0],
+        rank=rank,
+        world_size=world_size,
+        **slowmo_init_dict,
+    )
 
-    def tearDown(self) -> None:
-        super().tearDown()
-        try:
-            os.remove(self.file_name)
-        except OSError:
-            pass
+    model.to(devices[0])
 
-    @property
-    def world_size(self) -> int:
-        return 2
+    input = torch.randn(global_batch_size, 2).to(devices[0])
+    target = torch.randn(global_batch_size, 4).to(devices[0])
 
-    def _prepare_single_device_module(
-        self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], global_batch_size: int,
-    ) -> Tuple[nn.Module, gossip.GossipDataParallel, torch.Tensor, torch.Tensor]:
-        if not torch.distributed.is_initialized():
-            torch.distributed.init_process_group(
-                "nccl", init_method=f"file://{self.file_name}", rank=self.rank, world_size=self.world_size,
-            )
-        model = Net()
-        slowmo_model = gossip.GossipDataParallel(
-            copy.deepcopy(model).to(devices[0]),
-            comm_device=devices[0],
-            rank=self.rank,
-            world_size=self.world_size,
-            **slowmo_init_dict,
+    return model, slowmo_model, input, target
+
+
+def run_test_slowmo_with_slowmo_freq_1(
+    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0,
+) -> None:
+    """
+    Note: we pass down `device_ids` all the way to GossipDataParallel
+    as part of the test. Below you find tests that either use a list of
+    integers, a list of `torch.Device` instances, or an empty list.
+    The `devices` argument is used to control placement of the model and
+    must always be specified as list of `torch.Device` instances.
+    """
+
+    int_devices = get_gpus_for_rank(world_size)[rank][:1]
+    devices = [torch.device("cuda:" + str(i)) for i in int_devices]
+
+    torch.cuda.set_device(devices[0])
+    local_batch_size = len(devices)
+    global_batch_size = world_size * local_batch_size
+
+    model, slowmo_model, input, target = _prepare_single_device_module(
+        rank, world_size, tempfile, devices, slowmo_init_dict, global_batch_size
+    )
+    model_optimizer = torch.optim.SGD(
+        model.parameters(), lr=slowmo_model.slowmo_lr, momentum=slowmo_model.slowmo_momentum,
+    )
+    slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=1, momentum=0)
+    slowmo_model.init_global_momentum_buffers(slowmo_model_optimizer)
+
+    # check two model parameters over 3 iterations
+    for iteration in range(3):
+        # single cpu/gpu training
+        step_model(model, input, target)
+
+        # SlowMo training, SlowMo scatters subsets of input_cpu to nodes/GPUs
+        step_model(
+            slowmo_model,
+            input[rank * local_batch_size : (rank + 1) * local_batch_size],
+            target[rank * local_batch_size : (rank + 1) * local_batch_size],
         )
 
-        model.to(devices[0])
+        # Update weights and run a second iteration to shake out errors
+        update_parameters(model_optimizer)
+        update_parameters(slowmo_model_optimizer)
+        slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
 
-        input = torch.randn(global_batch_size, 2).to(devices[0])
-        target = torch.randn(global_batch_size, 4).to(devices[0])
+        assert list(model.parameters()) == list(slowmo_model.module.parameters())
 
-        return model, slowmo_model, input, target
+        # Shuffle the input so that DDP input is different
+        torch.manual_seed(1337 + iteration)
+        input = input[torch.randperm(global_batch_size)]
 
-    def _test_slowmo_with_slowmo_freq_1(
-        self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0,
-    ) -> None:
-        """
-        Note: we pass down `device_ids` all the way to GossipDataParallel
-        as part of the test. Below you find tests that either use a list of
-        integers, a list of `torch.Device` instances, or an empty list.
-        The `devices` argument is used to control placement of the model and
-        must always be specified as list of `torch.Device` instances.
-        """
-        torch.cuda.set_device(devices[0])
-        local_batch_size = len(devices)
-        global_batch_size = self.world_size * local_batch_size
 
-        model, slowmo_model, input, target = self._prepare_single_device_module(
-            devices, slowmo_init_dict, global_batch_size
-        )
-        model_optimizer = torch.optim.SGD(
-            model.parameters(), lr=slowmo_model.slowmo_lr, momentum=slowmo_model.slowmo_momentum,
-        )
-        slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=1, momentum=0)
-        slowmo_model.init_global_momentum_buffers(slowmo_model_optimizer)
+def run_test_localsgd_with_freq_ge_2(
+    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0,
+) -> None:
 
-        # check two model parameters over 3 iterations
-        for iteration in range(3):
-            # single cpu/gpu training
-            step_model(model, input, target)
+    int_devices = get_gpus_for_rank(world_size)[rank][:1]
+    devices = [torch.device("cuda:" + str(i)) for i in int_devices]
 
-            # SlowMo training, SlowMo scatters subsets of input_cpu to nodes/GPUs
-            step_model(
-                slowmo_model,
-                input[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-                target[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-            )
+    torch.cuda.set_device(devices[0])
+    local_batch_size = len(devices)
+    global_batch_size = world_size * local_batch_size
 
-            # Update weights and run a second iteration to shake out errors
-            update_parameters(model_optimizer)
-            update_parameters(slowmo_model_optimizer)
-            slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
+    model, slowmo_model, input, target = _prepare_single_device_module(
+        rank, world_size, tempfile, devices, slowmo_init_dict, global_batch_size
+    )
+    assert model_optimizer_momentum == 0
+    assert not slowmo_model.slowmo
 
-            self.assertEqual(list(model.parameters()), list(slowmo_model.module.parameters()))
+    model_optimizer = torch.optim.SGD(model.parameters(), lr=1, momentum=model_optimizer_momentum)
+    slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=1, momentum=0)
 
-            # Shuffle the input so that DDP input is different
-            torch.manual_seed(1337 + iteration)
-            input = input[torch.randperm(global_batch_size)]
-
-    def _test_slowmo_with_slowmo_freq_ge_2(self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any]) -> None:
-        """
-        Note: we pass down `device_ids` all the way to GossipDataParallel
-        as part of the test. Below you find tests that either use a list of
-        integers, a list of `torch.Device` instances, or an empty list.
-        The `devices` argument is used to control placement of the model and
-        must always be specified as list of `torch.Device` instances.
-        """
-        torch.cuda.set_device(devices[0])
-        local_batch_size = len(devices)
-        global_batch_size = self.world_size * local_batch_size
-
-        model, slowmo_model, input, target = self._prepare_single_device_module(
-            devices, slowmo_init_dict, global_batch_size
-        )
-        base_lr, base_momentum = 1, 0
-        model_optimizer = torch.optim.SGD(model.parameters(), lr=base_lr, momentum=base_momentum)
-        model_slow_momentum_optimizer = torch.optim.SGD(
-            model.parameters(), lr=slowmo_model.slowmo_lr, momentum=slowmo_model.slowmo_momentum,
-        )
-        slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=base_lr, momentum=base_momentum)
-        slowmo_model.init_global_momentum_buffers(slowmo_model_optimizer)
-
-        old_parameters = [copy.deepcopy(params) for params in model.parameters()]
-
-        # check two model parameters over 6 iterations
-        for iteration in range(6):
-            # single cpu/gpu training
-            step_model(model, input, target)
-
-            # SlowMo training, SlowMo scatters subsets of input_cpu to nodes/GPUs
-            step_model(
-                slowmo_model,
-                input[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-                target[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-            )
-
-            # Update weights and run a second iteration to shake out errors
-            update_parameters(model_optimizer)
-            update_parameters(slowmo_model_optimizer)
-            slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
-
-            # This block simulates the behaviour of slow momentum by applying it manually
-            # to the regular model
-            if (iteration + 1) % slowmo_init_dict["slowmo_frequency"] == 0:
-                for params, old_params in zip(model.parameters(), old_parameters):
-                    params.grad = -(params - old_params)
-                    with torch.no_grad():
-                        params.copy_(old_params)
-                update_parameters(model_slow_momentum_optimizer)
-                for params, old_params in zip(model.parameters(), old_parameters):
-                    with torch.no_grad():
-                        old_params.copy_(params)
-
-            self.assertEqual(list(model.parameters()), list(slowmo_model.module.parameters()))
-
-            # Shuffle the input so that DDP input is different
-            torch.manual_seed(1337 + iteration)
-            input = input[torch.randperm(global_batch_size)]
-
-    def _test_localsgd_with_freq_ge_2(
-        self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0,
-    ) -> None:
-        torch.cuda.set_device(devices[0])
-        local_batch_size = len(devices)
-        global_batch_size = self.world_size * local_batch_size
-
-        model, slowmo_model, input, target = self._prepare_single_device_module(
-            devices, slowmo_init_dict, global_batch_size
-        )
-        self.assertEqual(model_optimizer_momentum, 0)
-        self.assertFalse(slowmo_model.slowmo)
-
-        model_optimizer = torch.optim.SGD(model.parameters(), lr=1, momentum=model_optimizer_momentum)
-        slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=1, momentum=0)
-
-        # check two model parameters over 3 iterations
-        for iteration in range(6):
-            # single cpu/gpu training
-            step_model(
-                model,
-                input[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-                target[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-            )
-
-            # SlowMo training, SlowMo scatters subsets of input_cpu to nodes/GPUs
-            step_model(
-                slowmo_model,
-                input[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-                target[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-            )
-
-            # Update weights and run a second iteration to shake out errors
-            update_parameters(model_optimizer)
-            update_parameters(slowmo_model_optimizer)
-
-            # This block simulates the behaviour of localsgd by doing an allreduce on
-            # parameters of the regular model
-            if (iteration + 1) % slowmo_model.localsgd_frequency == 0:
-                for param in model.parameters():
-                    torch.distributed.all_reduce(param)
-                    with torch.no_grad():
-                        param /= self.world_size  # type: ignore
-            slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
-
-            self.assertEqual(list(model.parameters()), list(slowmo_model.module.parameters()))
-
-            # Shuffle the input so that distributed input is different
-            torch.manual_seed(1337 + iteration)
-            input = input[torch.randperm(global_batch_size)]
-
-    def _test_memory_usage_localsgd_with_slowmo(
-        self, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], use_gossip_data_parallel: bool = False,
-    ) -> int:
-        torch.cuda.set_device(devices[0])
-        torch.cuda.reset_peak_memory_stats(devices[0])
-        initial_max_memory = torch.cuda.max_memory_allocated(devices[0])
-
-        local_batch_size = len(devices)
-        global_batch_size = self.world_size * local_batch_size
-
-        if not torch.distributed.is_initialized():
-            torch.distributed.init_process_group(
-                "nccl", init_method=f"file://{self.file_name}", rank=self.rank, world_size=self.world_size,
-            )
-        if use_gossip_data_parallel:
-            model: nn.Module = gossip.GossipDataParallel(
-                LargeNet().to(devices[0]),
-                comm_device=devices[0],
-                rank=self.rank,
-                world_size=self.world_size,
-                **slowmo_init_dict,
-            )
-        else:
-            model = LargeNet().to(devices[0])
-
-        input = torch.randn(global_batch_size, 2).to(devices[0])
-        target = torch.randn(global_batch_size, 4).to(devices[0])
-
-        model_optimizer = torch.optim.SGD(model.parameters(), lr=1, momentum=0.5)
-
-        # check two model parameters over 3 iterations
-        for iteration in range(3):
-            step_model(
-                model,
-                input[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-                target[self.rank * local_batch_size : (self.rank + 1) * local_batch_size],
-            )
-
-            update_parameters(model_optimizer)
-            if hasattr(model, "perform_additional_optimizer_actions"):
-                model.perform_additional_optimizer_actions(model_optimizer)  # type: ignore
-
-            # Shuffle the input so that distributed input is different
-            torch.manual_seed(1337 + iteration)
-            input = input[torch.randperm(global_batch_size)]
-
-        torch.cuda.synchronize(devices[0])
-        final_max_memory = torch.cuda.max_memory_allocated(devices[0])
-        # print(f"{initial_max_memory}, {final_max_memory}")
-
-        return final_max_memory - initial_max_memory
-
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_nccl_backend_device_ids_integer_list(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_1(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 1,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.0,
-            },
+    # check two model parameters over 3 iterations
+    for iteration in range(6):
+        # single cpu/gpu training
+        step_model(
+            model,
+            input[rank * local_batch_size : (rank + 1) * local_batch_size],
+            target[rank * local_batch_size : (rank + 1) * local_batch_size],
         )
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_nccl_backend_device_ids_torch_device_list(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_1(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 1,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.0,
-            },
+        # SlowMo training, SlowMo scatters subsets of input_cpu to nodes/GPUs
+        step_model(
+            slowmo_model,
+            input[rank * local_batch_size : (rank + 1) * local_batch_size],
+            target[rank * local_batch_size : (rank + 1) * local_batch_size],
         )
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_nccl_backend_2_proc_1_node(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_1(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in GossipDataParallel in the one node case
-                "nprocs_per_node": 2,
-                "slowmo_momentum": 0.0,
-            },
+        # Update weights and run a second iteration to shake out errors
+        update_parameters(model_optimizer)
+        update_parameters(slowmo_model_optimizer)
+
+        # This block simulates the behaviour of localsgd by doing an allreduce on
+        # parameters of the regular model
+        if (iteration + 1) % slowmo_model.localsgd_frequency == 0:
+            for param in model.parameters():
+                torch.distributed.all_reduce(param)
+                with torch.no_grad():
+                    param /= world_size  # type: ignore
+        slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
+
+        assert list(model.parameters()) == list(slowmo_model.module.parameters())
+
+        # Shuffle the input so that distributed input is different
+        torch.manual_seed(1337 + iteration)
+        input = input[torch.randperm(global_batch_size)]
+
+
+def run_test_slowmo_with_slowmo_freq_ge_2(
+    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any]
+) -> None:
+    """
+    Note: we pass down `device_ids` all the way to GossipDataParallel
+    as part of the test. Below you find tests that either use a list of
+    integers, a list of `torch.Device` instances, or an empty list.
+    The `devices` argument is used to control placement of the model and
+    must always be specified as list of `torch.Device` instances.
+    """
+
+    int_devices = get_gpus_for_rank(world_size)[rank][:1]
+    devices = [torch.device("cuda:" + str(i)) for i in int_devices]
+
+    torch.cuda.set_device(devices[0])
+    local_batch_size = len(devices)
+    global_batch_size = world_size * local_batch_size
+
+    model, slowmo_model, input, target = _prepare_single_device_module(
+        rank, world_size, tempfile, devices, slowmo_init_dict, global_batch_size
+    )
+    base_lr, base_momentum = 1, 0
+    model_optimizer = torch.optim.SGD(model.parameters(), lr=base_lr, momentum=base_momentum)
+    model_slow_momentum_optimizer = torch.optim.SGD(
+        model.parameters(), lr=slowmo_model.slowmo_lr, momentum=slowmo_model.slowmo_momentum,
+    )
+    slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=base_lr, momentum=base_momentum)
+    slowmo_model.init_global_momentum_buffers(slowmo_model_optimizer)
+
+    old_parameters = [copy.deepcopy(params) for params in model.parameters()]
+
+    # check two model parameters over 6 iterations
+    for iteration in range(6):
+        # single cpu/gpu training
+        step_model(model, input, target)
+
+        # SlowMo training, SlowMo scatters subsets of input_cpu to nodes/GPUs
+        step_model(
+            slowmo_model,
+            input[rank * local_batch_size : (rank + 1) * local_batch_size],
+            target[rank * local_batch_size : (rank + 1) * local_batch_size],
         )
 
-    # This test needs to be added if we have a setup in which we can test on more GPUs
-    # @requires_nccl()
-    # @skip_if_lt_x_gpu(4)
-    # def test_nccl_backend_2_proc_2_node(self):
-    #     # 2 device, 2 node
-    #     # 4 device, 1 node
-    #     # 1 device, 4 node
-    #     # can change world size to 4
-    #     # will need to change world_size to 4 for this
-    #     int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-    #     devices = list([torch.device("cuda:" + str(i)) for i in int_devices])
-    #     self._test_slowmo_with_process_group(
-    #         process_group,
-    #         devices,
-    #         {
-    #             "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-    #             "localsgd_frequency": 1,
-    #             "rank": self.rank,
-    #             "world_size": self.world_size,
-    #             "nprocs_per_node": 2,
-    #             "local_node_group": process_group,
-    #             "master_group": process_group,
-    #             "slowmo_momentum": 0.,
-    #         },
-    #     )
+        # Update weights and run a second iteration to shake out errors
+        update_parameters(model_optimizer)
+        update_parameters(slowmo_model_optimizer)
+        slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_localsgd_slowmo_freq_1(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_1(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 1,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 1,
-                "slowmo_memory_efficient": True,
-            },
-            model_optimizer_momentum=0.5,
+        # This block simulates the behaviour of slow momentum by applying it manually
+        # to the regular model
+        if (iteration + 1) % slowmo_init_dict["slowmo_frequency"] == 0:
+            for params, old_params in zip(model.parameters(), old_parameters):
+                params.grad = -(params - old_params)
+                with torch.no_grad():
+                    params.copy_(old_params)
+            update_parameters(model_slow_momentum_optimizer)
+            for params, old_params in zip(model.parameters(), old_parameters):
+                with torch.no_grad():
+                    old_params.copy_(params)
+
+        assert list(model.parameters()) == list(slowmo_model.module.parameters())
+
+        # Shuffle the input so that DDP input is different
+        torch.manual_seed(1337 + iteration)
+        input = input[torch.randperm(global_batch_size)]
+
+
+def run_test_memory_usage_localsgd_with_slowmo(
+    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], use_gossip_data_parallel: bool = False,
+) -> int:
+    int_devices = get_gpus_for_rank(world_size)[rank][:1]
+    devices = [torch.device("cuda:" + str(i)) for i in int_devices]
+
+    torch.cuda.set_device(devices[0])
+    torch.cuda.reset_peak_memory_stats(devices[0])
+    initial_max_memory = torch.cuda.max_memory_allocated(devices[0])
+
+    local_batch_size = len(devices)
+    global_batch_size = world_size * local_batch_size
+
+    if not torch.distributed.is_initialized():
+        torch.distributed.init_process_group(
+            "nccl", init_method=f"file://{tempfile}", rank=rank, world_size=world_size,
+        )
+    if use_gossip_data_parallel:
+        model: nn.Module = gossip.GossipDataParallel(
+            LargeNet().to(devices[0]), comm_device=devices[0], rank=rank, world_size=world_size, **slowmo_init_dict,
+        )
+    else:
+        model = LargeNet().to(devices[0])
+
+    input = torch.randn(global_batch_size, 2).to(devices[0])
+    target = torch.randn(global_batch_size, 4).to(devices[0])
+
+    model_optimizer = torch.optim.SGD(model.parameters(), lr=1, momentum=0.5)
+
+    # check two model parameters over 3 iterations
+    for iteration in range(3):
+        step_model(
+            model,
+            input[rank * local_batch_size : (rank + 1) * local_batch_size],
+            target[rank * local_batch_size : (rank + 1) * local_batch_size],
         )
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_sgp_slowmo_freq_1(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_1(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 1,
-                "slowmo_memory_efficient": False,
-            },
-            model_optimizer_momentum=0.5,
-        )
+        update_parameters(model_optimizer)
+        if hasattr(model, "perform_additional_optimizer_actions"):
+            model.perform_additional_optimizer_actions(model_optimizer)  # type: ignore
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_localsgd_slowmo(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_ge_2(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 1,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 2,
-                "slowmo_memory_efficient": True,
-            },
-        )
+        # Shuffle the input so that distributed input is different
+        torch.manual_seed(1337 + iteration)
+        input = input[torch.randperm(global_batch_size)]
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_localsgd_slowmo_no_sharding(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_ge_2(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 1,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 2,
-                "slowmo_memory_efficient": False,
-            },
-        )
+    torch.cuda.synchronize(devices[0])
+    final_max_memory = torch.cuda.max_memory_allocated(devices[0])
+    # print(f"{initial_max_memory}, {final_max_memory}")
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_sgp_slowmo(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_ge_2(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 2,
-                "slowmo_memory_efficient": True,
-            },
-        )
+    return final_max_memory - initial_max_memory
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_sgp_slowmo_no_sharding(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_ge_2(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 2,
-                "slowmo_memory_efficient": False,
-            },
-        )
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_slowmo_small_world_size(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_slowmo_with_slowmo_freq_ge_2(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 1,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 2,
-                "slowmo_num_shards": 1,
-                "slowmo_memory_efficient": True,
-            },
-        )
+@requires_nccl()
+@skip_if_single_gpu
+def test_nccl_backend_device_ids_integer_list() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_localsgd_freq_2(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        self._test_localsgd_with_freq_ge_2(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 2,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.0,
-            },
-        )
+    # FIXME: @lefaudeux - looks like this test got lost in translation
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_max_memory_used_localsgd_slowmo_memory_efficient(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+        "localsgd_frequency": 1,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.0,
+    }
 
-        # Memory usage when running optimization locally on a single GPU
-        max_memory_local = self._test_memory_usage_localsgd_with_slowmo(
-            devices, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
-        )
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_1,
+        args=(world_size, temp_file_name, slowmo_settings),
+        nprocs=world_size,
+        join=True,
+    )
 
-        # Memory usage when running optimization using LocalSGD-SlowMo
-        max_memory_localsgd_slowmo = self._test_memory_usage_localsgd_with_slowmo(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 1,
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 1,
-                "slowmo_memory_efficient": True,
-            },
-            use_gossip_data_parallel=True,
-        )
 
-        model_memory_usage = find_memory_used_by_model(LargeNet, devices[0])
+@requires_nccl()
+@skip_if_single_gpu
+def test_nccl_backend_device_ids_torch_device_list() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
 
-        extra_memory_used_by_localsgd_slowmo = max_memory_localsgd_slowmo - max_memory_local
+    # FIXME: @lefaudeux - looks like this test got lost in translation
 
-        extra_memory_used_by_slowmo = (
-            model_memory_usage  # This is expected on 2 GPU experiments and confirmed in below test
-        )
-        extra_memory_used_by_localsgd = extra_memory_used_by_localsgd_slowmo - extra_memory_used_by_slowmo
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+        "localsgd_frequency": 1,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.0,
+    }
 
-        # Extra memory used by localsgd should be close to 0 for large models, because we discard the gradients before the localsgd step
-        # which should allow us some extra memory for the averaging itself
-        # TODO: Above is a hypothesis. Need to test it out for those later, once we know how much memory is typically used by activations
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_1,
+        args=(world_size, temp_file_name, slowmo_settings),
+        nprocs=world_size,
+        join=True,
+    )
 
-        # This try-catch block is to prevent a flaky test failure in which model_memory_usage is 0
-        try:
-            # Just setting a number below to match what I found here. This test needs to be revised
-            self.assertLess(extra_memory_used_by_localsgd / model_memory_usage, 0.3)
-        except ZeroDivisionError:
-            if self.rank == 0:
-                print("Skipping flaky test due to 0 memory error")
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_max_memory_used_slowmo_memory_efficient(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        max_memory_local = self._test_memory_usage_localsgd_with_slowmo(
-            devices, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
-        )
-        max_memory_slowmo = self._test_memory_usage_localsgd_with_slowmo(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 100,  # This is so that localsgd does not occur
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 1,
-                "slowmo_memory_efficient": True,
-            },
-            use_gossip_data_parallel=True,
-        )
+@requires_nccl()
+@skip_if_single_gpu
+def test_nccl_backend_2_proc_1_node() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+        "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in GossipDataParallel in the one node case
+        "nprocs_per_node": 2,
+        "slowmo_momentum": 0.0,
+    }
 
-        extra_memory_used_by_slowmo = max_memory_slowmo - max_memory_local
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_1,
+        args=(world_size, temp_file_name, slowmo_settings),
+        nprocs=world_size,
+        join=True,
+    )
 
-        model_memory_usage = find_memory_used_by_model(LargeNet, devices[0])
-        # This try-catch block is to prevent a flaky test failure in which model_memory_usage is 0
-        try:
-            # Just setting a number below to match what I found here. This test needs to be revised
-            self.assertAlmostEqual(extra_memory_used_by_slowmo / model_memory_usage, 1.0, places=1)
-        except (ZeroDivisionError, AssertionError):
-            if self.rank == 0:
-                print("Skipping flaky test due to memory error")
 
-    @requires_nccl()
-    @skip_if_not_multigpu
-    def test_max_memory_used_slowmo_no_sharding(self) -> None:
-        int_devices = get_gpus_for_rank(self.world_size)[self.rank][:1]
-        devices = [torch.device("cuda:" + str(i)) for i in int_devices]
-        max_memory_local = self._test_memory_usage_localsgd_with_slowmo(
-            devices, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
-        )
-        max_memory_slowmo = self._test_memory_usage_localsgd_with_slowmo(
-            devices,
-            {
-                "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-                "localsgd_frequency": 100,  # This is so that localsgd does not occur
-                "nprocs_per_node": 1,
-                "slowmo_momentum": 0.5,
-                "slowmo_frequency": 1,
-                "slowmo_memory_efficient": False,
-            },
-            use_gossip_data_parallel=True,
-        )
+# @requires_nccl()
+# @skip_if_lt_x_gpu(4)
+# def test_nccl_backend_2_proc_2_node():
+#     # 2 device, 2 node
+#     # 4 device, 1 node
+#     # 1 device, 4 node
+#     # can change world size to 4
+#     # will need to change world_size to 4 for this
+#     world_size = 4
+#     temp_file_name = tempfile.mkstemp()[1]
+#     slowmo_settings = {
+#         "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+#         "localsgd_frequency": 1,
+#         "rank": rank,
+#         "world_size": world_size,
+#         "nprocs_per_node": 2,
+#         "local_node_group": process_group,
+#         "master_group": process_group,
+#         "slowmo_momentum": 0.0,
+#     }
 
-        extra_memory_used_by_slowmo = max_memory_slowmo - max_memory_local
+#     mp.spawn(
+#         run_test_slowmo_with_process_group,
+#         args=(world_size, temp_file_name, process_group, slowmo_settings),
+#         nprocs=world_size,
+#         join=True,
+#     )
 
-        model_memory_usage = find_memory_used_by_model(LargeNet, devices[0])
-        # This try-catch block is to prevent a flaky test failure in which model_memory_usage is 0
-        try:
-            # Just setting a number below to match what I found here. This test needs to be revised
-            self.assertAlmostEqual(extra_memory_used_by_slowmo / model_memory_usage, 2.0, places=1)
-        except (ZeroDivisionError, AssertionError):
-            if self.rank == 0:
-                print("Skipping flaky test due to memory error")
+
+# FIXME: @lefaudeux - most of the tests below could be factorized and semi-autogenerated
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_localsgd_slowmo_freq_1() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+        "localsgd_frequency": 1,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.5,
+        "slowmo_frequency": 1,
+        "slowmo_memory_efficient": True,
+    }
+
+    model_optimizer_momentum = 0.5
+
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_1,
+        args=(world_size, temp_file_name, slowmo_settings, model_optimizer_momentum,),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_sgp_slowmo_freq_1() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+
+    model_optimizer_momentum = 0.5
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.5,
+        "slowmo_frequency": 1,
+        "slowmo_memory_efficient": False,
+    }
+
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_1,
+        args=(world_size, temp_file_name, slowmo_settings, model_optimizer_momentum,),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_localsgd_slowmo() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+        "localsgd_frequency": 1,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.5,
+        "slowmo_frequency": 2,
+        "slowmo_memory_efficient": True,
+    }
+
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_ge_2,
+        args=(world_size, temp_file_name, slowmo_settings,),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_localsgd_slowmo_no_sharding() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+        "localsgd_frequency": 1,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.5,
+        "slowmo_frequency": 2,
+        "slowmo_memory_efficient": False,
+    }
+
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_ge_2,
+        args=(world_size, temp_file_name, slowmo_settings,),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_sgp_slowmo() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.5,
+        "slowmo_frequency": 2,
+        "slowmo_memory_efficient": True,
+    }
+
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_ge_2,
+        args=(world_size, temp_file_name, slowmo_settings,),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_sgp_slowmo_no_sharding() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.5,
+        "slowmo_frequency": 2,
+        "slowmo_memory_efficient": False,
+    }
+
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_ge_2,
+        args=(world_size, temp_file_name, slowmo_settings,),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_slowmo_small_world_size() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+        "localsgd_frequency": 1,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.5,
+        "slowmo_frequency": 2,
+        "slowmo_num_shards": 1,
+        "slowmo_memory_efficient": True,
+    }
+
+    mp.spawn(
+        run_test_slowmo_with_slowmo_freq_ge_2,
+        args=(world_size, temp_file_name, slowmo_settings,),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_localsgd_freq_2() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    slowmo_settings = {
+        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+        "localsgd_frequency": 2,
+        "nprocs_per_node": 1,
+        "slowmo_momentum": 0.0,
+    }
+
+    mp.spawn(
+        run_test_localsgd_with_freq_ge_2,
+        args=(world_size, temp_file_name, slowmo_settings,),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempfile) -> None:
+    int_devices = get_gpus_for_rank(world_size)[rank][:1]
+    devices = [torch.device("cuda:" + str(i)) for i in int_devices]
+
+    # Memory usage when running optimization locally on a single GPU
+    max_memory_local = run_test_memory_usage_localsgd_with_slowmo(
+        rank, world_size, tempfile, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+    )
+
+    # Memory usage when running optimization using LocalSGD-SlowMo
+    max_memory_localsgd_slowmo = run_test_memory_usage_localsgd_with_slowmo(
+        rank,
+        world_size,
+        tempfile,
+        {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 1,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 1,
+            "slowmo_memory_efficient": True,
+        },
+        use_gossip_data_parallel=True,
+    )
+
+    model_memory_usage = find_memory_used_by_model(LargeNet, devices[0])
+
+    extra_memory_used_by_localsgd_slowmo = max_memory_localsgd_slowmo - max_memory_local
+
+    extra_memory_used_by_slowmo = (
+        model_memory_usage  # This is expected on 2 GPU experiments and confirmed in below test
+    )
+    extra_memory_used_by_localsgd = extra_memory_used_by_localsgd_slowmo - extra_memory_used_by_slowmo
+
+    # Extra memory used by localsgd should be close to 0 for large models, because we discard the gradients before the localsgd step
+    # which should allow us some extra memory for the averaging itself
+    # TODO: Above is a hypothesis. Need to test it out for those later, once we know how much memory is typically used by activations
+
+    # This try-catch block is to prevent a flaky test failure in which model_memory_usage is 0
+    try:
+        # Just setting a number below to match what I found here. This test needs to be revised
+        assert extra_memory_used_by_localsgd / model_memory_usage < 0.3
+    except ZeroDivisionError:
+        if rank == 0:
+            print("Skipping flaky test due to 0 memory error")
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_max_memory_used_localsgd_slowmo_memory_efficient() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    mp.spawn(
+        run_max_memory_used_localsgd_slowmo_memory_efficient,
+        args=(world_size, temp_file_name),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, tempfile: str):
+    int_devices = get_gpus_for_rank(world_size)[rank][:1]
+    devices = [torch.device("cuda:" + str(i)) for i in int_devices]
+
+    max_memory_local = run_test_memory_usage_localsgd_with_slowmo(
+        rank, world_size, tempfile, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+    )
+    max_memory_slowmo = run_test_memory_usage_localsgd_with_slowmo(
+        rank,
+        world_size,
+        tempfile,
+        {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 100,  # This is so that localsgd does not occur
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 1,
+            "slowmo_memory_efficient": True,
+        },
+        use_gossip_data_parallel=True,
+    )
+
+    extra_memory_used_by_slowmo = max_memory_slowmo - max_memory_local
+
+    model_memory_usage = find_memory_used_by_model(LargeNet, devices[0])
+    # This try-catch block is to prevent a flaky test failure in which model_memory_usage is 0
+    try:
+        # Just setting a number below to match what I found here. This test needs to be revised
+        assert extra_memory_used_by_slowmo / model_memory_usage == pytest.approx(1.0, 0.1)
+    except (ZeroDivisionError, AssertionError):
+        if rank == 0:
+            print("Skipping flaky test due to memory error")
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_max_memory_used_slowmo_memory_efficient() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    mp.spawn(
+        run_max_memory_used_slowmo_memory_efficient, args=(world_size, temp_file_name), nprocs=world_size, join=True
+    )
+
+
+def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile):
+    int_devices = get_gpus_for_rank(world_size)[rank][:1]
+    devices = [torch.device("cuda:" + str(i)) for i in int_devices]
+
+    max_memory_local = run_test_memory_usage_localsgd_with_slowmo(
+        rank, world_size, tempfile, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+    )
+    max_memory_slowmo = run_test_memory_usage_localsgd_with_slowmo(
+        rank,
+        world_size,
+        tempfile,
+        {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 100,  # This is so that localsgd does not occur
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 1,
+            "slowmo_memory_efficient": False,
+        },
+        use_gossip_data_parallel=True,
+    )
+
+    extra_memory_used_by_slowmo = max_memory_slowmo - max_memory_local
+
+    model_memory_usage = find_memory_used_by_model(LargeNet, devices[0])
+
+    # This try-catch block is to prevent a flaky test failure in which model_memory_usage is 0
+    try:
+        # Just setting a number below to match what I found here. This test needs to be revised
+        assert extra_memory_used_by_slowmo / model_memory_usage == pytest.approx(2.0, 0.1)
+    except (ZeroDivisionError, AssertionError):
+        if rank == 0:
+            print("Skipping flaky test due to memory error")
+
+
+@requires_nccl()
+@skip_if_single_gpu
+def test_max_memory_used_slowmo_no_sharding() -> None:
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+    mp.spawn(run_max_memory_used_slowmo_no_sharding, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
 
 if __name__ == "__main__":
