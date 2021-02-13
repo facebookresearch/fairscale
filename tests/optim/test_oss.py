@@ -834,8 +834,8 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             loss_sharded_optim = cast(torch.Tensor, sharded_optimizer.step(closure=closure_sharded))
 
             assert torch.allclose(
-                loss_ddp, loss_sharded_optim
-            ), f"Losses differ in between Pytorch optim and OSS\nworld size {world_size}"
+                loss_ddp, loss_sharded_optim, rtol=1e-3
+            ), f"Losses differ in between Pytorch optim and OSS\n {loss_ddp.item()} - {loss_sharded_optim.item()} - world size {world_size}"
 
             check_same_model_params(oss_ddp_model, ddp_model)
 
