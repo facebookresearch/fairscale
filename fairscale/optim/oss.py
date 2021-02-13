@@ -379,6 +379,8 @@ class OSS(Optimizer):
                         global_id = self.param_to_index[local_index_to_param_id[local_param_index]]
                         state_dict["state"][global_id] = s["state"][local_param_index]
 
+        # Make sure that the parameters are sorted in the state, as expected
+        state_dict["state"] = dict(sorted(state_dict["state"].items()))
         return state_dict
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
@@ -399,9 +401,7 @@ class OSS(Optimizer):
             # Populate the sharded optimizer state on the fly
             if self.param_to_rank[param] != self.rank:
                 state_dict["state"][key] = None
-
             else:
-
                 # Only add this state to the sharded optimizer if it owns this param
                 for pg in self.optim.param_groups:
                     if id(param) in [id(p) for p in pg["params"]]:
