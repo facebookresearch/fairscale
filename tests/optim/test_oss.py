@@ -867,10 +867,11 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         sharded_optimizer.load_state_dict(ddp_state_dict)
         check_step()
 
-        #  - self load, check no problem
+        #  - self load, rewind, check no problem
         # run one step and check that the models are still the same
         ddp_optimizer.load_state_dict(ddp_state_dict_ref)
         sharded_optimizer.load_state_dict(sharded_optim_state_dict)
+        check_step()
 
     for opt in [torch.optim.Adam, torch.optim.SGD]:
         check_optimizer_equivalence(opt, change_train_graph=False)
