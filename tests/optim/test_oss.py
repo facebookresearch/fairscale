@@ -774,7 +774,9 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
 
     def check_optimizer_equivalence(optimizer: Type[torch.optim.Optimizer], change_train_graph: bool = False):
         # Any model works. Add one different buffer per rank
-        trunk = torch.nn.Sequential(torch.nn.Linear(in_channels, hidden), torch.nn.Linear(hidden, hidden))
+        trunk = torch.nn.Sequential(
+            torch.nn.Linear(in_channels, hidden), torch.nn.Linear(hidden, hidden), torch.nn.Linear(hidden, hidden)
+        )
         trunk.register_buffer("test_buffer", torch.ones((1)) * rank)
         trunk.to(device)
 
@@ -832,8 +834,8 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             loss_sharded_optim = cast(torch.Tensor, sharded_optimizer.step(closure=closure_sharded))
 
             assert torch.allclose(
-                loss_ddp, loss_sharded_optim
-            ), f"Losses differ in between Pytorch optim and OSS\nworld size {world_size}"
+                loss_ddp, loss_sharded_optim, rtol=1e-3
+            ), f"Losses differ in between Pytorch optim and OSS\n {loss_ddp.item()} - {loss_sharded_optim.item()} - world size {world_size}"
 
             check_same_model_params(oss_ddp_model, ddp_model)
 
@@ -859,10 +861,16 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         sharded_optim_state_dict = sync_object_ranks(sharded_optim_state_dict, RECIPIENT_RANK, device)
 
         # - cross load the states
+        # run one step and check that the models are still the same
+        ddp_state_dict_ref = copy.deepcopy(ddp_state_dict)  # OSS will remove some states
         ddp_optimizer.load_state_dict(sharded_optim_state_dict)  # mixup on purpose !
         sharded_optimizer.load_state_dict(ddp_state_dict)
+        check_step()
 
-        # - run one step and check that the models are still the same
+        #  - self load, rewind, check no problem
+        # run one step and check that the models are still the same
+        ddp_optimizer.load_state_dict(ddp_state_dict_ref)
+        sharded_optimizer.load_state_dict(sharded_optim_state_dict)
         check_step()
 
     for opt in [torch.optim.Adam, torch.optim.SGD]:
