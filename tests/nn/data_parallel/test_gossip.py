@@ -168,7 +168,8 @@ def run_test_slowmo_with_slowmo_freq_1(
         update_parameters(slowmo_model_optimizer)
         slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
 
-        assert list(model.parameters()) == list(slowmo_model.module.parameters())
+        for a, b in zip(model.parameters(), slowmo_model.module.parameters()):
+            assert torch.allclose(a, b)
 
         # Shuffle the input so that DDP input is different
         torch.manual_seed(1337 + iteration)
@@ -224,7 +225,8 @@ def run_test_localsgd_with_freq_ge_2(
                     param /= world_size  # type: ignore
         slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
 
-        assert list(model.parameters()) == list(slowmo_model.module.parameters())
+        for a, b in zip(model.parameters(), slowmo_model.module.parameters()):
+            assert torch.allclose(a, b)
 
         # Shuffle the input so that distributed input is different
         torch.manual_seed(1337 + iteration)
@@ -291,7 +293,8 @@ def run_test_slowmo_with_slowmo_freq_ge_2(
                 with torch.no_grad():
                     old_params.copy_(params)
 
-        assert list(model.parameters()) == list(slowmo_model.module.parameters())
+        for a, b in zip(model.parameters(), slowmo_model.module.parameters()):
+            assert torch.allclose(a, b)
 
         # Shuffle the input so that DDP input is different
         torch.manual_seed(1337 + iteration)
