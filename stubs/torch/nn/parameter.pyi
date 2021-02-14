@@ -11,6 +11,7 @@ class Parameter(Tensor):
     _is_sharded: bool
     _orig_size: Size
     _cpu_grad: Tensor
+    _full_param_padded: Tensor
     _full_param: Tensor
     _fp32_shard: Tensor
     _fp16_shard: Optional[Tensor]

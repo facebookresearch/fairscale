@@ -145,9 +145,9 @@ class TestMixedPrecision(DistributedTest):
             expected_input_dtype=in_dtype, expected_param_dtype=p_dtype, expected_loss_dtype=loss_dtype,
         )
 
-        def _reduce_scatter(self, tensor):
+        def _reduce_scatter(self, tensor, shard_size):
             model._check("reduce_scatter.dtype", tensor.dtype, expected=reduce_dtype)
-            return orig_reduce_scatter(self, tensor)
+            return orig_reduce_scatter(self, tensor, shard_size)
 
         with mock.patch.object(FullyShardedDataParallel, "_reduce_scatter", new=_reduce_scatter):
             model = FullyShardedDataParallel(model, group, **cfg).cuda()

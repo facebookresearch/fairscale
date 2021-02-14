@@ -6,7 +6,6 @@
 import contextlib
 import copy
 import functools
-import math
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
@@ -25,7 +24,7 @@ from fairscale.utils.containers import (
     unpack_kwargs,
     unpack_non_tensors,
 )
-from fairscale.utils.parallel import validate_process_group
+from fairscale.utils.parallel import compute_shard_size, validate_process_group
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -185,47 +184,44 @@ class FullyShardedDataParallel(nn.Module):
 
             p._is_sharded = True
             p._orig_size = p.data.size()
-            # shard p.data such that all elements are part of a shard and the last shard is <= all other shards
-            shard_size = math.ceil(p.data.numel() / self.world_size)
-            s = self.rank * shard_size
+
+            # shard p.data such that all elements are part of a shard and the
+            # last shard is <= all other shards or, all shards are 1-element
+            # in size in case total size is smaller than the world_size.
+            #
+            # This way, we don't have holes when shards are reconstructed and
+            # only extra padding elements need to added/removed during sharding.
+            shard_size = compute_shard_size(p.data.numel(), self.world_size)
+            s = min(self.rank * shard_size, p.data.numel())
             e = min(s + shard_size, p.data.numel())
+            assert (
+                0 <= s <= e <= p.data.numel()
+            ), f"_shard_parameters_: {p.data.numel()} {self.world_size} {shard_size} {s} {e}"
 
             orig_data = p.data
             p.data = torch.flatten(p.data)[s:e].clone()
+            if p.data.numel() < shard_size:
+                p.data = F.pad(p.data, [0, shard_size - p.data.numel()])  # pad zeros to the right size.
+            assert p.data.numel() == shard_size, f"{p.data.numel()} {shard_size}"
             free_storage_(orig_data)
-
-    @property
-    def is_last_rank(self) -> bool:
-        return self.rank == (self.world_size - 1)
-
-    def _calc_num_to_pad(self, numel: int) -> int:
-        num_extra = numel % self.world_size
-        num_to_pad = self.world_size - num_extra if num_extra > 0 else 0
-        return num_to_pad
 
     @torch.no_grad()
     def _all_gather_full_param(self, p: nn.Parameter) -> None:
         """Fill p._full_param with gathered p.data values (using torch.distributed.all_gather).
-        If the last shard is smaller than the other shards, we pad it with zeroes.
-        """
-        full_param_chunks = list(torch.flatten(p._full_param).chunk(self.world_size))
-        # We overwrite the last chunk with zeroes if it is smaller than the other entries.
-        num_to_pad = self._calc_num_to_pad(p._orig_size.numel())
-        pointer_to_last_chunk = full_param_chunks[-1]
-        assert pointer_to_last_chunk.numel() + num_to_pad == full_param_chunks[0].numel()
 
+        The p._full_param is already allocated and have the size equal
+        to shard_size * world_size.
+
+        It is up to the caller to do necessary resize/reshape to the
+        unpadded _full_param.
+        """
+        full_param_chunks = list(p._full_param.chunk(self.world_size))
+        assert len(full_param_chunks) == self.world_size
+        assert full_param_chunks[-1].numel() == p.data.numel(), f"{full_param_chunks[-1].numel()} {p.data.numel()}"
         param_shard = p.data  # we will gather this from each worker
-        if num_to_pad > 0:  # add padding to param_shard and full_param_chunks[-1]
-            full_param_chunks[-1] = torch.zeros_like(full_param_chunks[0])  # no longer shares memory with full_param
-            if self.is_last_rank:
-                param_shard = F.pad(p.data, [0, num_to_pad])
+
         dist.all_gather(full_param_chunks, param_shard, group=self.process_group)
         # ^ updates p._full_param
-
-        # remove padding from full_param_chunks[-1] and p.data
-        if num_to_pad > 0:  # copy shard associated with the padded chunk to full_param
-            pointer_to_last_chunk.copy_(full_param_chunks[-1][:-num_to_pad])
-            # ^ updates p._full_param
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -597,7 +593,7 @@ class FullyShardedDataParallel(nn.Module):
                 param.grad.data.div_(self.world_size)
 
                 # Reduce-scatter grad.
-                param.grad.data = self._reduce_scatter(param.grad.data)
+                param.grad.data = self._reduce_scatter(param.grad.data, param.data.numel())
             else:
                 param.grad.data = torch.flatten(param.grad.data)
 
@@ -637,13 +633,24 @@ class FullyShardedDataParallel(nn.Module):
                 self._cast_fp32_param_shards_to_fp16()
 
             for p in self.params:
-                if p._full_param.storage().size() != p._orig_size.numel():
-                    alloc_storage_(p._full_param, size=p._orig_size)
+                p_size = p.data.numel() * self.world_size
+                if p._full_param.storage().size() != p_size:
+                    # Allocate based on full size from all shards.
+                    p._full_param.resize_(p_size)
+                    alloc_storage_(p._full_param, torch.Size((p_size,)))
                     if self.world_size > 1:
-                        # Fill p._full_param with (p.data for each shard in self.world_size).
+                        # Fill p._full_param with (p.data for each shard in self.world_size)
                         self._all_gather_full_param(p)
+                        if p._orig_size.numel() < p._full_param.numel():
+                            # We need a smaller view into _full_param and save
+                            # _full_param_padded.
+                            p._full_param_padded = p._full_param
+                            # Note, full size can be >> orig_size when world_size is
+                            # large and param size is tiny.
+                            p._full_param = p._full_param.split(p._orig_size.numel())[0]
                     else:
                         torch.flatten(p._full_param).copy_(p.data)
+                    p._full_param = p._full_param.reshape(p._orig_size)
 
                 p.data = p._full_param
 
@@ -679,7 +686,11 @@ class FullyShardedDataParallel(nn.Module):
                 # Storage object and unshard it in-place. For now, just resize
                 # the Storage to 0 to save memory.
                 p._full_param.record_stream(current_stream)
-                free_storage_(p._full_param)
+                if hasattr(p, "_full_param_padded"):
+                    free_storage_(p._full_param_padded)
+                    delattr(p, "_full_param_padded")
+                else:
+                    free_storage_(p._full_param)
 
     @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
@@ -720,20 +731,44 @@ class FullyShardedDataParallel(nn.Module):
                 free_storage_(p._fp16_shard)
 
     @torch.no_grad()
-    def _reduce_scatter(self, tensor: torch.Tensor) -> torch.Tensor:
+    def _reduce_scatter(self, tensor: torch.Tensor, shard_size: int) -> torch.Tensor:
         """Reduce-scatter a Tensor (gradient from the local worker) and return
-        the result (a single shard of the summed gradient across workers)."""
+        the result (a single "flattened" shard of the summed gradient across workers).
+
+        Shard_size is passed in to compute the padding, but we don't use F.pad since
+        it reallocates the tensor, which can be a big chunk of memory consumed. Instead,
+        we allocate only for missing and incomplete shards and copy only the needed
+        data to the first allocated shard. (The remining allocated shards are just
+        padding for reduce_scatter.)
+        """
         tensor = torch.flatten(tensor)
-        num_to_pad = self._calc_num_to_pad(tensor.numel())
-        if num_to_pad > 0:  # pad the gradient to be divisible by world_size
-            tensor = F.pad(tensor, [0, num_to_pad])
-        assert tensor.numel() % self.world_size == 0
-        tensor = tensor.view(self.world_size, -1)
-        output = torch.zeros_like(tensor[0])  # filled with gradient summed across workers
-        to_scatter = list(tensor.unbind(0))  # world size tensors of shape (shard_size,)
-        dist.reduce_scatter(output, to_scatter, group=self.process_group)
-        if self.is_last_rank and num_to_pad > 0:
-            output = output[:-num_to_pad]
+        full_shards, rem = divmod(tensor.numel(), shard_size)
+        assert full_shards <= self.world_size, (
+            f"incorrect shard_size {shard_size} " f"full_shards {full_shards} " f"world_size {self.world_size}"
+        )
+        full_shards_view = tensor
+        if rem > 0:
+            # Get two views in to the tensor.
+            full_shards_view, rem_view = tensor.split(full_shards * shard_size)
+
+        # This is first part of to_scatter list.
+        to_scatter = list(full_shards_view.view(-1, shard_size).unbind(0))
+
+        tail = []
+        if full_shards < self.world_size:
+            # This is the second part of the to_scatter list.
+            tail = [torch.zeros_like(to_scatter[0]) for i in range(full_shards, self.world_size)]
+
+        if rem > 0:
+            # Copy the right data in to the first partial shard.
+            tail[0][:rem].copy_(rem_view)
+
+        assert len(to_scatter) + len(tail) == self.world_size, (
+            f"incorrect length {len(to_scatter)} + {len(tail)} vs. " f"{self.world_size}"
+        )
+
+        output = torch.zeros_like(to_scatter[0])  # will be filled with gradient summed across workers
+        dist.reduce_scatter(output, to_scatter + tail, group=self.process_group)
         return output
 
 
