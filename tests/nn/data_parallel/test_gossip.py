@@ -41,9 +41,6 @@ def get_gpus_for_rank(world_size: int) -> List[List[int]]:
     # Make sure that the computations are deterministic
     if hasattr(torch, "set_deterministic"):
         torch.set_deterministic(True)  # type: ignore  # this is just checked above, mypy is drunk
-    else:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
 
     visible_devices = list(range(torch.cuda.device_count()))
     num_visible_devices = torch.cuda.device_count()
