@@ -1,4 +1,5 @@
 import copy
+import os
 import tempfile
 from typing import Any, Dict, List, Tuple, Type
 import unittest
@@ -13,6 +14,9 @@ from torch.testing._internal.common_distributed import requires_nccl
 
 import fairscale.nn.data_parallel.gossip as gossip
 from fairscale.utils.testing import skip_if_single_gpu
+
+# Enfore CUBLAS reproducibility, see https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 
 def get_gpus_for_rank(world_size: int) -> List[List[int]]:
@@ -33,6 +37,14 @@ def get_gpus_for_rank(world_size: int) -> List[List[int]]:
     Args:
         world_size (int): denotes number of subsets to split the available GPUs into
     """
+
+    # Make sure that the computations are deterministic
+    if hasattr(torch, "set_deterministic"):
+        torch.set_deterministic(True)  # type: ignore  # this is just checked above, mypy is drunk
+    else:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
     visible_devices = list(range(torch.cuda.device_count()))
     num_visible_devices = torch.cuda.device_count()
 
@@ -125,7 +137,7 @@ def _prepare_single_device_module(
 
 
 def run_test_slowmo_with_slowmo_freq_1(
-    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0,
+    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0
 ) -> None:
     """
     Note: we pass down `device_ids` all the way to GossipDataParallel
@@ -234,7 +246,7 @@ def run_test_localsgd_with_freq_ge_2(
 
 
 def run_test_slowmo_with_slowmo_freq_ge_2(
-    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any]
+    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], *_args: Any
 ) -> None:
     """
     Note: we pass down `device_ids` all the way to GossipDataParallel
@@ -294,7 +306,7 @@ def run_test_slowmo_with_slowmo_freq_ge_2(
                     old_params.copy_(params)
 
         for a, b in zip(model.parameters(), slowmo_model.module.parameters()):
-            assert torch.allclose(a, b)
+            assert torch.allclose(a, b, atol=1e-6), f"{a} = {b}"
 
         # Shuffle the input so that DDP input is different
         torch.manual_seed(1337 + iteration)
@@ -353,67 +365,144 @@ def run_test_memory_usage_localsgd_with_slowmo(
     return final_max_memory - initial_max_memory
 
 
+_SLOWMO_TEST_SETTINGS = [
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 1,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.0,
+        },
+        "model_optimizer_momentum": 0.0,
+        "test_function": run_test_slowmo_with_slowmo_freq_1,
+        "test_name": "nccl_backend_device_ids_torch_device_list",
+    },
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in GossipDataParallel in the one node case
+            "nprocs_per_node": 2,
+            "slowmo_momentum": 0.0,
+        },
+        "model_optimizer_momentum": 0.0,
+        "test_function": run_test_slowmo_with_slowmo_freq_1,
+        "test_name": "nccl_backend_2_proc_1_node",
+    },
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 1,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 1,
+            "slowmo_memory_efficient": True,
+        },
+        "model_optimizer_momentum": 0.5,  # Does not actually seem to be used
+        "test_function": run_test_slowmo_with_slowmo_freq_1,
+        "test_name": "localsgd_slowmo_freq_1",
+    },
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 1,
+            "slowmo_memory_efficient": False,
+        },
+        "model_optimizer_momentum": 0.5,
+        "test_function": run_test_slowmo_with_slowmo_freq_1,
+        "test_name": "sgp_slowmo_freq_1",
+    },
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 1,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 2,
+            "slowmo_memory_efficient": True,
+        },
+        "model_optimizer_momentum": 0.0,
+        "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
+        "test_name": "localsgd_slowmo",
+    },
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 1,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 2,
+            "slowmo_memory_efficient": False,
+        },
+        "model_optimizer_momentum": 0.0,
+        "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
+        "test_name": "localsgd_slowmo_no_sharding",
+    },
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 2,
+            "slowmo_memory_efficient": True,
+        },
+        "model_optimizer_momentum": 0.0,
+        "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
+        "test_name": "sgp_slowmo",
+    },
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 2,
+            "slowmo_memory_efficient": False,
+        },
+        "model_optimizer_momentum": 0.0,
+        "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
+        "test_name": "sgp_slowmo_no_sharding",
+    },
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 1,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.5,
+            "slowmo_frequency": 2,
+            "slowmo_num_shards": 1,
+            "slowmo_memory_efficient": True,
+        },
+        "model_optimizer_momentum": 0.0,
+        "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
+        "test_name": "slowmo_small_worldsize",
+    },
+    {
+        "slowmo_settings": {
+            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "localsgd_frequency": 2,
+            "nprocs_per_node": 1,
+            "slowmo_momentum": 0.0,
+        },
+        "model_optimizer_momentum": 0.0,
+        "test_name": "localsgd_freq2",
+        "test_function": run_test_localsgd_with_freq_ge_2,
+    },
+]
+
+
 @requires_nccl()
 @skip_if_single_gpu
-def test_nccl_backend_device_ids_integer_list() -> None:
+@pytest.mark.parametrize("test_settings", _SLOWMO_TEST_SETTINGS)
+def test_settings(test_settings) -> None:
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
-    # FIXME: @lefaudeux - looks like this test got lost in translation
-
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-        "localsgd_frequency": 1,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.0,
-    }
+    print("Testing ", test_settings["test_function"], " with settings ", test_settings["test_name"])
 
     mp.spawn(
-        run_test_slowmo_with_slowmo_freq_1,
-        args=(world_size, temp_file_name, slowmo_settings),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_nccl_backend_device_ids_torch_device_list() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-
-    # FIXME: @lefaudeux - looks like this test got lost in translation
-
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-        "localsgd_frequency": 1,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.0,
-    }
-
-    mp.spawn(
-        run_test_slowmo_with_slowmo_freq_1,
-        args=(world_size, temp_file_name, slowmo_settings),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_nccl_backend_2_proc_1_node() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-        "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in GossipDataParallel in the one node case
-        "nprocs_per_node": 2,
-        "slowmo_momentum": 0.0,
-    }
-
-    mp.spawn(
-        run_test_slowmo_with_slowmo_freq_1,
-        args=(world_size, temp_file_name, slowmo_settings),
+        test_settings["test_function"],
+        args=(world_size, temp_file_name, test_settings["slowmo_settings"], test_settings["model_optimizer_momentum"]),
         nprocs=world_size,
         join=True,
     )
@@ -446,185 +535,6 @@ def test_nccl_backend_2_proc_1_node() -> None:
 #         nprocs=world_size,
 #         join=True,
 #     )
-
-
-# FIXME: @lefaudeux - most of the tests below could be factorized and semi-autogenerated
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_localsgd_slowmo_freq_1() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-        "localsgd_frequency": 1,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.5,
-        "slowmo_frequency": 1,
-        "slowmo_memory_efficient": True,
-    }
-
-    model_optimizer_momentum = 0.5
-
-    mp.spawn(
-        run_test_slowmo_with_slowmo_freq_1,
-        args=(world_size, temp_file_name, slowmo_settings, model_optimizer_momentum,),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_sgp_slowmo_freq_1() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-
-    model_optimizer_momentum = 0.5
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.5,
-        "slowmo_frequency": 1,
-        "slowmo_memory_efficient": False,
-    }
-
-    mp.spawn(
-        run_test_slowmo_with_slowmo_freq_1,
-        args=(world_size, temp_file_name, slowmo_settings, model_optimizer_momentum,),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_localsgd_slowmo() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-        "localsgd_frequency": 1,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.5,
-        "slowmo_frequency": 2,
-        "slowmo_memory_efficient": True,
-    }
-
-    mp.spawn(
-        run_test_slowmo_with_slowmo_freq_ge_2,
-        args=(world_size, temp_file_name, slowmo_settings,),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_localsgd_slowmo_no_sharding() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-        "localsgd_frequency": 1,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.5,
-        "slowmo_frequency": 2,
-        "slowmo_memory_efficient": False,
-    }
-
-    mp.spawn(
-        run_test_slowmo_with_slowmo_freq_ge_2,
-        args=(world_size, temp_file_name, slowmo_settings,),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_sgp_slowmo() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.5,
-        "slowmo_frequency": 2,
-        "slowmo_memory_efficient": True,
-    }
-
-    mp.spawn(
-        run_test_slowmo_with_slowmo_freq_ge_2,
-        args=(world_size, temp_file_name, slowmo_settings,),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_sgp_slowmo_no_sharding() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.5,
-        "slowmo_frequency": 2,
-        "slowmo_memory_efficient": False,
-    }
-
-    mp.spawn(
-        run_test_slowmo_with_slowmo_freq_ge_2,
-        args=(world_size, temp_file_name, slowmo_settings,),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_slowmo_small_world_size() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-        "localsgd_frequency": 1,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.5,
-        "slowmo_frequency": 2,
-        "slowmo_num_shards": 1,
-        "slowmo_memory_efficient": True,
-    }
-
-    mp.spawn(
-        run_test_slowmo_with_slowmo_freq_ge_2,
-        args=(world_size, temp_file_name, slowmo_settings,),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@requires_nccl()
-@skip_if_single_gpu
-def test_localsgd_freq_2() -> None:
-    world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-    slowmo_settings = {
-        "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
-        "localsgd_frequency": 2,
-        "nprocs_per_node": 1,
-        "slowmo_momentum": 0.0,
-    }
-
-    mp.spawn(
-        run_test_localsgd_with_freq_ge_2,
-        args=(world_size, temp_file_name, slowmo_settings,),
-        nprocs=world_size,
-        join=True,
-    )
 
 
 def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempfile) -> None:
