@@ -250,7 +250,9 @@ class ShardedDataParallel(nn.Module):
         """ If the module trainability has changed, update all the assumptions """
 
         # Make sure that this is not done while gradients are waiting to be reduced (if no_sync context for instance)
-        assert not functools.reduce(lambda x, y: x or y, self._grad_to_be_reduced, False), "Grads waiting to be reduced"
+        assert not functools.reduce(
+            lambda x, y: x or y, self._grad_to_be_reduced, False
+        ), "Grads waiting to be reduced: {}".format(self._grad_to_be_reduced)
 
         self._trainable_params = list(filter(lambda x: x.requires_grad, self._all_params))
         self._trainable_params.sort(key=lambda x: x.numel())
@@ -273,11 +275,21 @@ class ShardedDataParallel(nn.Module):
         self._setup_backward_hooks()
 
     def reduce(self) -> None:
-        """.. deprecated:: 0.0.4
-
-        This does not need to be called, the gradient reduction is done automatically during the BW pass
         """
-        logging.warning("This is not useful anymore, gradients have been reduced automatically with the backward pass")
+        This does not *need* to be called, the gradient reduction is done automatically during the BW pass.
+        Use this method to reduce the gradients manually
+        """
+
+        # Check that this is not a mistake, if there's nothing to reduce
+        assert functools.reduce(
+            lambda x, y: x or y, self._grad_to_be_reduced, False
+        ), "No grads waiting to be reduced, maybe that this was called twice or there was no BW pass ?"
+
+        # Trigger all the current BW hooks
+        _ = map(lambda x: x(), self._grad_accs)
+
+        # Make sure that all the futures are consumed
+        self._consume_work_handles()
 
     @torch.no_grad()
     def sync_buffers(self, blocking: bool = False) -> None:
