@@ -7,7 +7,7 @@ import io
 from typing import Any, Callable, Dict, List, Optional
 
 import torch
-from torch._six import container_abcs
+import collections.abc as container_abcs
 import torch.distributed as dist
 
 
