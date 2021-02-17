@@ -137,10 +137,10 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     INPUTS = 2
     BATCH_SIZE = 32
 
-    def check_parity(amp: bool, accumulate: bool, change_train_graph: bool):
+    def check_parity(amp: bool, accumulate: bool, change_train_graph: bool, manual_reduction: bool):
 
         # The API should be the exact same in between the sharded and non-sharded variants, generic closure
-        def closure(model, scaler, input_tensor, should_accumulate):
+        def closure(model, scaler, input_tensor, should_accumulate, _manual_reduction=False):
             accumulate_steps = 3 if should_accumulate else 1
 
             model.zero_grad()
@@ -158,7 +158,13 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                 for _ in range(accumulate_steps - 1):
                     step()
 
-            step()
+            if not _manual_reduction:
+                step()
+            else:
+                with model.no_sync():
+                    step()
+
+                model.reduce()
 
         # Any model works. Add one different buffer per rank
         model = Sequential(Linear(INPUTS, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
@@ -192,7 +198,9 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                 return closure(ddp_model, ddp_scaler, input_tensor, accumulate)
 
             def closure_sharded(input_tensor=input_tensor):
-                return closure(sharded_ddp_model, sharded_ddp_scaler, input_tensor, accumulate)
+                return closure(
+                    sharded_ddp_model, sharded_ddp_scaler, input_tensor, accumulate, _manual_reduction=manual_reduction
+                )
 
             # Step/scale both
             if ddp_scaler is not None:
@@ -226,11 +234,18 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
 
     for accumulate in [False, True]:
         for change_train_graph in [False, True]:
-            for amp in amp_tests:
-                print(
-                    f"Checking configuration: accumulate {accumulate} - change train graph {change_train_graph} - amp {amp}"
-                )
-                check_parity(amp=amp, accumulate=accumulate, change_train_graph=change_train_graph)
+            manual_reductions = [False, True] if not accumulate and not change_train_graph else [False]
+            for manual_reduction in manual_reductions:
+                for amp in amp_tests:
+                    print(
+                        f"Checking configuration: accumulate {accumulate} - change train graph {change_train_graph} - amp {amp} - manual reduction {manual_reduction}"
+                    )
+                    check_parity(
+                        amp=amp,
+                        accumulate=accumulate,
+                        change_train_graph=change_train_graph,
+                        manual_reduction=manual_reduction,
+                    )
 
     dist.destroy_process_group()
 
