@@ -238,7 +238,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             for manual_reduction in manual_reductions:
                 for amp in amp_tests:
                     print(
-                        f"Checking configuration: accumulate {accumulate} - change train graph {change_train_graph} - amp {amp}"
+                        f"Checking configuration: accumulate {accumulate} - change train graph {change_train_graph} - amp {amp} - manual reduction {manual_reduction}"
                     )
                     check_parity(
                         amp=amp,

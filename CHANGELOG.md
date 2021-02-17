@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [next rel] - TBD
 ### Fixed
 - ShardedDDP and OSS handle model trainability changes during training ([#369](https://github.com/facebookresearch/fairscale/issues/369))
+- ShardedDDP state dict load/save bug (#386)
+
+### Added
+- ShardedDDP manual reduce option for checkpointing (#389)
 
 ## [0.1.6] - 2021-02-10
 ### Added
