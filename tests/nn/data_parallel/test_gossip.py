@@ -184,6 +184,9 @@ def run_test_slowmo_with_slowmo_freq_1(
         torch.manual_seed(1337 + iteration)
         input = input[torch.randperm(global_batch_size)]
 
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+
 
 def run_test_localsgd_with_freq_ge_2(
     rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0,
@@ -240,6 +243,9 @@ def run_test_localsgd_with_freq_ge_2(
         # Shuffle the input so that distributed input is different
         torch.manual_seed(1337 + iteration)
         input = input[torch.randperm(global_batch_size)]
+
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
 
 
 def run_test_slowmo_with_slowmo_freq_ge_2(
@@ -309,6 +315,9 @@ def run_test_slowmo_with_slowmo_freq_ge_2(
         torch.manual_seed(1337 + iteration)
         input = input[torch.randperm(global_batch_size)]
 
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+
 
 def run_test_memory_usage_localsgd_with_slowmo(
     rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], use_gossip_data_parallel: bool = False,
@@ -358,6 +367,9 @@ def run_test_memory_usage_localsgd_with_slowmo(
     torch.cuda.synchronize(devices[0])
     final_max_memory = torch.cuda.max_memory_allocated(devices[0])
     # print(f"{initial_max_memory}, {final_max_memory}")
+
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
 
     return final_max_memory - initial_max_memory
 
