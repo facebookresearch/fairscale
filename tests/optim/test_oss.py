@@ -772,7 +772,9 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
     out_channels = 3
     batch = 64
 
-    def check_optimizer_equivalence(optimizer: Type[torch.optim.Optimizer], change_train_graph: bool = False):
+    def check_optimizer_equivalence(
+        optimizer: Type[torch.optim.Optimizer], change_train_graph: bool = False, all_gather: bool = False
+    ):
         # Any model works. Add one different buffer per rank
         trunk = torch.nn.Sequential(
             torch.nn.Linear(in_channels, hidden), torch.nn.Linear(hidden, hidden), torch.nn.Linear(hidden, hidden)
@@ -798,6 +800,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             optim=optimizer,
             group=None,
             broadcast_buffer_size=2 ** 10,
+            all_gather_params=all_gather,
             **optimizer_settings,
         )
 
@@ -874,8 +877,9 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         check_step()
 
     for opt in [torch.optim.Adam, torch.optim.SGD]:
-        check_optimizer_equivalence(opt, change_train_graph=False)
-        check_optimizer_equivalence(opt, change_train_graph=True)
+        for change_train_graph in [False, True]:
+            for all_gather in [False, True]:
+                check_optimizer_equivalence(opt, change_train_graph=change_train_graph, all_gather=all_gather)
 
     dist.destroy_process_group()
 
