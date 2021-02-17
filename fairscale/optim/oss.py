@@ -73,6 +73,7 @@ class OSS(Optimizer):
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
         broadcast_buffer_size: int = -1,
+        all_gather_params: bool = False,
         **default: Any,
     ):
 
@@ -88,6 +89,8 @@ class OSS(Optimizer):
         self._index_to_param: Dict[int, torch.Tensor] = {}
         self._param_to_index: Dict[int, int] = {}
         self._local_params: Optional[List[torch.Tensor]] = None
+        self._all_gather_params = all_gather_params
+        logging.info("Using all-gather to sync params (takes some extra memory space): {}".format(all_gather_params))
 
         # Default empty values + immutables
         self._optim_defaults = default
@@ -548,9 +551,16 @@ class OSS(Optimizer):
         last_work_handle = None  # Work handles are consumed within this scope, no callback
 
         for device in self.buckets.keys():
-            for src_rank, bucket in enumerate(self.buckets[device]):
-                global_src_rank = self.get_global_rank(self.group, src_rank)
-                last_work_handle = dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True)
+            if self._all_gather_params:
+                last_work_handle = dist.all_gather(
+                    self.buckets[device], self.buckets[device][self.rank], group=self.group, async_op=True
+                )
+            else:
+                for src_rank, bucket in enumerate(self.buckets[device]):
+                    global_src_rank = self.get_global_rank(self.group, src_rank)
+                    last_work_handle = dist.broadcast(
+                        tensor=bucket, src=global_src_rank, group=self.group, async_op=True
+                    )
 
         # Only check on the last handle, they're all inlined on the same CUDA stream
         if last_work_handle:
@@ -568,6 +578,17 @@ class OSS(Optimizer):
             if device not in self.buckets.keys():
                 self.buckets[device] = []
 
+            _bucket_size = (
+                max(
+                    map(
+                        lambda params: sum(map(lambda x: x.numel(), filter(lambda x: x.requires_grad, params))),
+                        per_rank_params,
+                    )
+                )
+                if self._all_gather_params
+                else -1
+            )
+
             # Make parameters a view of the bucket
             for dst_rank, params in enumerate(per_rank_params):
                 if len(params) > 0:
@@ -578,8 +599,10 @@ class OSS(Optimizer):
 
                     # Merge all the trainable params in a single bucket
                     trainable_params = list(filter(lambda x: x.requires_grad, params))
-                    buffer_size = sum(map(lambda x: x.numel(), trainable_params))
-                    bucket = torch.empty(buffer_size, dtype=params[0].dtype, device=device)
+                    bucket_size = (
+                        _bucket_size if self._all_gather_params else sum(map(lambda x: x.numel(), trainable_params))
+                    )
+                    bucket = torch.empty(bucket_size, dtype=params[0].dtype, device=device)
                     offset = 0
 
                     for param in trainable_params:
