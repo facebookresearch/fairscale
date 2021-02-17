@@ -52,7 +52,9 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
             (deprecated) used to cap the size of the broadcast buffers, not being used anymore.
-
+        all_gather_params (bool):
+            Whether to sync the parameter updates via broadcasts (a little slower) or
+            all_gathers (faster but uses more memory with this implementation). (default: False)
 
     .. warning: the communication patterns that OSS use depend on the "trainability" graph,
         meaning that all the parameters which `require_grad` are handled differently. This is
