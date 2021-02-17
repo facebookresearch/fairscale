@@ -441,7 +441,6 @@ def test_device_change():
 
 
 def run_test_training_change(rank, world_size, backend, device, temp_file_name):
-    # Check that the wrapped module can change devices
     url = "file://" + temp_file_name
     group = dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
     model = Sequential(Linear(2, 3), Linear(3, 3)).to(device)
@@ -462,7 +461,6 @@ def run_test_training_change(rank, world_size, backend, device, temp_file_name):
 @skip_if_no_cuda
 @skip_if_single_gpu
 def test_training_change():
-    # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
     world_size = 8
     backend = "gloo"
     temp_file_name = tempfile.mkstemp()[1]
