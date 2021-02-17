@@ -352,7 +352,7 @@ class ShardedDataParallel(nn.Module):
             assert self._bucket_list is not None
 
             for bucket in self._bucket_list:
-                assert self.should_accumulate_grads or bucket.sent, (
+                assert not self.training or self.should_accumulate_grads or bucket.sent, (
                     "A bucket failed to be sent, probably unused parameters."
                     + "Either remove the unused parameter or de-activate ShardedDDP buckets -set reduce_buffer_size to 0-"
                 )
