@@ -470,7 +470,7 @@ class ShardedDataParallel(nn.Module):
             p_tmp = param.expand_as(param)
             assert p_tmp.grad_fn is not None
             grad_acc = p_tmp.grad_fn.next_functions[0][0]
-            dst_rank = self._trainable_param_to_rank[param]
+            dst_rank = OSS.get_global_rank(self.process_group, self._trainable_param_to_rank[param])
 
             grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank))
             self._grad_accs.append(grad_acc)  # keep this function in scope
@@ -545,7 +545,7 @@ class ShardedDataParallel(nn.Module):
 
         for param in self._trainable_params:
             device = param.device
-            dst_rank = self._trainable_param_to_rank[param]
+            dst_rank = OSS.get_global_rank(self.process_group, self._trainable_param_to_rank[param])
 
             if param.device not in self.buckets.keys():
                 self.buckets[param.device] = [

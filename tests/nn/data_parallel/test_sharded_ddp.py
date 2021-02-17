@@ -23,7 +23,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
-from fairscale.utils.testing import GPT2, check_same_model_params, skip_if_no_cuda, skip_if_py38, skip_if_single_gpu
+from fairscale.utils.testing import (
+    GPT2,
+    check_same_model_params,
+    skip_if_less_four_gpu,
+    skip_if_no_cuda,
+    skip_if_py38,
+    skip_if_single_gpu,
+)
 
 
 def run_one_step(rank, world_size, backend, device, temp_file_name):
@@ -565,3 +572,84 @@ def test_gpt2():
     temp_file_name = tempfile.mkstemp()[1]
     device = "cuda"
     mp.spawn(run_test_gpt2, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
+
+
+def run_test_multiple_groups(rank, world_size, tempfile_name):
+    # Only work with the even ranks, to check that the global_rank indexing is properly used
+    dist.init_process_group(init_method="file://" + tempfile_name, backend="nccl", rank=rank, world_size=world_size)
+
+    sub_group_ranks = [0, 2]
+    process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend="nccl")
+
+    # Make sure that all the ranks get different training data
+    # So that the sync check in between their models is meaningful
+    torch.manual_seed(rank)
+    np.random.seed(rank)
+
+    # Standard deep learning setup
+    device = "cuda"
+    torch.cuda.set_device(rank)
+
+    epochs, batch, input_width, hidden, target_width = 5, 3, 20, 10, 5
+    loss_fn = torch.nn.L1Loss().to(device)
+
+    def check(optimizer, model):
+        # Just run a couple of epochs, check that the model is properly updated
+        for _ in range(epochs):
+            target = torch.rand((batch, target_width), device=device)
+            inputs = torch.rand((batch, input_width), device=device)
+
+            def closure():
+                optimizer.zero_grad()
+                output = model(inputs)
+                loss = loss_fn(output, target)
+                loss.backward()
+                return loss
+
+            _ = optimizer.step(closure=closure)
+
+            # Check that all the params are the same on all ranks
+            for pg in optimizer.param_groups:
+                for p in pg["params"]:
+                    receptacle = [p.clone() for _ in sub_group_ranks] if rank == 0 else []
+                    dist.gather(p, receptacle, dst=0, group=process_group)
+                    if rank == 0:
+                        for sync_p in receptacle[1:]:
+                            assert torch.all(
+                                torch.eq(receptacle[0], sync_p)
+                            ), "Models differ in between ranks {} - {}".format(
+                                torch.norm(receptacle[0]), torch.norm(sync_p)
+                            )
+
+    if rank in sub_group_ranks:
+        # Model fitting in the broadcast bucket
+        model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
+            device
+        )
+
+        # With SGD, Momentum is required to get a state to shard
+        optimizer = OSS(model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=2 ** 20)
+        model = ShardedDataParallel(model, optimizer, process_group=process_group)
+        check(optimizer, model)
+
+        # Model not-fitting in the broadcast bucket
+        model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
+            device
+        )
+
+        # With SGD, Momentum is required to get a state to shard
+        optimizer = OSS(model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=0)
+        model = ShardedDataParallel(model, optimizer, process_group=process_group)
+        check(optimizer, model)
+
+    dist.destroy_process_group(process_group)
+
+
+@skip_if_less_four_gpu
+def test_multiple_groups():
+    world_size = 4
+    temp_file_name = tempfile.mkstemp()[1]
+
+    mp.spawn(
+        run_test_multiple_groups, args=(world_size, temp_file_name), nprocs=world_size, join=True,
+    )
