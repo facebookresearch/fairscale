@@ -148,7 +148,16 @@ class ActivationCheckpointing(torch.autograd.Function):
             # Apply the FP and store the activations on the CPU.
             with torch.no_grad():
                 inputs = model_instance._activations[index]
-                output = layer_shard(*inputs)
+                output_list = []
+                for given_input in inputs:
+                    given_input_list = torch.chunk(given_input, model_instance._num_microbatches)
+                    given_output_list = []
+                    for inputs in given_input_list:
+                        output = layer_shard(inputs)
+                        given_output_list.append(output)
+                    given_output = torch.cat(given_output_list).squeeze(-1)
+                    output_list.append(given_output)
+                output = tuple(output_list)
             output = output if isinstance(output, tuple) else (output,)
             model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
             # Move the layer shard back to the CPU.
@@ -173,6 +182,9 @@ class ActivationCheckpointing(torch.autograd.Function):
             inputs[i].requires_grad = need_grad
 
         all_grads = [grad_outputs]
+
+        final_index = len(model_instance._activations) - 1
+
         for model_shard, activation in zip(
             reversed(model_instance.model_slices), reversed(model_instance._activations[:-1])
         ):
@@ -187,25 +199,45 @@ class ActivationCheckpointing(torch.autograd.Function):
             # Store the BW pass state.
             bwd_rng_state = torch.get_rng_state()
 
-            # Set the states to what it used to be before the forward pass.
-            torch.set_rng_state(ctx.fwd_rng_state)
-            # Run the FW pass.
-            with torch.enable_grad():
-                # calculate the output of the last shard wrt to the stored activation at the slice boundary.
-                # TODO(anj-s): Why detach inputs?
-                activation = torch.utils.checkpoint.detach_variable(activation)
-                outputs = model_shard(*activation)
-
-            # Set the states back to what it was at the start of this function.
-            torch.set_rng_state(bwd_rng_state)
-
+            # TODO(anj-s): Why detach inputs?
+            activation = torch.utils.checkpoint.detach_variable(activation)
             # Get the last gradient calculation.
             final_grads = all_grads[-1]
-            if isinstance(outputs, torch.Tensor):
-                outputs = (outputs,)
-            torch.autograd.backward(outputs, final_grads)
+            if isinstance(activation, torch.Tensor):
+                activation = (activation,)
+            if isinstance(final_grads, torch.Tensor):
+                final_grads = (final_grads,)
+            # Iterate through all the inputs/outputs of a shard (there could be multiple).
+            chunked_grad_list = []
+            # Chunk the activation and grad based on the number of microbatches that are set.
+            for chunked_activation, chunked_grad in zip(
+                torch.chunk(*activation, model_instance._num_microbatches),
+                torch.chunk(*final_grads, model_instance._num_microbatches),
+            ):
+                # Set the states to what it used to be before the forward pass.
+                torch.set_rng_state(ctx.fwd_rng_state)
+
+                if isinstance(chunked_activation, torch.Tensor):
+                    chunked_activation = (chunked_activation,)
+                if isinstance(chunked_grad, torch.Tensor):
+                    chunked_grad = (chunked_grad,)
+
+                # Since we need a grad value of a non leaf element we need to set these properties.
+                for a in chunked_activation:
+                    a.requires_grad = True
+                    a.retain_grad()
+
+                with torch.enable_grad():
+                    # calculate the output of the last shard wrt to the stored activation at the slice boundary.
+                    outputs = model_shard(*chunked_activation)
+
+                # Set the states back to what it was at the start of this function.
+                torch.set_rng_state(bwd_rng_state)
+                torch.autograd.backward(outputs, chunked_grad)
+                chunked_grad_list += [a.grad for a in chunked_activation]
+
             # Append the list of grads to the all_grads list and this should be on the CPU.
-            all_grads.append(tuple([a.grad for a in activation]))
+            all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))
             # Move activation back to the CPU.
             # TODO(anj-s): Why does moving activations to CPU cause the .grad property to be None?
             activation = tuple([a.cpu() for a in list(activation)])
@@ -325,6 +357,7 @@ class OffloadModel(nn.Module):
         offload_device: torch.device = torch.device("cpu"),
         n_slices: int = 5,
         checkpoint_activation=False,
+        num_microbatches: int = 1,
     ):
         super().__init__()
         # TODO(anj-s): Add error checks for cuda and sequential model.
@@ -352,7 +385,15 @@ class OffloadModel(nn.Module):
         # intermediate activations at the slice boundaries.
         self._activations: List[Tuple] = []
 
+        # Currently we only support microbatches with activation checkpointing.
+        if not checkpoint_activation and num_microbatches > 1:
+            raise RuntimeError("We currently only support microbatches with activation checkpointing.")
+
+        # Bool indicating if we want to checkpoint activation on the host.
         self._checkpoint_activation = checkpoint_activation
+
+        # Number of microbatches to run per batch on the device
+        self._num_microbatches = num_microbatches
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
         # At least one of the inputs needs to have `requires_grad` set.
