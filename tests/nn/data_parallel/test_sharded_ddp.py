@@ -612,7 +612,7 @@ def run_test_multiple_groups(rank, world_size, tempfile_name):
             for pg in optimizer.param_groups:
                 for p in pg["params"]:
                     receptacle = [p.clone() for _ in sub_group_ranks] if rank == 0 else []
-                    dist.gather(p, receptacle, dst=0, group=process_group)
+                    dist.all_gather(receptacle, p, group=process_group)
                     if rank == 0:
                         for sync_p in receptacle[1:]:
                             assert torch.all(
