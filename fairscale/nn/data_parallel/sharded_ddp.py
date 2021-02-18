@@ -329,7 +329,6 @@ class ShardedDataParallel(nn.Module):
                 See :meth:`torch.optim.Optimizer.zero_grad` for details.
         """
 
-        print("zeroing grads", flush=True)
         for index, trainable_param in enumerate(self._all_params):
             if set_to_none and not self._should_bucket_grad[index]:
                 trainable_param.grad = None
