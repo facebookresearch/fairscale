@@ -171,18 +171,8 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                     loss.backward()
 
             with model.no_sync() if should_accumulate else suppress():
-                for param in model.parameters():
-                    if param.requires_grad and param.grad is not None:
-                        print(rank, torch.norm(param.grad), flush=True)
-                        break
-
                 for _ in range(accumulate_steps - 1):
                     step()
-
-                    for param in model.parameters():
-                        if param.requires_grad and param.grad is not None:
-                            print(rank, torch.norm(param.grad), flush=True)
-                            break
 
             if not _manual_reduction:
                 step()

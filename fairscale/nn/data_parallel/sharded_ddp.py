@@ -203,9 +203,6 @@ class ShardedDataParallel(nn.Module):
         # Reset all the grad reduce and bucket state flags
         self._clear_counters()
 
-        # Failsafe, catch buckets which have not been sent, will not catch all cases
-        self._attach_failsafe_hook_to_inputs(*inputs)
-
         # Normal FW on the base model
         return self.module(*inputs, **kwargs)
 
@@ -372,7 +369,8 @@ class ShardedDataParallel(nn.Module):
 
                 bucket.reset()
 
-        self.accumulate_grads_flipped = False
+        if not self.should_accumulate_grads:
+            self.accumulate_grads_flipped = False
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
@@ -597,46 +595,3 @@ class ShardedDataParallel(nn.Module):
             work_handle = self._work_handles.popleft()
             if work_handle.callback is not None:
                 work_handle.callback()
-
-    def _attach_failsafe_hook_to_inputs(self, *inputs: Any) -> Any:
-        """
-        The use of buckets to gather gradients to speed up reduction comes with the expectation that all the parameters
-        marked as `requires_grad` will indeed produce a gradient. If not, one of these parameters could be in a bucket,
-        which cannot be reduced until all its components got their gradients reduced. This situation will typically trigger
-        an assert in ShardedDDP, because the subsequent computations will not be correct.
-
-        If the inputs are differentiable (typically not the case for NLP and token used as inputs),
-        it is however possible to attach a hook to them to make sure that the buckets can be sent when autograd reaches the inputs.
-        """
-
-        if self.use_buckets:
-
-            def bucket_flush(*_: Any) -> None:
-                assert self._bucket_list is not None
-                handle = None
-
-                for bucket in self._bucket_list:
-                    if not bucket.sent:
-                        # Reduce the bucket. Some parameters went unused and this bucket was not flushed
-                        bucket.buffer.mul_(self.world_size_scaling)
-                        bucket.sent = True
-                        handle = dist.reduce(
-                            tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
-                        )
-
-                # Only wait on the last handle
-                if handle:
-                    handle.wait()
-
-            try:
-                if isinstance(inputs, tuple) and isinstance(inputs[0], torch.Tensor):
-                    inputs[0].requires_grad = True
-                    inputs[0].register_hook(bucket_flush)
-                elif isinstance(inputs, torch.Tensor):
-                    inputs.requires_grad = True
-                    inputs.register_backward_hook(bucket_flush)
-            except RuntimeError:
-                # These inputs do not accept gradients because of their type, this method cannot be used and that's probably ok
-                pass
-
-        return inputs
