@@ -622,23 +622,13 @@ def run_test_multiple_groups(rank, world_size, tempfile_name):
                             )
 
     if rank in sub_group_ranks:
-        # Model fitting in the broadcast bucket
-        model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
-            device
-        )
-
-        # With SGD, Momentum is required to get a state to shard
-        optimizer = OSS(model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=2 ** 20)
-        model = ShardedDataParallel(model, optimizer, process_group=process_group)
-        check(optimizer, model)
-
         # Model not-fitting in the broadcast bucket
         model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width)).to(
             device
         )
 
         # With SGD, Momentum is required to get a state to shard
-        optimizer = OSS(model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=0)
+        optimizer = OSS(model.parameters(), lr=0.1, momentum=0.99, group=process_group)
         model = ShardedDataParallel(model, optimizer, process_group=process_group)
         check(optimizer, model)
 
