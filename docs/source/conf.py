@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 # -- Project information -----------------------------------------------------
 
 project = "FairScale"
-copyright = "2020, Facebook AI Research"
+copyright = "2020-2021, Facebook AI Research"
 author = "Facebook AI Research"
 
 # The full version, including alpha/beta/rc tags
