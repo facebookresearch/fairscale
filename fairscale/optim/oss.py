@@ -412,7 +412,7 @@ class OSS(Optimizer):
 
     def refresh_trainable(self) -> None:
         """ Updates the partitioning and communication patterns if the trainability (`requires_grad`)
-        of some parameters changed
+        of some parameters changed.
         """
 
         # Create the optim which will work on the param shard

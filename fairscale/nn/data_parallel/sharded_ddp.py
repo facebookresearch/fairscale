@@ -51,9 +51,9 @@ class ShardedDataParallel(nn.Module):
             Synchronize the models in between the ranks when starting up. Not needed if each rank has the same seed,
             or the training restarts from a saved state
         reduce_buffer_size (int):
-            The max size of the buffer used to batch the small parameter tensors, in number of elements (default 8M).
+            The max size of the buffer used to batch the small parameter tensors, in number of elements (default 0 - unused).
             this will impact the long term memory consumption, because these buckets correspond to parameters which will not be sharded.
-            Set to 0 to remove all bucketing.
+            Set to 0 to remove all bucketing, 1M to 8M is usually reasonable.
         auto_refresh_trainable (bool):
             (default: True) Check whether the parameters trainability (`requires_grad`) has changed and update both ShardedDDP
             and OSS automatically if this is the case. If set to False, `refresh_trainable()` needs to be called anytime
@@ -98,7 +98,7 @@ class ShardedDataParallel(nn.Module):
         process_group: Any = None,
         broadcast_buffers: bool = True,
         sync_models_at_startup: bool = True,
-        reduce_buffer_size: int = 2 ** 23,
+        reduce_buffer_size: int = 0,
         auto_refresh_trainable: bool = True,
     ):
         super().__init__()
@@ -111,6 +111,7 @@ class ShardedDataParallel(nn.Module):
         # Handle a no_sync() context which prevents the gradient synchronization,
         # accumulate in place
         self.should_accumulate_grads = False
+        self.accumulate_grads_flipped = False
 
         # Communication related attributes
         self.process_group = process_group if process_group is not None else dist.group.WORLD
@@ -153,10 +154,6 @@ class ShardedDataParallel(nn.Module):
 
         # - setup buckets and tensor views
         model_size = sum([p.numel() for p in self.module.parameters()])
-        if dist.get_world_size(self.process_group) <= 8:
-            logging.info("Assuming single node environment. De-activating ShardedDDP buckets")
-            reduce_buffer_size = 0
-
         self.buffer_max_size = min(reduce_buffer_size, model_size)
         logging.info(
             "ShardedDDP bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
@@ -206,6 +203,9 @@ class ShardedDataParallel(nn.Module):
         # Reset all the grad reduce and bucket state flags
         self._clear_counters()
 
+        # Failsafe, catch buckets which have not been sent, will not catch all cases
+        self._attach_failsafe_hook_to_inputs(*inputs)
+
         # Normal FW on the base model
         return self.module(*inputs, **kwargs)
 
@@ -230,6 +230,11 @@ class ShardedDataParallel(nn.Module):
         .. note::
             This method modifies the module in-place.
 
+        .. warning:
+            Device changes are not supported, and this will raise an exception. The issue in that case is not
+            really ShardedDDP, but OSS which will not be aware of the device change, and whose buffers will be
+            in a broken state.
+
         Arguments:
             device (:class:`torch.device`): the desired device of the parameters and buffers in this module.
             dtype (:class:`torch.dtype`): the desired floating point type of the floating point parameters and buffers.
@@ -237,14 +242,18 @@ class ShardedDataParallel(nn.Module):
 
         Returns:
             Module: self.
-
         """
 
-        for device in self.buckets.keys():
-            for bucket in self.buckets[device]:
+        assert device in self.buckets.keys(), "Changing devices is not supported, because this would break OSSs state"
+        assert (
+            len(self.buckets.keys()) == 1
+        ), "Several devices specified to begin with, incompatible with setting a single device here"
+
+        for _device in self.buckets.keys():
+            for bucket in self.buckets[_device]:
                 bucket.buffer.to(device=device, dtype=dtype, non_blocking=non_blocking)
 
-        self.module.to(device)
+        self.module.to(device=device, dtype=dtype, non_blocking=non_blocking)
 
     def refresh_trainable(self) -> None:
         """ If the module trainability has changed, update all the assumptions """
@@ -320,7 +329,8 @@ class ShardedDataParallel(nn.Module):
                 See :meth:`torch.optim.Optimizer.zero_grad` for details.
         """
 
-        for index, trainable_param in enumerate(self._trainable_params):
+        print("zeroing grads", flush=True)
+        for index, trainable_param in enumerate(self._all_params):
             if set_to_none and not self._should_bucket_grad[index]:
                 trainable_param.grad = None
             elif trainable_param.grad is not None:
@@ -339,6 +349,7 @@ class ShardedDataParallel(nn.Module):
         old_should_accumulate_grads = self.should_accumulate_grads
         self.should_accumulate_grads = True
         yield
+        self.accumulate_grads_flipped = self.should_accumulate_grads != old_should_accumulate_grads
         self.should_accumulate_grads = old_should_accumulate_grads
 
     @torch.no_grad()
@@ -352,12 +363,17 @@ class ShardedDataParallel(nn.Module):
             assert self._bucket_list is not None
 
             for bucket in self._bucket_list:
-                assert not self.training or self.should_accumulate_grads or bucket.sent, (
-                    "A bucket failed to be sent, probably unused parameters."
-                    + "Either remove the unused parameter or de-activate ShardedDDP buckets -set reduce_buffer_size to 0-"
+                assert (
+                    self.accumulate_grads_flipped or not self.training or self.should_accumulate_grads or bucket.sent
+                ), (
+                    "A bucket failed to be sent, probably unused parameters. "
+                    + "Either mark the unused parameter as not trainable (`.requires_grad = False`) "
+                    + "or de-activate ShardedDDP buckets -set `reduce_buffer_size` to 0-"
                 )
 
                 bucket.reset()
+
+        self.accumulate_grads_flipped = False
 
     def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
         """ Look up where this parameter belongs to """
@@ -475,28 +491,6 @@ class ShardedDataParallel(nn.Module):
             grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank))
             self._grad_accs.append(grad_acc)  # keep this function in scope
 
-        #  Add a hook on the module to flush the buckets, if needed
-        if self.use_buckets:
-
-            def bucket_flush(*_: Any) -> None:
-                assert self._bucket_list is not None
-                handle = None
-
-                for bucket in self._bucket_list:
-                    if not bucket.sent:
-                        # Reduce the bucket. Some parameters went unused and this bucket was not flushed
-                        bucket.buffer.mul_(self.world_size_scaling)
-                        bucket.sent = True
-                        handle = dist.reduce(
-                            tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
-                        )
-
-                # Only wait on the last handle
-                if handle:
-                    handle.wait()
-
-            self.module.register_backward_hook(bucket_flush)
-
     @torch.no_grad()
     def _sync_params_and_buffers(self) -> None:
         """
@@ -604,3 +598,46 @@ class ShardedDataParallel(nn.Module):
             work_handle = self._work_handles.popleft()
             if work_handle.callback is not None:
                 work_handle.callback()
+
+    def _attach_failsafe_hook_to_inputs(self, *inputs: Any) -> Any:
+        """
+        The use of buckets to gather gradients to speed up reduction comes with the expectation that all the parameters
+        marked as `requires_grad` will indeed produce a gradient. If not, one of these parameters could be in a bucket,
+        which cannot be reduced until all its components got their gradients reduced. This situation will typically trigger
+        an assert in ShardedDDP, because the subsequent computations will not be correct.
+
+        If the inputs are differentiable (typically not the case for NLP and token used as inputs),
+        it is however possible to attach a hook to them to make sure that the buckets can be sent when autograd reaches the inputs.
+        """
+
+        if self.use_buckets:
+
+            def bucket_flush(*_: Any) -> None:
+                assert self._bucket_list is not None
+                handle = None
+
+                for bucket in self._bucket_list:
+                    if not bucket.sent:
+                        # Reduce the bucket. Some parameters went unused and this bucket was not flushed
+                        bucket.buffer.mul_(self.world_size_scaling)
+                        bucket.sent = True
+                        handle = dist.reduce(
+                            tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                        )
+
+                # Only wait on the last handle
+                if handle:
+                    handle.wait()
+
+            try:
+                if isinstance(inputs, tuple) and isinstance(inputs[0], torch.Tensor):
+                    inputs[0].requires_grad = True
+                    inputs[0].register_hook(bucket_flush)
+                elif isinstance(inputs, torch.Tensor):
+                    inputs.requires_grad = True
+                    inputs.register_backward_hook(bucket_flush)
+            except RuntimeError:
+                # These inputs do not accept gradients because of their type, this method cannot be used and that's probably ok
+                pass
+
+        return inputs
