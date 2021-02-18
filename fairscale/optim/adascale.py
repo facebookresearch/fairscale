@@ -58,7 +58,7 @@ class AdaScale(Optimizer):
     work with it. In other words, AdaScale is intended to be a complete wrapper of an
     torch Optimizer.
 
-    Note that, AdaScale does _not_ help increase per-GPU batch size.
+    Note that, AdaScale does *not* help increase per-GPU batch size.
 
     There are several ways to integrate AdaScale with your training loop.
     We show two examples below.

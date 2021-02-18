@@ -19,10 +19,11 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
     A friendlier wrapper for performing activation checkpointing.
 
     Compared to the PyTorch version, this version:
-    - wraps an nn.Module, so that all subsequent calls will use checkpointing
-    - handles keyword arguments in the forward
-    - handles non-Tensor outputs from the forward
-    - supports offloading activations to CPU
+
+        - wraps an nn.Module, so that all subsequent calls will use checkpointing
+        - handles keyword arguments in the forward
+        - handles non-Tensor outputs from the forward
+        - supports offloading activations to CPU
 
     Usage::
 
@@ -30,8 +31,14 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         a, b = checkpointed_module(x, y=3, z=torch.Tensor([1]))
 
     Args:
-        module (nn.Module): module to wrap
-        offload_to_cpu (Optional, bool): whether to offload activations to CPU
+        module (nn.Module):
+            module to wrap
+        offload_to_cpu (Optional, bool):
+            whether to offload activations to CPU
+
+    Returns:
+        (nn.Module):
+            wrapped module
     """
     module.forward = functools.partial(_checkpointed_forward, module.forward, offload_to_cpu)  # type: ignore
     return module
