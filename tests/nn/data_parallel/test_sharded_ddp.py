@@ -574,12 +574,12 @@ def test_gpt2():
     mp.spawn(run_test_gpt2, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
 
 
-def run_test_multiple_groups(rank, world_size, tempfile_name):
+def run_test_multiple_groups(rank, world_size, tempfile_name, backend):
     # Only work with the even ranks, to check that the global_rank indexing is properly used
-    dist.init_process_group(init_method="file://" + tempfile_name, backend="nccl", rank=rank, world_size=world_size)
+    dist.init_process_group(init_method="file://" + tempfile_name, backend=backend, rank=rank, world_size=world_size)
 
     sub_group_ranks = [0, 2]
-    process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend="nccl")
+    process_group = torch.distributed.new_group(ranks=sub_group_ranks, backend=backend)
 
     # Make sure that all the ranks get different training data
     # So that the sync check in between their models is meaningful
@@ -640,6 +640,12 @@ def test_multiple_groups():
     world_size = 4
     temp_file_name = tempfile.mkstemp()[1]
 
+    for backend in ["gloo", "nccl"]:
+        print("Testing backend ", backend)
+        mp.spawn(
+            run_test_multiple_groups, args=(world_size, temp_file_name, backend), nprocs=world_size, join=True,
+        )
+
     mp.spawn(
-        run_test_multiple_groups, args=(world_size, temp_file_name), nprocs=world_size, join=True,
+        run_test_multiple_groups, args=(world_size, temp_file_name, "gloo"), nprocs=world_size, join=True,
     )
