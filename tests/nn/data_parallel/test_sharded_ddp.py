@@ -458,8 +458,6 @@ def run_test_training_change(rank, world_size, backend, device, temp_file_name):
     dist.destroy_process_group()
 
 
-@skip_if_no_cuda
-@skip_if_single_gpu
 def test_training_change():
     world_size = 8
     backend = "gloo"
