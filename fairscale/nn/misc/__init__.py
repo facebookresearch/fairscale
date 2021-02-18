@@ -4,3 +4,4 @@
 # LICENSE file in the root directory of this source tree.
 
 from .flatten_params_wrapper import FlattenParamsWrapper
+from .checkpoint_activations import checkpoint_wrapper
