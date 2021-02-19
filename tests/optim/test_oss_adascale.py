@@ -37,7 +37,7 @@ def _test_basic_func(rank, world_size, tempfile_name, test_case, oss, model=None
     _dist_init(rank, world_size, tempfile_name, backend="nccl")
 
     if model is None:
-        model = Linear(2, 2, bias=False)
+        model = Linear(2, 2)
     model.to("cuda")
     model = DDP(model, device_ids=[rank])
 
@@ -65,7 +65,9 @@ def _test_basic_func(rank, world_size, tempfile_name, test_case, oss, model=None
         optim.zero_grad()
 
     if "expected_gain" in test_case:
-        assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
+        assert np.allclose(optim.gain(), test_case["expected_gain"]), "{} vs {}".format(
+            optim.gain(), test_case["expected_gain"]
+        )
 
     if "expected_mean_weight" in test_case:
         mean_weight = mean([model.module[i].weight.data.mean().item() for i in range(4)])

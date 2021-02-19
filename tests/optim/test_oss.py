@@ -264,13 +264,9 @@ def test_zero_grad():
 
 def run_test_catch_empty_shardd(rank, world_size, tempfile_name):
     dist_init(rank, world_size, tempfile_name, backend="gloo")
-    x = torch.rand(1)
     m = torch.nn.Linear(1, 1)
-    try:
-        o = optim.OSS(m.parameters(), lr=0.1)
-        assert False, "One shard is empty, this should have been caught"
-    except AssertionError:
-        pass
+    with pytest.raises(AssertionError):
+        _ = optim.OSS(m.parameters(), lr=0.1)
 
     dist.destroy_process_group()
 
