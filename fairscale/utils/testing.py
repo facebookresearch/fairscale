@@ -67,6 +67,11 @@ skip_if_py39_no_cuda = pytest.mark.skipif(
     reason="Python3.9 wo CUDA is skipped",
 )
 
+available_devices = ["cpu"]
+if torch.cuda.is_available():
+    available_devices.append("cuda")
+
+
 _, filename_mpi = tempfile.mkstemp()
 
 

@@ -25,6 +25,7 @@ from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.utils.testing import (
     GPT2,
+    available_devices,
     check_same_model_params,
     check_same_models_across_ranks,
     skip_if_less_than_four_gpu,
@@ -47,9 +48,6 @@ class _DoubleInput(torch.nn.Module):
         x1 = self.mlp(x)
         x2 = self.mlp(y)
         return torch.cat((x1, x2), dim=1)
-
-
-_optim_settings = {"lr": 1e-3, "momentum": 0.99}
 
 
 def run_one_step(
@@ -388,12 +386,12 @@ def run_test_two_inputs(rank, world_size, backend, device, temp_file_name, reduc
 
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 @pytest.mark.parametrize("backend", ["gloo", "nccl"])
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", available_devices)
 def test_inputs(reduce_buffer_size, backend, device):
     # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
     world_size = 2
     if backend == "nccl" and device == "cpu":
-        pytest.skip("Incompatible combination")
+        pytest.skip("Incompatible combination, or cuda not available")
         return
 
     mp.spawn(
