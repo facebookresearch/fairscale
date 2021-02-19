@@ -47,7 +47,9 @@ class DistributedTest(unittest.TestCase):
     @staticmethod
     def _train_for_several_steps(model, num_steps, autocast, lr=0.01):
         model_device = next(model.parameters()).device
-        optim = torch.optim.Adam(model.parameters(), lr=lr)
+        # use SGD with momentum instead of Adam, since Adam is scale invariant
+        # and this makes it bad for tests
+        optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
         for _ in range(num_steps):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
@@ -65,9 +67,9 @@ class DistributedTest(unittest.TestCase):
     @staticmethod
     def get_wrapped_model(group, cuda_first=False, config={}, **model_kwargs) -> FullyShardedDataParallel:
         if cuda_first:
-            model = FullyShardedDataParallel(TransformerWithSharedParams(**model_kwargs).cuda(), group, **config)
+            model = FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs).cuda(), group, **config)
         else:
-            model = FullyShardedDataParallel(TransformerWithSharedParams(**model_kwargs), group, **config).cuda()
+            model = FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs), group, **config).cuda()
         return model
 
 
@@ -140,18 +142,19 @@ class TestMixedPrecision(DistributedTest):
 
     @staticmethod
     def _test_dtypes(cfg: Dict, autocast, in_dtype, p_dtype, loss_dtype, reduce_dtype, rank, group):
-        # Patch _reduce_scatter op to check the dtype of the reduction
-        orig_reduce_scatter = FullyShardedDataParallel._reduce_scatter
+        # Patch torch.distributed.reduce_scatter to check the dtype of the reduction
+        orig_reduce_scatter = torch.distributed.reduce_scatter
 
         model = DeviceAndTypeCheckModule(
             expected_input_dtype=in_dtype, expected_param_dtype=p_dtype, expected_loss_dtype=loss_dtype,
         )
 
-        def _reduce_scatter(self, tensor, shard_size):
-            model._check("reduce_scatter.dtype", tensor.dtype, expected=reduce_dtype)
-            return orig_reduce_scatter(self, tensor, shard_size)
+        def _reduce_scatter(output, input_list, **kwargs):
+            for tensor in input_list:
+                model._check("reduce_scatter.dtype", tensor.dtype, expected=reduce_dtype)
+            return orig_reduce_scatter(output, input_list, **kwargs)
 
-        with mock.patch.object(FullyShardedDataParallel, "_reduce_scatter", new=_reduce_scatter):
+        with mock.patch("torch.distributed.reduce_scatter", new=_reduce_scatter):
             model = FullyShardedDataParallel(model, group, **cfg).cuda()
             device = next(model.parameters()).device
             x = torch.rand(2, 5).to(device)
@@ -184,10 +187,8 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # the device transfer and PyTorch optimizers don't support this.
         config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": True}
         test_fn = functools.partial(
-            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.001
+            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
         )
-        # We use lower lr to reduce this test's sensitivity to slightly different CPU vs CUDA behavior of pytorch.
-        # With lr=0.01, it fails on torch 1.6.0.
         spawn_and_init(test_fn)
 
     def test_cpu_offload_and_cuda_grads_breaks(self):
@@ -218,8 +219,26 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
         spawn_and_init(test_fn)
 
+    def test_mixture_of_experts(self):
+        config = {"mixed_precision": True}
+        test_fn = functools.partial(
+            self._test_identical_outputs,
+            MixtureOfExperts,
+            config,
+            # MixtureOfExperts implements custom reduce logic, so the reference
+            # behavior should use that logic instead of PyTorch DDP.
+            ref_ddp_fn=self._dummy_ddp_fn,
+        )
+        spawn_and_init(test_fn)
+
     @classmethod
-    def _test_identical_outputs(cls, model_init_fn, config, rank, group, num_steps=3, use_cuda=True, lr=0.01):
+    def _dummy_ddp_fn(self, model, group):
+        return DummyDDP(model)
+
+    @classmethod
+    def _test_identical_outputs(
+        cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None
+    ):
         if config["mixed_precision"]:
             autocast = True
             # Force the compute dtype to be torch.float32 so that we get
@@ -232,7 +251,12 @@ class TestComparisonToPyTorchDDP(DistributedTest):
 
         # Establish reference behavior with PyTorch DDP (+ optionally autocast).
         model = model_init_fn(group=group, wrapper_config=None).cuda()
-        model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank, process_group=group)
+        if ref_ddp_fn is None:
+            model = nn.parallel.DistributedDataParallel(
+                model, device_ids=[rank], output_device=rank, process_group=group
+            )
+        else:
+            model = ref_ddp_fn(model, group)
         ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr)
         ref_state_dict = model.module.state_dict()
 
@@ -319,7 +343,7 @@ class TestSerialization(DistributedTest):
         for m in model.modules():
             if isinstance(m, FullyShardedDataParallel):
                 m.process_group = group
-        optim = torch.optim.Adam(model.parameters(), lr=0.0001)
+        optim = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
         input = model.module.get_input(torch.device("cuda"))
         output = model(*input)
         loss = model.module.get_loss(input, output)
@@ -415,7 +439,7 @@ class TestSaveLoadStateDict(DistributedTest):
         cls._train_for_several_steps(ddp_model, 2, autocast)
         state_1 = ddp_model.state_dict()
         # You must make a new FullyShardedDataParallel instance to use module.load_state_dict
-        unwrapped_model = TransformerWithSharedParams()
+        unwrapped_model = TransformerWithSharedParams(group)
         unwrapped_model.load_state_dict(state_1)
         new_ddp_model = FullyShardedDataParallel(unwrapped_model, group, **config).cuda()
         cls._train_for_several_steps(new_ddp_model, 2, autocast)
@@ -451,7 +475,7 @@ class TestHooks(DistributedTest):
     def _test_output_backward_hooks(self, rank, group, cuda_first=False, model=None):
         if model is None:
             model = self.get_wrapped_model(group, cuda_first=cuda_first)
-        optim = torch.optim.Adam(model.parameters(), lr=0.0001)
+        optim = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
         optim.zero_grad()
         # Inputs always cuda regardless of move_grads_cpu, or model.device
         input = model.module.get_input(torch.device("cuda"))
@@ -577,8 +601,10 @@ class TestNoSync(DistributedTest):
 
 
 class TransformerWithSharedParams(nn.Module):
-    def __init__(self, *unused_args, d_vocab=23, d_model=16, **unused_kwargs):
+    def __init__(self, group, *unused_args, d_vocab=23, d_model=16, **unused_kwargs):
         super().__init__()
+        self.rank = group.rank()
+        self.world_size = group.size()
         torch.manual_seed(0)  # keep everything deterministic
         assert d_vocab >= 12  # we use torch.arange(12) as input
         self.embed_tokens = nn.Embedding(d_vocab, d_model)
@@ -591,7 +617,7 @@ class TransformerWithSharedParams(nn.Module):
         self.register_buffer(_BUFFER_NAME, self.embed_tokens.weight.new_ones((d_model,)))
 
     def get_input(self, device):
-        torch.manual_seed(1)  # keep everything deterministic
+        torch.manual_seed(1 + self.rank)  # keep everything deterministic
         src = torch.arange(12, device=device).view(6, 2)  # T x B
         tgt = torch.arange(8, device=device).view(4, 2)  # T x B
         return (src, tgt)
@@ -614,6 +640,9 @@ class TransformerWithSharedParams(nn.Module):
 class NestedWrappedModule(nn.Module):
     def __init__(self, group, wrapper_config):
         super().__init__()
+        self.rank = group.rank()
+        self.world_size = group.size()
+        self.wrapper_config = wrapper_config
 
         def _maybe_wrap(layer):
             if wrapper_config is not None:
@@ -626,7 +655,7 @@ class NestedWrappedModule(nn.Module):
         )
 
     def get_input(self, device):
-        torch.manual_seed(1)  # keep everything deterministic
+        torch.manual_seed(1 + self.rank)  # keep everything deterministic
         return (torch.rand(4, 8, device=device),)
 
     def forward(self, x):
@@ -638,6 +667,52 @@ class NestedWrappedModule(nn.Module):
 
     def run_backward(self, loss):
         loss.backward()
+
+
+class DummyDDP(nn.Module):
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+
+    def forward(self, *args, **kwargs):
+        return self.module(*args, **kwargs)
+
+
+class MixtureOfExperts(NestedWrappedModule):
+    def __init__(self, group, wrapper_config):
+        super().__init__(group, wrapper_config)
+        self.group = group
+
+        # "expert" params are different on each rank
+        torch.manual_seed(42 + group.rank())
+        expert = nn.Linear(16, 4)
+        for p in expert.parameters():
+            p.expert = True
+
+        # everything else is shared
+        torch.manual_seed(0)
+        shared = nn.Linear(4, 16)
+
+        if wrapper_config is not None:
+            # we create a process group of size 1 for the expert params
+            expert_group = torch.distributed.new_group([group.rank()])
+            expert = FullyShardedDataParallel(expert, expert_group, **wrapper_config)
+
+            shared = FullyShardedDataParallel(shared, group, **wrapper_config)
+
+        self.module = nn.Sequential(nn.Linear(8, 4), shared, expert, nn.Linear(4, 8))
+
+    def run_backward(self, loss):
+        loss.backward()
+
+        # manually reduce gradients if not wrapped in FullyShardedDataParallel
+        if self.wrapper_config is None:
+            with torch.no_grad():
+                for p in self.parameters():
+                    if hasattr(p, "expert"):
+                        continue  # these params don't need grad reduction
+                    p.grad.data.div_(self.world_size)
+                    torch.distributed.all_reduce(p.grad.data, group=self.group)
 
 
 class ModuleWithDelay(nn.Module):

@@ -100,7 +100,7 @@ def torch_version() -> Tuple[int, ...]:
 
         # Assuming that we're interested in the second usecase more than the first,
         # return the pre-release or dev numbering
-        logging.warning(f"Pytorch pre-relase version {torch.__version__} - assuming intent to test it")
+        logging.warning(f"Pytorch pre-release version {torch.__version__} - assuming intent to test it")
         numbering[2] = "0"
 
     return tuple(int(n) for n in numbering)

@@ -25,7 +25,7 @@ from fairscale.utils.containers import (
     unpack_kwargs,
     unpack_non_tensors,
 )
-from fairscale.utils.parallel import compute_shard_size, validate_process_group
+from fairscale.utils.parallel import validate_process_group
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -142,7 +142,7 @@ class FullyShardedDataParallel(nn.Module):
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to
         # shard any leftover parameters.
-        params = list(p for p in module.parameters() if not getattr(p, "_is_sharded", False))
+        params = list(p for p in module.parameters() if not hasattr(p, "_is_sharded"))
 
         if self.flatten_parameters and len(params) > 0:
             self.module: nn.Module = FlattenParamsWrapper(module, param_list=params)
@@ -157,7 +157,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # Make sure all parameters are sharded.
         for n, p in self.named_parameters():
-            assert getattr(p, "_is_sharded", False), f"found unsharded parameter: {n} ; {p.size()}"
+            assert hasattr(p, "_is_sharded"), f"found unsharded parameter: {n} ; {p.size()}"
 
         self._reset_lazy_init()
 
@@ -204,46 +204,41 @@ class FullyShardedDataParallel(nn.Module):
             if self.mixed_precision:
                 assert p.dtype == torch.float32
 
-            p._is_sharded = True
+            # If world_size is 1, then we all-reduce grads instead of sharding.
+            p._is_sharded = self.world_size > 1
             p._orig_size = p.data.size()
 
-            # shard p.data such that all elements are part of a shard and the
-            # last shard is <= all other shards or, all shards are 1-element
-            # in size in case total size is smaller than the world_size.
-            #
-            # This way, we don't have holes when shards are reconstructed and
-            # only extra padding elements need to added/removed during sharding.
-            shard_size = compute_shard_size(p.data.numel(), self.world_size)
-            s = min(self.rank * shard_size, p.data.numel())
-            e = min(s + shard_size, p.data.numel())
-            assert (
-                0 <= s <= e <= p.data.numel()
-            ), f"_shard_parameters_: {p.data.numel()} {self.world_size} {shard_size} {s} {e}"
+            if not p._is_sharded:
+                continue
+            p._is_sharded = True
 
+            # Shard using torch.chunk to match all-gather/reduce-scatter.
+            chunks = list(torch.flatten(p.data).chunk(self.world_size))
+            while len(chunks) < self.world_size:
+                chunks.append(chunks[0].new_empty(0))
+
+            # Determine number of padding elements.
+            num_to_pad = chunks[0].numel() - chunks[self.rank].numel()
+            assert num_to_pad >= 0, num_to_pad
+
+            # Replace p.data with the relevant shard.
             orig_data = p.data
-            p.data = torch.flatten(p.data)[s:e].clone()
-            if p.data.numel() < shard_size:
-                p.data = F.pad(p.data, [0, shard_size - p.data.numel()])  # pad zeros to the right size.
-            assert p.data.numel() == shard_size, f"{p.data.numel()} {shard_size}"
+            p.data = chunks[self.rank].clone()  # clone since we free storage below
+            if num_to_pad > 0:
+                p.data = F.pad(p.data, [0, num_to_pad])
             free_storage_(orig_data)
 
-    @torch.no_grad()
-    def _all_gather_full_param(self, p: nn.Parameter) -> None:
-        """Fill p._full_param with gathered p.data values (using torch.distributed.all_gather).
-
-        The p._full_param is already allocated and have the size equal
-        to shard_size * world_size.
-
-        It is up to the caller to do necessary resize/reshape to the
-        unpadded _full_param.
-        """
-        full_param_chunks = list(p._full_param.chunk(self.world_size))
-        assert len(full_param_chunks) == self.world_size
-        assert full_param_chunks[-1].numel() == p.data.numel(), f"{full_param_chunks[-1].numel()} {p.data.numel()}"
-        param_shard = p.data  # we will gather this from each worker
-
-        dist.all_gather(full_param_chunks, param_shard, group=self.process_group)
-        # ^ updates p._full_param
+    def extra_repr(self) -> str:
+        return (
+            f"rank={self.rank}, world_size={self.world_size}, "
+            f"reshard_after_forward={self.reshard_after_forward}, "
+            f"mixed_precision={self.mixed_precision}, "
+            f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
+            f"flatten_parameters={self.flatten_parameters}, "
+            f"cpu_offload={self.cpu_offload}, "
+            f"compute_dtype={self.compute_dtype}, "
+            f"move_grads_to_cpu={self.move_grads_to_cpu}"
+        )
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -259,6 +254,7 @@ class FullyShardedDataParallel(nn.Module):
         we remove them and try to reconstruct them in :func:`__setstate__`.
         """
         state = copy.copy(self.__dict__)
+        state["is_sharded"] = [p._is_sharded for p in self.params]
         state["orig_sizes"] = [p._orig_size for p in self.params]
         if state["process_group"] is not None:
             state["process_group"] = "MISSING"  # process_group isn't pickleable
@@ -269,14 +265,17 @@ class FullyShardedDataParallel(nn.Module):
         """Intercept state setting and perform needed changes on params."""
         super().__setstate__(state)
 
-        def fixup(p: Parameter, size: torch.Size) -> Parameter:
+        def fixup(p: Parameter, is_sharded: bool, size: torch.Size) -> Parameter:
             assert isinstance(p, Parameter)
             p.data = p.data.clone()  # move tensors out of shared memory
-            p._is_sharded = True
+            p._is_sharded = is_sharded
             p._orig_size = size
             return p
 
-        self.params = [fixup(p, size) for p, size in zip(self.params, self.orig_sizes)]
+        self.params = [
+            fixup(p, is_sharded, size) for p, is_sharded, size in zip(self.params, self.is_sharded, self.orig_sizes)
+        ]
+        del self.is_sharded
         del self.orig_sizes
         self._reset_lazy_init()
 
@@ -371,7 +370,7 @@ class FullyShardedDataParallel(nn.Module):
         if self._is_root is None:
             self._set_is_root()
             self._setup_streams()
-        if self.cpu_offload:  # Buffers stay on GPU, and dont get sharded
+        if self.cpu_offload:  # Buffers stay on GPU, and don't get sharded
             self._all_buffers_to(device=torch.device("cuda"), dtype=self.compute_dtype)
         else:
             self._all_buffers_to(dtype=self.compute_dtype)
@@ -387,7 +386,9 @@ class FullyShardedDataParallel(nn.Module):
         We manage several attributes on each Parameter instance. The first two
         are set by :func:`_shard_parameters_`:
 
-            ``_is_sharded``: ``True`` after the Parameter is initially sharded
+            ``_is_sharded``: ``True`` if the Parameter is sharded or ``False``
+                if the Parameter is intentionally not sharded (in which case we
+                will all-reduce grads for this param).
             ``_orig_size``: the size of the original Parameter (before sharding)
 
         The remaining attributes are set here:
@@ -397,12 +398,13 @@ class FullyShardedDataParallel(nn.Module):
                 depending on the value of *``cpu_offload``*.
             ``_fp16_shard``: if *``mixed_precision``* is ``True``, this will be
                 a single shard of the parameters in FP16, used for all-gather.
-            ``_full_param``: the full weight, used for computation in the
-                forward/backward pass. This will be resized in place and only
-                materialized (via all-gather) as needed.
+            ``_full_param_padded``: the full weight (padded to be evenly
+                divisible by ``world_size``), used for computation in the
+                forward and backward pass. This will be resized in place and
+                only materialized (via all-gather) as needed.
         """
-        assert p._is_sharded and hasattr(p, "_orig_size")
-        if hasattr(p, "_full_param"):
+        assert hasattr(p, "_is_sharded") and hasattr(p, "_orig_size")
+        if hasattr(p, "_fp32_shard"):
             return
 
         # Compute device defaults to CUDA when *cpu_offload* is enabled, or the
@@ -435,9 +437,15 @@ class FullyShardedDataParallel(nn.Module):
 
         # We also maintain a full-sized parameter of type self.compute_dtype
         # (FP16 for mixed_precision or FP32 otherwise). We resize the
-        # storage to size 0 at init (here) and only materialize as needed.
-        p._full_param = torch.zeros(p._orig_size, device=compute_device, dtype=self.compute_dtype)
-        free_storage_(p._full_param)
+        # storage to size 0 at init (here) and only materialize as needed. The
+        # storage may contain padding elements so that it is evenly divisible by
+        # world_size, although these padding elements will be removed before the
+        # relevant computation.
+        if p._is_sharded:
+            p._full_param_padded = torch.zeros(
+                p.data.numel() * self.world_size, device=compute_device, dtype=self.compute_dtype
+            )
+            free_storage_(p._full_param_padded)
 
         if self.move_grads_to_cpu:
             # We can optionally move the grad shard to CPU during the backward
@@ -626,10 +634,12 @@ class FullyShardedDataParallel(nn.Module):
                 # Average grad by world_size for consistency with PyTorch DDP.
                 param.grad.data.div_(self.world_size)
 
+            if param._is_sharded:
                 # Reduce-scatter grad.
-                param.grad.data = self._reduce_scatter(param.grad.data, param.data.numel())
-            else:
-                param.grad.data = torch.flatten(param.grad.data)
+                param.grad.data = self._reduce_scatter_grad(param)
+            elif self.world_size > 1:
+                # All-reduce non-sharded grad.
+                dist.all_reduce(param.grad.data, group=self.process_group)
 
             # Cast grad to param's dtype (typically FP32). Note: we do this
             # before the move_grads_to_cpu step so that this entire hook remains
@@ -669,26 +679,24 @@ class FullyShardedDataParallel(nn.Module):
                 self._cast_fp32_param_shards_to_fp16()
 
             for p in self.params:
-                p_size = p.data.numel() * self.world_size
-                if p._full_param.storage().size() != p_size:
-                    # Allocate based on full size from all shards.
-                    p._full_param.resize_(p_size)
-                    alloc_storage_(p._full_param, torch.Size((p_size,)))
-                    if self.world_size > 1:
-                        # Fill p._full_param with (p.data for each shard in self.world_size)
-                        self._all_gather_full_param(p)
-                        if p._orig_size.numel() < p._full_param.numel():
-                            # We need a smaller view into _full_param and save
-                            # _full_param_padded.
-                            p._full_param_padded = p._full_param
-                            # Note, full size can be >> orig_size when world_size is
-                            # large and param size is tiny.
-                            p._full_param = p._full_param.split(p._orig_size.numel())[0]
-                    else:
-                        torch.flatten(p._full_param).copy_(p.data)
-                    p._full_param = p._full_param.reshape(p._orig_size)
+                if not p._is_sharded:
+                    if self.mixed_precision:
+                        p.data = p._fp16_shard
+                    continue
 
-                p.data = p._full_param
+                p_size = p._full_param_padded.size()
+                if p._full_param_padded.storage().size() != p_size.numel():
+                    # Allocate based on full size from all shards.
+                    alloc_storage_(p._full_param_padded, size=p_size)
+                    assert p_size.numel() % self.world_size == 0
+                    if p._is_sharded:
+                        # Fill p._full_param_padded with (p.data for each shard in self.world_size)
+                        chunks = list(p._full_param_padded.chunk(self.world_size))
+                        dist.all_gather(chunks, p.data, group=self.process_group)
+                    else:
+                        p._full_param_padded.copy_(torch.flatten(p.data), non_blocking=True)
+
+                p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
 
                 if self.mixed_precision:
                     self._free_fp16_param_shard([p])
@@ -697,8 +705,13 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _use_full_params(self) -> None:
         for p in self.params:
-            assert p._full_param.storage().size() != 0
-            p.data = p._full_param
+            if not p._is_sharded:
+                if self.mixed_precision:
+                    assert p._fp16_shard.storage().size() != 0
+                    p.data = p._fp16_shard
+            else:
+                assert p._full_param_padded.storage().size() != 0
+                p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
 
     @torch.no_grad()
     def _prep_grads_for_backward(self) -> None:
@@ -715,18 +728,18 @@ class FullyShardedDataParallel(nn.Module):
         current_stream = torch.cuda.current_stream()
         with torch.cuda.stream(self._streams["all_gather"]):
             for p in params:
+                if not p._is_sharded:
+                    if self.mixed_precision:
+                        self._free_fp16_param_shard([p])
+                    continue
                 # There may be external references to the Tensor Storage that we
                 # can't modify, such as references that are created by
                 # ctx.save_for_backward in the forward pass. Thus when we
                 # unshard parameters, we should reuse the original Tensor
                 # Storage object and unshard it in-place. For now, just resize
                 # the Storage to 0 to save memory.
-                p._full_param.record_stream(current_stream)
-                if hasattr(p, "_full_param_padded"):
-                    free_storage_(p._full_param_padded)
-                    delattr(p, "_full_param_padded")
-                else:
-                    free_storage_(p._full_param)
+                p._full_param_padded.record_stream(current_stream)
+                free_storage_(p._full_param_padded)
 
     @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
@@ -767,44 +780,21 @@ class FullyShardedDataParallel(nn.Module):
                 free_storage_(p._fp16_shard)
 
     @torch.no_grad()
-    def _reduce_scatter(self, tensor: torch.Tensor, shard_size: int) -> torch.Tensor:
-        """Reduce-scatter a Tensor (gradient from the local worker) and return
-        the result (a single "flattened" shard of the summed gradient across workers).
+    def _reduce_scatter_grad(self, p: nn.Parameter) -> torch.Tensor:
+        """Reduce-scatter a Parameter's gradient and return a single shard of
+        the summed gradient across workers."""
+        assert p.grad is not None and p._is_sharded
+        grad_chunks = list(torch.flatten(p.grad.data).chunk(self.world_size))
 
-        Shard_size is passed in to compute the padding, but we don't use F.pad since
-        it reallocates the tensor, which can be a big chunk of memory consumed. Instead,
-        we allocate only for missing and incomplete shards and copy only the needed
-        data to the first allocated shard. (The remining allocated shards are just
-        padding for reduce_scatter.)
-        """
-        tensor = torch.flatten(tensor)
-        full_shards, rem = divmod(tensor.numel(), shard_size)
-        assert full_shards <= self.world_size, (
-            f"incorrect shard_size {shard_size} " f"full_shards {full_shards} " f"world_size {self.world_size}"
-        )
-        full_shards_view = tensor
-        if rem > 0:
-            # Get two views in to the tensor.
-            full_shards_view, rem_view = tensor.split(full_shards * shard_size)
+        # torch.chunk may return fewer than world_size chunks, pad accordingly.
+        num_pad_for_partial_chunk = grad_chunks[0].numel() - grad_chunks[-1].numel()
+        if num_pad_for_partial_chunk > 0:
+            grad_chunks[-1] = F.pad(grad_chunks[-1], [0, num_pad_for_partial_chunk])
+        if len(grad_chunks) < self.world_size:
+            grad_chunks.extend([torch.zeros_like(grad_chunks[0])] * (self.world_size - len(grad_chunks)))
 
-        # This is first part of to_scatter list.
-        to_scatter = list(full_shards_view.view(-1, shard_size).unbind(0))
-
-        tail = []
-        if full_shards < self.world_size:
-            # This is the second part of the to_scatter list.
-            tail = [torch.zeros_like(to_scatter[0]) for i in range(full_shards, self.world_size)]
-
-        if rem > 0:
-            # Copy the right data in to the first partial shard.
-            tail[0][:rem].copy_(rem_view)
-
-        assert len(to_scatter) + len(tail) == self.world_size, (
-            f"incorrect length {len(to_scatter)} + {len(tail)} vs. " f"{self.world_size}"
-        )
-
-        output = torch.zeros_like(to_scatter[0])  # will be filled with gradient summed across workers
-        dist.reduce_scatter(output, to_scatter + tail, group=self.process_group)
+        output = torch.zeros_like(grad_chunks[0])  # filled with gradient summed across workers
+        dist.reduce_scatter(output, grad_chunks, group=self.process_group)
         return output
 
     def assert_idle(self) -> None:
