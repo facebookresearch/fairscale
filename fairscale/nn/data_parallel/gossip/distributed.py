@@ -227,9 +227,9 @@ class SlowMoDistributedDataParallel(Module):
         assert world_size is not None and rank is not None
         self.process_rank = rank
 
-        self.initialize_logger(verbose, self.process_rank)
+        self._initialize_logger(verbose, self.process_rank)
 
-        rank, world_size = self.maybe_create_process_groups(
+        rank, world_size = self._maybe_create_process_groups(
             rank, world_size, nprocs_per_node, global_group, master_group, local_node_group
         )
 
@@ -293,7 +293,7 @@ class SlowMoDistributedDataParallel(Module):
         self.nprocs_per_node_device = torch.tensor([self.nprocs_per_node], device=comm_device, dtype=first_param_dtype)
 
         if self.sgp:
-            self.sgp_init(
+            self._sgp_init(
                 module=module,
                 first_param_dtype=first_param_dtype,
                 rank=rank,
@@ -313,7 +313,7 @@ class SlowMoDistributedDataParallel(Module):
 
         self.logger.debug("Initialization of SlowMoDistributedDataParallel complete")
 
-    def initialize_logger(self, verbose: bool, process_rank: int) -> None:
+    def _initialize_logger(self, verbose: bool, process_rank: int) -> None:
         """ Initializes the logger """
         self.logger = logging.getLogger(__name__)
         if verbose:
@@ -324,7 +324,7 @@ class SlowMoDistributedDataParallel(Module):
             # Set custom adapter on top of logger
             self.logger = cast(logging.Logger, MultiProcessAdapter(self.logger, {"process_num": process_rank}))
 
-    def maybe_create_process_groups(
+    def _maybe_create_process_groups(
         self,
         rank: int,
         world_size: int,
@@ -376,7 +376,7 @@ class SlowMoDistributedDataParallel(Module):
         self.logger.debug("Initialization of all process groups complete")
         return rank, world_size
 
-    def sgp_init(
+    def _sgp_init(
         self,
         module: torch.nn.Module,
         first_param_dtype: torch.dtype,
@@ -435,7 +435,7 @@ class SlowMoDistributedDataParallel(Module):
 
         if self.process_rank % self.nprocs_per_node == 0:
             self.gossip_thread = threading.Thread(
-                target=SlowMoDistributedDataParallel.sgp_gossip_target,
+                target=SlowMoDistributedDataParallel._sgp_gossip_target,
                 args=(
                     self.dist_config,
                     self.gossip_flag,
@@ -496,15 +496,11 @@ class SlowMoDistributedDataParallel(Module):
     ) -> None:
         dist._broadcast_coalesced(process_group, tensors, buffer_size)
 
-    def block(self) -> None:
-        self.logger.debug("blocking")
-        dist.barrier()
-
-    def create_event_recorder(self, event_name: str) -> EventRecorder:
+    def _create_event_recorder(self, event_name: str) -> EventRecorder:
         """ Creates an cuda event recorder which helps in profiling """
         return create_event_recorder(event_name, dummy=not self.profile_mode)
 
-    def fp16_fp32_iterator(
+    def _fp16_fp32_iterator(
         self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor]
     ) -> Iterable[Tuple[torch.Tensor, torch.Tensor]]:
         """ Iterator for those fp16 parameters which have a fp32 copy """
@@ -533,39 +529,39 @@ class SlowMoDistributedDataParallel(Module):
                 else:
                     yield p.view(-1), fp32_params[offset : offset + numel]
 
-    def should_perform_slowmo(self) -> bool:
+    def _should_perform_slowmo(self) -> bool:
         return self.slowmo and (self.num_updates + 1) % self.slowmo_frequency == 0
 
-    def should_perform_localsgd(self) -> bool:
+    def _should_perform_localsgd(self) -> bool:
         return self.localsgd and (self.num_updates + 1) % self.localsgd_frequency == 0
 
-    def skip_averaging_memory_efficient_slowmo(self) -> bool:
-        return self.should_perform_slowmo() and self.slowmo_memory_efficient
+    def _skip_averaging_memory_efficient_slowmo(self) -> bool:
+        return self._should_perform_slowmo() and self.slowmo_memory_efficient
 
-    def should_perform_sgp_common(self) -> bool:
-        return self.sgp and not self.overlap and not self.skip_averaging_memory_efficient_slowmo()
+    def _should_perform_sgp_common(self) -> bool:
+        return self.sgp and not self.overlap and not self._skip_averaging_memory_efficient_slowmo()
 
-    def should_perform_sgp(self) -> bool:
-        return self.should_perform_sgp_common() and not self.overlap
+    def _should_perform_sgp(self) -> bool:
+        return self._should_perform_sgp_common() and not self.overlap
 
-    def should_perform_sgp_overlap(self) -> bool:
-        return self.should_perform_sgp_common() and self.overlap
+    def _should_perform_sgp_overlap(self) -> bool:
+        return self._should_perform_sgp_common() and self.overlap
 
-    def should_allreduce_params(self) -> bool:
+    def _should_allreduce_params(self) -> bool:
         # We do not all-reduce parameters with local SGD if a slow momentum step is
         # performed, since this step contains a reduce operation already. Note that this
         # also means there is no error feedback correction in that case: it is not needed
         # since communication within the slow momentum step happens in fp32.
-        return (self.sgp and self.should_perform_slowmo() and self.slowmo_sgp_average_params) or (
-            self.should_perform_localsgd() and not self.skip_averaging_memory_efficient_slowmo()
+        return (self.sgp and self._should_perform_slowmo() and self.slowmo_sgp_average_params) or (
+            self._should_perform_localsgd() and not self._skip_averaging_memory_efficient_slowmo()
         )
 
-    def maybe_pre_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
-        ef_rec = self.create_event_recorder("Error feedback")
-        if self.should_perform_sgp() or self.should_allreduce_params():
+    def _maybe_pre_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
+        ef_rec = self._create_event_recorder("Error feedback")
+        if self._should_perform_sgp() or self._should_allreduce_params():
             with torch.no_grad():
                 for p_fp16, p_fp32 in fp16_fp32_list:
-                    if self.should_allreduce_params():
+                    if self._should_allreduce_params():
                         # This division and multiplication with the same number is done
                         # to ensure that we do not lose bits of information when we divide
                         # before the all_reduce. In order to preserve these bits in an
@@ -583,9 +579,9 @@ class SlowMoDistributedDataParallel(Module):
         ef_rec.stop()
         self.logger.debug("Error feedback completed")
 
-    def maybe_post_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
-        ef_unroll_rec = self.create_event_recorder("Sync and error feedback unroll rec")
-        if self.should_perform_sgp() or self.should_allreduce_params():
+    def _maybe_post_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
+        ef_unroll_rec = self._create_event_recorder("Sync and error feedback unroll rec")
+        if self._should_perform_sgp() or self._should_allreduce_params():
             # Error Feedback Reversal
             with torch.no_grad():
                 for p, p_fp32 in fp16_fp32_list:
@@ -593,19 +589,19 @@ class SlowMoDistributedDataParallel(Module):
         ef_unroll_rec.stop()
         self.logger.debug("Error feedback unroll completed")
 
-    def maybe_perform_sgp(self) -> None:
-        if self.should_perform_sgp():
-            sgp_rec = self.create_event_recorder("SGP")
-            if not self.should_allreduce_params():
-                self.sgp_transfer_params()
-                self.sgp_query_gossip_queue()
+    def _maybe_perform_sgp(self) -> None:
+        if self._should_perform_sgp():
+            sgp_rec = self._create_event_recorder("SGP")
+            if not self._should_allreduce_params():
+                self._sgp_transfer_params()
+                self._sgp_query_gossip_queue()
                 torch.cuda.synchronize()
             sgp_rec.stop()
             self.logger.debug("SGP completed")
 
-    def maybe_allreduce(self) -> None:
-        localsgd_rec = self.create_event_recorder("Localsgd communication time")
-        if self.should_allreduce_params():
+    def _maybe_allreduce(self) -> None:
+        localsgd_rec = self._create_event_recorder("Localsgd communication time")
+        if self._should_allreduce_params():
             communication_op = functools.partial(dist.all_reduce, group=self.master_group)
             params = cast(List[torch.Tensor], list(self.parameters()))
             with torch.no_grad():
@@ -614,7 +610,7 @@ class SlowMoDistributedDataParallel(Module):
             self.logger.debug("Params normalized before localsgd step")
 
             # Commenting this out as it may cause an overhead. Can be uncommented if needed
-            # synch_rec = self.create_event_recorder("Synchronization time for localsgd")
+            # synch_rec = self._create_event_recorder("Synchronization time for localsgd")
             # dist.barrier()
             # synch_rec.stop()
             # self.logger.debug("Barrier completed before localsgd step")
@@ -624,22 +620,22 @@ class SlowMoDistributedDataParallel(Module):
             self.logger.debug("Allreduce completed")
         localsgd_rec.stop()
 
-    def maybe_sync_locally(self) -> None:
-        if self.should_perform_sgp() or self.should_allreduce_params():
+    def _maybe_sync_locally(self) -> None:
+        if self._should_perform_sgp() or self._should_allreduce_params():
             self._sync_params()
             torch.cuda.synchronize()
 
-    def maybe_perform_slowmo(self, optimizer: torch.optim.Optimizer) -> None:
-        slowmo_rec = self.create_event_recorder("Slowmo")
-        if self.should_perform_slowmo():
-            self.global_momentum_step(optimizer)
+    def _maybe_perform_slowmo(self, optimizer: torch.optim.Optimizer) -> None:
+        slowmo_rec = self._create_event_recorder("Slowmo")
+        if self._should_perform_slowmo():
+            self._global_momentum_step(optimizer)
         slowmo_rec.stop()
         self.logger.debug("Global momentum step completed")
 
-    def maybe_copy_back_fp32_parameters(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
-        ef_copy_rec = self.create_event_recorder("Error feedback copy back")
+    def _maybe_copy_back_fp32_parameters(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
+        ef_copy_rec = self._create_event_recorder("Error feedback copy back")
         if (
-            self.should_perform_sgp() or self.should_allreduce_params() or self.should_perform_slowmo()
+            self._should_perform_sgp() or self._should_allreduce_params() or self._should_perform_slowmo()
         ) and fp16_fp32_list:
             with torch.no_grad():
                 for idx, (p_fp16, p_fp32) in enumerate(fp16_fp32_list):
@@ -647,10 +643,10 @@ class SlowMoDistributedDataParallel(Module):
         ef_copy_rec.stop()
         self.logger.debug("Error feedback copy-back completed")
 
-    def maybe_sgp_overlap_pre_communicate_error_feedback(
+    def _maybe_sgp_overlap_pre_communicate_error_feedback(
         self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]
     ) -> None:
-        if self.should_perform_sgp_overlap() and fp16_fp32_list:
+        if self._should_perform_sgp_overlap() and fp16_fp32_list:
             # Initialize error feedback for SGP-overlap
             if self.ef1 is None:
                 self.ef1 = []
@@ -679,16 +675,16 @@ class SlowMoDistributedDataParallel(Module):
         # waiting for it to happen in the global_momentum step function so that we store a copy of
         # the version of the parameters at iteration 0 and can use them for a slow momentum step later
         if not self.global_momentum_buffers_initialized:
-            self.init_global_momentum_buffers(optimizer)
+            self._init_global_momentum_buffers(optimizer)
 
-        fp16_fp32_list = list(self.fp16_fp32_iterator(optimizer, fp32_params))
+        fp16_fp32_list = list(self._fp16_fp32_iterator(optimizer, fp32_params))
         self.logger.debug("Created a list of fp16 and fp32 corresponding parameters")
 
         self.logger.debug(
-            "Booleans set. Values - self.should_perform_slowmo()=%r, self.should_perform_localsgd()=%r, self.should_allreduce_params()=%r",
-            self.should_perform_slowmo(),
-            self.should_perform_localsgd(),
-            self.should_allreduce_params(),
+            "Booleans set. Values - self._should_perform_slowmo()=%r, self._should_perform_localsgd()=%r, self._should_allreduce_params()=%r",
+            self._should_perform_slowmo(),
+            self._should_perform_localsgd(),
+            self._should_allreduce_params(),
         )
         self.logger.debug("Step number(0-indexed)=%d", self.num_updates)
 
@@ -704,18 +700,18 @@ class SlowMoDistributedDataParallel(Module):
                 "avoid accuracy loss"
             )
 
-        self.maybe_pre_communicate_error_feedback(fp16_fp32_list)
-        self.maybe_perform_sgp()
-        self.maybe_allreduce()
-        self.maybe_sync_locally()
-        self.maybe_post_communicate_error_feedback(fp16_fp32_list)
-        self.maybe_perform_slowmo(optimizer)
-        self.maybe_copy_back_fp32_parameters(fp16_fp32_list)
-        self.maybe_sgp_overlap_pre_communicate_error_feedback(fp16_fp32_list)
+        self._maybe_pre_communicate_error_feedback(fp16_fp32_list)
+        self._maybe_perform_sgp()
+        self._maybe_allreduce()
+        self._maybe_sync_locally()
+        self._maybe_post_communicate_error_feedback(fp16_fp32_list)
+        self._maybe_perform_slowmo(optimizer)
+        self._maybe_copy_back_fp32_parameters(fp16_fp32_list)
+        self._maybe_sgp_overlap_pre_communicate_error_feedback(fp16_fp32_list)
 
         self.num_updates += 1
 
-    def init_global_momentum_buffers(self, optimizer: torch.optim.Optimizer) -> None:
+    def _init_global_momentum_buffers(self, optimizer: torch.optim.Optimizer) -> None:
         """ Initializes the slow momentum buffers """
         if not self.slowmo:
             return
@@ -779,7 +775,7 @@ class SlowMoDistributedDataParallel(Module):
 
         self.global_momentum_buffer = torch.zeros_like(self.old_params).detach()
 
-    def distributed_comm(self, optimizer: torch.optim.Optimizer, mode: str) -> None:
+    def _distributed_comm(self, optimizer: torch.optim.Optimizer, mode: str) -> None:
         """ Performs the communication needed for the efficient SlowMo implementation """
         offset = 0
         slowmo_comm_lists: List[List[torch.Tensor]] = [[] for _ in range(self.slowmo_num_shards)]
@@ -815,25 +811,24 @@ class SlowMoDistributedDataParallel(Module):
                     communication_op = functools.partial(dist.broadcast, src=slowmo_rank)
                 communicate(slowmo_comm_list, communication_op)
 
-    def global_momentum_step(self, optimizer: torch.optim.Optimizer) -> None:
+    def _global_momentum_step(self, optimizer: torch.optim.Optimizer) -> None:
         """ Performs the slow momentum step """
         if not self.slowmo:
             return
 
         if not self.global_momentum_buffers_initialized:
-            self.init_global_momentum_buffers(optimizer)
+            self._init_global_momentum_buffers(optimizer)
 
         if self.slowmo_memory_efficient:
-            # actual global_momentum_step
-            self.distributed_comm(optimizer, mode="gather")
+            self._distributed_comm(optimizer, mode="gather")
 
         if self.is_computing_slowmo:
-            self.perform_local_optimization(optimizer)
+            self._perform_local_optimization(optimizer)
 
         if self.slowmo_memory_efficient:
-            self.distributed_comm(optimizer, mode="scatter")
+            self._distributed_comm(optimizer, mode="scatter")
 
-    def perform_local_optimization(self, optimizer: torch.optim.Optimizer) -> None:
+    def _perform_local_optimization(self, optimizer: torch.optim.Optimizer) -> None:
         """ Performs the slow momentum on the local shard """
         assert self.portion_start is not None
 
@@ -897,12 +892,12 @@ class SlowMoDistributedDataParallel(Module):
 
             if self.sgp:
                 # convert model back to ps-numerator
-                self.sgp_ps_numerator()
+                self._sgp_ps_numerator()
 
                 # gossip during training (not inference)
                 if self.gossip_enable:
-                    if self.overlap and not self.skip_averaging_memory_efficient_slowmo():
-                        self.sgp_query_gossip_queue()
+                    if self.overlap and not self._skip_averaging_memory_efficient_slowmo():
+                        self._sgp_query_gossip_queue()
 
         def queue_hook(*unused: Any) -> None:
             Variable._execution_engine.queue_callback(hook)
@@ -920,11 +915,11 @@ class SlowMoDistributedDataParallel(Module):
             # gossip during training (not inference)
             if self.sgp:
                 if self.gossip_enable:
-                    if self.overlap and not self.skip_averaging_memory_efficient_slowmo():
-                        self.sgp_transfer_params()
+                    if self.overlap and not self._skip_averaging_memory_efficient_slowmo():
+                        self._sgp_transfer_params()
 
                 # convert model to de-biased estimate
-                self.sgp_unbias()
+                self._sgp_unbias()
 
         return hook
 
@@ -946,7 +941,7 @@ class SlowMoDistributedDataParallel(Module):
         else:
             super(SlowMoDistributedDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
 
-    def sgp_ps_numerator(self) -> None:
+    def _sgp_ps_numerator(self) -> None:
         """ Convert model params to ps-numerator """
         if not self.is_sgp_ps_numerator:
             ps_weight = self.ps_weight
@@ -956,7 +951,7 @@ class SlowMoDistributedDataParallel(Module):
                         p.mul_(cast(torch.Tensor, ps_weight.type(p.dtype)))
             self.is_sgp_ps_numerator = True
 
-    def sgp_unbias(self) -> None:
+    def _sgp_unbias(self) -> None:
         """ Convert moel params to de-biased estimate """
         if self.is_sgp_ps_numerator:
             ps_weight = self.ps_weight
@@ -977,10 +972,10 @@ class SlowMoDistributedDataParallel(Module):
         if self.sgp:
             self.gossip_enable = False
         if self.sgp:
-            self.sgp_query_gossip_queue(non_blocking=self.asynch)
+            self._sgp_query_gossip_queue(non_blocking=self.asynch)
         return self
 
-    def sgp_query_gossip_queue(self, non_blocking: bool = False) -> bool:
+    def _sgp_query_gossip_queue(self, non_blocking: bool = False) -> bool:
         """ Check gossip-queue for push-sum residuals and update model """
         if not self.gossip_enable:
             return False
@@ -1007,13 +1002,13 @@ class SlowMoDistributedDataParallel(Module):
                 self.gossip_flag.clear()
                 self.params_mixed = True
                 self.gossiping = False
-                self.sgp_transfer_params(mix=False)
+                self._sgp_transfer_params(mix=False)
                 return False
 
             self.lazy_ps_factor.copy_(self.gossip_ps_factor)
 
             # convert model-params to ps numerators b4 adding residuals
-            self.sgp_ps_numerator()
+            self._sgp_ps_numerator()
 
             # add residuals
             self.ps_weight += self.gossip_ps_weight
@@ -1035,7 +1030,7 @@ class SlowMoDistributedDataParallel(Module):
 
         return False
 
-    def sgp_transfer_params(self, mix: bool = True) -> bool:
+    def _sgp_transfer_params(self, mix: bool = True) -> bool:
         """ Transfers COPY of model parameters to gossip queue """
         if not self.gossip_enable or self.process_rank % self.nprocs_per_node != 0:
             return False
@@ -1052,7 +1047,7 @@ class SlowMoDistributedDataParallel(Module):
 
         # Transfer ps-numerators to gossip-process:
         # --
-        self.sgp_ps_numerator()
+        self._sgp_ps_numerator()
         if mix:
             self.ps_weight *= self.gossip_ps_factor
         self.gossip_ps_weight.copy_(self.ps_weight)
@@ -1082,7 +1077,7 @@ class SlowMoDistributedDataParallel(Module):
         return True
 
     @staticmethod
-    def sgp_gossip_into_receive_buffer(
+    def _sgp_gossip_into_receive_buffer(
         send_buffer: List[torch.Tensor],
         gossiper: Gossiper,
         receive_buffer: List[torch.Tensor],
@@ -1109,7 +1104,7 @@ class SlowMoDistributedDataParallel(Module):
         return ps_weight, ps_factor
 
     @staticmethod
-    def sgp_gossip_target(
+    def _sgp_gossip_target(
         dist_config: Dict[Any, Any],
         gossip_flag: threading.Event,
         train_flag: threading.Event,
@@ -1151,7 +1146,7 @@ class SlowMoDistributedDataParallel(Module):
             try:
                 with torch.cuda.stream(gossip_stream):
                     for dtype in gossip_params_by_dtype:
-                        (ps_weight, ps_factor,) = SlowMoDistributedDataParallel.sgp_gossip_into_receive_buffer(
+                        (ps_weight, ps_factor,) = SlowMoDistributedDataParallel._sgp_gossip_into_receive_buffer(
                             gossip_params_by_dtype[dtype],
                             gossipers[dtype],
                             gossip_device_buffer_by_dtype[dtype],

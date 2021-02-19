@@ -158,7 +158,7 @@ def run_test_slowmo_with_slowmo_freq_1(
         model.parameters(), lr=slowmo_model.slowmo_lr, momentum=slowmo_model.slowmo_momentum,
     )
     slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=1, momentum=0)
-    slowmo_model.init_global_momentum_buffers(slowmo_model_optimizer)
+    slowmo_model._init_global_momentum_buffers(slowmo_model_optimizer)
 
     # check two model parameters over 3 iterations
     for iteration in range(3):
@@ -275,7 +275,7 @@ def run_test_slowmo_with_slowmo_freq_ge_2(
         model.parameters(), lr=slowmo_model.slowmo_lr, momentum=slowmo_model.slowmo_momentum,
     )
     slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=base_lr, momentum=base_momentum)
-    slowmo_model.init_global_momentum_buffers(slowmo_model_optimizer)
+    slowmo_model._init_global_momentum_buffers(slowmo_model_optimizer)
 
     old_parameters = [copy.deepcopy(params) for params in model.parameters()]
 

@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 #
 
-from .distributed import GossipDataParallel, SlowmoBaseAlgorithm
+from .distributed import SlowmoBaseAlgorithm, SlowMoDistributedDataParallel
 from .gossiper import PushPull, PushSum
 from .graph_manager import (
     DynamicBipartiteExponentialGraph,
