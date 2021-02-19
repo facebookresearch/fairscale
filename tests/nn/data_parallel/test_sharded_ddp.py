@@ -10,7 +10,6 @@ Testing ShardedDDP
 from contextlib import suppress
 import copy
 import tempfile
-from typing import List
 
 import numpy as np
 import pytest
@@ -27,6 +26,7 @@ from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.utils.testing import (
     GPT2,
     check_same_model_params,
+    check_same_models_across_ranks,
     skip_if_less_than_four_gpu,
     skip_if_no_cuda,
     skip_if_py38,
@@ -49,11 +49,13 @@ class _DoubleInput(torch.nn.Module):
         return torch.cat((x1, x2), dim=1)
 
 
+_optim_settings = {"lr": 1e-3, "momentum": 0.99}
+
+
 def run_one_step(
     rank, world_size, backend, device, temp_file_name, broadcast_buffers, grad_accumulation, reduce_buffer_size,
 ):
-    url = "file://" + temp_file_name
-    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
     if device == torch.device("cuda"):
         torch.cuda.set_device(rank)
 
@@ -67,49 +69,15 @@ def run_one_step(
 
     next(model.parameters()).requires_grad = False  # Test non-trainable parameters
 
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(
         model, optimizer, broadcast_buffers=broadcast_buffers, reduce_buffer_size=reduce_buffer_size
     )
 
-    def check_same_model_across_ranks(same_params: bool):
-        # Check that all the params are the same on all ranks
-        # This should be true with and without broadcast_buffers, we don't have any real buffer here
-        receptacle: List[torch.Tensor] = []
-
-        if dist.get_backend() != "nccl":
-            for pg in optimizer.param_groups:
-                for p in pg["params"]:
-                    # Check the params
-                    receptacle = [p.clone() for _ in range(world_size)] if rank == 0 else []
-                    dist.gather(p, receptacle, dst=0)
-                    if rank == 0:
-                        for sync_p in receptacle[1:]:
-                            if same_params:
-                                assert torch.all(torch.eq(receptacle[0], sync_p)), "Models differ in between ranks"
-                            else:
-                                assert not torch.all(
-                                    torch.eq(receptacle[0], sync_p)
-                                ), "Gradients should not have been synced"
-
-            # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
-            if broadcast_buffers:
-                for b in ddp_model.buffers():
-                    receptacle = [b.clone() for _ in range(world_size)] if rank == 0 else []
-                    dist.gather(b, receptacle, dst=0)
-                    if rank == 0:
-                        for sync_b in receptacle[1:]:
-                            if same_params:
-                                assert torch.all(torch.eq(receptacle[0], sync_b)), "Models differ in between ranks"
-                            else:
-                                assert not torch.all(
-                                    torch.eq(receptacle[0], sync_b)
-                                ), "Gradients should not have been synced"
-
-                    assert b.cpu().item() == 0.0
-
     # The model should be synchronized in between the ranks at ShardedDataParallel construction time, check that
-    check_same_model_across_ranks(same_params=True)
+    check_same_models_across_ranks(
+        ddp_model, dist.group.WORLD, params_should_be_equal=True, check_broadcast_buffers=broadcast_buffers
+    )
 
     # Optim loop
     def closure():
@@ -126,7 +94,9 @@ def run_one_step(
         _ = optimizer.step(closure=closure)
         # when running on cpu/gloo the "nodes" are not really different
         same_params = device == torch.device("cpu") or grad_accumulation
-        check_same_model_across_ranks(same_params=same_params)
+        check_same_models_across_ranks(
+            ddp_model, dist.group.WORLD, params_should_be_equal=same_params, check_broadcast_buffers=broadcast_buffers
+        )
 
     dist.destroy_process_group()
 
@@ -167,15 +137,14 @@ def test_step_cpu(broadcast_buffers, grad_accumulation, reduce_buffer_size):
 def run_ddp_parity(
     rank, world_size, backend, temp_file_name, reduce_buffer_size, grad_accumulation, change_train_graph
 ):
-    url = "file://" + temp_file_name
-    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
 
     device = torch.device("cuda")
     torch.cuda.set_device(rank)
     torch.manual_seed(rank)
     np.random.seed(rank)
     NUMBER_BATCHS = 5
-    BATCH_SIZE = 32
+    BATCH_SIZE = 8
 
     def check_parity(amp: bool, manual_reduction: bool):
 
@@ -215,7 +184,7 @@ def run_ddp_parity(
         # properly reassigned when/if this changes
         next(model.parameters()).requires_grad = False
 
-        sharded_optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-5, momentum=0.99)
+        sharded_optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-4, momentum=0.99)
         sharded_ddp_model = ShardedDataParallel(
             module=model,
             sharded_optimizer=sharded_optimizer,
@@ -224,7 +193,7 @@ def run_ddp_parity(
         )
 
         ddp_model_single = copy.deepcopy(model)
-        ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-5, momentum=0.99)
+        ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-4, momentum=0.99)
         ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True, find_unused_parameters=True)
 
         ddp_scaler = TorchGradScaler() if amp else None
@@ -303,20 +272,18 @@ def run_ddp_parity(
 @pytest.mark.parametrize("grad_accumulation", [True, False])
 @pytest.mark.parametrize("change_train_graph", [True, False])
 def test_ddp_parity(reduce_buffer_size, grad_accumulation, change_train_graph):
-    temp_file_name = tempfile.mkstemp()[1]
     world_size = torch.cuda.device_count()
     backend = dist.Backend.NCCL
     mp.spawn(
         run_ddp_parity,
-        args=(world_size, backend, temp_file_name, reduce_buffer_size, grad_accumulation, change_train_graph),
+        args=(world_size, backend, tempfile.mkstemp()[1], reduce_buffer_size, grad_accumulation, change_train_graph),
         nprocs=world_size,
         join=True,
     )
 
 
 def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_buffer_size):
-    url = "file://" + temp_file_name
-    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
     device = torch.device("cuda")
     torch.cuda.set_device(rank)
     torch.manual_seed(rank)
@@ -383,28 +350,26 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_b
 @skip_if_single_gpu
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 def test_ddp_parity_two_optim(reduce_buffer_size):
-    temp_file_name = tempfile.mkstemp()[1]
     world_size = 2
     backend = dist.Backend.NCCL
     mp.spawn(
         run_ddp_parity_two_optim,
-        args=(world_size, backend, temp_file_name, reduce_buffer_size),
+        args=(world_size, backend, tempfile.mkstemp()[1], reduce_buffer_size),
         nprocs=world_size,
         join=True,
     )
 
 
 def run_test_two_inputs(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
-    url = "file://" + temp_file_name
-    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
-    if device == torch.device("cuda"):
+    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
+    if device == "cuda":
         torch.cuda.set_device(rank)
 
     torch.manual_seed(rank)
     np.random.seed(rank)
 
     model = _DoubleInput().to(device)
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(model, optimizer, reduce_buffer_size=reduce_buffer_size)
 
     # Optim loop
@@ -422,15 +387,18 @@ def run_test_two_inputs(rank, world_size, backend, device, temp_file_name, reduc
 
 
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
-def test_inputs(reduce_buffer_size):
+@pytest.mark.parametrize("backend", ["gloo", "nccl"])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_inputs(reduce_buffer_size, backend, device):
     # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
     world_size = 2
-    backend = "gloo"
-    temp_file_name = tempfile.mkstemp()[1]
-    device = "cpu"
+    if backend == "nccl" and device == "cpu":
+        pytest.skip("Incompatible combination")
+        return
+
     mp.spawn(
         run_test_two_inputs,
-        args=(world_size, backend, device, temp_file_name, reduce_buffer_size),
+        args=(world_size, backend, device, tempfile.mkstemp()[1], reduce_buffer_size),
         nprocs=world_size,
         join=True,
     )
@@ -440,12 +408,10 @@ def test_ddp_attributes():
     # Check that ShardedDDP exposes the same attributes as Pytorch's DDP
     # - is multi_device_module
     # - device_type
-
-    url = "file://" + tempfile.mkstemp()[1]
-    dist.init_process_group(init_method=url, backend="gloo", rank=0, world_size=1)
+    dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
 
     model = Sequential(Linear(2, 3), Linear(3, 3))
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(model, optimizer)
 
     assert hasattr(ddp_model, "is_multi_device_module")
@@ -455,14 +421,12 @@ def test_ddp_attributes():
 
 def test_random_attributes():
     # Check that ShardedDDP exposes the original module's attributes
-
-    url = "file://" + tempfile.mkstemp()[1]
-    dist.init_process_group(init_method=url, backend="gloo", rank=0, world_size=1)
+    dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
 
     model = Sequential(Linear(2, 3), Linear(3, 3))
     model.banana = "sweet"
 
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(model, optimizer)
 
     assert hasattr(ddp_model, "banana")
@@ -473,12 +437,11 @@ def test_random_attributes():
 
 def run_test_device_change(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
     # Check that the wrapped module can change devices
-    url = "file://" + temp_file_name
-    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
     model = Sequential(Linear(2, 3), Linear(3, 3)).cpu()  # not device on purpose, test changing it after the fact
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(
         model, optimizer, sync_models_at_startup=False, reduce_buffer_size=reduce_buffer_size
     )
@@ -509,12 +472,13 @@ def test_device_change(reduce_buffer_size):
 
 
 def run_test_training_change(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
-    url = "file://" + temp_file_name
-    group = dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+    group = dist.init_process_group(
+        init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size
+    )
     torch.cuda.set_device(rank)
 
     model = Sequential(Linear(2, 3), Linear(3, 3)).to(device)
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(model, optimizer, process_group=group, reduce_buffer_size=reduce_buffer_size)
 
     inputs = torch.rand((10, 2), device=device)
@@ -545,14 +509,13 @@ def test_training_change(reduce_buffer_size):
 
 
 def run_test_ddp_sync_batch_norm(rank, world_size, backend, device, temp_file_name):
-    url = "file://" + temp_file_name
-    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
 
     model = Sequential(Linear(2, 3), torch.nn.BatchNorm1d(3), Linear(3, 3)).to(device)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.to(device)  # in pytorch 1.5 syncBN switches to the default device/cpu
 
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(model, optimizer)
 
     assert isinstance(model[1], torch.nn.SyncBatchNorm)
@@ -575,8 +538,7 @@ def test_ddp_sync_batch_norm():
 
 
 def run_test_two_optimizers(rank, world_size, backend, device, temp_file_name):
-    url = "file://" + temp_file_name
-    dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
     if device == torch.device("cuda"):
         torch.cuda.set_device(rank)
 
@@ -585,8 +547,8 @@ def run_test_two_optimizers(rank, world_size, backend, device, temp_file_name):
     model = _DoubleInput().to(device)
 
     parameters = list(model.parameters())
-    optimizer_1 = OSS(params=parameters[:-10], optim=torch.optim.SGD, lr=0.01, momentum=0.99)
-    optimizer_2 = OSS(params=parameters[-10:], optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    optimizer_1 = OSS(params=parameters[:-10], optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+    optimizer_2 = OSS(params=parameters[-10:], optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(model, [optimizer_1, optimizer_2])
 
     # Optim loop
@@ -629,7 +591,7 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
     model = GPT2(
         embed_dim=256, num_heads=2, num_layers=12, num_positions=INPUT_DIM * INPUT_DIM, num_vocab=512, num_classes=2
     ).to(device)
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(model, optimizer, reduce_buffer_size=0)
 
     # Optim loop
@@ -694,17 +656,9 @@ def run_test_multiple_groups(rank, world_size, tempfile_name, backend, reduce_bu
             _ = optimizer.step(closure=closure)
 
             # Check that all the params are the same on all ranks
-            for pg in optimizer.param_groups:
-                for p in pg["params"]:
-                    receptacle = [p.clone() for _ in sub_group_ranks]
-                    dist.all_gather(receptacle, p, group=process_group)
-                    if rank == 0:
-                        for sync_p in receptacle[1:]:
-                            assert torch.all(
-                                torch.eq(receptacle[0], sync_p)
-                            ), "Models differ in between ranks {} - {}".format(
-                                torch.norm(receptacle[0]), torch.norm(sync_p)
-                            )
+            check_same_models_across_ranks(
+                model, process_group, params_should_be_equal=True, check_broadcast_buffers=True
+            )
 
     if rank in sub_group_ranks:
         # Model not-fitting in the broadcast bucket
@@ -713,7 +667,7 @@ def run_test_multiple_groups(rank, world_size, tempfile_name, backend, reduce_bu
         )
 
         # With SGD, Momentum is required to get a state to shard
-        optimizer = OSS(model.parameters(), lr=0.1, momentum=0.99, group=process_group)
+        optimizer = OSS(model.parameters(), group=process_group, lr=1e-3, momentum=0.99)
         model = ShardedDataParallel(
             model, optimizer, process_group=process_group, reduce_buffer_size=reduce_buffer_size
         )
