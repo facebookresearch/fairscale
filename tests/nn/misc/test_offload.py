@@ -26,6 +26,7 @@ def _init():
     return device, offload_device
 
 
+@skip_if_no_cuda
 def test_single_run():
     device, offload_device = _init()
     model = _get_model()
@@ -111,6 +112,7 @@ def _train_offload_model(
     return _train(offload_model, offload_optimizer, use_fp16, device)
 
 
+@skip_if_no_cuda
 @pytest.mark.parametrize("use_fp16", [True, False])
 @pytest.mark.parametrize("checkpoint_activation", [True, False])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
