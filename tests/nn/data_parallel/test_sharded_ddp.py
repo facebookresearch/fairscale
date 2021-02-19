@@ -515,7 +515,7 @@ def run_test_training_change(rank, world_size, backend, device, temp_file_name, 
 
     model = Sequential(Linear(2, 3), Linear(3, 3)).to(device)
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=0.01, momentum=0.99)
-    ddp_model = ShardedDataParallel(model, optimizer, process_group=group, reduce_buffer_size=bucket_size)
+    ddp_model = ShardedDataParallel(model, optimizer, process_group=group, reduce_buffer_size=reduce_buffer_size)
 
     inputs = torch.rand((10, 2), device=device)
     outputs = ddp_model(inputs)  # assert if the module has not been changed properly
