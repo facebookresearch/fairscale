@@ -17,26 +17,26 @@ import torch
 from torch import nn
 
 
-def conditional_amp_fwd_decorator(orig_func):
+def conditional_amp_fwd_decorator(orig_func):  # type: ignore
 
     if hasattr(torch.cuda.amp, "custom_fwd"):
-        return torch.cuda.amp.custom_fwd(orig_func)
+        return torch.cuda.amp.custom_fwd(orig_func)  # type: ignore
 
     @functools.wraps(orig_func)
-    def inner_decorator(*args, **kwargs):
+    def inner_decorator(*args: Any, **kwargs: Any) -> Any:
         return orig_func(*args, **kwargs)
-    
+
     return inner_decorator
 
 
-def conditional_amp_bwd_decorator(orig_func):
+def conditional_amp_bwd_decorator(orig_func):  # type: ignore
     if hasattr(torch.cuda.amp, "custom_bwd"):
-        return torch.cuda.amp.custom_bwd(orig_func)
+        return torch.cuda.amp.custom_bwd(orig_func)  # type: ignore
 
     @functools.wraps(orig_func)
-    def inner_decorator(*args, **kwargs):
+    def inner_decorator(*args: Any, **kwargs: Any) -> Any:
         return orig_func(*args, **kwargs)
-    
+
     return inner_decorator
 
 
@@ -150,7 +150,7 @@ class ActivationCheckpointing(torch.autograd.Function):
 
     @staticmethod
     @conditional_amp_fwd_decorator  # type: ignore
-    def forward(ctx: Any, inputs: Any, model_instance: Any) -> Any: # type: ignore
+    def forward(ctx: Any, inputs: Any, model_instance: Any) -> Any:
         inputs = inputs if isinstance(inputs, tuple) else (inputs,)
 
         ctx.inputs = inputs

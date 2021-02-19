@@ -128,6 +128,11 @@ def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
     model = _get_model()
     rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
     omodel, oopt, oloss = _train_offload_model(
-        model, device, offload_device, use_fp16=use_fp16, checkpoint_activation=checkpoint_activation, num_microbatches=num_microbatches,
+        model,
+        device,
+        offload_device,
+        use_fp16=use_fp16,
+        checkpoint_activation=checkpoint_activation,
+        num_microbatches=num_microbatches,
     )
     _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
