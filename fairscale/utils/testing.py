@@ -54,7 +54,7 @@ skip_if_single_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 2, reason="multiple GPUs required"
 )
 
-skip_if_less_four_gpu = pytest.mark.skipif(
+skip_if_less_than_four_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 4, reason="4 GPUs or more required"
 )
 
