@@ -17,28 +17,27 @@ import torch
 from torch import nn
 
 
-def conditional_amp_fwd_decorator(orig_func):  # type: ignore
-    def outer_decorator(func):  # type: ignore
-        @functools.wraps(func)
-        def inner_decorator(*args, **kwargs):  # type: ignore
-            return func(*args, **kwargs)
+def conditional_amp_fwd_decorator(orig_func):
 
     if hasattr(torch.cuda.amp, "custom_fwd"):
-        return torch.cuda.amp.custom_fwd(orig_func)  # type: ignore
-    else:
-        return outer_decorator(orig_func)  # type: ignore
+        return torch.cuda.amp.custom_fwd(orig_func)
+
+    @functools.wraps(orig_func)
+    def inner_decorator(*args, **kwargs):
+        return orig_func(*args, **kwargs)
+    
+    return inner_decorator
 
 
-def conditional_amp_bwd_decorator(orig_func):  # type: ignore
-    def outer_decorator(func):  # type: ignore
-        @functools.wraps(func)
-        def inner_decorator(*args, **kwargs):  # type: ignore
-            return func(*args, **kwargs)
-
+def conditional_amp_bwd_decorator(orig_func):
     if hasattr(torch.cuda.amp, "custom_bwd"):
-        return torch.cuda.amp.custom_bwd(orig_func)  # type: ignore
-    else:
-        return outer_decorator(orig_func)  # type: ignore
+        return torch.cuda.amp.custom_bwd(orig_func)
+
+    @functools.wraps(orig_func)
+    def inner_decorator(*args, **kwargs):
+        return orig_func(*args, **kwargs)
+    
+    return inner_decorator
 
 
 def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
@@ -151,7 +150,7 @@ class ActivationCheckpointing(torch.autograd.Function):
 
     @staticmethod
     @conditional_amp_fwd_decorator  # type: ignore
-    def forward(ctx: Any, inputs: Any, model_instance: Any) -> Any:
+    def forward(ctx: Any, inputs: Any, model_instance: Any) -> Any: # type: ignore
         inputs = inputs if isinstance(inputs, tuple) else (inputs,)
 
         ctx.inputs = inputs
@@ -427,7 +426,6 @@ class OffloadModel(nn.Module):
         if self._checkpoint_activation:
             return ActivationCheckpointing.apply(*inputs, self)
 
-        shardSync = ShardSyncLayer.apply
         self._activations = []
         for index in range(-1, len(self.model_slices)):
             if index >= 0:
@@ -437,7 +435,7 @@ class OffloadModel(nn.Module):
                 inputs = self._activations[index]
                 inputs = self.model_slices[index](*inputs)
             # Call the custom autograd hooks (discard/load slices FW and BW)
-            inputs = shardSync(inputs, index, self.model_slices, self)
+            inputs = ShardSyncLayer.apply(inputs, index, self.model_slices, self)
             self._activations.append(inputs)
             if index >= 0:
                 self._activations[index] = tuple([a.cpu() for a in list(self._activations[index])])

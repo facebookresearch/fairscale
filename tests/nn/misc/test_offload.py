@@ -15,6 +15,7 @@ import pytest
 import torch
 
 from fairscale.nn.misc.offload import OffloadModel
+from fairscale.utils.testing import skip_if_no_cuda
 
 
 def _init():
@@ -117,8 +118,8 @@ def _train_offload_model(
 @pytest.mark.parametrize("checkpoint_activation", [True, False])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
 def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
-    if not hasattr(torch.cuda.amp, "custom_fwd"):
-        return
+    if (use_fp16 or checkpoint_activation) and not hasattr(torch.cuda.amp, "custom_fwd"):
+        pytest.skip(f"AMP APIs are not supported in torch version {torch.__version__}")
 
     if not checkpoint_activation and num_microbatches > 1:
         pytest.skip("We only support microbatches with activation offloading.")
@@ -127,6 +128,6 @@ def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
     model = _get_model()
     rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
     omodel, oopt, oloss = _train_offload_model(
-        model, device, offload_device, use_fp16=True, checkpoint_activation=True, num_microbatches=5
+        model, device, offload_device, use_fp16=use_fp16, checkpoint_activation=checkpoint_activation, num_microbatches=num_microbatches,
     )
     _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
