@@ -11,7 +11,7 @@ A wrapper which streams the model in and out of the GPU automatically during FW 
 from builtins import isinstance
 import functools
 import logging
-from typing import Any, Callable, List, Tuple, TypeVar
+from typing import Any, List, Tuple
 
 import torch
 from torch import nn
@@ -24,7 +24,7 @@ def conditional_amp_fwd_decorator(orig_func):  # type: ignore
             return func(*args, **kwargs)
 
     if hasattr(torch.cuda.amp, "custom_fwd"):
-        return torch.cuda.amp.custom_fwd(orig_func)   # type: ignore
+        return torch.cuda.amp.custom_fwd(orig_func)  # type: ignore
     else:
         return outer_decorator(orig_func)  # type: ignore
 
@@ -36,7 +36,7 @@ def conditional_amp_bwd_decorator(orig_func):  # type: ignore
             return func(*args, **kwargs)
 
     if hasattr(torch.cuda.amp, "custom_bwd"):
-        return torch.cuda.amp.custom_bwd(orig_func)   # type: ignore
+        return torch.cuda.amp.custom_bwd(orig_func)  # type: ignore
     else:
         return outer_decorator(orig_func)  # type: ignore
 
