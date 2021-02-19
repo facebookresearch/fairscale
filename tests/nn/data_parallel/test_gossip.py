@@ -546,20 +546,20 @@ def test_settings(test_settings) -> None:
 #     )
 
 
-def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempfile) -> None:
+def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempfile_1, tempfile_2) -> None:
     int_devices = get_gpus_for_rank(world_size)[rank][:1]
     devices = [torch.device("cuda:" + str(i)) for i in int_devices]
 
     # Memory usage when running optimization locally on a single GPU
     max_memory_local = run_test_memory_usage_localsgd_with_slowmo(
-        rank, world_size, tempfile, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+        rank, world_size, tempfile_1, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
     )
 
     # Memory usage when running optimization using LocalSGD-SlowMo
     max_memory_localsgd_slowmo = run_test_memory_usage_localsgd_with_slowmo(
         rank,
         world_size,
-        tempfile,
+        tempfile_2,
         {
             "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
             "localsgd_frequency": 1,
@@ -597,26 +597,25 @@ def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempf
 @skip_if_single_gpu
 def test_max_memory_used_localsgd_slowmo_memory_efficient() -> None:
     world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(
         run_max_memory_used_localsgd_slowmo_memory_efficient,
-        args=(world_size, temp_file_name),
+        args=(world_size, tempfile.mkstemp()[1], tempfile.mkstemp()[1]),
         nprocs=world_size,
         join=True,
     )
 
 
-def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, tempfile: str):
+def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, tempfile_1: str, tempfile_2: str):
     int_devices = get_gpus_for_rank(world_size)[rank][:1]
     devices = [torch.device("cuda:" + str(i)) for i in int_devices]
 
     max_memory_local = run_test_memory_usage_localsgd_with_slowmo(
-        rank, world_size, tempfile, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+        rank, world_size, tempfile_1, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
     )
     max_memory_slowmo = run_test_memory_usage_localsgd_with_slowmo(
         rank,
         world_size,
-        tempfile,
+        tempfile_2,
         {
             "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
             "localsgd_frequency": 100,  # This is so that localsgd does not occur
@@ -644,23 +643,25 @@ def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, temp
 @skip_if_single_gpu
 def test_max_memory_used_slowmo_memory_efficient() -> None:
     world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(
-        run_max_memory_used_slowmo_memory_efficient, args=(world_size, temp_file_name), nprocs=world_size, join=True
+        run_max_memory_used_slowmo_memory_efficient,
+        args=(world_size, tempfile.mkstemp()[1], tempfile.mkstemp()[1]),
+        nprocs=world_size,
+        join=True,
     )
 
 
-def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile):
+def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile_1, tempfile_2):
     int_devices = get_gpus_for_rank(world_size)[rank][:1]
     devices = [torch.device("cuda:" + str(i)) for i in int_devices]
 
     max_memory_local = run_test_memory_usage_localsgd_with_slowmo(
-        rank, world_size, tempfile, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+        rank, world_size, tempfile_1, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
     )
     max_memory_slowmo = run_test_memory_usage_localsgd_with_slowmo(
         rank,
         world_size,
-        tempfile,
+        tempfile_2,
         {
             "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
             "localsgd_frequency": 100,  # This is so that localsgd does not occur
@@ -689,8 +690,12 @@ def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile):
 @skip_if_single_gpu
 def test_max_memory_used_slowmo_no_sharding() -> None:
     world_size = 2
-    temp_file_name = tempfile.mkstemp()[1]
-    mp.spawn(run_max_memory_used_slowmo_no_sharding, args=(world_size, temp_file_name), nprocs=world_size, join=True)
+    mp.spawn(
+        run_max_memory_used_slowmo_no_sharding,
+        args=(world_size, tempfile.mkstemp()[1], tempfile.mkstemp()[1]),
+        nprocs=world_size,
+        join=True,
+    )
 
 
 if __name__ == "__main__":
