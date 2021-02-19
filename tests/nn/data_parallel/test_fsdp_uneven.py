@@ -48,6 +48,7 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
     if test_case["assert_ref_out"]:
         torch.testing.assert_allclose(ref_out, out)
 
+    model.assert_idle()
     teardown()
 
 

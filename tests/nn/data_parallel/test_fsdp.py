@@ -58,6 +58,8 @@ class DistributedTest(unittest.TestCase):
             assert loss.dtype == torch.float32
             model.module.run_backward(loss)
             optim.step()
+        if hasattr(model, "assert_idle"):
+            model.assert_idle()
         return loss.detach()
 
     @staticmethod

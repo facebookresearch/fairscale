@@ -5,6 +5,7 @@
 
 import contextlib
 import copy
+from enum import Enum, auto
 import functools
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
@@ -28,6 +29,25 @@ from fairscale.utils.parallel import compute_shard_size, validate_process_group
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
+
+
+class TrainingState(Enum):
+    """
+    Simple enum to indicate what state FSDP is in. Used for asserting
+    to make sure APIs are called in the correct state.
+
+    TODO (Min): It would be nice to capture the stepping state as well.
+        Maybe we can use the model.zero_grad() call, but not sure if it
+        is called if optim.zero_grad() is used instead.
+        It would be nice to have clear state transition be explicit like:
+
+        zero_grad -> fwd -> bwd -> optionally accum grad by repeating
+        fwd/bwd -> stepping -> loop back to zero_grad
+    """
+
+    IDLE = auto()
+    FORWARD = auto()
+    BACKWARD = auto()
 
 
 class FullyShardedDataParallel(nn.Module):
@@ -144,6 +164,8 @@ class FullyShardedDataParallel(nn.Module):
         # Flag to indicate if we require gradient reduction in the backward
         # pass. This will be False when inside the no_sync context manager.
         self.require_backward_grad_sync: bool = True
+
+        self.training_state = TrainingState.IDLE
 
     @torch.no_grad()
     def _all_buffers_to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> None:
@@ -315,6 +337,8 @@ class FullyShardedDataParallel(nn.Module):
         variables, which will later be synchronized in the first
         forward-backward pass exiting the context.
         """
+        assert self._is_root, "no_sync on inner FSDP is not tested."
+        self.assert_idle()
         # This instance may wrap other FullyShardedDataParallel instances and we
         # need to set all of them to accumulate gradients.
         old_flags = []
@@ -465,6 +489,9 @@ class FullyShardedDataParallel(nn.Module):
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self._lazy_init()
 
+        # Start of a forward pass.
+        self.training_state = TrainingState.FORWARD
+
         # Due to the use of streams, we need to make sure the previous
         # ``optim.step()`` is done before we all-gather parameters.
         if self._is_root:
@@ -497,6 +524,9 @@ class FullyShardedDataParallel(nn.Module):
         # pass (if needed).
         outputs = self._register_pre_backward_hooks(outputs)
 
+        # Done with a forward pass.
+        self.training_state = TrainingState.IDLE
+
         return outputs
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
@@ -511,6 +541,10 @@ class FullyShardedDataParallel(nn.Module):
             if pre_backward_hook_has_run[0]:
                 return  # only run once
             pre_backward_hook_has_run[0] = True
+
+            # Start of a backward pass.
+            self.training_state = TrainingState.BACKWARD
+
             # All-gather full parameters.
             if self.reshard_after_forward:
                 self._rebuild_full_params()
@@ -624,6 +658,8 @@ class FullyShardedDataParallel(nn.Module):
         if self.move_grads_to_cpu:
             # Wait for the non-blocking GPU -> CPU grad transfers to finish.
             torch.cuda.current_stream().synchronize()
+        # A backward pass is done.
+        self.training_state = TrainingState.IDLE
 
     @torch.no_grad()
     def _rebuild_full_params(self) -> None:
@@ -770,6 +806,12 @@ class FullyShardedDataParallel(nn.Module):
         output = torch.zeros_like(to_scatter[0])  # will be filled with gradient summed across workers
         dist.reduce_scatter(output, to_scatter + tail, group=self.process_group)
         return output
+
+    def assert_idle(self) -> None:
+        """Assert we are in the idle state."""
+        assert (
+            self.training_state == TrainingState.IDLE
+        ), f"wrong state to call no_sync. current state is {self.training_state}"
 
 
 @torch.no_grad()
