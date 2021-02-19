@@ -13,6 +13,7 @@ import copy
 import numpy as np
 import torch
 
+import pytest
 from fairscale.nn.misc.offload import OffloadModel
 
 
@@ -110,59 +111,16 @@ def _train_offload_model(
     return _train(offload_model, offload_optimizer, use_fp16, device)
 
 
-def test_correctness():
-    device, offload_device = _init()
-    model = _get_model()
-    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
-    omodel, oopt, oloss = _train_offload_model(model, device, offload_device)
-    _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
-
-
-def test_correctness_fp16():
+@pytest.mark.parametrize("use_fp16", [True, False])
+@pytest.mark.parametrize("checkpoint_activation", [True, False])
+@pytest.mark.parametrize("num_microbatches", [1, 5])
+def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
     if not hasattr(torch.cuda.amp, "autocast"):
         return
-    device, offload_device = _init()
-    model = _get_model()
-    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device, use_fp16=True)
-    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, use_fp16=True)
-    _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
+    
+    if not checkpoint_activation and num_microbatches > 1:
+        pytest.skip("We only support microbatches with activation offloading.")
 
-
-def test_correctness_activation_checkpointing():
-    if not hasattr(torch.cuda.amp, "autocast"):
-        return
-    device, offload_device = _init()
-    model = _get_model()
-    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
-    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, checkpoint_activation=True)
-    _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
-
-
-def test_correctness_activation_checkpointing_fp16():
-    if not hasattr(torch.cuda.amp, "autocast"):
-        return
-    device, offload_device = _init()
-    model = _get_model()
-    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device, use_fp16=True)
-    omodel, oopt, oloss = _train_offload_model(model, device, offload_device, use_fp16=True, checkpoint_activation=True)
-    _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
-
-
-def test_correctness_microbatches():
-    if not hasattr(torch.cuda.amp, "autocast"):
-        return
-    device, offload_device = _init()
-    model = _get_model()
-    rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
-    omodel, oopt, oloss = _train_offload_model(
-        model, device, offload_device, checkpoint_activation=True, num_microbatches=5
-    )
-    _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
-
-
-def test_correctness_microbatches_fp16():
-    if not hasattr(torch.cuda.amp, "autocast"):
-        return
     device, offload_device = _init()
     model = _get_model()
     rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
