@@ -63,6 +63,9 @@ class SlowMoDistributedDataParallel(Module):
     it synchronizes the parameters on the different nodes using SlowMo
     (https://arxiv.org/abs/1910.00643).
 
+    Please make sure to read the documentation for slowmo_memory_efficient parameter as
+    it contains a non-trivial trick in order to optimize our implementation.
+
     Please refer to the documentation of ``torch.nn.parallel.DistributedDataParallel``
     for other useful tips for using this container.
 
@@ -94,8 +97,31 @@ class SlowMoDistributedDataParallel(Module):
                         transfomers on the WMT 16 En-De dataset, we have found the optimal
                         values to be 0 for less than 4 nodes, 0.2 for 4 nodes, 0.5 for 8
                         nodes and 0.6 for 16 nodes (default: 0.5)
+        slowmo_memory_efficient (float): If enabled, use a memory efficient implementation of
+                        SlowMo. The basic implementation of SlowMo occupies extra memory
+                        equal to double the memory occupied by the model parameters. This
+                        implementation shards that across a certain number of shards which is
+                        specified as a parameter below.
+                        In addition, slowmo_memory_efficient leads to extra communication
+                        with throughput equivalent to an allreduce, and performs an allreduce
+                        as a side-effect. In order to optimize the implementation, we skip
+                        the typical allreduce when slowmo_base_algorithm is localsgd and
+                        the localsgd step and slowmo step occur on the same iteration. Also,
+                        we skip the gossip step when slowmo_base_algorithm is sgp. We can skip
+                        these because the memory-efficient slowmo step does an allreduce as a
+                        side effect. Due to this skipping, when slowmo_base_algorithm is
+                        localsgd, we recommend setting slowmo_frequency to be a multiple of
+                        localsgd_frequency.
+                        We recommend setting this parameter to True when slowmo_base_algorithm
+                        is localsgd. In case of sgp, there is a tradeoff between extra memory
+                        usage which is double the memory occupied by the parameters, and extra
+                        time spent which is half the time taken up by an allreduce every
+                        slowmo_frequency iterations and we suggest setting it to False
+                        (default: True)
         slowmo_frequency (int): This specifies how often (number of iterations) slow momentum
-                         is to be performed (default: 48)
+                         is to be performed. We recommend keeping slowmo_frequency as a
+                         multiple of localsgd_frequency. Please look at the documentation of
+                         slowmo_memory_efficient for the reasoning (default: 48)
         slowmo_lr (float): This specifies the value of slowmo learning rate to be used (read
                   https://arxiv.org/abs/1910.00643 for more details). We do not recommend
                   changing this (default: 1.0)
@@ -106,8 +132,10 @@ class SlowMoDistributedDataParallel(Module):
         # LocalSGD Args
 
         localsgd_frequency (int): LocalSGD typically averages the parameters once every few
-                           iterations. This parameter specifices the frequency of averaging
-                           (default: 3)
+                           iterations. This parameter specifices the frequency of averaging.
+                           We recommend keeping slowmo_frequency as a multiple of
+                           localsgd_frequency. Please look at the documentation of
+                           slowmo_memory_efficient for the reasoning (default: 3)
 
         # SGP Args
 
@@ -160,8 +188,7 @@ class SlowMoDistributedDataParallel(Module):
         slowmo_base_algorithm: SlowmoBaseAlgorithm = SlowmoBaseAlgorithm.LOCALSGD,
         # SlowMo Args
         slowmo_momentum: float = 0.5,
-        slowmo_memory_efficient: bool = False,  # TODO: add documentation for this parameter
-        # Most probably don't need to be changed
+        slowmo_memory_efficient: bool = True,
         slowmo_frequency: int = 48,
         slowmo_lr: float = 1.0,
         slowmo_num_shards: int = 32,
