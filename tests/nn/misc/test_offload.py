@@ -115,7 +115,7 @@ def _train_offload_model(
 @pytest.mark.parametrize("checkpoint_activation", [True, False])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
 def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
-    if not hasattr(torch.cuda.amp, "autocast"):
+    if not hasattr(torch.cuda.amp, "custom_fwd"):
         return
 
     if not checkpoint_activation and num_microbatches > 1:
