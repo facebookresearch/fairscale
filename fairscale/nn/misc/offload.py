@@ -9,12 +9,36 @@ A wrapper which streams the model in and out of the GPU automatically during FW 
 """
 
 from builtins import isinstance
+import functools
 import logging
-from typing import Any, List, Tuple
+from typing import Any, Callable, List, Tuple, TypeVar
 
 import torch
 from torch import nn
-from torch.cuda.amp import custom_bwd, custom_fwd
+
+
+def conditional_amp_fwd_decorator(orig_func):  # type: ignore
+    def outer_decorator(func):  # type: ignore
+        @functools.wraps(func)
+        def inner_decorator(*args, **kwargs):  # type: ignore
+            return func(*args, **kwargs)
+
+    if hasattr(torch.cuda.amp, "custom_fwd"):
+        return torch.cuda.amp.custom_fwd(orig_func)   # type: ignore
+    else:
+        return outer_decorator(orig_func)  # type: ignore
+
+
+def conditional_amp_bwd_decorator(orig_func):  # type: ignore
+    def outer_decorator(func):  # type: ignore
+        @functools.wraps(func)
+        def inner_decorator(*args, **kwargs):  # type: ignore
+            return func(*args, **kwargs)
+
+    if hasattr(torch.cuda.amp, "custom_bwd"):
+        return torch.cuda.amp.custom_bwd(orig_func)   # type: ignore
+    else:
+        return outer_decorator(orig_func)  # type: ignore
 
 
 def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
@@ -126,7 +150,7 @@ class ActivationCheckpointing(torch.autograd.Function):
      """
 
     @staticmethod
-    @custom_fwd
+    @conditional_amp_fwd_decorator  # type: ignore
     def forward(ctx: Any, inputs: Any, model_instance: Any) -> Any:
         inputs = inputs if isinstance(inputs, tuple) else (inputs,)
 
@@ -148,7 +172,7 @@ class ActivationCheckpointing(torch.autograd.Function):
             # Apply the FP and store the activations on the CPU.
             with torch.no_grad():
                 inputs = model_instance._activations[index]
-                output_list = []
+                output_list: List[Any] = []
                 for given_input in inputs:
                     given_input_list = torch.chunk(given_input, model_instance._num_microbatches)
                     given_output_list = []
@@ -170,7 +194,7 @@ class ActivationCheckpointing(torch.autograd.Function):
         return result[0] if len(result) == 1 else result
 
     @staticmethod
-    @custom_bwd
+    @conditional_amp_bwd_decorator
     def backward(ctx, *grad_outputs):  # type: ignore
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
@@ -208,19 +232,19 @@ class ActivationCheckpointing(torch.autograd.Function):
             if isinstance(final_grads, torch.Tensor):
                 final_grads = (final_grads,)
             # Iterate through all the inputs/outputs of a shard (there could be multiple).
-            chunked_grad_list = []
+            chunked_grad_list: List[Any] = []
             # Chunk the activation and grad based on the number of microbatches that are set.
             for chunked_activation, chunked_grad in zip(
-                torch.chunk(*activation, model_instance._num_microbatches),
-                torch.chunk(*final_grads, model_instance._num_microbatches),
+                torch.chunk(*activation, model_instance._num_microbatches),  # type: ignore
+                torch.chunk(*final_grads, model_instance._num_microbatches),  # type: ignore
             ):
                 # Set the states to what it used to be before the forward pass.
                 torch.set_rng_state(ctx.fwd_rng_state)
 
                 if isinstance(chunked_activation, torch.Tensor):
-                    chunked_activation = (chunked_activation,)
+                    chunked_activation = (chunked_activation,)  # type: ignore
                 if isinstance(chunked_grad, torch.Tensor):
-                    chunked_grad = (chunked_grad,)
+                    chunked_grad = (chunked_grad,)  # type: ignore
 
                 # Since we need a grad value of a non leaf element we need to set these properties.
                 for a in chunked_activation:
@@ -237,7 +261,7 @@ class ActivationCheckpointing(torch.autograd.Function):
                 chunked_grad_list += [a.grad for a in chunked_activation]
 
             # Append the list of grads to the all_grads list and this should be on the CPU.
-            all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))
+            all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))  # type: ignore
             # Move activation back to the CPU.
             # TODO(anj-s): Why does moving activations to CPU cause the .grad property to be None?
             activation = tuple([a.cpu() for a in list(activation)])
@@ -265,7 +289,7 @@ class ShardSyncLayer(torch.autograd.Function):
      """
 
     @staticmethod
-    @custom_fwd
+    @conditional_amp_fwd_decorator  # type: ignore
     def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, model_instance: Any) -> Any:
         drop_index = index
         load_index = index + 1
@@ -288,7 +312,7 @@ class ShardSyncLayer(torch.autograd.Function):
         return inputs if isinstance(inputs, tuple) else (inputs,)
 
     @staticmethod
-    @custom_bwd
+    @conditional_amp_bwd_decorator
     def backward(ctx, *grad_outputs):  # type: ignore
 
         load_index = ctx.index
@@ -356,7 +380,7 @@ class OffloadModel(nn.Module):
         device: torch.device,
         offload_device: torch.device = torch.device("cpu"),
         n_slices: int = 5,
-        checkpoint_activation=False,
+        checkpoint_activation: bool = False,
         num_microbatches: int = 1,
     ):
         super().__init__()

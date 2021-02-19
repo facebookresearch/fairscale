@@ -11,9 +11,9 @@ import contextlib
 import copy
 
 import numpy as np
+import pytest
 import torch
 
-import pytest
 from fairscale.nn.misc.offload import OffloadModel
 
 
@@ -117,7 +117,7 @@ def _train_offload_model(
 def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
     if not hasattr(torch.cuda.amp, "autocast"):
         return
-    
+
     if not checkpoint_activation and num_microbatches > 1:
         pytest.skip("We only support microbatches with activation offloading.")
 
