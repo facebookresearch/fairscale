@@ -25,12 +25,7 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 
 def get_gpus_for_rank(world_size: int) -> List[List[int]]:
-    """Multigpu tests are designed to simulate the multi nodes with multi
-    GPUs on each node. Nccl backend requires equal #GPUs in each process.
-    On a single node, all visible GPUs are evenly
-    divided to subsets, each process only uses a subset.
-
-    This will return a list, each element of which contains a list of GPUs
+    """This will return a list, each element of which contains a list of GPUs
     to be used by the respective process.
 
     Examples (results are shown for a machine with 2 GPUs):
@@ -51,11 +46,7 @@ def get_gpus_for_rank(world_size: int) -> List[List[int]]:
     num_visible_devices = torch.cuda.device_count()
 
     if num_visible_devices >= world_size:
-        assert num_visible_devices % world_size == 0
-        gpus_per_process = num_visible_devices // world_size
-        gpus_for_rank = []
-        for rank in range(world_size):
-            gpus_for_rank.append(visible_devices[rank * gpus_per_process : (rank + 1) * gpus_per_process])
+        gpus_for_rank = [[i] for i in range(world_size)]
     else:
         visible_devices_repeated = [
             [device]
