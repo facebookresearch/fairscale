@@ -1,5 +1,4 @@
 import time
-from typing import Optional, Union, cast
 
 from helpers import dist_init, get_data, get_loss_fun, get_model
 import torch
