@@ -562,7 +562,7 @@ class SlowMoDistributedDataParallel(Module):
                     assert self.ef1 is not None
                     self.ef1[idx].copy_(p_fp32 - p_fp16.float())
 
-    def perform_additional_optimizer_actions(
+    def perform_slowmo(
         self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor] = None
     ) -> None:  # TODO: rename this function
         """ This is to be called after optimizer.step. It performs the approximate averaging using
@@ -599,9 +599,7 @@ class SlowMoDistributedDataParallel(Module):
             and any(p.dtype == torch.float16 for p in self.parameters())
         ):
             self.logger.warning(
-                "WARNING: please set fp32_params in "
-                "perform_additional_optimizer_actions in order to "
-                "avoid accuracy loss"
+                "WARNING: please set fp32_params in " "perform_slowmo in order to " "avoid accuracy loss"
             )
 
         self._maybe_pre_communicate_error_feedback(fp16_fp32_list)

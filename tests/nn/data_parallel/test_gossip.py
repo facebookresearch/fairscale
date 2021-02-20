@@ -180,7 +180,7 @@ def run_test_slowmo_with_slowmo_freq_1(
         # Update weights and run a second iteration to shake out errors
         update_parameters(model_optimizer)
         update_parameters(slowmo_model_optimizer)
-        slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
+        slowmo_model.perform_slowmo(slowmo_model_optimizer)
 
         for a, b in zip(model.parameters(), slowmo_model.module.parameters()):
             assert torch.allclose(a, b)
@@ -239,7 +239,7 @@ def run_test_localsgd_with_freq_ge_2(
                 torch.distributed.all_reduce(param)
                 with torch.no_grad():
                     param /= world_size  # type: ignore
-        slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
+        slowmo_model.perform_slowmo(slowmo_model_optimizer)
 
         for a, b in zip(model.parameters(), slowmo_model.module.parameters()):
             assert torch.allclose(a, b)
@@ -298,7 +298,7 @@ def run_test_slowmo_with_slowmo_freq_ge_2(
         # Update weights and run a second iteration to shake out errors
         update_parameters(model_optimizer)
         update_parameters(slowmo_model_optimizer)
-        slowmo_model.perform_additional_optimizer_actions(slowmo_model_optimizer)
+        slowmo_model.perform_slowmo(slowmo_model_optimizer)
 
         # This block simulates the behaviour of slow momentum by applying it manually
         # to the regular model
@@ -361,8 +361,8 @@ def run_test_memory_usage_localsgd_with_slowmo(
         )
 
         update_parameters(model_optimizer)
-        if hasattr(model, "perform_additional_optimizer_actions"):
-            model.perform_additional_optimizer_actions(model_optimizer)  # type: ignore
+        if hasattr(model, "perform_slowmo"):
+            model.perform_slowmo(model_optimizer)  # type: ignore
 
         # Shuffle the input so that distributed input is different
         torch.manual_seed(1337 + iteration)
