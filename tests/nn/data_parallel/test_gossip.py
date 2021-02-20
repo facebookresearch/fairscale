@@ -134,7 +134,7 @@ def _prepare_single_device_module(
 
 
 def run_test_slowmo_with_slowmo_freq_1(
-    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0
+    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any]
 ) -> None:
     """
     Note: we pass down `device_ids` all the way to SlowMoDistributedDataParallel
@@ -189,7 +189,7 @@ def run_test_slowmo_with_slowmo_freq_1(
 
 
 def run_test_localsgd_with_freq_ge_2(
-    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], model_optimizer_momentum: float = 0,
+    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any]
 ) -> None:
 
     int_devices = get_gpus_for_rank(world_size)[rank][:1]
@@ -202,10 +202,9 @@ def run_test_localsgd_with_freq_ge_2(
     model, slowmo_model, input, target = _prepare_single_device_module(
         rank, world_size, tempfile, devices, slowmo_init_dict, global_batch_size
     )
-    assert model_optimizer_momentum == 0
     assert not slowmo_model.slowmo
 
-    model_optimizer = torch.optim.SGD(model.parameters(), lr=1, momentum=model_optimizer_momentum)
+    model_optimizer = torch.optim.SGD(model.parameters(), lr=1, momentum=0)
     slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=1, momentum=0)
 
     # check two model parameters over 3 iterations
@@ -382,7 +381,6 @@ _SLOWMO_TEST_SETTINGS = [
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.0,
         },
-        "model_optimizer_momentum": 0.0,
         "test_function": run_test_slowmo_with_slowmo_freq_1,
         "test_name": "nccl_backend_device_ids_torch_device_list",
     },
@@ -393,7 +391,6 @@ _SLOWMO_TEST_SETTINGS = [
             "nprocs_per_node": 2,
             "slowmo_momentum": 0.0,
         },
-        "model_optimizer_momentum": 0.0,
         "test_function": run_test_slowmo_with_slowmo_freq_1,
         "test_name": "nccl_backend_2_proc_1_node",
     },
@@ -406,7 +403,6 @@ _SLOWMO_TEST_SETTINGS = [
             "slowmo_frequency": 1,
             "slowmo_memory_efficient": True,
         },
-        "model_optimizer_momentum": 0.5,  # Does not actually seem to be used
         "test_function": run_test_slowmo_with_slowmo_freq_1,
         "test_name": "localsgd_slowmo_freq_1",
     },
@@ -418,7 +414,6 @@ _SLOWMO_TEST_SETTINGS = [
             "slowmo_frequency": 1,
             "slowmo_memory_efficient": False,
         },
-        "model_optimizer_momentum": 0.5,
         "test_function": run_test_slowmo_with_slowmo_freq_1,
         "test_name": "sgp_slowmo_freq_1",
     },
@@ -431,7 +426,6 @@ _SLOWMO_TEST_SETTINGS = [
             "slowmo_frequency": 2,
             "slowmo_memory_efficient": True,
         },
-        "model_optimizer_momentum": 0.0,
         "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
         "test_name": "localsgd_slowmo",
     },
@@ -444,7 +438,6 @@ _SLOWMO_TEST_SETTINGS = [
             "slowmo_frequency": 2,
             "slowmo_memory_efficient": False,
         },
-        "model_optimizer_momentum": 0.0,
         "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
         "test_name": "localsgd_slowmo_no_sharding",
     },
@@ -456,7 +449,6 @@ _SLOWMO_TEST_SETTINGS = [
             "slowmo_frequency": 2,
             "slowmo_memory_efficient": True,
         },
-        "model_optimizer_momentum": 0.0,
         "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
         "test_name": "sgp_slowmo",
     },
@@ -468,7 +460,6 @@ _SLOWMO_TEST_SETTINGS = [
             "slowmo_frequency": 2,
             "slowmo_memory_efficient": False,
         },
-        "model_optimizer_momentum": 0.0,
         "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
         "test_name": "sgp_slowmo_no_sharding",
     },
@@ -482,7 +473,6 @@ _SLOWMO_TEST_SETTINGS = [
             "slowmo_num_shards": 1,
             "slowmo_memory_efficient": True,
         },
-        "model_optimizer_momentum": 0.0,
         "test_function": run_test_slowmo_with_slowmo_freq_ge_2,
         "test_name": "slowmo_small_worldsize",
     },
@@ -493,7 +483,6 @@ _SLOWMO_TEST_SETTINGS = [
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.0,
         },
-        "model_optimizer_momentum": 0.0,
         "test_name": "localsgd_freq2",
         "test_function": run_test_localsgd_with_freq_ge_2,
     },
@@ -511,7 +500,7 @@ def test_settings(test_settings) -> None:
 
     mp.spawn(
         test_settings["test_function"],
-        args=(world_size, temp_file_name, test_settings["slowmo_settings"], test_settings["model_optimizer_momentum"]),
+        args=(world_size, temp_file_name, test_settings["slowmo_settings"]),
         nprocs=world_size,
         join=True,
     )

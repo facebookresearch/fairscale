@@ -12,7 +12,6 @@ Distributed Gossip Wrapper
               multi-peer training.
 """
 
-from enum import Enum
 import functools
 import logging
 import os
