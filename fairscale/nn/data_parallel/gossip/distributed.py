@@ -46,12 +46,6 @@ from .utils.cuda_metering import EventRecorder, create_event_recorder
 HEARTBEAT_TIMEOUT = 300  # maximum time to wait for message (seconds)
 
 
-class SlowmoBaseAlgorithm(Enum):
-    LOCALSGD = 1
-    SGP = 2
-    NONE = 3
-
-
 class SlowMoDistributedDataParallel(Module):
     """Wraps an arbitrary :class:`nn.Module <torch.nn.Module>` module and allows
     it to be run on multiple GPUs (distributed) in a data parallel setting.
@@ -78,14 +72,14 @@ class SlowMoDistributedDataParallel(Module):
                           buffers of the module at beginning of the ``forward``
                           function. (default: ``True``)
 
-        slowmo_base_algorithm (SlowmoBaseAlgorithm): The base algorithm to be used for
+        slowmo_base_algorithm (str): The base algorithm to be used for
                               approximately averaging the different parameters across nodes.
                               The base algorithm is responsible for increasing the efficiency of
                               this module. The base algorithm, combined with SlowMo, results in
                               significant speedups without accuracy loss.
-                              Either Stochastic Gradient Push (https://arxiv.org/abs/1811.10792)
-                              or LocalSGD (https://arxiv.org/abs/1808.07217) can be used here
-                              (default: SlowmoBaseAlgorithm.LOCALSGD)
+                              Either Stochastic Gradient Push ("sgp") (https://arxiv.org/abs/1811.10792)
+                              or LocalSGD ("localsgd") (https://arxiv.org/abs/1808.07217) can be used here
+                              (default: "localsgd")
 
         # SlowMo Args
 
@@ -185,7 +179,7 @@ class SlowMoDistributedDataParallel(Module):
         module: torch.nn.Module,
         nprocs_per_node: int,
         broadcast_buffers: bool = True,
-        slowmo_base_algorithm: SlowmoBaseAlgorithm = SlowmoBaseAlgorithm.LOCALSGD,
+        slowmo_base_algorithm: str = "localsgd",
         # SlowMo Args
         slowmo_momentum: float = 0.5,
         slowmo_memory_efficient: bool = True,
@@ -271,8 +265,8 @@ class SlowMoDistributedDataParallel(Module):
         self.slowmo_frequency = slowmo_frequency
         self.slowmo_sgp_average_params = slowmo_sgp_average_params
         self.slowmo_base_algorithm = slowmo_base_algorithm
-        self.localsgd = slowmo_base_algorithm == SlowmoBaseAlgorithm.LOCALSGD
-        self.sgp = slowmo_base_algorithm == SlowmoBaseAlgorithm.SGP
+        self.localsgd = slowmo_base_algorithm == "localsgd"
+        self.sgp = slowmo_base_algorithm == "sgp"
 
         self.localsgd_frequency = localsgd_frequency
         self.ef1: Optional[List[torch.Tensor]] = None

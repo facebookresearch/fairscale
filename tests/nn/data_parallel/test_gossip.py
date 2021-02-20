@@ -377,7 +377,7 @@ def run_test_memory_usage_localsgd_with_slowmo(
 _SLOWMO_TEST_SETTINGS = [
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 1,
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.0,
@@ -388,7 +388,7 @@ _SLOWMO_TEST_SETTINGS = [
     },
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 100,  # Localsgd has to be disabled since it would fail in the 1 node case. TODO: Need to allow it to run without failing in SlowMoDistributedDataParallel in the one node case
             "nprocs_per_node": 2,
             "slowmo_momentum": 0.0,
@@ -399,7 +399,7 @@ _SLOWMO_TEST_SETTINGS = [
     },
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 1,
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
@@ -412,7 +412,7 @@ _SLOWMO_TEST_SETTINGS = [
     },
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
+            "slowmo_base_algorithm": "sgp",
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
             "slowmo_frequency": 1,
@@ -424,7 +424,7 @@ _SLOWMO_TEST_SETTINGS = [
     },
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 1,
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
@@ -437,7 +437,7 @@ _SLOWMO_TEST_SETTINGS = [
     },
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 1,
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
@@ -450,7 +450,7 @@ _SLOWMO_TEST_SETTINGS = [
     },
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
+            "slowmo_base_algorithm": "sgp",
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
             "slowmo_frequency": 2,
@@ -462,7 +462,7 @@ _SLOWMO_TEST_SETTINGS = [
     },
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.SGP,
+            "slowmo_base_algorithm": "sgp",
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
             "slowmo_frequency": 2,
@@ -474,7 +474,7 @@ _SLOWMO_TEST_SETTINGS = [
     },
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 1,
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
@@ -488,7 +488,7 @@ _SLOWMO_TEST_SETTINGS = [
     },
     {
         "slowmo_settings": {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 2,
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.0,
@@ -528,7 +528,7 @@ def test_settings(test_settings) -> None:
 #     world_size = 4
 #     temp_file_name = tempfile.mkstemp()[1]
 #     slowmo_settings = {
-#         "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+#         "slowmo_base_algorithm": "localsgd",
 #         "localsgd_frequency": 1,
 #         "rank": rank,
 #         "world_size": world_size,
@@ -561,7 +561,7 @@ def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempf
         world_size,
         tempfile_2,
         {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 1,
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
@@ -617,7 +617,7 @@ def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, temp
         world_size,
         tempfile_2,
         {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 100,  # This is so that localsgd does not occur
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
@@ -663,7 +663,7 @@ def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile_1, tempfil
         world_size,
         tempfile_2,
         {
-            "slowmo_base_algorithm": gossip.SlowmoBaseAlgorithm.LOCALSGD,
+            "slowmo_base_algorithm": "localsgd",
             "localsgd_frequency": 100,  # This is so that localsgd does not occur
             "nprocs_per_node": 1,
             "slowmo_momentum": 0.5,
