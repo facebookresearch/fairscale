@@ -626,6 +626,8 @@ class FullyShardedDataParallel(nn.Module):
         # reductions in post_backward stream.
         self._streams["post_backward"].wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self._streams["post_backward"]):
+            orig_grad_data = param.grad.data
+
             if self.mixed_precision and self.fp32_reduce_scatter:
                 # Cast grad to FP32.
                 param.grad.data = param.grad.data.to(param.dtype)
@@ -652,6 +654,13 @@ class FullyShardedDataParallel(nn.Module):
             if self.move_grads_to_cpu:
                 param._cpu_grad.copy_(param.grad.data, non_blocking=True)
                 param.grad.data = param._cpu_grad
+
+            # After _post_backward_hook returns, orig_grad_data will eventually
+            # go out of scope, at which point it could otherwise be freed for
+            # further reuse by the main stream while the div/reduce_scatter/copy
+            # are underway in the post_backward stream. See:
+            # github.com/NVIDIA/apex/blob/master/apex/parallel/distributed.py
+            orig_grad_data.record_stream(self._streams["post_backward"])
 
         # Enqueue a callback at the end of the backward pass to ensure that all
         # post-backward work has finished. We only need one callback and it only
