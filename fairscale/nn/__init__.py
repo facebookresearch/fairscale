@@ -14,5 +14,6 @@ __all__ = [
     "Pipe",
     "PipeRPCWrapper",
     "ShardedDataParallel",
+    "SlowMoDistributedDataParallel",
     "Top2Gate",
 ]
