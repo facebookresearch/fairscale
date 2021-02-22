@@ -57,6 +57,7 @@ if __name__ == "__main__":
         name="fairscale",
         description="fairscale: A PyTorch library for large-scale and high-performance training.",
         version=find_version("fairscale/__init__.py"),
+        setup_requires=["ninja"],  # ninja is required to build extensions
         install_requires=fetch_requirements(),
         include_package_data=True,
         packages=setuptools.find_packages(exclude=("tests", "tests.*")),
