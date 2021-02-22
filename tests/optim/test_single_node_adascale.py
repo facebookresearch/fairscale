@@ -63,7 +63,7 @@ def test_loss_accum_cpu():
 @pytest.mark.parametrize("test_case", adascale_test_data)
 def test_grad_accum(test_case, cpu):
     """Test the basic functionality on CPU/GPU with gradient accumulation without DDP"""
-    model = Linear(2, 2, bias=False)
+    model = Linear(2, 2, bias=True)
     if not cpu:
         if torch.cuda.device_count() < 1:
             pytest.skip("1 GPU is required")
