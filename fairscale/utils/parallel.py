@@ -21,7 +21,7 @@ def compute_shard_size(numel: int, world_size: int) -> int:
             # two shards, shard size is the size of the bigger one.
             shard_size = numel // world_size + 1
         else:
-            # find the equal chunks until reminder is smaller than shard_size
+            # find the equal chunks until remainder is smaller than shard_size
             for div in range(world_size - 1, 1, -1):
                 shard_size, rem = divmod(numel, div)
                 if shard_size >= rem:

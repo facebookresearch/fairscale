@@ -2,9 +2,9 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
-
 import functools
 import itertools
+from math import inf
 import pickle
 import sys
 from typing import Dict
@@ -46,7 +46,7 @@ class DistributedTest(unittest.TestCase):
             raise unittest.SkipTest("distributed tests require 2+ GPUs, skipping")
 
     @staticmethod
-    def _train_for_several_steps(model, num_steps, autocast, lr=0.01):
+    def _train_for_several_steps(model, num_steps, autocast, lr=0.01, norm_type=None):
         model_device = next(model.parameters()).device
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
@@ -60,6 +60,12 @@ class DistributedTest(unittest.TestCase):
                 loss = model.module.get_loss(input, output).to(model_device)
             assert loss.dtype == torch.float32
             model.module.run_backward(loss)
+            if norm_type is not None:
+                clip_norm = 0.3
+                if isinstance(model, FullyShardedDataParallel):
+                    model.clip_grad_norm_(clip_norm, norm_type)
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm, norm_type)
             optim.step()
         if hasattr(model, "assert_idle"):
             model.assert_idle()
@@ -230,8 +236,17 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             # MixtureOfExperts implements custom reduce logic, so the reference
             # behavior should use that logic instead of PyTorch DDP.
             ref_ddp_fn=self._dummy_ddp_fn,
+            norm_type=None,
         )
         spawn_and_init(test_fn)
+
+    def test_mixture_of_experts_grad_clip_breaks(self):
+        config = {"mixed_precision": True}
+        test_fn = functools.partial(
+            self._test_identical_outputs, MixtureOfExperts, config, ref_ddp_fn=self._dummy_ddp_fn, norm_type=2,
+        )
+        with self.assertRaises(Exception):
+            spawn_and_init(test_fn)
 
     @classmethod
     def _dummy_ddp_fn(self, model, group):
@@ -239,7 +254,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
 
     @classmethod
     def _test_identical_outputs(
-        cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None
+        cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
     ):
         if config["mixed_precision"]:
             autocast = True
@@ -259,7 +274,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             )
         else:
             model = ref_ddp_fn(model, group)
-        ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr)
+        ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
         ref_state_dict = model.module.state_dict()
 
         # Confirm we get the same behavior using FullyShardedDataParallel.
@@ -268,7 +283,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             model = model.cuda()
         else:
             assert next(model.parameters()).device == torch.device("cpu")
-        shard_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr)
+        shard_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
         shard_state_dict = model.state_dict()
 
         try:
@@ -276,6 +291,14 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
         except (AssertionError, RuntimeError) as e:
             raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
+
+    @parameterized.expand([[1], [inf]], name_func=rename_test)
+    def test_clip_norm_transformer(self, norm_type):
+        config = {"mixed_precision": True}
+        test_fn = functools.partial(
+            self._test_identical_outputs, TransformerWithSharedParams, config, norm_type=norm_type,
+        )
+        spawn_and_init(test_fn)
 
 
 class TestParamInit(DistributedTest):

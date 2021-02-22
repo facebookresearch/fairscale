@@ -15,7 +15,7 @@ import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
-from .utils import Workhandle, broadcast_object, recursive_copy_to_device
+from .utils import Workhandle, broadcast_object, calc_grad_norm, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
@@ -274,18 +274,14 @@ class OSS(Optimizer):
         # https://github.com/NVIDIA/Megatron-LM/blob/19301985dd31c8b612095cbad15bd903e8ddd497/megatron/mpu/layers.py#L54
         local_params = filter_params_fn(self.local_params) if filter_params_fn is not None else self.local_params
 
+        local_norm = calc_grad_norm(local_params, norm_type)
         # Compute the norm on this grad set,
         # then sync all the norms from all ranks
         if norm_type == inf:
-            total_norm = max(p.grad.detach().abs().max().to(self._device) for p in local_params)
+            total_norm = local_norm
             # all reduce over data parallel and model parallel workers
             dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=dist.group.WORLD)
         else:
-            local_norm = torch.norm(
-                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type, dtype=torch.float32).to(self._device) for p in local_params]),  # type: ignore
-                p=norm_type,
-            )
-
             # local norm result can be accumulated with the remote ones if put to the right power
             # n_i = sum_rank(a^p)^1/p
             # -> n_total = all_reduce(n_i^p)^(1/p) = sum_i(n_i^p)^1/p = sum_i(sum_rank(a^p))^1/p

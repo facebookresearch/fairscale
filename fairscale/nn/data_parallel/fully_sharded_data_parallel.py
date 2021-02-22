@@ -7,6 +7,7 @@ import contextlib
 import copy
 from enum import Enum, auto
 import functools
+from math import inf
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
@@ -18,6 +19,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
+from fairscale.optim.utils import calc_grad_norm
 from fairscale.utils.containers import (
     apply_to_tensors,
     pack_kwargs,
@@ -172,6 +174,68 @@ class FullyShardedDataParallel(nn.Module):
         """Move all buffers to the specified device and dtype, recursively."""
         cast_fn = functools.partial(cast_buffers_, device=device, dtype=dtype)
         self.apply(cast_fn)
+
+    @property
+    def params_with_grad(self) -> List[Parameter]:
+        """[p for p in self.parameters() if p.grad is not None] """
+        return [p for p in self.parameters() if p.grad is not None]
+
+    @torch.no_grad()
+    def clip_grad_norm_(
+        self,
+        max_norm: Union[float, int],
+        norm_type: Union[float, int] = 2.0,
+        # filter_params_fn: Callable[[Any], Any] = None,
+    ) -> torch.Tensor:
+        """
+        Clip all gradients at this point in time. The norm is computed over all gradients together, as if they were
+        concatenated into a single vector. Gradients are modified in-place.
+
+        Arguments:
+            max_norm (float or int): max norm of the gradients
+            norm_type (float or int): type of the used p-norm. Can be ``'inf'`` for infinity norm.
+
+        Returns:
+            Total norm of the parameters (viewed as a single vector).
+
+        .. note: This is analogous to `torch.nn.utils.clip_grad_norm_` but handles the partitioning and multiple devices per rank
+            under the hood. The default torch util is not applicable here, because each rank only has a partial view of all the grads
+            in the model, so calling it in the OSS context would lead to different scaling being applied per subset of model parameters
+
+        .. warning: This needs to be called on all ranks, since synchronization primitives will be used
+
+        """
+        assert self._is_root, "clip_grad_norm should only be called on the root (parent) instance"
+        assert self.training_state == TrainingState.IDLE
+
+        max_norm = float(max_norm)
+        norm_type = float(norm_type)
+        params_with_grad = self.params_with_grad
+        if not self.children_share_process_group:
+            raise NotImplementedError(
+                "clip_grad_norm requires that all params share one process group. clip_grad_by_value_ should work"
+            )
+        # Computes the max norm for this shard's gradients and sync's across workers
+        local_norm = calc_grad_norm(params_with_grad, norm_type).cuda()
+        if norm_type == inf:
+            total_norm = local_norm
+            dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=self.process_group)
+        else:
+            total_norm = local_norm ** norm_type
+            dist.all_reduce(total_norm, group=self.process_group)
+            total_norm = total_norm ** (1.0 / norm_type)
+
+        if self.move_grads_to_cpu:
+            total_norm = total_norm.cpu()
+        # Now multiply each grad by (max_norm/total_norm), same as torch 1.7 https://tinyurl.com/3wtxhhqq)
+        clip_coef = torch.tensor(max_norm, dtype=total_norm.dtype, device=total_norm.device) / (total_norm + 1e-6)
+        if clip_coef < 1:
+
+            # multiply by clip_coef
+            for p in params_with_grad:
+                p.grad.detach().mul_(clip_coef.to(p.grad.device))  # type: ignore
+
+        return total_norm
 
     @torch.no_grad()
     def _shard_parameters_(self) -> None:
@@ -464,16 +528,22 @@ class FullyShardedDataParallel(nn.Module):
 
     def _set_is_root(self) -> None:
         """If ``True``, implies that no other :class:`FullyShardedDataParallel`
-        instance wraps this one. Called once by :func:`_lazy_init`."""
+        instance wraps this one. Called once by :func:`_lazy_init`.
+        Also sets self.children_share_process_group = True if all child instances share the same process group.
+            If some child instances use a different process group, self.clip_grad_norm_ will raise an error.
+         """
         if self._is_root is not None:
             return
         # No FullyShardedDataParallel instance wraps this, else _is_root would be set to False
         self._is_root = True
         # As the root, we now set all children instances to False.
+        self.children_share_process_group = True
         for n, m in self.named_modules():
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 assert m._is_root is None
                 m._is_root = False
+                if m.process_group != self.process_group:
+                    self.children_share_process_group = False
 
     def _setup_streams(self) -> None:
         """Create streams to overlap data transfer and computation."""
