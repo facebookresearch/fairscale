@@ -17,7 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from experimental.nn.ampnet_pipe.pipe import AMPnetPipe
+from fairscale.experimental.nn.ampnet_pipe.pipe import AMPnetPipe
 import torch
 from torch import nn
 from torch.optim.optimizer import Optimizer
