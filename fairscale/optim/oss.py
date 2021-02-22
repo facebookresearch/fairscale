@@ -15,11 +15,7 @@ import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
-<<<<<<< HEAD
-from .utils import Workhandle, broadcast_object, calc_grad_norm, recursive_copy_to_device
-=======
-from .utils import broadcast_object, recursive_copy_to_device
->>>>>>> oss-master
+from .utils import broadcast_object, calc_grad_norm, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
