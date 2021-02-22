@@ -7,20 +7,20 @@
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
 
-""" Test utility classes from containers.py. """
+""" Test utility classes from fairscale.utils.parallel """
 
-import pytest
+from parameterized import parameterized
 import torch
 
-from fairscale.utils.parallel import compute_shard_size
+from fairscale.utils.parallel import chunk_and_pad
 
 
-@pytest.mark.parametrize(
-    "test_case", [(1, 2), (2, 2), (3, 2), (4, 2), (4, 4), (3, 4), (9, 4), (9, 6), (10, 5), (14, 5)]
-)
-def test_compute_shard_size(test_case):
-    """Test compute_shard_size, verify using torch.chunk()"""
-    numel, world_size = test_case
-    result = compute_shard_size(numel, world_size)
-    expected = torch.zeros(numel).chunk(world_size)[0].numel()
-    assert result == expected, f"{result} == {expected}"
+@parameterized.expand([[num_chunks] for num_chunks in range(1, 33)])
+def test_chunk_and_pad(num_chunks):
+    max_tensor_size = 256
+    tensor = torch.zeros(max_tensor_size)
+    for tensor_size in range(1, max_tensor_size + 1):
+        tensor_i = tensor[:tensor_size]
+        chunks = chunk_and_pad(tensor_i, num_chunks)
+        assert len(chunks) == num_chunks
+        assert all(len(chunks[0]) == len(chunk) for chunk in chunks)

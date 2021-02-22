@@ -19,6 +19,7 @@ from torch.nn import Linear, Sequential
 from torch.optim import SGD
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+from fairscale.nn.data_parallel.fully_sharded_data_parallel import TrainingState
 from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, torch_version
 
 
@@ -48,7 +49,7 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
     if test_case["assert_ref_out"]:
         torch.testing.assert_allclose(ref_out, out)
 
-    model.assert_idle()
+    model.assert_state(TrainingState.IDLE)
     teardown()
 
 

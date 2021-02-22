@@ -27,7 +27,8 @@ from fairscale.utils.containers import (
     unpack_kwargs,
     unpack_non_tensors,
 )
-from fairscale.utils.parallel import validate_process_group
+from fairscale.utils.parallel import chunk_and_pad, validate_process_group
+from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -107,6 +108,12 @@ class FullyShardedDataParallel(nn.Module):
         move_grads_to_cpu (bool, Optional): move gradient shard to CPU after
             reduction. This is useful when combined with CPU-based optimizers.
             It defaults to the value of *``cpu_offload``*.
+        bucket_cap_mb (int, Optional): FSDP will bucket parameters so that
+            gradient reduction can potentially overlap with backward
+            computation. bucket_cap_mb controls the bucket size in MegaBytes
+            (MB). Buckets are sub-divided based on world_size, so the max shard
+            size is roughly ``bucket_cap_mb / world_size``. Values <= 0 disable
+            bucketing. Default: 25.
     """
 
     def __init__(
@@ -120,6 +127,7 @@ class FullyShardedDataParallel(nn.Module):
         cpu_offload: bool = False,
         compute_dtype: Optional[torch.dtype] = None,
         move_grads_to_cpu: Optional[bool] = None,
+        bucket_cap_mb: int = 25,
     ):
         super().__init__()
         self.process_group = process_group or dist.new_group()
@@ -132,6 +140,7 @@ class FullyShardedDataParallel(nn.Module):
         self.cpu_offload = cpu_offload
         self.compute_dtype = compute_dtype or (torch.float16 if mixed_precision else torch.float32)
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
+        self.bucket_cap_mb = bucket_cap_mb
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
@@ -405,7 +414,7 @@ class FullyShardedDataParallel(nn.Module):
         """
         self._lazy_init()
         assert self._is_root, "no_sync on inner FSDP is not supported"
-        self.assert_idle()
+        self.assert_state(TrainingState.IDLE)
         # This instance may wrap other FullyShardedDataParallel instances and we
         # need to set all of them to accumulate gradients.
         old_flags = []
@@ -423,6 +432,7 @@ class FullyShardedDataParallel(nn.Module):
         """Reset instance so :func:`_lazy_init` will run on the next forward."""
         self._is_root: Optional[bool] = None
         self._streams: Dict[str, torch.cuda.Stream] = {}
+        self._reducer: Optional[ReduceScatterBucketer] = None
 
     def _lazy_init(self) -> None:
         """Initialization steps that should happen lazily, typically right
@@ -438,6 +448,7 @@ class FullyShardedDataParallel(nn.Module):
         if self._is_root is None:
             self._set_is_root()
             self._setup_streams()
+
         if self.cpu_offload:  # Buffers stay on GPU, and don't get sharded
             self._all_buffers_to(device=torch.device("cuda"), dtype=self.compute_dtype)
         else:
@@ -555,12 +566,16 @@ class FullyShardedDataParallel(nn.Module):
         self._streams["all_gather"] = torch.cuda.Stream()
         # Stream for overlapping grad reduction with the backward pass.
         self._streams["post_backward"] = torch.cuda.Stream()
+        # Helper for bucketing reduce-scatter ops. This is also shared with
+        # children instances to improve bucket utilization.
+        self._reducer = ReduceScatterBucketer(self.bucket_cap_mb)
         # We share streams with all children instances, which allows them to
         # overlap transfers across the forward pass without synchronizing with
         # the default stream.
         for n, m in self.named_modules():
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 m._streams = self._streams
+                m._reducer = self._reducer
 
     def _wait_for_previous_optim_step(self) -> None:
         """
@@ -679,6 +694,7 @@ class FullyShardedDataParallel(nn.Module):
         alignment is created by :func:`_shard_parameters_`, which ensures that
         the local optimizer only sees the relevant parameter shard.
         """
+        self.assert_state(TrainingState.BACKWARD)
         if param.grad is None:
             return
         if param.grad.requires_grad:
@@ -717,24 +733,18 @@ class FullyShardedDataParallel(nn.Module):
                 # Average grad by world_size for consistency with PyTorch DDP.
                 param.grad.data.div_(self.world_size)
 
+            callback_fn = functools.partial(self._post_reduction_hook, param)
             if param._is_sharded:
-                # Reduce-scatter grad.
-                param.grad.data = self._reduce_scatter_grad(param)
-            elif self.world_size > 1:
-                # All-reduce non-sharded grad.
-                dist.all_reduce(param.grad.data, group=self.process_group)
-
-            # Cast grad to param's dtype (typically FP32). Note: we do this
-            # before the move_grads_to_cpu step so that this entire hook remains
-            # non-blocking. The downside is a bit more D2H transfer in that case.
-            if self.mixed_precision:
-                param.grad.data = param.grad.data.to(dtype=param.data.dtype)
-
-            # Optionally move gradients to CPU, typically used if one is running
-            # the optimizer on the CPU.
-            if self.move_grads_to_cpu:
-                param._cpu_grad.copy_(param.grad.data, non_blocking=True)
-                param.grad.data = param._cpu_grad
+                assert param._is_sharded
+                assert self._reducer is not None
+                grad_chunks = chunk_and_pad(param.grad.data, self.world_size)
+                self._reducer.reduce_scatter_async(grad_chunks, group=self.process_group, callback_fn=callback_fn)
+            else:
+                # Currently the only way for _is_sharded to be False is if
+                # world_size == 1. This could be relaxed in the future, in which
+                # case grads should be all-reduced here.
+                assert self.world_size == 1
+                callback_fn(param.grad.data)
 
             # After _post_backward_hook returns, orig_grad_data will eventually
             # go out of scope, at which point it could otherwise be freed for
@@ -743,10 +753,34 @@ class FullyShardedDataParallel(nn.Module):
             # github.com/NVIDIA/apex/blob/master/apex/parallel/distributed.py
             orig_grad_data.record_stream(self._streams["post_backward"])
 
+    def _post_reduction_hook(self, param: Parameter, reduced_grad: torch.Tensor) -> None:
+        """Hook to call on each param after the reduce-scatter."""
+        assert torch.cuda.current_stream() == self._streams["post_backward"]
+        assert param.grad is not None
+        self.assert_state(TrainingState.BACKWARD)
+        param.grad.data = reduced_grad
+        # Cast grad to param's dtype (typically FP32). Note: we do this
+        # before the move_grads_to_cpu step so that this entire hook remains
+        # non-blocking. The downside is a bit more D2H transfer in that case.
+        if self.mixed_precision:
+            param.grad.data = param.grad.data.to(dtype=param.data.dtype)
+        # Optionally move gradients to CPU, typically used if one is running
+        # the optimizer on the CPU.
+        if self.move_grads_to_cpu:
+            param._cpu_grad.copy_(param.grad.data, non_blocking=True)
+            param.grad.data = param._cpu_grad
+        # Don't let this memory get reused until after the transfers.
+        reduced_grad.record_stream(torch.cuda.current_stream())
+
     @torch.no_grad()
     def _wait_for_post_backward(self) -> None:
         """Wait for post-backward work to finish. Only called on root instance."""
         assert self._is_root
+        self.assert_state(TrainingState.BACKWARD)
+        # Flush any unreduced buckets in the post_backward stream.
+        with torch.cuda.stream(self._streams["post_backward"]):
+            assert self._reducer is not None
+            self._reducer.flush()
         torch.cuda.current_stream().wait_stream(self._streams["post_backward"])
         if self.move_grads_to_cpu:
             # Wait for the non-blocking GPU -> CPU grad transfers to finish.
@@ -862,29 +896,11 @@ class FullyShardedDataParallel(nn.Module):
                 p._fp16_shard.record_stream(current_stream)
                 free_storage_(p._fp16_shard)
 
-    @torch.no_grad()
-    def _reduce_scatter_grad(self, p: nn.Parameter) -> torch.Tensor:
-        """Reduce-scatter a Parameter's gradient and return a single shard of
-        the summed gradient across workers."""
-        assert p.grad is not None and p._is_sharded
-        grad_chunks = list(torch.flatten(p.grad.data).chunk(self.world_size))
-
-        # torch.chunk may return fewer than world_size chunks, pad accordingly.
-        num_pad_for_partial_chunk = grad_chunks[0].numel() - grad_chunks[-1].numel()
-        if num_pad_for_partial_chunk > 0:
-            grad_chunks[-1] = F.pad(grad_chunks[-1], [0, num_pad_for_partial_chunk])
-        if len(grad_chunks) < self.world_size:
-            grad_chunks.extend([torch.zeros_like(grad_chunks[0])] * (self.world_size - len(grad_chunks)))
-
-        output = torch.zeros_like(grad_chunks[0])  # filled with gradient summed across workers
-        dist.reduce_scatter(output, grad_chunks, group=self.process_group)
-        return output
-
-    def assert_idle(self) -> None:
-        """Assert we are in the idle state."""
+    def assert_state(self, state: TrainingState) -> None:
+        """Assert we are in the given state."""
         assert (
-            self.training_state == TrainingState.IDLE
-        ), f"wrong state to call no_sync. current state is {self.training_state}"
+            self.training_state == state
+        ), f"expected to be in state {state} but current state is {self.training_state}"
 
 
 @torch.no_grad()

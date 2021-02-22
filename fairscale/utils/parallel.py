@@ -5,32 +5,24 @@
 
 """Useful functions for parallel training."""
 
+from typing import List
+
 import torch
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
+import torch.nn.functional as F
 
 
-def compute_shard_size(numel: int, world_size: int) -> int:
-    """Compute shard size like the behavior of torch.chunk()."""
-    assert numel > 0 and world_size > 0, "invalid inputs"
-    if numel % world_size == 0:
-        # easy case, including world_size == 1.
-        shard_size = numel // world_size
-    else:
-        if world_size == 2:
-            # two shards, shard size is the size of the bigger one.
-            shard_size = numel // world_size + 1
-        else:
-            # find the equal chunks until remainder is smaller than shard_size
-            for div in range(world_size - 1, 1, -1):
-                shard_size, rem = divmod(numel, div)
-                if shard_size >= rem:
-                    break
-            # corner case: bunch of 1 elements and rest are 0s.
-            if shard_size == 0:
-                shard_size = 1
-    assert shard_size > 0, f"bug: {shard_size}"
-    return shard_size
+def chunk_and_pad(tensor: torch.Tensor, num_chunks: int) -> List[torch.Tensor]:
+    """Chunk a given Tensor into num_chunks parts and add any necessary padding."""
+    chunks = list(torch.flatten(tensor).chunk(num_chunks))
+    # torch.chunk may return fewer than num_chunks chunks, pad accordingly.
+    num_pad_for_partial_chunk = chunks[0].numel() - chunks[-1].numel()
+    if num_pad_for_partial_chunk > 0:
+        chunks[-1] = F.pad(chunks[-1], [0, num_pad_for_partial_chunk])
+    if len(chunks) < num_chunks:
+        chunks.extend([torch.zeros_like(chunks[0]) for _ in range(num_chunks - len(chunks))])
+    return chunks
 
 
 def validate_process_group(device: torch.device, process_group: ProcessGroup) -> None:

@@ -36,7 +36,7 @@ class DistributedTest(unittest.TestCase):
     def setUp(self):
         major, minor = torch.__version__.split(".")[:2]
         major, minor = int(major), int(minor)
-        if major < 1 or minor < 6:
+        if major < 1 or (major == 1 and minor < 6):
             raise unittest.SkipTest("Need pytorch version >= 1.6 due to autocast")
         if not torch.cuda.is_available():
             raise unittest.SkipTest("CUDA not available, skipping test")
