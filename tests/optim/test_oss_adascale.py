@@ -38,6 +38,8 @@ def _test_basic_func(rank, world_size, tempfile_name, test_case, oss, model=None
 
     if model is None:
         model = Linear(2, 2)
+        model.bias.data.fill_(0.0)
+
     model.to("cuda")
     model = DDP(model, device_ids=[rank])
 
