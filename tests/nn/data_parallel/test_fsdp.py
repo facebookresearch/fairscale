@@ -16,6 +16,7 @@ import torch
 from torch import nn
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel
+from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,
@@ -219,12 +220,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
         spawn_and_init(test_fn)
 
-    def test_mixture_of_experts(self):
-        config = {"mixed_precision": True}
+    @parameterized.expand([[{"checkpoint_act": False}], [{"checkpoint_act": True}]], name_func=rename_test)
+    def test_mixture_of_experts(self, moe_config):
+        fsdp_config = {"mixed_precision": True}
         test_fn = functools.partial(
             self._test_identical_outputs,
-            MixtureOfExperts,
-            config,
+            functools.partial(MixtureOfExperts, **moe_config),
+            fsdp_config,
             # MixtureOfExperts implements custom reduce logic, so the reference
             # behavior should use that logic instead of PyTorch DDP.
             ref_ddp_fn=self._dummy_ddp_fn,
@@ -679,7 +681,7 @@ class DummyDDP(nn.Module):
 
 
 class MixtureOfExperts(NestedWrappedModule):
-    def __init__(self, group, wrapper_config):
+    def __init__(self, group, wrapper_config, checkpoint_act=False):
         super().__init__(group, wrapper_config)
         self.group = group
 
@@ -692,6 +694,10 @@ class MixtureOfExperts(NestedWrappedModule):
         # everything else is shared
         torch.manual_seed(0)
         shared = nn.Linear(4, 16)
+
+        if checkpoint_act:
+            expert = checkpoint_wrapper(expert)
+            shared = checkpoint_wrapper(shared)
 
         if wrapper_config is not None:
             # we create a process group of size 1 for the expert params

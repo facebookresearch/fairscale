@@ -306,6 +306,8 @@ class FullyShardedDataParallel(nn.Module):
         so the resulting state_dict can only be loaded after the Module has been
         wrapped with FullyShardedDataParallel.
         """
+        torch.cuda.synchronize()
+        self._lazy_init()
         if self.flatten_parameters:
             return self.module.flat_state_dict(*args, **kwargs)  # type: ignore
         else:
@@ -326,6 +328,7 @@ class FullyShardedDataParallel(nn.Module):
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
         """Load a local (sharded) state_dict."""
+        torch.cuda.synchronize()
         return self.module.load_state_dict(state_dict, strict)
 
     @contextlib.contextmanager
@@ -375,10 +378,15 @@ class FullyShardedDataParallel(nn.Module):
         else:
             self._all_buffers_to(dtype=self.compute_dtype)
 
-        # Don't free the full params for the outer-most (root) instance, since
-        # those params will be needed immediately after for the backward pass.
         if self._is_root:
+            # Don't free the full params for the outer-most (root) instance,
+            # since those params will be needed immediately after for the
+            # backward pass.
             self.reshard_after_forward = False
+
+            # Due to the use of streams, we need to make sure the previous
+            # ``optim.step()`` is done before we all-gather parameters.
+            self._wait_for_previous_optim_step()
 
     @torch.no_grad()
     def _init_param_attributes(self, p: Parameter) -> None:
@@ -500,11 +508,6 @@ class FullyShardedDataParallel(nn.Module):
         # Start of a forward pass.
         self.training_state = TrainingState.FORWARD
 
-        # Due to the use of streams, we need to make sure the previous
-        # ``optim.step()`` is done before we all-gather parameters.
-        if self._is_root:
-            self._wait_for_previous_optim_step()
-
         if self.mixed_precision:
             args, kwargs = cast_inputs_to_fp16(*args, **kwargs)
 
@@ -590,7 +593,7 @@ class FullyShardedDataParallel(nn.Module):
         At the start of :func:`_post_backward_hook`, ``param.grad`` contains the
         full gradient for the local batch. The reduce-scatter op will replace
         ``param.grad`` with a single shard of the summed gradient across all
-        GPUs.  This shard will align with the current GPU rank. For example::
+        GPUs. This shard will align with the current GPU rank. For example::
 
             before reduce_scatter:
                 param.grad (GPU #0): [1, 2, 3, 4]
