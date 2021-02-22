@@ -3,19 +3,23 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections import OrderedDict, deque
+from collections import OrderedDict
 import copy
 from itertools import chain
 import logging
 from math import inf
-from typing import TYPE_CHECKING, Any, Callable, Deque, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type, Union
 
 import torch
 import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
+<<<<<<< HEAD
 from .utils import Workhandle, broadcast_object, calc_grad_norm, recursive_copy_to_device
+=======
+from .utils import broadcast_object, recursive_copy_to_device
+>>>>>>> oss-master
 
 __all__ = ["OSS"]
 
@@ -52,6 +56,14 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
             (deprecated) used to cap the size of the broadcast buffers, not being used anymore.
+
+
+    .. warning: the communication patterns that OSS use depend on the "trainability" graph,
+        meaning that all the parameters which `require_grad` are handled differently. This is
+        not reevaluated at every step, please use `refresh_trainable()` if your model changed
+        (freeze or unfreeze for instance).
+        If used with :class:<fairscale.nn.ShardedDDP> then an automatic change detection is possible,
+        via the `auto_refresh_trainable` parameter.
     """
 
     #: The optimizer used for a given shard
@@ -81,27 +93,22 @@ class OSS(Optimizer):
         self._param_to_index: Dict[int, int] = {}
         self._local_params: Optional[List[torch.Tensor]] = None
 
-        # Build the wrapped optimizer, responsible for a shard of the params
+        # Default empty values + immutables
+        self._optim_defaults = default
+        self._optim_constructor = optim
+
         self.group = group if group is not None else dist.group.WORLD
         self.world_size = dist.get_world_size(self.group)
         self.rank = dist.get_rank(self.group)
         self.global_rank = self.get_global_rank(self.group, self.rank)
-        self.optim = optim(self.partition_parameters()[self.rank], **default)
-
-        # - Sync local and global param_groups keys
-        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
-            for key, value in local_group.items():
-                if key != "params":
-                    global_group[key] = value
-
-        #  Optional consolidated optimizer state
-        self._all_states: List[Dict[str, Any]] = []
-
-        # Current default device is set by the parameters allocated to this rank
-        self._device = list(self.per_device_params.keys())[0]
-        self.work_handles: Deque[Workhandle] = deque()
         self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
-        self._setup_flat_buffers()
+
+        self._all_states: List[Dict[str, Any]] = []  # Optional consolidated optimizer state
+        self._default_device = torch.device("cpu")
+
+        # Setup everything which is related to the parameters to be trained
+        # (partition and optimizer for the shard)
+        self.refresh_trainable()
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
@@ -136,6 +143,13 @@ class OSS(Optimizer):
                     param_group_rank = copy.copy(param_group)
                     param_group_rank["params"] = params
                     self._partition_parameters[rank].append(param_group_rank)
+
+            assert min(sum(len(pg["params"]) for pg in partition) for partition in self._partition_parameters) > 0, (
+                "One or more empty shards detected, the world size is too big or the model too small.\n"
+                + "Please reduce your world size if this is the model you would like to train\n"
+                + f"Current world size: {self.world_size}\n"
+                + "Current number of parameters: {}".format(sum(len(pg["params"]) for pg in self.param_groups))
+            )
 
         return self._partition_parameters
 
@@ -274,7 +288,7 @@ class OSS(Optimizer):
         # https://github.com/NVIDIA/Megatron-LM/blob/19301985dd31c8b612095cbad15bd903e8ddd497/megatron/mpu/layers.py#L54
         local_params = filter_params_fn(self.local_params) if filter_params_fn is not None else self.local_params
 
-        local_norm = calc_grad_norm(local_params, norm_type)
+        local_norm = calc_grad_norm(local_params, norm_type).to(self._default_device)
         # Compute the norm on this grad set,
         # then sync all the norms from all ranks
         if norm_type == inf:
@@ -372,6 +386,8 @@ class OSS(Optimizer):
                         global_id = self.param_to_index[local_index_to_param_id[local_param_index]]
                         state_dict["state"][global_id] = s["state"][local_param_index]
 
+        # Make sure that the parameters are sorted in the state, as expected
+        state_dict["state"] = dict(sorted(state_dict["state"].items()))
         return state_dict
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
@@ -384,23 +400,16 @@ class OSS(Optimizer):
 
         # NOTE: PyTorch 1.5 does not index linearly but with the id(params) at saving time
         # we work around that here by using the fact that the params are ordered as in the param_groups
+        pytorch15_index_redirect = {k: i for i, k in enumerate(state_dict["state"].keys())}
 
-        for i_param, (key, value) in enumerate(state_dict["state"].items()):
-            param = self.index_to_param[i_param]
+        for key, value in state_dict["state"].items():
+            param = self.index_to_param[pytorch15_index_redirect[key]]
 
             # Populate the sharded optimizer state on the fly
             if self.param_to_rank[param] != self.rank:
                 state_dict["state"][key] = None
-
-            if key in self.index_to_param:
-                param = self.index_to_param[i_param]
-
-                # Only add this state to the sharded optimizer if it owns this param
-                for pg in self.optim.param_groups:
-                    if id(param) in [id(p) for p in pg["params"]]:
-                        self.optim.state[param] = recursive_copy_to_device(
-                            value, non_blocking=True, device=param.device
-                        )
+            else:
+                self.optim.state[param] = recursive_copy_to_device(value, non_blocking=True, device=param.device)
 
         super().load_state_dict(state_dict)
 
@@ -408,16 +417,25 @@ class OSS(Optimizer):
         OSS._sync_param_groups(state_dict["param_groups"], self.param_groups)
         OSS._sync_param_groups(self.param_groups, self.optim.param_groups)
 
+    def refresh_trainable(self) -> None:
+        """ Updates the partitioning and communication patterns if the trainability (`requires_grad`)
+        of some parameters changed.
+        """
+
+        # Create the optim which will work on the param shard
+        if not hasattr(self, "optim"):
+            self._clear_cache()
+            self._default_device = list(self.per_device_params.keys())[0]
+            self.optim = self._optim_constructor(self.partition_parameters()[self.rank], **self._optim_defaults)
+            OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
+
+        self._setup_flat_buffers()
+
     def _broadcast_state_dict(self) -> None:
         """Broadcast this rank's state shard, discard others"""
 
-        # Default to CPU space to gain some memory headroom
-        local_cpu_state = recursive_copy_to_device(
-            self.optim.state_dict(), non_blocking=True, device=torch.device("cpu")
-        )
-
         # Tensor cannot be really empty, even if its size is meaningless
-        dummy_sync_tensor = torch.tensor([1], device=self._device)
+        dummy_sync_tensor = torch.tensor([1], device=self._default_device)
 
         for rank in range(self.world_size):
             if rank == self.rank:
@@ -427,17 +445,20 @@ class OSS(Optimizer):
                 )
                 # legacy compatibility for old torch versions
                 broadcast_object(
-                    self.local_state_dict(), src_rank=self.global_rank, group=self.group, dist_device=self._device
+                    self.local_state_dict(),
+                    src_rank=self.global_rank,
+                    group=self.group,
+                    dist_device=self._default_device,
                 )
             else:
                 global_rank = self.get_global_rank(self.group, rank)
 
                 # Discard this tensor/rank, broadcast necessary for syncing and because NCCL does not support gather
                 broadcast_object(
-                    torch.tensor([dummy_sync_tensor], dtype=torch.uint8, device=self._device),
+                    torch.tensor([dummy_sync_tensor], dtype=torch.uint8, device=self._default_device),
                     src_rank=global_rank,
                     group=self.group,
-                    dist_device=self._device,
+                    dist_device=self._default_device,
                 )
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
@@ -453,19 +474,19 @@ class OSS(Optimizer):
 
                 # Sync with other replicas
                 broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=self._device),
+                    torch.tensor([0], dtype=torch.uint8, device=self._default_device),
                     src_rank=self.global_rank,
                     group=self.group,
-                    dist_device=self._device,
+                    dist_device=self._default_device,
                 )
             else:
                 # Fetch the optim state from the other replicas
                 global_rank = self.get_global_rank(self.group, rank)
                 replica_state = broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=self._device),
+                    torch.tensor([0], dtype=torch.uint8, device=self._default_device),
                     src_rank=global_rank,
                     group=self.group,
-                    dist_device=self._device,
+                    dist_device=self._default_device,
                 )
 
                 all_states.append(
@@ -542,23 +563,6 @@ class OSS(Optimizer):
         if last_work_handle:
             last_work_handle.wait()
 
-    def _consume_work_handles(self) -> None:
-        """Consume all the futures which are tied to this optimizer's buckets.
-        We start from the first/older ones, since they are the most likely to be ready and non-blocking
-        """
-        while len(self.work_handles) > 0:
-            work_handle = self.work_handles.popleft()
-            work_handle.handle.wait()
-            if work_handle.callback is not None:
-                work_handle.callback()
-
-    def _try_consume_work_handle(self) -> None:
-        """Try to consume the oldest future. This is non blocking, if not ready we'll pass"""
-        while len(self.work_handles) > 0 and self.work_handles[0].handle.is_completed():
-            work_handle = self.work_handles.popleft()
-            if work_handle.callback is not None:
-                work_handle.callback()
-
     def _setup_flat_buffers(self) -> None:
         """Make all params which are on the same device and tied to the same rank views of a single buffer.
         This is used at construction time, and anytime parameter trainability is changed (frozen or unfrozen) and
@@ -566,19 +570,35 @@ class OSS(Optimizer):
         """
 
         for device, per_rank_params in self.per_device_params.items():
-            self.buckets[device] = []
+            # Only wipe the existing buckets if there are none
+            # (could be that this is called twice, when trainability changes)
+            if device not in self.buckets.keys():
+                self.buckets[device] = []
 
+            # Make parameters a view of the bucket
             for dst_rank, params in enumerate(per_rank_params):
                 if len(params) > 0:
+
+                    # Clone the non-trainable params, if in a bucket it will get destroyed
+                    for param in filter(lambda x: not x.requires_grad, params):
+                        param.data = param.data.detach().clone()
+
+                    # Merge all the trainable params in a single bucket
                     trainable_params = list(filter(lambda x: x.requires_grad, params))
                     buffer_size = sum(map(lambda x: x.numel(), trainable_params))
-                    self.buckets[device].append(torch.empty(buffer_size, dtype=params[0].dtype, device=device))
+                    bucket = torch.empty(buffer_size, dtype=params[0].dtype, device=device)
                     offset = 0
 
                     for param in trainable_params:
-                        # This parameter becomes a view of the bucket
                         offset_next = offset + param.numel()
-
-                        self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.flatten())
-                        param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
+                        bucket[offset:offset_next].copy_(param.data.flatten())
+                        param.data = bucket[offset:offset_next].view_as(param.data)
                         offset = offset_next
+
+                    # Either replace the existing bucket, or create it
+                    if len(self.buckets[device]) == dst_rank:
+                        self.buckets[device].append(bucket)
+                    else:
+                        self.buckets[device][dst_rank] = bucket
+                else:
+                    self.buckets[device].append(torch.zeros(1, device=device))

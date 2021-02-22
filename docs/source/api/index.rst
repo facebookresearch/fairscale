@@ -9,3 +9,4 @@ API Reference
    optim/grad_scaler
    nn/pipe
    nn/sharded_ddp
+   nn/misc/checkpoint_activations
