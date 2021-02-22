@@ -51,13 +51,11 @@ def _checkpointed_forward(original_forward: Any, offload_to_cpu: bool, *args: An
     kwarg_keys, flat_args = pack_kwargs(*args, **kwargs)
     parent_ctx_dict: Dict[str, Any] = {"offload": offload_to_cpu}
     output = CheckpointFunction.apply(original_forward, parent_ctx_dict, kwarg_keys, *flat_args)
-    if isinstance(output, torch.Tensor):
-        return output
-    else:
+    if not isinstance(output, torch.Tensor):
         packed_non_tensor_outputs = parent_ctx_dict["packed_non_tensor_outputs"]
         if packed_non_tensor_outputs:
             output = unpack_non_tensors(output, packed_non_tensor_outputs)
-        return output
+    return output
 
 
 def get_rng_state() -> Dict[str, Any]:
@@ -113,15 +111,13 @@ class CheckpointFunction(torch.autograd.Function):
             unpacked_args, unpacked_kwargs = unpack_kwargs(kwarg_keys, args)
             outputs = run_function(*unpacked_args, **unpacked_kwargs)
 
-        if isinstance(outputs, torch.Tensor):
-            return outputs
-        else:
+        if not isinstance(outputs, torch.Tensor):
             # Autograd Functions don't like non-Tensor outputs. We can split the
             # non-Tensor and Tensor outputs, returning the former by reference
             # through *parent_ctx_dict* and returning the latter directly.
             outputs, packed_non_tensor_outputs = split_non_tensors(outputs)
             parent_ctx_dict["packed_non_tensor_outputs"] = packed_non_tensor_outputs
-            return outputs
+        return outputs
 
     @staticmethod
     def backward(ctx: Any, *args: Any) -> Tuple[Optional[Tensor], ...]:
