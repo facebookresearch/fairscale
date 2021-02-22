@@ -339,7 +339,8 @@ class FullyShardedDataParallel(nn.Module):
         variables, which will later be synchronized in the first
         forward-backward pass exiting the context.
         """
-        assert self._is_root, "no_sync on inner FSDP is not tested."
+        self._lazy_init()
+        assert self._is_root, "no_sync on inner FSDP is not supported"
         self.assert_idle()
         # This instance may wrap other FullyShardedDataParallel instances and we
         # need to set all of them to accumulate gradients.
@@ -622,6 +623,13 @@ class FullyShardedDataParallel(nn.Module):
             # pre_backward_hook.
             self._free_fp16_param_shard([param])
 
+        # Enqueue a callback at the end of the backward pass to ensure that all
+        # post-backward work has finished. We only need one callback and it only
+        # needs to be called from the outer-most (root) instance.
+        if self._is_root and not self._post_backward_callback_queued:
+            self._post_backward_callback_queued = True
+            Variable._execution_engine.queue_callback(self._wait_for_post_backward)
+
         if not self.require_backward_grad_sync:
             return
 
@@ -664,13 +672,6 @@ class FullyShardedDataParallel(nn.Module):
             # are underway in the post_backward stream. See:
             # github.com/NVIDIA/apex/blob/master/apex/parallel/distributed.py
             orig_grad_data.record_stream(self._streams["post_backward"])
-
-        # Enqueue a callback at the end of the backward pass to ensure that all
-        # post-backward work has finished. We only need one callback and it only
-        # needs to be called from the outer-most (root) instance.
-        if self._is_root and not self._post_backward_callback_queued:
-            self._post_backward_callback_queued = True
-            Variable._execution_engine.queue_callback(self._wait_for_post_backward)
 
     @torch.no_grad()
     def _wait_for_post_backward(self) -> None:

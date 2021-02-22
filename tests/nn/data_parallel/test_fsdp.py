@@ -549,6 +549,18 @@ class TestNoSync(DistributedTest):
         fn = functools.partial(self._test_nested_wrapper, config={})
         spawn_and_init(fn)
 
+    def test_no_sync_before_first_forward(self):
+        group = DummyProcessGroup(rank=0, size=1)
+        model = self.get_wrapped_model(group, config={})
+        batch = model.module.get_input(torch.device("cuda"))
+        with model.no_sync():
+            output = model(*batch)
+            loss = model.module.get_loss(batch, output)
+            loss.backward()
+        output = model(*batch)
+        loss = model.module.get_loss(batch, output)
+        loss.backward()
+
     @classmethod
     def _test_transformer(self, rank, group, config):
         model = self.get_wrapped_model(group, config=config)
