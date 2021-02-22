@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 import torchtext
 from torchtext.data.utils import get_tokenizer
 
-from experimental.nn.ampnet_pipe import pipe
+from fairscale.experimental.nn.ampnet_pipe import pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import LazyModule
@@ -423,7 +423,6 @@ def run_mp_worker(args, available_workers):
         chunks=args.chunks,
         worker_map=get_worker_map(),
         input_device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
-        pipelined_backward=False,
         checkpoint=args.checkpoint,
     )
     if torch.cuda.is_available():

@@ -259,15 +259,9 @@ def checkpoint_mode(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
     input = torch.rand(2, 1)
 
-    always = pipe_class(
-        model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="always", pipelined_backward=False,
-    )
-    except_last = pipe_class(
-        model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="except_last", pipelined_backward=False,
-    )
-    never = pipe_class(
-        model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="never", pipelined_backward=False,
-    )
+    always = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="always",)
+    except_last = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="except_last",)
+    never = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="never",)
 
     always_output = always(input)
     except_last_output = except_last(input)
@@ -306,7 +300,7 @@ def checkpoint_mode_when_chunks_1(pipe_class):
 @pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
 def checkpoint_eval(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
-    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, pipelined_backward=False,)
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2,)
     input = torch.rand(2, 1)
 
     def find_grad_fn(grad_fn, name):
@@ -343,9 +337,7 @@ def checkpoint_non_float_input(pipe_class):
             return input[0] * 2
 
     model = nn.Sequential(ForkNonFloat(), JoinNonFloat())
-    model = pipe_class(
-        model, balance=[1, 1], worker_map=get_worker_map(), chunks=1, checkpoint="always", pipelined_backward=False,
-    )
+    model = pipe_class(model, balance=[1, 1], worker_map=get_worker_map(), chunks=1, checkpoint="always",)
 
     input = torch.rand(1, requires_grad=True)
     output = model(input)
@@ -374,8 +366,8 @@ def no_grad(pipe_class):
         nonlocal latent
         latent = output
 
-    partition = model.partitions[0]
-    partition.module.register_forward_hook(hook)
+    partition = model.partition
+    partition.register_forward_hook(hook)
 
     with torch.no_grad():
         model(input)
@@ -456,7 +448,7 @@ def input_pair(pipe_class):
             return (self.fc_a(a), self.fc_b(b))
 
     model = nn.Sequential(Two())
-    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, pipelined_backward=False,)
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2,)
 
     a = torch.rand(10, 1, requires_grad=True)
     b = torch.rand(10, 1, requires_grad=True)
@@ -482,7 +474,7 @@ def input_singleton(pipe_class):
             return (self.fc(a),)
 
     model = nn.Sequential(One())
-    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, pipelined_backward=False,)
+    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2,)
 
     a = torch.rand(10, 1, requires_grad=True)
 
@@ -624,9 +616,7 @@ def partitions(pipe_class):
     model = nn.Sequential(a, b)
     model = pipe_class(model, [1, 1], worker_map=get_worker_map())
 
-    assert isinstance(model.partitions, list)
-    assert len(model) == 1
-    assert isinstance(model.partitions[0].module, nn.Sequential)
+    assert isinstance(model.partition, nn.Sequential)
 
     if model.group.rank() == 0:
         assert model[0].weight == a.weight
@@ -766,7 +756,7 @@ def verify_module_duplicate_parameters_on_distinct_partitions(pipe_class):
 
 
 @torch_spawn([4])
-@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+@pytest.mark.parametrize("pipe_class", [MultiProcessPipe])
 def pipelined_backward(pipe_class):
     model = nn.Sequential(nn.ReLU(), nn.ReLU())
 

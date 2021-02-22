@@ -3,19 +3,19 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections import OrderedDict, deque
+from collections import OrderedDict
 import copy
 from itertools import chain
 import logging
 from math import inf
-from typing import TYPE_CHECKING, Any, Callable, Deque, Dict, Iterable, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type, Union
 
 import torch
 import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
-from .utils import Workhandle, broadcast_object, recursive_copy_to_device
+from .utils import broadcast_object, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
@@ -51,9 +51,15 @@ class OSS(Optimizer):
         group (group):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
-            the max size of the buffer used to batch the small parameter tensors, in number of elements (default 16M).
-            this will not impact the long term memory consumption, but the peak memory can be impacted by the moment
-            when the buffers are allocated and the bucketed params have not yet been relocated to them.
+            (deprecated) used to cap the size of the broadcast buffers, not being used anymore.
+
+
+    .. warning: the communication patterns that OSS use depend on the "trainability" graph,
+        meaning that all the parameters which `require_grad` are handled differently. This is
+        not reevaluated at every step, please use `refresh_trainable()` if your model changed
+        (freeze or unfreeze for instance).
+        If used with :class:<fairscale.nn.ShardedDDP> then an automatic change detection is possible,
+        via the `auto_refresh_trainable` parameter.
     """
 
     #: The optimizer used for a given shard
@@ -66,7 +72,7 @@ class OSS(Optimizer):
         params: _params_t,
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
-        broadcast_buffer_size: int = 2 ** 24,
+        broadcast_buffer_size: int = -1,
         **default: Any,
     ):
 
@@ -81,32 +87,24 @@ class OSS(Optimizer):
         self._partition_parameters: List[List[dict]] = []
         self._index_to_param: Dict[int, torch.Tensor] = {}
         self._param_to_index: Dict[int, int] = {}
-        self._local_params: Optional[Iterable[Any]] = None
+        self._local_params: Optional[List[torch.Tensor]] = None
 
-        # Build the wrapped optimizer, responsible for a shard of the params
+        # Default empty values + immutables
+        self._optim_defaults = default
+        self._optim_constructor = optim
+
         self.group = group if group is not None else dist.group.WORLD
         self.world_size = dist.get_world_size(self.group)
         self.rank = dist.get_rank(self.group)
         self.global_rank = self.get_global_rank(self.group, self.rank)
-        self.optim = optim(self.partition_parameters()[self.rank], **default)
-
-        # - Sync local and global param_groups keys
-        for global_group, local_group in zip(self.param_groups, self.optim.param_groups):
-            for key, value in local_group.items():
-                if key != "params":
-                    global_group[key] = value
-
-        #  Optional consolidated optimizer state
-        self._all_states: List[Dict[str, Any]] = []
-
-        # Current default device is set by the parameters allocated to this rank
-        self._device = list(self.per_device_params.keys())[0]
         self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
-        self.buffer_max_size = broadcast_buffer_size
 
-        self.should_bucket_param: List[bool] = []
-        self.work_handles: Deque[Workhandle] = deque()
-        self._setup_bucket_strategy()
+        self._all_states: List[Dict[str, Any]] = []  # Optional consolidated optimizer state
+        self._default_device = torch.device("cpu")
+
+        # Setup everything which is related to the parameters to be trained
+        # (partition and optimizer for the shard)
+        self.refresh_trainable()
 
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
@@ -145,14 +143,20 @@ class OSS(Optimizer):
         return self._partition_parameters
 
     @property
-    def local_params(self) -> Iterable[torch.Tensor]:
+    def local_params(self) -> List[torch.Tensor]:
+        """ Iterable which goes through the parameters that this rank owns
+        """
         if self._local_params is None:
-            self._local_params = chain(
-                *[
-                    list(filter(lambda x: x.grad is not None, device_params[self.rank]))
-                    for device_params in self.per_device_params.values()
-                ]
+            self._local_params = list(
+                chain(
+                    *[
+                        list(filter(lambda x: x.grad is not None, device_params[self.rank]))
+                        for device_params in self.per_device_params.values()
+                    ]
+                )
             )
+
+        # Make sure that the iterator is not consumed, only expose a copy
         return self._local_params
 
     @property
@@ -276,12 +280,12 @@ class OSS(Optimizer):
         # Compute the norm on this grad set,
         # then sync all the norms from all ranks
         if norm_type == inf:
-            total_norm = max(p.grad.detach().abs().max().to(self._device) for p in local_params)
+            total_norm = max(p.grad.detach().abs().max().to(self._default_device) for p in local_params)
             # all reduce over data parallel and model parallel workers
             dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=dist.group.WORLD)
         else:
             local_norm = torch.norm(
-                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type, dtype=torch.float32).to(self._device) for p in local_params]),  # type: ignore
+                input=torch.stack([torch.norm(input=p.grad.detach(), p=norm_type, dtype=torch.float32).to(self._default_device) for p in local_params]),  # type: ignore
                 p=norm_type,
             )
 
@@ -375,6 +379,8 @@ class OSS(Optimizer):
                         global_id = self.param_to_index[local_index_to_param_id[local_param_index]]
                         state_dict["state"][global_id] = s["state"][local_param_index]
 
+        # Make sure that the parameters are sorted in the state, as expected
+        state_dict["state"] = dict(sorted(state_dict["state"].items()))
         return state_dict
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
@@ -387,23 +393,16 @@ class OSS(Optimizer):
 
         # NOTE: PyTorch 1.5 does not index linearly but with the id(params) at saving time
         # we work around that here by using the fact that the params are ordered as in the param_groups
+        pytorch15_index_redirect = {k: i for i, k in enumerate(state_dict["state"].keys())}
 
-        for i_param, (key, value) in enumerate(state_dict["state"].items()):
-            param = self.index_to_param[i_param]
+        for key, value in state_dict["state"].items():
+            param = self.index_to_param[pytorch15_index_redirect[key]]
 
             # Populate the sharded optimizer state on the fly
             if self.param_to_rank[param] != self.rank:
                 state_dict["state"][key] = None
-
-            if key in self.index_to_param:
-                param = self.index_to_param[i_param]
-
-                # Only add this state to the sharded optimizer if it owns this param
-                for pg in self.optim.param_groups:
-                    if id(param) in [id(p) for p in pg["params"]]:
-                        self.optim.state[param] = recursive_copy_to_device(
-                            value, non_blocking=True, device=param.device
-                        )
+            else:
+                self.optim.state[param] = recursive_copy_to_device(value, non_blocking=True, device=param.device)
 
         super().load_state_dict(state_dict)
 
@@ -411,16 +410,25 @@ class OSS(Optimizer):
         OSS._sync_param_groups(state_dict["param_groups"], self.param_groups)
         OSS._sync_param_groups(self.param_groups, self.optim.param_groups)
 
+    def refresh_trainable(self) -> None:
+        """ Updates the partitioning and communication patterns if the trainability (`requires_grad`)
+        of some parameters changed.
+        """
+
+        # Create the optim which will work on the param shard
+        if not hasattr(self, "optim"):
+            self._clear_cache()
+            self._default_device = list(self.per_device_params.keys())[0]
+            self.optim = self._optim_constructor(self.partition_parameters()[self.rank], **self._optim_defaults)
+            OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
+
+        self._setup_flat_buffers()
+
     def _broadcast_state_dict(self) -> None:
         """Broadcast this rank's state shard, discard others"""
 
-        # Default to CPU space to gain some memory headroom
-        local_cpu_state = recursive_copy_to_device(
-            self.optim.state_dict(), non_blocking=True, device=torch.device("cpu")
-        )
-
         # Tensor cannot be really empty, even if its size is meaningless
-        dummy_sync_tensor = torch.tensor([1], device=self._device)
+        dummy_sync_tensor = torch.tensor([1], device=self._default_device)
 
         for rank in range(self.world_size):
             if rank == self.rank:
@@ -430,17 +438,20 @@ class OSS(Optimizer):
                 )
                 # legacy compatibility for old torch versions
                 broadcast_object(
-                    self.local_state_dict(), src_rank=self.global_rank, group=self.group, dist_device=self._device
+                    self.local_state_dict(),
+                    src_rank=self.global_rank,
+                    group=self.group,
+                    dist_device=self._default_device,
                 )
             else:
                 global_rank = self.get_global_rank(self.group, rank)
 
                 # Discard this tensor/rank, broadcast necessary for syncing and because NCCL does not support gather
                 broadcast_object(
-                    torch.tensor([dummy_sync_tensor], dtype=torch.uint8, device=self._device),
+                    torch.tensor([dummy_sync_tensor], dtype=torch.uint8, device=self._default_device),
                     src_rank=global_rank,
                     group=self.group,
-                    dist_device=self._device,
+                    dist_device=self._default_device,
                 )
 
     def _collect_sharded_states(self) -> List[Dict[str, Any]]:
@@ -456,19 +467,19 @@ class OSS(Optimizer):
 
                 # Sync with other replicas
                 broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=self._device),
+                    torch.tensor([0], dtype=torch.uint8, device=self._default_device),
                     src_rank=self.global_rank,
                     group=self.group,
-                    dist_device=self._device,
+                    dist_device=self._default_device,
                 )
             else:
                 # Fetch the optim state from the other replicas
                 global_rank = self.get_global_rank(self.group, rank)
                 replica_state = broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=self._device),
+                    torch.tensor([0], dtype=torch.uint8, device=self._default_device),
                     src_rank=global_rank,
                     group=self.group,
-                    dist_device=self._device,
+                    dist_device=self._default_device,
                 )
 
                 all_states.append(
@@ -503,7 +514,7 @@ class OSS(Optimizer):
                 self.optim.add_param_group(param_groups[-1])
 
             # Update the bucketing strategy accordingly
-            self._setup_bucket_strategy()
+            self._setup_flat_buffers()
 
     def _clear_cache(self) -> None:
         self._partition_parameters.clear()
@@ -534,94 +545,53 @@ class OSS(Optimizer):
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
 
-        i_param = 0
         last_work_handle = None  # Work handles are consumed within this scope, no callback
 
-        for (device, device_params,) in self.per_device_params.items():  # all the params on this device (inc all ranks)
-            buckets = self.buckets[device]
-            # Bucket and issue all the async calls
-            for (src_rank, params), bucket in zip(enumerate(device_params), buckets):
+        for device in self.buckets.keys():
+            for src_rank, bucket in enumerate(self.buckets[device]):
                 global_src_rank = self.get_global_rank(self.group, src_rank)
-
-                # Direct broadcasts only
-                for param in params:
-                    if not self.should_bucket_param[i_param]:
-                        last_work_handle = dist.broadcast(
-                            tensor=param.data, src=global_src_rank, group=self.group, async_op=True
-                        )
-
-                    i_param += 1
-
-                # Bucket broadcasts
                 last_work_handle = dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True)
 
         # Only check on the last handle, they're all inlined on the same CUDA stream
         if last_work_handle:
             last_work_handle.wait()
 
-    def _consume_work_handles(self) -> None:
-        """Consume all the futures which are tied to this optimizer's buckets.
-        We start from the first/older ones, since they are the most likely to be ready and non-blocking
+    def _setup_flat_buffers(self) -> None:
+        """Make all params which are on the same device and tied to the same rank views of a single buffer.
+        This is used at construction time, and anytime parameter trainability is changed (frozen or unfrozen) and
+        `refresh_trainability` is called.
         """
 
-        while len(self.work_handles) > 0:
-            work_handle = self.work_handles.popleft()
-            work_handle.handle.wait()
-            if work_handle.callback is not None:
-                work_handle.callback()
-
-    def _try_consume_work_handle(self) -> None:
-        """Try to consume the oldest future. This is non blocking, if not ready we'll pass"""
-        while len(self.work_handles) > 0 and self.work_handles[0].handle.is_completed():
-            work_handle = self.work_handles.popleft()
-            if work_handle.callback is not None:
-                work_handle.callback()
-
-    def _setup_bucket_strategy(self) -> None:
-        """Tag parameters to either bucket them or broadcast/reduce them directly. The parameters are ordered
-        (smallest first), the bucket will hold the smallest elements, the remaining ones will be directly sent
-        over the wire.
-
-        Generating the partition once and for all allows us to save some time at runtime, and to know when all the
-        network requests have been issued.
-        """
-
-        # (re) allocate the buckets
-        #  - Get the correct size for the buckets, cannot be bigger than the model
-        model_size = sum([p.numel() for p in self.param_to_rank.keys()])
-        self.bucket_size = min(self.buffer_max_size, model_size)
-        logging.info(
-            "Bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
-                self.bucket_size / 2 ** 20, model_size / 2 ** 20
-            )
-        )
-
-        # - Allocate one buffer per rank and per device to group the small parameters
-        for device, per_device in self.per_device_params.items():
-            self.buckets[device] = [
-                torch.zeros(self.bucket_size, dtype=per_device[0][0].dtype, device=device)
-                for _ in range(len(per_device))
-            ]
-
-        # Devise the bucketing strategy
         for device, per_rank_params in self.per_device_params.items():
+            # Only wipe the existing buckets if there are none
+            # (could be that this is called twice, when trainability changes)
+            if device not in self.buckets.keys():
+                self.buckets[device] = []
+
+            # Make parameters a view of the bucket
             for dst_rank, params in enumerate(per_rank_params):
-                offset = 0
+                if len(params) > 0:
 
-                for param in params:
-                    # Criteria to decide whether this parameter is to be bucketed or not:
-                    # - enough room in the bucket
-                    if param.requires_grad and (offset + param.numel()) < self.bucket_size:
-                        self.should_bucket_param.append(True)
+                    # Clone the non-trainable params, if in a bucket it will get destroyed
+                    for param in filter(lambda x: not x.requires_grad, params):
+                        param.data = param.data.detach().clone()
 
-                        # This parameter becomes a view of the bucket
+                    # Merge all the trainable params in a single bucket
+                    trainable_params = list(filter(lambda x: x.requires_grad, params))
+                    buffer_size = sum(map(lambda x: x.numel(), trainable_params))
+                    bucket = torch.empty(buffer_size, dtype=params[0].dtype, device=device)
+                    offset = 0
+
+                    for param in trainable_params:
                         offset_next = offset + param.numel()
-
-                        self.buckets[device][dst_rank][offset:offset_next].copy_(param.data.flatten())
-                        param.data = self.buckets[device][dst_rank][offset:offset_next].view_as(param.data)
+                        bucket[offset:offset_next].copy_(param.data.flatten())
+                        param.data = bucket[offset:offset_next].view_as(param.data)
                         offset = offset_next
-                    else:
-                        self.should_bucket_param.append(False)
 
-                # Resize the bucket to remove lost space in the end
-                self.buckets[device][dst_rank].resize_(offset)
+                    # Either replace the existing bucket, or create it
+                    if len(self.buckets[device]) == dst_rank:
+                        self.buckets[device].append(bucket)
+                    else:
+                        self.buckets[device][dst_rank] = bucket
+                else:
+                    self.buckets[device].append(torch.zeros(1, device=device))

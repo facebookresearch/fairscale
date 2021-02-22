@@ -54,6 +54,10 @@ skip_if_single_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 2, reason="multiple GPUs required"
 )
 
+skip_if_less_than_four_gpu = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.device_count() < 4, reason="4 GPUs or more required"
+)
+
 skip_if_py38 = pytest.mark.skipif(
     sys.version_info.major == 3 and sys.version_info.minor == 8, reason="Python3.8 is skipped"
 )
@@ -62,6 +66,11 @@ skip_if_py39_no_cuda = pytest.mark.skipif(
     not torch.cuda.is_available() and sys.version_info.major == 3 and sys.version_info.minor == 9,
     reason="Python3.9 wo CUDA is skipped",
 )
+
+available_devices = ["cpu"]
+if torch.cuda.is_available():
+    available_devices.append("cuda")
+
 
 _, filename_mpi = tempfile.mkstemp()
 
@@ -406,3 +415,39 @@ def objects_are_equal(a: Any, b: Any, raise_exception: bool = False) -> bool:
                 return False
     else:
         return a == b
+
+
+def check_same_model_params(model_a: torch.nn.Module, model_b: torch.nn.Module, message: str = "") -> None:
+    for p_a, p_b in zip(model_a.parameters(), model_b.parameters()):
+        assert torch.allclose(p_a, p_b, atol=1e-3), f"Model parameters differ\n{p_a} {p_b}\n" + message
+
+    for b_a, b_b in zip(model_a.buffers(), model_b.buffers()):
+        assert torch.allclose(b_a, b_b), f"Model buffers differ {b_a} - {b_b}\n" + message
+
+
+def check_same_models_across_ranks(
+    model: torch.nn.Module, process_group: Any, params_should_be_equal: bool, check_broadcast_buffers: bool
+) -> None:
+    world_size = dist.get_world_size(process_group)
+    rank = dist.get_rank(process_group)
+    for param in model.parameters():
+        # collect the params across the rank
+        receptacle = [param.clone() for _ in range(world_size)]
+        dist.all_gather(receptacle, param, group=process_group)
+
+        if rank == 0:
+            for sync_p in receptacle[1:]:
+                assert not params_should_be_equal or torch.all(
+                    torch.eq(receptacle[0], sync_p)
+                ), "Models differ in between ranks"
+
+    # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
+    if check_broadcast_buffers:
+        for buffer in model.buffers():
+            receptacle = [buffer.clone() for _ in range(world_size)]
+            dist.all_gather(receptacle, buffer, group=process_group)
+            if rank == 0:
+                for sync_b in receptacle[1:]:
+                    assert not params_should_be_equal or torch.all(
+                        torch.eq(receptacle[0], sync_b)
+                    ), "Models differ in between ranks"

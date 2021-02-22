@@ -4,8 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [next rel] - TBD
+## NEXT - TBD
 
+## [0.1.7] - 2021-02-19
+### Fixed
+- ShardedDDP and OSS handle model trainability changes during training ([#369](https://github.com/facebookresearch/fairscale/issues/369))
+- ShardedDDP state dict load/save bug ([#386](https://github.com/facebookresearch/fairscale/issues/386))
+- ShardedDDP handle train/eval modes ([#393](https://github.com/facebookresearch/fairscale/issues/393))
+- AdaScale handling custom scaling factors ([#401](https://github.com/facebookresearch/fairscale/issues/401))
+
+### Added
+- ShardedDDP manual reduce option for checkpointing ([#389](https://github.com/facebookresearch/fairscale/issues/389))
+
+## [0.1.6] - 2021-02-10
+### Added
+- Checkpointing model wrapper (#376)
+- Faster OSS, flatbuffers (#371)
+- Small speedup in OSS clipgradnorm (#363)
+
+### Fixed
+- Bug in ShardedDDP with 0.1.5 depending the init (KeyError / OSS)
+- Much refactoring in Pipe (#357, #358, #360, #362, #370, #373)
+- Better pip integration / resident pytorch (#375)
 
 ## [0.1.5] - 2021-02-03
 ### Added

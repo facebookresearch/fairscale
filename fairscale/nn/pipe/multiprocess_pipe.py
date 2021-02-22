@@ -20,7 +20,7 @@
 """The MultiProcessPipe interface."""
 from collections import OrderedDict
 import threading
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Union
 import warnings
 
 import torch
@@ -31,7 +31,6 @@ import torch.cuda
 from fairscale.nn.model_parallel import get_model_parallel_world_size, get_pipeline_parallel_group
 
 from . import microbatch
-from .async_schedule import Location, ModuleWrapper
 from .batchnorm import DeferredBatchNorm
 from .multiprocess_pipeline import MultiProcessPipeline
 from .phony import get_phony
@@ -118,13 +117,6 @@ class MultiProcessPipe(Module):
             whether to use deferred BatchNorm moving statistics (default:
             :data:`False`, see :class:`DeferredBatchNorm` for more
             details)
-        pipelined_backward (bool, optional):
-            if True, call torch.autograd.backward once per microbatch on the
-            backward pass (instead of once for the whole batch). This works
-            around a potential deadlock in pytorch when using tensor parallelism
-            at the same time. Defaults to `True` if
-            `get_model_parallel_world_size() > 1`
-            (default: `None`)
 
     Raises:
         TypeError:
@@ -174,7 +166,6 @@ class MultiProcessPipe(Module):
         chunks: int = chunks,
         checkpoint: str = checkpoint,
         deferred_batch_norm: bool = False,
-        pipelined_backward: bool = None,
     ) -> None:
         super().__init__()
 
@@ -183,13 +174,17 @@ class MultiProcessPipe(Module):
         if checkpoint not in ["always", "except_last", "never"]:
             raise ValueError("checkpoint is not one of 'always', 'except_last', or 'never'")
 
+        if get_model_parallel_world_size() > 1:
+            self.pipelined_backward = True
+        else:
+            self.pipelined_backward = False
+
         self.balance = list(balance)
         verify_module(module)
         check_balance(module, self.balance)
 
         self.chunks = chunks
         self.checkpoint = checkpoint
-        self.pipelined_backward = pipelined_backward
         self.pipeline: Optional[MultiProcessPipeline]
         self.lock = threading.Lock()
 
@@ -214,31 +209,23 @@ class MultiProcessPipe(Module):
         self.final_stage = rank == len(self.balance) - 1
         if rank >= len(self.balance):
             warnings.warn("More ranks than partitions, some ranks unused")
-            self.partitions: List[ModuleWrapper] = []
+            self.partition = nn.Sequential()
             self.pipeline = None
         else:
-            self.partitions = self.instantiate_partition(module, self.balance, self.group)
+            self.partition = self.instantiate_partition(module, self.balance, self.group)
             if deferred_batch_norm:
-                for part in self.partitions:
-                    part.module = DeferredBatchNorm.convert_deferred_batch_norm(part.module, chunks)
-            for name, part in enumerate(self.partitions):
-                self.add_module(str(name), part.module)
+                self.partitition = DeferredBatchNorm.convert_deferred_batch_norm(self.partition, chunks)
+            self.add_module(str(0), self.partition)
             self.create_pipeline()
 
         del module
-
-        if self.pipelined_backward is None:
-            if get_model_parallel_world_size() > 1:
-                self.pipelined_backward = True
-            else:
-                self.pipelined_backward = False
 
     def create_pipeline(self) -> None:
         # The micro-batch index where the checkpointing stops.
         checkpoint_stop = {"always": self.chunks, "except_last": self.chunks - 1, "never": 0}[self.checkpoint]
 
         self.pipeline = MultiProcessPipeline(
-            self.partitions,
+            self.partition,
             self._skip_layout,
             checkpoint_stop,
             group=self.group,
@@ -249,48 +236,25 @@ class MultiProcessPipe(Module):
 
     def instantiate_partition(
         self, module: Union[nn.Sequential, List[LazyModule]], balance: List[int], group: torch.distributed.ProcessGroup,
-    ) -> List[ModuleWrapper]:
+    ) -> nn.Sequential:
         rank = group.rank()
         first_layer = sum(balance[:rank])
         num_layers = balance[rank]
         layers = module[first_layer : first_layer + num_layers]
         instantiated_layers = [l if isinstance(l, nn.Module) else l() for l in layers]
-        return [ModuleWrapper(nn.Sequential(*instantiated_layers), Location(rank, 0))]
+        return nn.Sequential(*instantiated_layers)
 
     def __len__(self) -> int:
         """Counts the length of the underlying sequential module."""
-        return sum(len(p) for p in self.partitions)
+        return self.partition.__len__()
 
     def __getitem__(self, index: int) -> nn.Module:
         """Gets a layer in the underlying sequential module."""
-        partitions: List[Any]
-        partitions = self.partitions
-
-        if index < 0:
-            partitions = partitions[::-1]
-
-        for partition in partitions:
-            try:
-                if isinstance(partition, ModuleWrapper):
-                    return partition.module[index]
-                else:
-                    return partition[index]
-            except IndexError:
-                pass
-
-            shift = len(partition)
-
-            if index < 0:
-                index += shift
-            else:
-                index -= shift
-
-        raise IndexError
+        return self.partition.__getitem__(index)
 
     def __iter__(self) -> Iterable[nn.Module]:
         """Iterates over children of the underlying sequential module."""
-        for partition in self.partitions:
-            yield from partition.module
+        return self.partition.__iter__()
 
     def forward(self, input: TensorOrTensors, *, event=None) -> TensorOrTensors:  # type: ignore
         """:class:`MultiProcessPipe` is a fairly transparent module wrapper. It doesn't
