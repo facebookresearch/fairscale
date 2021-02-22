@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from .data_parallel import ShardedDataParallel
-from .misc import FlattenParamsWrapper, OffloadModel
+from .misc import FlattenParamsWrapper
 from .moe import MOELayer, Top2Gate
 from .pipe import Pipe, PipeRPCWrapper
 
