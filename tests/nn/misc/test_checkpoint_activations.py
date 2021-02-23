@@ -9,7 +9,7 @@ import unittest
 
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
 
@@ -26,7 +26,9 @@ class Model(nn.Module):
     def __init__(self, use_pytorch_checkpoint=False, use_fairscale_checkpoint=False, **kwargs):
         super().__init__()
         torch.manual_seed(0)  # make sure weights are deterministic.
-        assert not (use_pytorch_checkpoint and use_fairscale_checkpoint), "Doesn't make sense to use both"
+        assert not (
+            use_pytorch_checkpoint and use_fairscale_checkpoint
+        ), "Cannot use both pytorch and fairscale checkpointing mechanisms."
         self.use_pytorch_checkpoint = use_pytorch_checkpoint
         self.ffn = nn.Sequential(
             nn.Linear(32, 128),
@@ -40,7 +42,7 @@ class Model(nn.Module):
 
     def forward(self, x):
         if self.use_pytorch_checkpoint:
-            x = checkpoint(self.ffn, x)
+            x = torch_checkpoint(self.ffn, x)
         else:
             x = self.ffn(x)
         return self.out(x)
