@@ -44,10 +44,10 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         - When both inner and outer are large, both help and the
           benefit is additive.
 
-    The first and last most likely do not benefit from the `offload_to_cpu` flag.
+    The first and last layers most likely do not benefit from the `offload_to_cpu` flag.
     That's because input to first layer is the input to the model and won't
     be moved to CPU by this module. The input the last layer is immediately
-    used by the backward pass and own't resulting in memory saving.
+    used by the backward pass and won't resulting in memory saving.
 
     Args:
         module (nn.Module):
