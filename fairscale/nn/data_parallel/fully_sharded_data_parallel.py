@@ -85,30 +85,40 @@ class FullyShardedDataParallel(nn.Module):
         )
 
     Args:
-        module (nn.Module): module to checkpoint
-        process_group (Optional): process group for sharding
-        reshard_after_forward (bool, Optional): if ``True``, reshard parameters
+        module (nn.Module):
+            module to checkpoint
+        process_group (Optional):
+            process group for sharding
+        reshard_after_forward (bool, Optional):
+            if ``True``, reshard parameters
             after the forward pass. This saves memory but slows training. This
             is only relevant when resharding individual layers.
-        mixed_precision (bool, Optional): if ``True``, inputs, activations and
+        mixed_precision (bool, Optional):
+            if ``True``, inputs, activations and
             gradients will be kept in FP16; computation and communication will
             occur in FP16; and a (sharded) master copy of the model weights will
             be maintained in FP32.
-        fp32_reduce_scatter (bool, Optional): if ``True``, then reduce-scatter
+        fp32_reduce_scatter (bool, Optional):
+            if ``True``, then reduce-scatter
             gradients in FP32. This is only relevant when *``mixed_precision``*
             is ``True``.
-        flatten_parameters (bool, Optional): if ``True``, flatten parameters
+        flatten_parameters (bool, Optional):
+            if ``True``, flatten parameters
             into a single contiguous tensor, which improves training speed.
-        cpu_offload (bool, Optional): if ``True``, offload FP32 params to CPU.
+        cpu_offload (bool, Optional):
+            if ``True``, offload FP32 params to CPU.
             This is only relevant when *``mixed_precision``* is ``True``.
-        compute_dtype (torch.dtype, Optional): dtype for full parameters for
+        compute_dtype (torch.dtype, Optional):
+            dtype for full parameters for
             computation. This defaults to ``torch.float32`` unless
             *``mixed_precision``* is set, in which case it defaults to
             ``torch.float16``.
-        move_grads_to_cpu (bool, Optional): move gradient shard to CPU after
+        move_grads_to_cpu (bool, Optional):
+            move gradient shard to CPU after
             reduction. This is useful when combined with CPU-based optimizers.
             It defaults to the value of *``cpu_offload``*.
-        bucket_cap_mb (int, Optional): FSDP will bucket parameters so that
+        bucket_cap_mb (int, Optional):
+            FSDP will bucket parameters so that
             gradient reduction can potentially overlap with backward
             computation. bucket_cap_mb controls the bucket size in MegaBytes
             (MB). Buckets are sub-divided based on world_size, so the max shard
