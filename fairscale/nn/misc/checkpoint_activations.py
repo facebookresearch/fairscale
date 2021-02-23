@@ -46,12 +46,10 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
 
     ..Note::
 
-        The first and last layers are not likely to benefit from the `offload_to_cpu` flag.
-        It's because the input to first layer is the input to the model and the input
-        tensor is often referred in the training loop and data lader. As a result that
-        tensor won't be moved to CPU by this wrapper if the outside reference exists.
-        The input to the last layer is immediately used by the backward pass and won't
-        resulting in memory saving.
+        The first and last layers are not likely to benefit from the `offload_to_cpu` flag
+        because (1) there are typically other references to the first layer's input, so
+        the GPU memory won't be freed; (2) the input to the last layer is immediately
+        used by the backward pass and won't result in memory savings.
 
     Args:
         module (nn.Module):
