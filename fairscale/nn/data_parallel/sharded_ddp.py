@@ -104,7 +104,7 @@ class ShardedDataParallel(nn.Module):
         sync_models_at_startup: bool = True,
         reduce_buffer_size: int = 0,
         auto_refresh_trainable: bool = True,
-        reduce_fp16: bool = True,
+        reduce_fp16: bool = False,
     ):
         super().__init__()
 
