@@ -52,15 +52,26 @@ class TestComparisonToPyTorch(unittest.TestCase):
     def _test_checkpoint_wrapper(self, device):
         def get_loss_and_gnorm(model, input):
             ret = {}
+
             ret["mem_0"] = get_cuda_mem_allocated()
+            ret["mem_peak"] = 0
+            if ret["mem_0"] > 0:
+                torch.cuda.reset_peak_memory_stats()
+
             model.zero_grad()
             loss = model(input).sum()
             ret["mem_after_fwd"] = get_cuda_mem_allocated()
+
             loss.backward()
             ret["mem_after_bwd"] = get_cuda_mem_allocated()
+
             gnorm = torch.norm(torch.stack([torch.norm(p.grad.detach()) for p in model.parameters()]))
             ret["loss"] = loss.item()
             ret["gnorm"] = gnorm.item()
+
+            if ret["mem_0"] > 0:
+                ret["mem_peak"] = torch.cuda.max_memory_allocated()
+
             return ret
 
         input = torch.rand(2, 16, 32).requires_grad_(True)
@@ -92,11 +103,17 @@ class TestComparisonToPyTorch(unittest.TestCase):
         for d in [no_cpt, pyt_cpt, fairscale_cpt, fairscale_cpt_offload]:
             del d["loss"]
             del d["gnorm"]
-        assert no_cpt == {"mem_0": 38912, "mem_after_fwd": 64000, "mem_after_bwd": 74240}, no_cpt
-        assert pyt_cpt == {"mem_0": 38912, "mem_after_fwd": 43520, "mem_after_bwd": 74240}, pyt_cpt
-        assert fairscale_cpt == {"mem_0": 38912, "mem_after_fwd": 43520, "mem_after_bwd": 74240}, fairscale_cpt
+        assert no_cpt == {"mem_0": 38912, "mem_peak": 98816, "mem_after_fwd": 64000, "mem_after_bwd": 74240}, no_cpt
+        assert pyt_cpt == {"mem_0": 38912, "mem_peak": 103424, "mem_after_fwd": 43520, "mem_after_bwd": 74240}, pyt_cpt
+        assert fairscale_cpt == {
+            "mem_0": 38912,
+            "mem_peak": 103424,
+            "mem_after_fwd": 43520,
+            "mem_after_bwd": 74240,
+        }, fairscale_cpt
         assert fairscale_cpt_offload == {
             "mem_0": 38912,
+            "mem_peak": 107520,
             "mem_after_fwd": 43520,
             "mem_after_bwd": 74240,
         }, fairscale_cpt_offload

@@ -32,9 +32,10 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
 
     Args:
         module (nn.Module):
-            module to wrap
+            The module to be wrapped
         offload_to_cpu (Optional, bool):
-            whether to offload activations to CPU
+            Whether to offload activations to CPU. Peak memory usage will be
+            reduced when multiple checkpoint blocks are used.
 
     Returns:
         (nn.Module):
