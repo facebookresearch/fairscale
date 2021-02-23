@@ -169,8 +169,20 @@ class ActivationCheckpointing(torch.autograd.Function):
             # Bring in the current layer shard onto the device.
             layer_shard.forward_load()
             # Apply the FP and store the activations on the CPU.
-            with torch.no_grad():
+            if index == len(model_instance.model_slices) - 1:
+                context = torch.no_grad()
                 inputs = model_instance._activations[index]
+                for inp in inputs:
+                    inp.requires_grad = True
+                    # print(f"inp {inp}")
+                
+            else:
+                context = torch.no_grad()
+                inputs = model_instance._activations[index]
+                
+            with context:
+                # print(f"context is {context}")
+                
                 output_list: List[Any] = []
                 for given_input in inputs:
                     given_input_list = torch.chunk(given_input, model_instance._num_microbatches)
@@ -181,15 +193,24 @@ class ActivationCheckpointing(torch.autograd.Function):
                     given_output = torch.cat(given_output_list).squeeze(-1)
                     output_list.append(given_output)
                 output = tuple(output_list)
+            # print(f"output is {output}")
             output = output if isinstance(output, tuple) else (output,)
-            model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
+            # The last instance will lose the gradient function if we move it to the CPU.
+            # This is because all grad function are present on the device that ran the FW pass.
+            if index == len(model_instance.model_slices) - 1:
+                model_instance._activations.append(output)
+            else:
+                model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
+            # print(f"activations on cpu {model_instance._activations[-1]}")
             # Move the layer shard back to the CPU.
             layer_shard.forward_drop()
 
         # Move the output to the device since the user is expecting the output on the device.
         # TODO(anj-s): Check device to make sure the outputs and targets match device.
-        model_instance._activations[-1] = tuple([a.cuda() for a in list(model_instance._activations[-1])])
+        # model_instance._activations[-1] = tuple([a.cuda() for a in list(model_instance._activations[-1])])
         result = model_instance._activations[-1]
+        for r in result:
+            r.requires_grad = True
         return result[0] if len(result) == 1 else result
 
     @staticmethod
@@ -197,7 +218,6 @@ class ActivationCheckpointing(torch.autograd.Function):
     def backward(ctx, *grad_outputs):  # type: ignore
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
-
         inputs = ctx.inputs
         model_instance = ctx.model_instance
 
@@ -266,7 +286,7 @@ class ActivationCheckpointing(torch.autograd.Function):
             activation = tuple([a.cpu() for a in list(activation)])
             # Move the shard back to the CPU.
             model_shard.backward_drop()
-
+        print(f"all grads {all_grads}\n\n")
         detached_inputs = model_instance._activations[0]
         grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp for inp in detached_inputs)
         return (None, None) + grads
@@ -422,6 +442,8 @@ class OffloadModel(nn.Module):
         # At least one of the inputs needs to have `requires_grad` set.
         # TODO(anj-s): Should we require users to set this or should we set it here?
         for inp in inputs:
+            if inp.dtype == torch.long:
+                continue
             inp.requires_grad = True
         if self._checkpoint_activation:
             return ActivationCheckpointing.apply(*inputs, self)
