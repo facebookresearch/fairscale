@@ -98,21 +98,18 @@ def test_basic(device):
     fairscale_cpt_offload = get_loss_and_gnorm(model, input.to(device))
 
     # Check for correctness.
-    torch.testing.assert_allclose(no_cpt["loss"], pyt_cpt["loss"])
-    torch.testing.assert_allclose(no_cpt["gnorm"], pyt_cpt["gnorm"])
-
-    torch.testing.assert_allclose(no_cpt["loss"], fairscale_cpt["loss"])
-    torch.testing.assert_allclose(no_cpt["gnorm"], fairscale_cpt["gnorm"])
-
-    torch.testing.assert_allclose(no_cpt["loss"], fairscale_cpt_offload["loss"])
-    torch.testing.assert_allclose(no_cpt["gnorm"], fairscale_cpt_offload["gnorm"])
+    for key in "loss", "gnorm":
+        if not (no_cpt[key] == pyt_cpt[key] == fairscale_cpt[key] == fairscale_cpt_offload[key]):
+            print(no_cpt, pyt_cpt, fairscale_cpt, fairscale_cpt_offload)
+            assert 0
+        del no_cpt[key]
+        del pyt_cpt[key]
+        del fairscale_cpt[key]
+        del fairscale_cpt_offload[key]
 
     # Check for memory usage for cuda only.
     if "cpu" in device:
         return
-    for d in [no_cpt, pyt_cpt, fairscale_cpt, fairscale_cpt_offload]:
-        del d["loss"]
-        del d["gnorm"]
 
     mem_peaks = [98816, 103424, 103424, 107520]
     if torch_version() < (1, 7, 0):
@@ -182,13 +179,19 @@ def test_offload_memory():
     offload = get_loss_and_gnorm(model, input.to(device))
 
     for key in "loss", "gnorm":
-        assert base[key] == cpt[key] == offload[key], f"{base[key]} == {cpt[key]} == {offload[key]}"
+        if not (base[key] == cpt[key] == offload[key]):
+            # Use print to collect all debugging info.
+            print(base, cpt, offload)
+            assert 0
         del base[key]
         del cpt[key]
         del offload[key]
 
-    # XXX
-    print(base, cpt, offload)
-    assert base == {"mem_0": 32256, "mem_peak": 334336, "mem_after_fwd": 274944, "mem_after_bwd": 41984}
-    assert cpt == {"mem_0": 32256, "mem_peak": 253952, "mem_after_fwd": 101888, "mem_after_bwd": 41984}
-    assert offload == {"mem_0": 32256, "mem_peak": 207872, "mem_after_fwd": 55808, "mem_after_bwd": 41984}
+    ref_base = {"mem_0": 32256, "mem_peak": 334336, "mem_after_fwd": 274944, "mem_after_bwd": 41984}
+    ref_cpt = {"mem_0": 32256, "mem_peak": 253952, "mem_after_fwd": 101888, "mem_after_bwd": 41984}
+    ref_offload = {"mem_0": 32256, "mem_peak": 207872, "mem_after_fwd": 55808, "mem_after_bwd": 41984}
+
+    if not (base == ref_base and cpt == ref_cpt and offload == ref_offload):
+        # Use print to collect all debugging info.
+        print(base, cpt, offload)
+        assert 0
