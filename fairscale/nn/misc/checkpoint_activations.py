@@ -63,6 +63,9 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         (nn.Module):
             wrapped module
     """
+    # The use of weakref here is to prevent creating a ref cycle: m -> m.forward -> m.
+    # When such cycle exists, gc won't collect the module when the module is freed.
+    # That causes GPU memory is leaked. See the unit test for how we catch that.
     module.forward = functools.partial(_checkpointed_forward, type(module).forward, weakref.ref(module), offload_to_cpu)  # type: ignore
     return module
 
