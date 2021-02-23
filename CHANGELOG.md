@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Catch corner case when the model is too small with respect to the world size, and shards are empty ([#406] (https://github.com/facebookresearch/fairscale/pull/406))
+- Memory leak in checkpoint_wrapper ([#413] (https://github.com/facebookresearch/fairscale/pull/413))
 
 ## [0.1.7] - 2021-02-19
 ### Fixed

@@ -4,13 +4,12 @@
 # LICENSE file in the root directory of this source tree.
 
 from contextlib import contextmanager
-import functools
 from typing import Any, Dict, Generator, Optional, Tuple
 
 import torch
 from torch import Tensor
 import torch.nn as nn
-import torch.utils.checkpoint as checkpoint
+import torch.utils.checkpoint as torch_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
@@ -41,8 +40,23 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         (nn.Module):
             wrapped module
     """
-    module.forward = functools.partial(_checkpointed_forward, module.forward, offload_to_cpu)  # type: ignore
-    return module
+    # Do not use functools.partial like:
+    #
+    #     module.forward = functools.partial(_checkpointed_forward, module.forward, offload_to_cpu)
+    #
+    # It causes the backward to hold-on to tensor memory even when model is
+    # freed.
+
+    # Use a wrapper to wrap the original module.
+    class CheckpointWrapper(nn.Module):
+        def __init__(self, module: nn.Module):
+            super().__init__()
+            self.module = module
+
+        def forward(self, *args: Any, **kwargs: Any) -> Any:
+            return _checkpointed_forward(self.module, offload_to_cpu, *args, **kwargs)
+
+    return CheckpointWrapper(module)
 
 
 def _checkpointed_forward(original_forward: Any, offload_to_cpu: bool, *args: Any, **kwargs: Any) -> Any:
@@ -52,13 +66,11 @@ def _checkpointed_forward(original_forward: Any, offload_to_cpu: bool, *args: An
     kwarg_keys, flat_args = pack_kwargs(*args, **kwargs)
     parent_ctx_dict: Dict[str, Any] = {"offload": offload_to_cpu}
     output = CheckpointFunction.apply(original_forward, parent_ctx_dict, kwarg_keys, *flat_args)
-    if isinstance(output, torch.Tensor):
-        return output
-    else:
+    if not isinstance(output, torch.Tensor):
         packed_non_tensor_outputs = parent_ctx_dict["packed_non_tensor_outputs"]
         if packed_non_tensor_outputs:
             output = unpack_non_tensors(output, packed_non_tensor_outputs)
-        return output
+    return output
 
 
 def get_rng_state() -> Dict[str, Any]:
@@ -109,7 +121,7 @@ class CheckpointFunction(torch.autograd.Function):
         **kwargs: Any
     ) -> Any:
         if torch.is_grad_enabled():  # grad may be disabled, e.g., during validation
-            checkpoint.check_backward_validity(args)
+            torch_checkpoint.check_backward_validity(args)
 
         ctx.run_function = run_function
         ctx.kwarg_keys = kwarg_keys
@@ -131,15 +143,13 @@ class CheckpointFunction(torch.autograd.Function):
             unpacked_args, unpacked_kwargs = unpack_kwargs(kwarg_keys, args)
             outputs = run_function(*unpacked_args, **unpacked_kwargs)
 
-        if isinstance(outputs, torch.Tensor):
-            return outputs
-        else:
+        if not isinstance(outputs, torch.Tensor):
             # Autograd Functions don't like non-Tensor outputs. We can split the
             # non-Tensor and Tensor outputs, returning the former by reference
             # through *parent_ctx_dict* and returning the latter directly.
             outputs, packed_non_tensor_outputs = split_non_tensors(outputs)
             parent_ctx_dict["packed_non_tensor_outputs"] = packed_non_tensor_outputs
-            return outputs
+        return outputs
 
     @staticmethod
     def backward(ctx: Any, *args: Any) -> Tuple[Optional[Tensor], ...]:
@@ -147,7 +157,7 @@ class CheckpointFunction(torch.autograd.Function):
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
 
         tensor_inputs: Tuple = ctx.saved_tensors
-        tensor_inputs = checkpoint.detach_variable(tensor_inputs)
+        tensor_inputs = torch_checkpoint.detach_variable(tensor_inputs)
         if ctx.fwd_device is not None:
             tensor_inputs = tuple(t.to(ctx.fwd_device[i]) for i, t in enumerate(tensor_inputs))
             for i, need_grad in enumerate(ctx.grad_requirements):
