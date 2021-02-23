@@ -22,7 +22,7 @@ from torch import nn
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader, Dataset
 
-from experimental.nn.ampnet_pipe.pipe import AMPnetPipe
+from fairscale.experimental.nn.ampnet_pipe.pipe import AMPnetPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
