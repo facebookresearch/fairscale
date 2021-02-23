@@ -82,7 +82,7 @@ class AsyncAMPnetEventLoop:
         self.checkpoint_stop = checkpoint_stop
         self.input_device = input_device
 
-    def perform_optimizer_step(self, optimizer, num_gradients):
+    def perform_optimizer_step(self, optimizer: Any, num_gradients: Any) -> Any:
         return (optimizer is not None) and ((num_gradients % self.min_update_interval == 0) or self.weight_prediction)
 
     def async_send_inner(self, batch: Batch, index: int) -> Tuple[Batch, PipeMessage]:

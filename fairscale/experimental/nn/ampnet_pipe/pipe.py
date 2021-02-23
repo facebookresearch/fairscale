@@ -25,7 +25,7 @@ class AMPnetPipe(AsyncPipe):
         The implementation closely follows the paper: https://arxiv.org/abs/1705.09786
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
     def interleave(
