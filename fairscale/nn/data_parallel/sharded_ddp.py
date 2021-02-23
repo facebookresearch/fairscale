@@ -60,8 +60,8 @@ class ShardedDataParallel(nn.Module):
             a parameter is frozen or unfrozen.
         reduce_fp16 (bool):
             cast the grads to fp16 before reducing. Not needed if the model is already fp16, but will probably improve performance
-            for multi node jobs using PyTorch AMP. The effect is similar to DDP's fp16_compress_hook_.
-    
+            for multi node jobs using PyTorch AMP. The effect is similar to DDP's fp16_compress_hook_ and will also save some memory.
+
     .. _fp16_compress_hook: https://pytorch.org/docs/1.8.0/ddp_comm_hooks.html?highlight=fp16#torch.distributed.algorithms.ddp_comm_hooks.default_hooks.fp16_compress_hook
 
     .. warning:
@@ -104,7 +104,7 @@ class ShardedDataParallel(nn.Module):
         sync_models_at_startup: bool = True,
         reduce_buffer_size: int = 0,
         auto_refresh_trainable: bool = True,
-        reduce_fp16: bool = False,
+        reduce_fp16: bool = True,
     ):
         super().__init__()
 
