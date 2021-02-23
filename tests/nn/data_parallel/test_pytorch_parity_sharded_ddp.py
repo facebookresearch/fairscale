@@ -30,9 +30,17 @@ from fairscale.utils.testing import (
     check_same_models_across_ranks,
     skip_if_less_than_four_gpu,
     skip_if_no_cuda,
-    skip_if_py38,
     skip_if_single_gpu,
 )
+
+"""
+Check that ShardedDDP gets the same results as DDP in a variety of scenarii
+"""
+
+_test_fp16_reduction = [False]
+
+if hasattr(dist, "algorithms.ddp_com_hooks.default_hooks"):
+    _test_fp16_reduction.append(True)
 
 
 def _get_mlp():
@@ -50,90 +58,8 @@ class _DoubleInput(torch.nn.Module):
         return torch.cat((x1, x2), dim=1)
 
 
-def run_one_step(
-    rank, world_size, backend, device, temp_file_name, broadcast_buffers, grad_accumulation, reduce_buffer_size,
-):
-    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
-    if device == torch.device("cuda"):
-        torch.cuda.set_device(rank)
-
-    torch.manual_seed(rank)
-    np.random.seed(rank)
-
-    # Any model works. Add one different buffer per rank
-    model = _get_mlp()
-    model.register_buffer("test_buffer", torch.ones((1)) * rank)
-    model.to(device)
-
-    next(model.parameters()).requires_grad = False  # Test non-trainable parameters
-
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
-    ddp_model = ShardedDataParallel(
-        model, optimizer, broadcast_buffers=broadcast_buffers, reduce_buffer_size=reduce_buffer_size
-    )
-
-    # The model should be synchronized in between the ranks at ShardedDataParallel construction time, check that
-    check_same_models_across_ranks(
-        ddp_model, dist.group.WORLD, params_should_be_equal=True, check_broadcast_buffers=broadcast_buffers
-    )
-
-    # Optim loop
-    def closure():
-        optimizer.zero_grad()
-
-        with ddp_model.no_sync() if grad_accumulation else suppress():
-            input_tensor = torch.rand((64, 2)).to(device)
-            loss = ddp_model(input_tensor).abs().sum()
-            loss.backward()
-        return loss
-
-    # The models should stay the same in between the ranks
-    for i in range(5):
-        _ = optimizer.step(closure=closure)
-        # when running on cpu/gloo the "nodes" are not really different
-        same_params = device == torch.device("cpu") or grad_accumulation
-        check_same_models_across_ranks(
-            ddp_model, dist.group.WORLD, params_should_be_equal=same_params, check_broadcast_buffers=broadcast_buffers
-        )
-
-    dist.destroy_process_group()
-
-
-def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size):
-    temp_file_name = tempfile.mkstemp()[1]
-    mp.spawn(
-        run_one_step,
-        args=(world_size, backend, device, temp_file_name, broadcast_buffers, grad_accumulation, reduce_buffer_size),
-        nprocs=world_size,
-        join=True,
-    )
-
-
-@skip_if_no_cuda
-@skip_if_single_gpu
-@pytest.mark.parametrize("broadcast_buffers", [True, False])
-@pytest.mark.parametrize("grad_accumulation", [True, False])
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
-def test_step_gpu(broadcast_buffers, grad_accumulation, reduce_buffer_size):
-    world_size = 2
-    run_test(
-        dist.Backend.NCCL, torch.device("cuda"), world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size
-    )
-
-
-@skip_if_py38
-@pytest.mark.parametrize("broadcast_buffers", [True, False])
-@pytest.mark.parametrize("grad_accumulation", [True, False])
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
-def test_step_cpu(broadcast_buffers, grad_accumulation, reduce_buffer_size):
-    world_size = 2
-    run_test(
-        dist.Backend.GLOO, torch.device("cpu"), world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size
-    )
-
-
 def run_ddp_parity(
-    rank, world_size, backend, temp_file_name, reduce_buffer_size, grad_accumulation, change_train_graph
+    rank, world_size, backend, temp_file_name, reduce_buffer_size, grad_accumulation, change_train_graph, fp16_reduction
 ):
     dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
 
@@ -188,11 +114,17 @@ def run_ddp_parity(
             sharded_optimizer=sharded_optimizer,
             broadcast_buffers=True,
             reduce_buffer_size=reduce_buffer_size,
+            reduce_fp16=fp16_reduction,
         )
 
         ddp_model_single = copy.deepcopy(model)
         ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-4, momentum=0.99)
         ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True, find_unused_parameters=True)
+
+        if fp16_reduction:
+            from dist.algorithms.ddp_com_hooks.default_hooks import fp16_compress_hook
+
+            ddp_model.register_comm_hook(state=None, hook=fp16_compress_hook)  # type: ignore
 
         ddp_scaler = TorchGradScaler() if amp else None
         sharded_ddp_scaler = ShardedGradScaler() if amp else None
@@ -269,12 +201,21 @@ def run_ddp_parity(
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 @pytest.mark.parametrize("grad_accumulation", [True, False])
 @pytest.mark.parametrize("change_train_graph", [True, False])
-def test_ddp_parity(reduce_buffer_size, grad_accumulation, change_train_graph):
+@pytest.mark.parametrize("fp16_reduction", _test_fp16_reduction)
+def test_ddp_parity(reduce_buffer_size, grad_accumulation, change_train_graph, fp16_reduction):
     world_size = torch.cuda.device_count()
     backend = dist.Backend.NCCL
     mp.spawn(
         run_ddp_parity,
-        args=(world_size, backend, tempfile.mkstemp()[1], reduce_buffer_size, grad_accumulation, change_train_graph),
+        args=(
+            world_size,
+            backend,
+            tempfile.mkstemp()[1],
+            reduce_buffer_size,
+            grad_accumulation,
+            change_train_graph,
+            fp16_reduction,
+        ),
         nprocs=world_size,
         join=True,
     )

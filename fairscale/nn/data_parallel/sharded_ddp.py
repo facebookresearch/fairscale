@@ -58,7 +58,11 @@ class ShardedDataParallel(nn.Module):
             (default: True) Check whether the parameters trainability (`requires_grad`) has changed and update both ShardedDDP
             and OSS automatically if this is the case. If set to False, `refresh_trainable()` needs to be called anytime
             a parameter is frozen or unfrozen.
+        reduce_fp16 (bool):
+            cast the grads to fp16 before reducing. Not needed if the model is already fp16, but will probably improve performance
+            for multi node jobs using PyTorch AMP. The effect is similar to DDP's fp16_compress_hook_ and will also save some memory.
 
+    .. _fp16_compress_hook: https://pytorch.org/docs/1.8.0/ddp_comm_hooks.html?highlight=fp16#torch.distributed.algorithms.ddp_comm_hooks.default_hooks.fp16_compress_hook
 
     .. warning:
         ShardedDDP implements gradient sharding, meaning that each rank only owns a unique shard of the model gradients
@@ -100,6 +104,7 @@ class ShardedDataParallel(nn.Module):
         sync_models_at_startup: bool = True,
         reduce_buffer_size: int = 0,
         auto_refresh_trainable: bool = True,
+        reduce_fp16: bool = True,
     ):
         super().__init__()
 
@@ -107,6 +112,12 @@ class ShardedDataParallel(nn.Module):
         self.sharded_optimizers = [sharded_optimizer] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
         self.enable_broadcast_buffers = broadcast_buffers
         self.auto_refresh_trainable = auto_refresh_trainable
+        self.reduce_fp16 = reduce_fp16
+        if reduce_buffer_size > 0:
+            self.reduce_fp16 = False
+            logging.warning(
+                "fp16 gradient reduction is not compatible with reduction buffers, which are requested. fp16 grad reduction is deactivated."
+            )
 
         # Handle a no_sync() context which prevents the gradient synchronization,
         # accumulate in place
@@ -401,10 +412,16 @@ class ShardedDataParallel(nn.Module):
                     self._grad_to_be_reduced[index] = False
                     param.grad.mul_(self.world_size_scaling)
 
+                    if self.reduce_fp16:
+                        param.grad.data = param.grad.data.half()
+
                     # Future work includes clearing up the buffer if possible
                     def cleanup() -> None:
                         if dst_rank != self.global_rank:
                             param.grad = None
+                        else:
+                            assert param.grad is not None
+                            param.grad.data = param.grad.data.to(dtype=param.dtype)
 
                     # Async reduce for this buffer, log the future
                     dst_global_rank = OSS.get_global_rank(self.process_group, dst_rank)
