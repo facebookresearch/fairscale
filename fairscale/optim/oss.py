@@ -235,14 +235,26 @@ class OSS(Optimizer):
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         OSS._sync_param_groups(self.param_groups, self.optim.param_groups)
 
-        # Run the optimizer step on this shard only:
-        if closure is not None:
-            loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
-        else:
-            loss = self.optim.step(**kwargs)
+        rank_updated = False
+        last_work_handle = None
 
-        # Sync all the updated shards in between the ranks
-        self._broadcast_params()
+        if closure is not None:
+            # Run the optimizer step on this shard only, cannot be interleaved with comms
+            loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
+            rank_updated = True
+
+        # Interleave optimizer steps and broadcasts, overlap comms and compute
+        for device in self.buckets.keys():
+            for src_rank, bucket in enumerate(self.buckets[device]):
+                if src_rank == self.rank and not rank_updated:
+                    loss = self.optim.step(**kwargs)
+                    rank_updated = True
+
+                global_src_rank = self.get_global_rank(self.group, src_rank)
+                last_work_handle = dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True)
+
+        if last_work_handle is not None:
+            last_work_handle.wait()
 
         # Sync hypothethical new results from the wrapped optimizer to the exposed param_groups
         OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
@@ -543,21 +555,6 @@ class OSS(Optimizer):
             # Sync everything but the parameters
             for k in filter(lambda x: x != "params", source_group.keys()):
                 destination_group[k] = source_group[k]
-
-    @torch.no_grad()
-    def _broadcast_params(self) -> None:
-        """Helper function to broadcast all the parameters from a given device"""
-
-        last_work_handle = None  # Work handles are consumed within this scope, no callback
-
-        for device in self.buckets.keys():
-            for src_rank, bucket in enumerate(self.buckets[device]):
-                global_src_rank = self.get_global_rank(self.group, src_rank)
-                last_work_handle = dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True)
-
-        # Only check on the last handle, they're all inlined on the same CUDA stream
-        if last_work_handle:
-            last_work_handle.wait()
 
     def _setup_flat_buffers(self) -> None:
         """Make all params which are on the same device and tied to the same rank views of a single buffer.
