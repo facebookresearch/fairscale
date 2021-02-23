@@ -272,7 +272,6 @@ class ActivationCheckpointing(torch.autograd.Function):
             activation = tuple([a.cpu() for a in list(activation)])
             # Move the shard back to the CPU.
             model_shard.backward_drop()
-        print(f"all grads {all_grads}\n\n")
         detached_inputs = model_instance._activations[0]
         grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp for inp in detached_inputs)
         return (None, None) + grads
