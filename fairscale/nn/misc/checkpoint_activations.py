@@ -30,11 +30,32 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         checkpointed_module = checkpoint_wrapper(my_module, offload_to_cpu=True)
         a, b = checkpointed_module(x, y=3, z=torch.Tensor([1]))
 
+    To understand the benefits of checkpointing and the `offload_to_cpu` flag,
+    let's divide activations into 2 types: inner activations and outer
+    activations w.r.t. the checkpointed modules. The inner ones are saved
+    by activation checkpointing, the outer ones are saved by offload_to_cpu.
+
+    In terms of GPU memory savings:
+
+        - When inner ones are large in size and outer ones are small,
+          checkpointing helps a lot, offload_to_cpu may help a little.
+        - When inner ones are small and outer ones are large,
+          checkpointing helps little, offload_to_cpu helps a lot.
+        - When both inner and outer are large, both help and the
+          benefit is additive.
+
+    ..Note::
+
+        The first and last layers are not likely to benefit from the `offload_to_cpu` flag
+        because (1) there are typically other references to the first layer's input, so
+        the GPU memory won't be freed; (2) the input to the last layer is immediately
+        used by the backward pass and won't result in memory savings.
+
     Args:
         module (nn.Module):
-            module to wrap
+            The module to be wrapped
         offload_to_cpu (Optional, bool):
-            whether to offload activations to CPU
+            Whether to offload activations to CPU.
 
     Returns:
         (nn.Module):
