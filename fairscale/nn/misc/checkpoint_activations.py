@@ -3,7 +3,8 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Dict, Optional, Tuple
+from contextlib import contextmanager
+from typing import Any, Dict, Generator, Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -85,6 +86,23 @@ def set_rng_state(state: Dict[str, Any]) -> None:
         torch.cuda.set_rng_state(state["cuda_rng_state"])
 
 
+def is_autocast_enabled() -> bool:
+    """Similar to torch.is_autocast_enabled, but compatible with torch 1.5.1"""
+    if hasattr(torch, "is_autocast_enabled"):
+        return torch.is_autocast_enabled()
+    return False
+
+
+@contextmanager
+def autocast(enabled: bool) -> Generator:
+    """Similar to torch.cuda.amp.autocast, but compatible with torch 1.5.1"""
+    if enabled:
+        with torch.cuda.amp.autocast(enabled):
+            yield
+    else:
+        yield
+
+
 class CheckpointFunction(torch.autograd.Function):
     """Similar to the torch version, but support non-Tensor outputs.
 
@@ -108,13 +126,13 @@ class CheckpointFunction(torch.autograd.Function):
         ctx.run_function = run_function
         ctx.kwarg_keys = kwarg_keys
         ctx.fwd_rng_state = get_rng_state()
+        ctx.had_autocast_in_fwd = is_autocast_enabled()
 
         tensor_inputs, packed_non_tensor_inputs = split_non_tensors(args)
         if parent_ctx_dict["offload"]:
             ctx.fwd_device = tuple(x.device for x in tensor_inputs)
             ctx.grad_requirements = tuple(x.requires_grad for x in tensor_inputs)
             tensor_inputs = tuple(x.cpu() for x in tensor_inputs)
-
         else:
             ctx.fwd_device, ctx.grad_requirements = None, None
 
@@ -152,7 +170,7 @@ class CheckpointFunction(torch.autograd.Function):
         # Set the states to what it used to be before the forward pass.
         set_rng_state(ctx.fwd_rng_state)
 
-        with torch.enable_grad():
+        with torch.enable_grad(), autocast(ctx.had_autocast_in_fwd):
             unpacked_args, unpacked_kwargs = unpack_kwargs(ctx.kwarg_keys, inputs)
             outputs = ctx.run_function(*unpacked_args, **unpacked_kwargs)
             tensor_outputs, _ = split_non_tensors(outputs)
