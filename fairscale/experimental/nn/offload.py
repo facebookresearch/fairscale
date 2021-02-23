@@ -170,7 +170,7 @@ class ActivationCheckpointing(torch.autograd.Function):
             layer_shard.forward_load()
             # Apply the FP and store the activations on the CPU.
             inputs = model_instance._activations[index]
-            
+
             with torch.no_grad():
                 output_list: List[Any] = []
                 for given_input in inputs:

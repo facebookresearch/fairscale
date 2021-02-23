@@ -261,10 +261,7 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
     print("Throughput(wps) is {:.2f}.".format(wps))
-    print(
-        "Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]
-        )
-    )
+    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
     # TODO(anj-s): Enable golden config data verification.
 
 

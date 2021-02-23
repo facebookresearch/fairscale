@@ -52,7 +52,7 @@ class Offload_Sequential:
             "criterion": nn.CrossEntropyLoss(),
             "slices": 3,
             "checkpoint_activation": True,
-            "num_microbatches": 4
+            "num_microbatches": 4,
         }
 
 
