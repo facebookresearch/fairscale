@@ -169,20 +169,9 @@ class ActivationCheckpointing(torch.autograd.Function):
             # Bring in the current layer shard onto the device.
             layer_shard.forward_load()
             # Apply the FP and store the activations on the CPU.
-            if index == len(model_instance.model_slices) - 1:
-                context = torch.no_grad()
-                inputs = model_instance._activations[index]
-                for inp in inputs:
-                    inp.requires_grad = True
-                    # print(f"inp {inp}")
-                
-            else:
-                context = torch.no_grad()
-                inputs = model_instance._activations[index]
-                
-            with context:
-                # print(f"context is {context}")
-                
+            inputs = model_instance._activations[index]
+            
+            with torch.no_grad():
                 output_list: List[Any] = []
                 for given_input in inputs:
                     given_input_list = torch.chunk(given_input, model_instance._num_microbatches)
@@ -193,7 +182,7 @@ class ActivationCheckpointing(torch.autograd.Function):
                     given_output = torch.cat(given_output_list).squeeze(-1)
                     output_list.append(given_output)
                 output = tuple(output_list)
-            # print(f"output is {output}")
+
             output = output if isinstance(output, tuple) else (output,)
             # The last instance will lose the gradient function if we move it to the CPU.
             # This is because all grad function are present on the device that ran the FW pass.
@@ -201,13 +190,10 @@ class ActivationCheckpointing(torch.autograd.Function):
                 model_instance._activations.append(output)
             else:
                 model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
-            # print(f"activations on cpu {model_instance._activations[-1]}")
             # Move the layer shard back to the CPU.
             layer_shard.forward_drop()
 
-        # Move the output to the device since the user is expecting the output on the device.
-        # TODO(anj-s): Check device to make sure the outputs and targets match device.
-        # model_instance._activations[-1] = tuple([a.cuda() for a in list(model_instance._activations[-1])])
+        # TODO(anj-s): Check device of the result to make sure the outputs and targets match device.
         result = model_instance._activations[-1]
         for r in result:
             r.requires_grad = True

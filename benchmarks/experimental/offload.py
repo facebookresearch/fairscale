@@ -1,20 +1,25 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 import argparse
+import contextlib
 from functools import reduce
 import logging
 import math
 import operator
 import time
 
-from benchmarks.datasets.wikitext2_data import get_real_dataloaders as get_real_wikitext2_dataloaders
-from benchmarks.datasets.wikitext2_data import get_synthetic_dataloaders as get_synthetic_wikitext2_dataloaders
-from benchmarks.golden_configs import lm_wikitext2
-from benchmarks.models import transformer_lm
 import numpy as np
 import torch
 from torch.optim import Adam
+from torch.utils.data.dataloader import DataLoader
+from torchvision.datasets import FakeData
+from torchvision.transforms import ToTensor
 
+from benchmarks.datasets.wikitext2_data import get_real_dataloaders as get_real_wikitext2_dataloaders
+from benchmarks.datasets.wikitext2_data import get_synthetic_dataloaders as get_synthetic_wikitext2_dataloaders
+from benchmarks.golden_configs.lm_wikitext2 import Offload_Sequential as offload_seq
+from benchmarks.golden_configs.lm_wikitext2 import Offload_Transformer as lm_wikitext2
+from benchmarks.models import transformer_lm
 from fairscale.experimental.nn.offload import OffloadModel
 from fairscale.nn.pipe import LazyModule
 
@@ -26,38 +31,39 @@ def init_random_seed(seed: int):
     np.random.seed(seed)
 
 
-def get_model_and_optimizer(args, device, config):
+def get_model_and_optimizer(args, device, benchmark_config, model_specs):
     """Return instantiated model and optimizer function."""
 
     if args.model_name == "lm":
-        model = get_lm_model(args, device, config)
+        model = get_lm_model(args, device, model_specs)
+        lr = benchmark_config["lr"]
+
+        def make_adam(params):
+            return Adam(params, lr=lr)
+
+        optimizer = make_adam
     elif args.model_name == "seq":
-        model = get_sequential_model(args, device, config)
+        model = get_seq_model(args, device, model_specs)
+        optimizer = torch.optim.SGD
 
     model = OffloadModel(
         model_cpu=model,
         device=torch.device("cuda"),
         offload_device=torch.device("cpu"),
-        n_slices=3,
-        checkpoint_activation=True,
-        num_microbatches=4,
+        n_slices=benchmark_config["slices"],
+        checkpoint_activation=benchmark_config["checkpoint_activation"],
+        num_microbatches=benchmark_config["num_microbatches"],
     )
 
-    lr = config["lr"]
-
-    def make_adam(params):
-        return Adam(params, lr=lr)
-
-    optimizer = make_adam
     return model, optimizer
 
 
-def get_seq_model(args, device, config):
+def get_seq_model(args, device, model_specs):
     model = torch.nn.Sequential(
-            torch.nn.Linear(args.inputs * args.inputs, args.hidden),
-            *([torch.nn.Linear(args.hidden, args.hidden) for _ in range(args.layers)]),
-            torch.nn.Linear(args.hidden, args.outputs),
-        )
+        torch.nn.Linear(model_specs["inputs"] * model_specs["inputs"], model_specs["hidden"]),
+        *([torch.nn.Linear(model_specs["hidden"], model_specs["hidden"]) for _ in range(model_specs["layers"])]),
+        torch.nn.Linear(model_specs["hidden"], model_specs["outputs"]),
+    )
     return model.cpu()
 
 
@@ -72,20 +78,7 @@ def get_lm_model(args, device, config):
     nhid = config["nhid"]
     ndecoder = config["num_decoder_layers"]
 
-    if args.lazy_construction:
-        layers = [
-            LazyModule(lambda: transformer_lm.EmbeddingLayer(vocab_size, ninp, initrange)),
-            LazyModule(lambda: transformer_lm.PositionalEncodingLayer(ninp, dropout)),
-        ]
-        for _ in range(ndecoder):
-            layers.append(LazyModule(lambda: transformer_lm.TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
-
-        layers.append(LazyModule(lambda: transformer_lm.LinearLayer(ninp, vocab_size, initrange)))
-        model = layers
-    else:
-        model = transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
-
-    return model
+    return transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
 
 def log_number_of_parameters(model):
@@ -94,10 +87,69 @@ def log_number_of_parameters(model):
     logging.info(f"training model, #params = {num_params}")
 
 
-def train(model_config, model, benchmark_config, args):
+def _get_fp16_context(use_fp16=False):
+    if use_fp16:
+        return torch.cuda.amp.autocast()
+    else:
+        return contextlib.nullcontext()
+
+
+def _get_profiler_context(use_profiler=False):
+    if use_profiler:
+        return torch.autograd.profiler.profile(use_cuda=True, profile_memory=True)
+    else:
+        return contextlib.nullcontext()
+
+
+def _get_profiler_record_context(record_name, use_profiler=False):
+    if use_profiler:
+        return torch.autograd.profiler.record_function(record_name)
+    else:
+        return contextlib.nullcontext()
+
+
+def train_seq(model_config, benchmark_config, model_specs, args):
+    device = torch.device("cuda")
+    torch.cuda.set_device(0)
+    torch.manual_seed(5)
+
+    model = model_config["model"]
+    criterion = benchmark_config["criterion"]
+    optimizer = model_config["optimizer"](model.parameters(), lr=benchmark_config["lr"])
+    dataloader, _, _ = model_config["data"]
+
+    def train_epoch(args):
+        model.train()
+        for batch_inputs, batch_outputs in dataloader:
+            batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
+            start = time.time_ns()
+            with _get_profiler_context() as prof:
+                optimizer.zero_grad()
+                inputs = batch_inputs.reshape(-1, model_specs["inputs"] * model_specs["inputs"])
+                with _get_profiler_record_context("model_training"):
+                    with _get_fp16_context(use_fp16=args.use_fp16):
+                        output = model(inputs)
+                        loss = criterion(output, target=batch_outputs)
+                        loss.backward()
+                    optimizer.step()
+            logging.info(
+                "Memory stats are {:.2f}GB".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] / 2 ** 30)
+            )
+            logging.info(
+                "Loss {:.2f} - throughput {:.2f}fps".format(
+                    loss.item(), benchmark_config["batch_size"] / (time.time_ns() - start) * 10 ** 9
+                )
+            )
+        if args.use_profiler:
+            prof.export_chrome_trace("/tmp/offload_prof")
+
+    train_epoch(args)
+
+
+def train(model_config, model, benchmark_config, model_specs, args):
     lm_dataloader, _, _ = model_config["data"]
     criterion = benchmark_config["criterion"]
-    vocab_size = benchmark_config["vocab_size"]
+    vocab_size = model_specs["vocab_size"]
     optimizer = model_config["optimizer"]
 
     model.train()
@@ -137,7 +189,7 @@ def train(model_config, model, benchmark_config, args):
         loss = criterion(output.view(-1, vocab_size), target.view(-1))
         loss.backward()
 
-        torch.nn.utils.clip_grad_value_(model.parameters(), benchmark_config["clip_value"])
+        torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
         optimizer.step()
 
         total_loss += loss.item()
@@ -197,81 +249,100 @@ def verify_lm_run(wps, golden_config, args):
             verify_peak_memory(i, golden_config, 1.1)
 
 
-def benchmark_language_model(model_config, model, benchmark_config, args):
-    golden_config = get_golden_config(args.model_name, args)
+def benchmark_language_model(model_config, model, benchmark_config, model_specs, args):
     epoch = benchmark_config["epochs"]
     start_time = time.time()
-    if dist.get_rank() == dist.get_world_size() - 1:
-        print("-" * 110)
-        print("| start of epoch {:1d}".format(epoch))
-        print("-" * 110)
-    wps, loss = train(model_config, model, benchmark_config, args)
+    print("-" * 110)
+    print("| start of epoch {:1d}".format(epoch))
+    print("-" * 110)
+    wps, loss = train(model_config, model, benchmark_config, model_specs, args)
     elapsed_time = time.time() - start_time
-    if dist.get_rank() == dist.get_world_size() - 1:
-        print("-" * 110)
-        print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
-        print("-" * 110)
-        print("Throughput(wps) is {:.2f}.".format(wps))
+    print("-" * 110)
+    print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
+    print("-" * 110)
+    print("Throughput(wps) is {:.2f}.".format(wps))
     print(
-        "Peak allocated bytes on cuda:{}: {:1d}".format(
-            dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]
+        "Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]
         )
     )
-
-    if args.model_name == "lm":
-        verify_lm_run(wps, golden_config, args)
-    else:
-        raise RuntimeError("Unrecognized args.model_name " % args.model_name)
+    # TODO(anj-s): Enable golden config data verification.
 
 
-def get_synthetic_dataloaders(args, benchmark_config):
+def get_synthetic_dataloaders(args, device, benchmark_config, model_specs):
     """Returns dataloader for synthetic data."""
 
     if args.model_name == "lm":
-        return get_synthetic_wikitext2_dataloaders(args, benchmark_config)
+        return get_synthetic_wikitext2_dataloaders(args, benchmark_config, model_specs)
+    elif args.model_name == "seq":
+        transform = ToTensor()
+        dataloader = DataLoader(
+            FakeData(
+                image_size=(1, model_specs["inputs"], model_specs["inputs"]),
+                num_classes=model_specs["outputs"],
+                transform=transform,
+            ),
+            batch_size=benchmark_config["batch_size"],
+        )
+        return dataloader, dataloader, dataloader
     else:
-        raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
+        raise RuntimeError(f"Unrecognized args.model_name {args.model_name}")
 
 
-def get_real_dataloaders(args, device, benchmark_config):
+def get_real_dataloaders(args, device, benchmark_config, model_specs):
     """Returns dataloaders for real data."""
 
     if args.model_name == "lm":
-        data = get_real_wikitext2_dataloaders(args, benchmark_config)
+        data = get_real_wikitext2_dataloaders(args, benchmark_config, model_specs)
         ntokens, train_dataloader, valid_dataloader, test_dataloader = data
-        benchmark_config["vocab_size"] = ntokens
+        model_specs["vocab_size"] = ntokens
         return train_dataloader, valid_dataloader, test_dataloader
     else:
-        raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
+        raise RuntimeError(f"Unrecognized args.model_mame {args.model_name}")
 
 
-def create_model_config(args, benchmark_config=None):
+def create_model_config(args, benchmark_config=None, model_specs=None):
     """Return a dict with the given model, dataset and optimizer."""
 
     # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     device = torch.device("cpu")
 
-    if args.use_synthetic_data:
-        dataloader_fn = get_synthetic_dataloaders
-    else:
-        dataloader_fn = get_real_dataloaders
+    if args.model_name == "lm":
+        if args.use_synthetic_data:
+            dataloader_fn = get_synthetic_dataloaders
+        else:
+            dataloader_fn = get_real_dataloaders
 
-    data = dataloader_fn(args, device, benchmark_config)
-    model, optimizer = get_model_and_optimizer(args, device, benchmark_config)
-    return {
-        "model": model,
-        "optimizer": optimizer,
-        "data": data,
-    }
+        data = dataloader_fn(args, device, benchmark_config, model_specs)
+        model, optimizer = get_model_and_optimizer(args, device, benchmark_config, model_specs)
+        return {
+            "model": model,
+            "optimizer": optimizer,
+            "data": data,
+        }
+    elif args.model_name == "seq":
+
+        data = get_synthetic_dataloaders(
+            args, device, offload_seq.get_benchmark_config(), offload_seq.get_model_config()
+        )
+        model, optimizer = get_model_and_optimizer(args, device, benchmark_config, model_specs)
+        return {
+            "model": model,
+            "optimizer": optimizer,
+            "data": data,
+        }
+    else:
+        raise RuntimeError(f"Unrecognized args.model_mame {args.model_name}")
 
 
 def create_benchmark_config(model_name):
     """Return a dict with configurations required for benchmarking `model_name` model."""
 
-    if model_name == "lm":
+    if args.model_name == "lm":
         return lm_wikitext2.get_benchmark_config()
+    elif args.model_name == "seq":
+        return offload_seq.get_benchmark_config()
     else:
-        raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
+        raise RuntimeError(f"Unrecognized args.model_name {args.model_name}")
 
 
 def get_golden_config(model_name, args):
@@ -280,10 +351,21 @@ def get_golden_config(model_name, args):
     if model_name == "lm":
         return lm_wikitext2.get_golden_real_stats(False)
     else:
+        raise RuntimeError(f"Unrecognized args.model_mame {args.model_name}")
+
+
+def get_model_specs(model_name):
+    """Return a dict with configurations required for configuring `model_name` model."""
+
+    if model_name == "lm":
+        return lm_wikitext2.get_model_config()
+    elif model_name == "seq":
+        return offload_seq.get_model_config()
+    else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def benchmark_single_process(args):
+def run_benchmark(args):
     """Benchmark a given model using a single process and single devices."""
 
     # We need at least 1 GPU to benchmark the offload model API.
@@ -291,31 +373,38 @@ def benchmark_single_process(args):
     assert num_devices > 0
     init_random_seed(0)
 
-    benchmark_config = create_benchmark_config(args.model_name)
-    model_config = create_model_config(args, benchmark_config=benchmark_config)
-    model = model_config["model"]
+    if args.model_name == "lm":
+        benchmark_config = create_benchmark_config(args.model_name)
+        model_specs = get_model_specs(args.model_name)
+        model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
+        model = model_config["model"]
 
-    if args.dry_run:
-        train(model_config, model, benchmark_config, args)
+        if args.dry_run:
+            train(model_config, model, benchmark_config, args)
+        else:
+            benchmark_language_model(model_config, model, benchmark_config, model_specs, args)
+    elif args.model_name == "seq":
+        benchmark_config = create_benchmark_config(args.model_name)
+        model_specs = get_model_specs(args.model_name)
+        model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
+        model = model_config["model"]
+        train_seq(model_config, benchmark_config, model_specs, args)
     else:
-        benchmark_language_model(model_config, model, benchmark_config, args)
+        raise RuntimeError(f"Unable to recognize model name {args.model_name}")
 
 
 parser = argparse.ArgumentParser(description="benchmark")
-parser.add_argument(
-    "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
-)
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
     "--debug", action="store_true", help="Print debugging statements which is more verbose than the default."
 )
 parser.add_argument(
-    "--model_name",
-    default="lm",
-    help="Language Model(LM) used to benchmark nn.pipe.",
+    "--model_name", default="lm", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
 )
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
-parser.add_argument("--batch-size", type=int, default=2, help="size of a batch")
+parser.add_argument("--use_fp16", action="store_true", default=False)
+parser.add_argument("--checkpoint_activation", action="store_true", default=False)
+parser.add_argument("--use_profiler", action="store_true", default=False)
 
 
 if __name__ == "__main__":
@@ -324,4 +413,4 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
     logging.info("Benchmark arguments: %s" % args)
 
-    benchmark_single_process(args)
+    run_benchmark(args)
