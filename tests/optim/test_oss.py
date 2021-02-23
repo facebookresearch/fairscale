@@ -631,6 +631,7 @@ def run_gradient_clipping(rank, world_size, tempfile_name):
 
         loss_oss = loss_fn(outputs_oss, target)
         loss_oss.backward()
+        torch.testing.assert_allclose(loss_oss, loss)
 
         # Check the equivalence with the non-sharded optim
         oss_total_norm = sharded_optimizer.clip_grad_norm(CLIP_NORM, norm_type=norm)
