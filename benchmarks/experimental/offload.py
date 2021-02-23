@@ -31,6 +31,8 @@ def get_model_and_optimizer(args, device, config):
 
     if args.model_name == "lm":
         model = get_lm_model(args, device, config)
+    elif args.model_name == "seq":
+        model = get_sequential_model(args, device, config)
 
     model = OffloadModel(
         model_cpu=model,
@@ -48,6 +50,15 @@ def get_model_and_optimizer(args, device, config):
 
     optimizer = make_adam
     return model, optimizer
+
+
+def get_seq_model(args, device, config):
+    model = torch.nn.Sequential(
+            torch.nn.Linear(args.inputs * args.inputs, args.hidden),
+            *([torch.nn.Linear(args.hidden, args.hidden) for _ in range(args.layers)]),
+            torch.nn.Linear(args.hidden, args.outputs),
+        )
+    return model.cpu()
 
 
 def get_lm_model(args, device, config):
@@ -80,20 +91,7 @@ def get_lm_model(args, device, config):
 def log_number_of_parameters(model):
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
-    if hasattr(model, "group"):
-        total = torch.Tensor([num_params])
-        if torch.cuda.is_available():
-            total = total.cuda()
-        torch.distributed.all_reduce(total, group=model.group)
-        logging.info(
-            f"training model, #params = {num_params}, group: {model.group.rank()}, grank:"
-            f" {torch.distributed.get_rank()}, sizes {model.group.size()}"
-        )
-        torch.distributed.barrier()
-        if model.group.rank() == 0:
-            logging.info(f"total #prams = {total.item()}")
-    else:
-        logging.info(f"training model, #params = {num_params}")
+    logging.info(f"training model, #params = {num_params}")
 
 
 def train(model_config, model, benchmark_config, args):
@@ -138,10 +136,8 @@ def train(model_config, model, benchmark_config, args):
         output = output.to(target.device)
         loss = criterion(output.view(-1, vocab_size), target.view(-1))
         loss.backward()
-        # del target
-        # del output
 
-        # torch.nn.utils.clip_grad_value_(model.parameters(), benchmark_config["clip_value"])
+        torch.nn.utils.clip_grad_value_(model.parameters(), benchmark_config["clip_value"])
         optimizer.step()
 
         total_loss += loss.item()
