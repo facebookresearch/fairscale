@@ -30,27 +30,30 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         checkpointed_module = checkpoint_wrapper(my_module, offload_to_cpu=True)
         a, b = checkpointed_module(x, y=3, z=torch.Tensor([1]))
 
+    To understand the benefits of checkpointing and the `offload_to_cpu` flag,
+    let's divide activations into 2 types: inner activations and outer
+    activations w.r.t. the checkpointed modules. The inner ones are saved
+    by activation checkpointing, the outer ones are saved by offload_to_cpu.
+
+    In terms of GPU memory savings:
+
+        - When inner ones are large in size and outer ones are small,
+          checkpointing helps a lot, offload_to_cpu may help a little.
+        - When inner ones are small and outer ones are large,
+          checkpointing helps little, offload_to_cpu helps a lot.
+        - When both inner and outer are large, both help and the
+          benefit is additive.
+
+    The first and last most likely do not benefit from the `offload_to_cpu` flag.
+    That's because input to first layer is the input to the model and won't
+    be moved to CPU by this module. The input the last layer is immediately
+    used by the backward pass and own't resulting in memory saving.
+
     Args:
         module (nn.Module):
             The module to be wrapped
         offload_to_cpu (Optional, bool):
-            Whether to offload activations to CPU. This is non-trivial
-            to use. Enable it doesn't always cause lower peak GPU memory.
-            It can cause more GPU memory being used if used incorrectly.
-
-                - layer with the model input doesn't benefit from offloading
-                  since the input tensor is hold in GPU anyway, offloading
-                  can cause more memory being used
-                - last layer of the model doesn't benefit since immediately
-                  we load the tensor back from CPU in the backward
-                - long model with a lot of checkpoint blocks and small
-                  inner (recomputed) activations is more likely to benefit
-                  from this. But bigger checkpoint blocks might be better
-                  in that case.
-
-            It is likely you will need extensive profiling and experimentation
-            to find an good setting for checkpoint blocks and their
-            offload_to_cpu flags.
+            Whether to offload activations to CPU.
 
     Returns:
         (nn.Module):
