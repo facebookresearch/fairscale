@@ -35,7 +35,7 @@ def _dist_init(rank, world_size, tempfile_name, backend):
 def _test_basic_func(rank, world_size, tempfile_name, test_case):
     _dist_init(rank, world_size, tempfile_name, backend="nccl")  # Covers nccl
 
-    model = Linear(2, 2, bias=False)
+    model = Linear(2, 2)
     model.to("cuda")
     model = DDP(model, device_ids=[rank])
     optim = AdaScale(SGD(model.parameters(), lr=0.1))
