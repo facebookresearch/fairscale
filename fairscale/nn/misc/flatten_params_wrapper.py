@@ -1,7 +1,7 @@
 # Copyright (c) Tongzhou Wang
 # Licensed under the MIT License.
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
@@ -142,11 +142,13 @@ class FlattenParamsWrapper(nn.Module):
     def load_state_dict(
         self, state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], strict: bool = True
     ) -> NamedTuple:
-        if "flat_param" in state_dict:
-            return super().load_state_dict(state_dict, strict=strict)
-        else:
-            with self.unflatten_params():
-                return self.module.load_state_dict(state_dict, strict)
+        with self.unflatten_params():
+            return self.module.load_state_dict(state_dict, strict)
+
+    def load_flat_state_dict(
+        self, state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], strict: bool = True
+    ) -> NamedTuple:
+        return super().load_state_dict(state_dict, strict)
 
     def forward(self, *inputs: Any, **kwinputs: Any) -> Any:
         self._unflatten_params_as_views()

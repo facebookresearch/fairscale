@@ -433,11 +433,9 @@ class TestSaveLoadStateDict(DistributedTest):
         ddp_model.state_dict()
         ddp_model.state_dict()  # second call
 
-    @parameterized.expand([[False], [True]], name_func=rename_test)
-    def test_state_dict_after_forward_mixed_precision(self, mixed_precision):
-        test_fn = functools.partial(
-            self._test_module_state_dict, {"flatten_parameters": False, "mixed_precision": mixed_precision}
-        )
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_state_dict_after_forward(self, config):
+        test_fn = functools.partial(self._test_module_state_dict, config)
         spawn_and_init(test_fn)
 
     @parameterized.expand([[False], [True]], name_func=rename_test)
@@ -472,6 +470,18 @@ class TestSaveLoadStateDict(DistributedTest):
             assert False, "ddp_model.load_state_dict(new_ddp_model.state_dict()) succeeded"
         except Exception:
             pass
+
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_nested_wrapped_model(self, config):
+        test_fn = functools.partial(self._test_nested_wrapped_model, config)
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_nested_wrapped_model(cls, config, rank, group):
+        model = NestedWrappedModule(group, config)
+        model = FullyShardedDataParallel(model, group, **config).cuda()
+        cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
+        model.load_state_dict(model.state_dict())
 
 
 class TestHooks(DistributedTest):

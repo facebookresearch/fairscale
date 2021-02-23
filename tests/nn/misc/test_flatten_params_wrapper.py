@@ -32,6 +32,15 @@ class TestFlattenParams(unittest.TestCase):
             dec_layer.linear2.weight = enc_layer.linear2.weight
         return module
 
+    def _get_nested_flat_module(self, seed=0):
+        return FlattenParamsWrapper(
+            torch.nn.Sequential(
+                FlattenParamsWrapper(torch.nn.Linear(4, 8)),
+                FlattenParamsWrapper(torch.nn.Linear(8, 16)),
+                FlattenParamsWrapper(torch.nn.Linear(16, 4)),
+            )
+        )
+
     def _get_output(self, module):
         torch.manual_seed(1)  # keep everything deterministic
         device = next(module.parameters()).device
@@ -139,6 +148,16 @@ class TestFlattenParams(unittest.TestCase):
         flat_output = self._get_output(flat_module)
 
         assert objects_are_equal(ref_output, flat_output)
+
+    def test_nested_flat_modules(self):
+        module = self._get_nested_flat_module()
+        ref_state_dict = module.state_dict()
+
+        flat_module = self._get_nested_flat_module(seed=1234)
+        flat_module.load_state_dict(ref_state_dict)
+        flat_state_dict = flat_module.state_dict()
+
+        assert objects_are_equal(ref_state_dict, flat_state_dict)
 
     def test_flat_state_dict(self):
         flat_module = self._get_shared_params_transformer()
