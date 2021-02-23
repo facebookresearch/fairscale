@@ -2,7 +2,7 @@
 
 from ... import Tensor, device, dtype
 from .. import Parameter
-from typing import Union, Tuple, Any, Callable, Iterator, Set, Optional, overload, TypeVar, Mapping, Dict, Generic
+from typing import Union, Tuple, Any, Callable, Iterator, Set, Optional, overload, TypeVar, Mapping, Dict, Generic, NamedTuple
 from collections import OrderedDict
 from ...utils.hooks import RemovableHandle
 
@@ -65,8 +65,9 @@ class Module(Generic[T_co]):
 
     def __getattr__(self, name: str) -> Union[Tensor, 'Module']: ...
 
-    # TODO double-check this
     def __setattr__(self, name: str, value: Union[Tensor, 'Module']) -> None: ...
+
+    def __setstate__(self, state: Dict[str, Any]) -> None: ...
 
     # The user can pass an optional arbitrary mappable object to `state_dict`, in which case `state_dict` returns
     # back that same object. But if they pass nothing, an `OrederedDict` is created and returned.
@@ -78,7 +79,7 @@ class Module(Generic[T_co]):
     @overload
     def state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> OrderedDict[str, Tensor]: ...
 
-    def load_state_dict(self, state_dict: Union[Dict[str, Tensor], OrderedDict[str, Tensor]], strict: bool = ...): ...
+    def load_state_dict(self, state_dict: Union[Dict[str, Tensor], OrderedDict[str, Tensor]], strict: bool = ...) -> NamedTuple: ...
 
     def parameters(self, recurse: bool = ...) -> Iterator[Parameter]: ...
 

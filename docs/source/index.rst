@@ -23,6 +23,7 @@ Components
     * `Optimizer state sharding <../../en/latest/api/optim/oss.html>`_
     * `Sharded grad scaler - automatic mixed precision <../../en/latest/api/optim/grad_scaler.html>`_
     * `Sharded distributed data parallel <../../en/latest/api/nn/sharded_ddp.html>`_
+    * `Fully Sharded Data Parallel FSDP <../../en/latest/api/nn/fsdp.html>`_
 
 * Optimization at scale:
    * `AdaScale SGD <../../en/latest/api/optim/adascale.html>`_
