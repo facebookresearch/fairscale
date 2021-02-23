@@ -234,8 +234,7 @@ def test_add_param_group():
     if torch.cuda.is_available() and torch.cuda.device_count() < world_size:
         world_size = min(world_size, torch.cuda.device_count())
 
-    temp_file_name = tempfile.mkstemp()[1]
-    mp.spawn(run_test_add_param_group, args=(world_size, temp_file_name), nprocs=world_size, join=True)
+    mp.spawn(run_test_add_param_group, args=(world_size, tempfile.mkstemp()[1]), nprocs=world_size, join=True)
 
 
 def run_test_zero_grad(rank, world_size, tempfile_name):
@@ -261,6 +260,21 @@ def test_zero_grad():
 
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(run_test_zero_grad, args=(world_size, temp_file_name), nprocs=world_size, join=True)
+
+
+def run_test_catch_empty_shardd(rank, world_size, tempfile_name):
+    dist_init(rank, world_size, tempfile_name, backend="gloo")
+    m = torch.nn.Linear(1, 1)
+    with pytest.raises(AssertionError):
+        _ = optim.OSS(m.parameters(), lr=0.1)
+
+    dist.destroy_process_group()
+
+
+def test_empty_shard():
+    world_size = 4
+
+    mp.spawn(run_test_catch_empty_shardd, args=(world_size, tempfile.mkstemp()[1]), nprocs=world_size, join=True)
 
 
 def run_test_step(rank, world_size, tempfile_name):

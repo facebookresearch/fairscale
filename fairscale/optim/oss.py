@@ -140,6 +140,13 @@ class OSS(Optimizer):
                     param_group_rank["params"] = params
                     self._partition_parameters[rank].append(param_group_rank)
 
+            assert min(sum(len(pg["params"]) for pg in partition) for partition in self._partition_parameters) > 0, (
+                "One or more empty shards detected, the world size is too big or the model too small.\n"
+                + "Please reduce your world size if this is the model you would like to train\n"
+                + f"Current world size: {self.world_size}\n"
+                + "Current number of parameters: {}".format(sum(len(pg["params"]) for pg in self.param_groups))
+            )
+
         return self._partition_parameters
 
     @property
