@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint_wrapper
 
 from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
+from fairscale.utils.testing import skip_if_no_cuda
 
 
 def get_cuda_mem_allocated():
@@ -78,24 +79,6 @@ class BasicModel(nn.Module):
         return self.out(x)
 
 
-class CpuOffloadModel(nn.Module):
-    """Model used to check cpu offload memory saving"""
-
-    def __init__(self, enable_checkpoint=False, cpu_offload=False):
-        super().__init__()
-        torch.manual_seed(0)  # make sure weights are deterministic.
-        self.layers = nn.Sequential(
-            nn.Sequential(nn.Linear(2, 4), nn.Linear(4, 8), nn.Linear(8, 10)),
-            nn.Sequential(nn.Linear(10, 32), nn.Linear(32, 64), nn.Linear(64, 1)),
-        )
-        if enable_checkpoint:
-            for i, layer in enumerate(self.layers):
-                self.layers[i] = checkpoint_wrapper(layer, cpu_offload)
-
-    def forward(self, x):
-        return self.layers(x)
-
-
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_basic(device):
     if "cuda" in device and not torch.cuda.is_available():
@@ -148,12 +131,37 @@ def test_basic(device):
     }, fairscale_cpt_offload
 
 
+class CpuOffloadModel(nn.Module):
+    """Model used to check cpu offload memory saving"""
+
+    def __init__(self, enable_checkpoint=False, cpu_offload=False):
+        super().__init__()
+
+        torch.manual_seed(0)  # make sure weights are deterministic.
+
+        # These numbers are picked to show cpu_offload memory saving.
+        # Inner (recomputed) activation sizes need to be just right
+        # to show the benefit.
+        self.layers = nn.Sequential(
+            nn.Sequential(nn.Linear(4, 4), nn.Linear(4, 4), nn.Linear(4, 8)),
+            nn.Sequential(nn.Linear(8, 4), nn.Linear(4, 4), nn.Linear(4, 4)),
+            nn.Sequential(nn.Linear(4, 6), nn.Linear(6, 8), nn.Linear(8, 2)),
+        )
+
+        if enable_checkpoint:
+            for i, layer in enumerate(self.layers):
+                # Only middle layer needs to have offloading
+                self.layers[i] = checkpoint_wrapper(layer, cpu_offload if i == 1 else False)
+
+    def forward(self, x):
+        return self.layers(x)
+
+
+@skip_if_no_cuda
 def test_offload_memory():
     device = "cuda"
-    if "cuda" in device and not torch.cuda.is_available():
-        pytest.skip("test requires a GPU")
 
-    input = torch.rand(60, 24, 2).requires_grad_(True)
+    input = torch.rand(60, 24, 4).requires_grad_(True)
 
     model = CpuOffloadModel().to(device)
     base = get_loss_and_gnorm(model, input.to(device))
@@ -164,5 +172,14 @@ def test_offload_memory():
     model = CpuOffloadModel(True, True).to(device)
     offload = get_loss_and_gnorm(model, input.to(device))
 
+    for key in "loss", "gnorm":
+        assert base[key] == cpt[key] == offload[key], f"{base[key]} == {cpt[key]} == {offload[key]}"
+        del base[key]
+        del cpt[key]
+        del offload[key]
+
+    # XXX
     print(base, cpt, offload)
-    assert 0
+    assert base == {"mem_0": 32256, "mem_peak": 334336, "mem_after_fwd": 274944, "mem_after_bwd": 41984}
+    assert cpt == {"mem_0": 32256, "mem_peak": 253952, "mem_after_fwd": 101888, "mem_after_bwd": 41984}
+    assert offload == {"mem_0": 32256, "mem_peak": 207872, "mem_after_fwd": 55808, "mem_after_bwd": 41984}

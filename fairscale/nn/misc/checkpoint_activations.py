@@ -34,8 +34,23 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         module (nn.Module):
             The module to be wrapped
         offload_to_cpu (Optional, bool):
-            Whether to offload activations to CPU. Peak memory usage will be
-            reduced when multiple checkpoint blocks are used.
+            Whether to offload activations to CPU. This is non-trivial
+            to use. Enable it doesn't always cause lower peak GPU memory.
+            It can cause more GPU memory being used if used incorrectly.
+
+                - layer with the model input doesn't benefit from offloading
+                  since the input tensor is hold in GPU anyway, offloading
+                  can cause more memory being used
+                - last layer of the model doesn't benefit since immediately
+                  we load the tensor back from CPU in the backward
+                - long model with a lot of checkpoint blocks and small
+                  inner (recomputed) activations is more likely to benefit
+                  from this. But bigger checkpoint blocks might be better
+                  in that case.
+
+            It is likely you will need extensive profiling and experimentation
+            to find an good setting for checkpoint blocks and their
+            offload_to_cpu flags.
 
     Returns:
         (nn.Module):
