@@ -53,7 +53,7 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
             self.module = module
 
         def forward(self, *args: Any, **kwargs: Any) -> Any:
-            return _checkpointed_forward(self.m, offload_to_cpu, *args, **kwargs)
+            return _checkpointed_forward(self.module, offload_to_cpu, *args, **kwargs)
 
     return CheckpointWrapper(module)
 
