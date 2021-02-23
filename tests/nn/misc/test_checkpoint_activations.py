@@ -11,7 +11,7 @@ import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint_wrapper
 
 from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
-from fairscale.utils.testing import skip_if_no_cuda
+from fairscale.utils.testing import skip_if_no_cuda, torch_version
 
 
 def get_cuda_mem_allocated():
@@ -113,19 +113,28 @@ def test_basic(device):
     for d in [no_cpt, pyt_cpt, fairscale_cpt, fairscale_cpt_offload]:
         del d["loss"]
         del d["gnorm"]
-        print("XXX", d["mem_peak"])
 
-    assert no_cpt == {"mem_0": 38912, "mem_peak": 98816, "mem_after_fwd": 64000, "mem_after_bwd": 74240}, no_cpt
-    assert pyt_cpt == {"mem_0": 38912, "mem_peak": 103424, "mem_after_fwd": 43520, "mem_after_bwd": 74240}, pyt_cpt
+    mem_peaks = [98816, 103424, 103424, 107520]
+    if torch_version() < (1, 7, 0):
+        # Older torch behaves slightly differently
+        mem_peaks = [102400, 103424, 103424, 107520]
+
+    assert no_cpt == {"mem_0": 38912, "mem_peak": mem_peaks[0], "mem_after_fwd": 64000, "mem_after_bwd": 74240}, no_cpt
+    assert pyt_cpt == {
+        "mem_0": 38912,
+        "mem_peak": mem_peaks[1],
+        "mem_after_fwd": 43520,
+        "mem_after_bwd": 74240,
+    }, pyt_cpt
     assert fairscale_cpt == {
         "mem_0": 38912,
-        "mem_peak": 103424,
+        "mem_peak": mem_peaks[2],
         "mem_after_fwd": 43520,
         "mem_after_bwd": 74240,
     }, fairscale_cpt
     assert fairscale_cpt_offload == {
         "mem_0": 38912,
-        "mem_peak": 107520,
+        "mem_peak": mem_peaks[3],
         "mem_after_fwd": 43520,
         "mem_after_bwd": 74240,
     }, fairscale_cpt_offload
