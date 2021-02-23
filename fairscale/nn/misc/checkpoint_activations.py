@@ -3,13 +3,12 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-import functools
 from typing import Any, Dict, Optional, Tuple
 
 import torch
 from torch import Tensor
 import torch.nn as nn
-import torch.utils.checkpoint as checkpoint
+import torch.utils.checkpoint as pt_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
@@ -40,8 +39,23 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         (nn.Module):
             wrapped module
     """
-    module.forward = functools.partial(_checkpointed_forward, module.forward, offload_to_cpu)  # type: ignore
-    return module
+    # Do not use functools.partial like:
+    #
+    #     module.forward = functools.partial(_checkpointed_forward, module.forward, offload_to_cpu)
+    #
+    # It causes the backward to hold-on to tensor memory even when model is
+    # freed.
+
+    # Use a wrapper to wrap the original module.
+    class Wrapper(nn.Module):
+        def __init__(self, m: nn.Module):
+            super().__init__()
+            self.m = m
+
+        def forward(self, *args: Any, **kwargs: Any) -> Any:
+            return _checkpointed_forward(self.m, offload_to_cpu, *args, **kwargs)
+
+    return Wrapper(module)
 
 
 def _checkpointed_forward(original_forward: Any, offload_to_cpu: bool, *args: Any, **kwargs: Any) -> Any:
@@ -89,7 +103,7 @@ class CheckpointFunction(torch.autograd.Function):
         **kwargs: Any
     ) -> Any:
         if torch.is_grad_enabled():  # grad may be disabled, e.g., during validation
-            checkpoint.check_backward_validity(args)
+            pt_checkpoint.check_backward_validity(args)
 
         ctx.run_function = run_function
         ctx.kwarg_keys = kwarg_keys
@@ -125,7 +139,7 @@ class CheckpointFunction(torch.autograd.Function):
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
 
         tensor_inputs: Tuple = ctx.saved_tensors
-        tensor_inputs = checkpoint.detach_variable(tensor_inputs)
+        tensor_inputs = pt_checkpoint.detach_variable(tensor_inputs)
         if ctx.fwd_device is not None:
             tensor_inputs = tuple(t.to(ctx.fwd_device[i]) for i, t in enumerate(tensor_inputs))
             for i, need_grad in enumerate(ctx.grad_requirements):
@@ -142,6 +156,7 @@ class CheckpointFunction(torch.autograd.Function):
             unpacked_args, unpacked_kwargs = unpack_kwargs(ctx.kwarg_keys, inputs)
             outputs = ctx.run_function(*unpacked_args, **unpacked_kwargs)
             tensor_outputs, _ = split_non_tensors(outputs)
+
         # Set the states back to what it was at the start of this function.
         set_rng_state(bwd_rng_state)
 
