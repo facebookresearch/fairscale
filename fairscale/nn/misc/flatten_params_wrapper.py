@@ -1,7 +1,7 @@
 # Copyright (c) Tongzhou Wang
 # Licensed under the MIT License.
 
-from contextlib import contextmanager, ExitStack
+from contextlib import ExitStack, contextmanager
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
@@ -142,7 +142,42 @@ class FlattenParamsWrapper(nn.Module):
     def load_state_dict(
         self, state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], strict: bool = True
     ) -> NamedTuple:
-        with self.unflatten_params():
+        # Note: nested FlattenParamsWrapper instances are problematic because
+        # nn.Module.load_state_dict does not call the load_state_dict method of
+        # child instances, so we can't use the unflatten_params context manager
+        # in the same way we do in the state_dict() method. Instead, we identify
+        # all nested FlattenParamsWrapper instances and rewrite the passed-in
+        # state_dict to match the unflattened structure.
+
+        def replace_prefix_(state_dict, old_prefix, new_prefix):
+            # Replace all keys that match a given prefix with new keys (in-place)
+            for key in list(state_dict.keys()):
+                if not key.startswith(old_prefix):
+                    continue
+                new_key = new_prefix + key[len(old_prefix):]
+                state_dict[new_key] = state_dict[key]
+                del state_dict[key]
+
+        def rewrite_state_dict(state_dict, module, prefix=""):
+            # Rewrite state_dict to match unflattened structure. For example, we
+            # might have a rule that maps "layer." -> "layer.module." to match a
+            # situation where `layer` is a nested FlattenParamsWrapper instance.
+            for name, child in module.named_children():
+                child_prefix = prefix + name + "."
+                if isinstance(child, FlattenParamsWrapper):
+                    replace_prefix_(state_dict, child_prefix, child_prefix + "module.")
+                rewrite_state_dict(state_dict, child, child_prefix)
+
+        with ExitStack() as stack:
+            # First unflatten all FlattenParamsWrapper instances.
+            for module in self.modules():
+                if isinstance(module, FlattenParamsWrapper):
+                    stack.enter_context(module.unflatten_params())
+
+            # Rewrite state_dict to match unflattened structure.
+            state_dict = state_dict.copy()  # shallow copy
+            rewrite_state_dict(state_dict, self.module)
+
             return self.module.load_state_dict(state_dict, strict)
 
     def load_flat_state_dict(

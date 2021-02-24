@@ -35,8 +35,12 @@ class TestFlattenParams(unittest.TestCase):
     def _get_nested_flat_module(self, seed=0):
         return FlattenParamsWrapper(
             torch.nn.Sequential(
-                FlattenParamsWrapper(torch.nn.Linear(4, 8)),
-                FlattenParamsWrapper(torch.nn.Linear(8, 16)),
+                FlattenParamsWrapper(
+                    torch.nn.Sequential(torch.nn.Linear(4, 8), torch.nn.Linear(8, 8))
+                ),
+                FlattenParamsWrapper(
+                    torch.nn.Sequential(FlattenParamsWrapper(torch.nn.Linear(8, 16)))
+                ),
                 FlattenParamsWrapper(torch.nn.Linear(16, 4)),
             )
         )
@@ -168,7 +172,7 @@ class TestFlattenParams(unittest.TestCase):
 
         new_module = self._get_shared_params_transformer(seed=1234)
         new_module = FlattenParamsWrapper(new_module)
-        new_module.load_state_dict(flat_state_dict)
+        new_module.load_flat_state_dict(flat_state_dict)
         new_output = self._get_output(new_module)
 
         assert objects_are_equal(ref_output, new_output)
