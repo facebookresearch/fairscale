@@ -4,7 +4,9 @@
 # LICENSE file in the root directory of this source tree.
 
 from contextlib import contextmanager
+import functools
 from typing import Any, Dict, Generator, Optional, Tuple
+import weakref
 
 import torch
 from torch import Tensor
@@ -30,39 +32,54 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         checkpointed_module = checkpoint_wrapper(my_module, offload_to_cpu=True)
         a, b = checkpointed_module(x, y=3, z=torch.Tensor([1]))
 
+    To understand the benefits of checkpointing and the `offload_to_cpu` flag,
+    let's divide activations into 2 types: inner activations and outer
+    activations w.r.t. the checkpointed modules. The inner ones are saved
+    by activation checkpointing, the outer ones are saved by offload_to_cpu.
+
+    In terms of GPU memory savings:
+
+        - When inner ones are large in size and outer ones are small,
+          checkpointing helps a lot, offload_to_cpu may help a little.
+        - When inner ones are small and outer ones are large,
+          checkpointing helps little, offload_to_cpu helps a lot.
+        - When both inner and outer are large, both help and the
+          benefit is additive.
+
+    ..Note::
+
+        The first and last layers are not likely to benefit from the `offload_to_cpu` flag
+        because (1) there are typically other references to the first layer's input, so
+        the GPU memory won't be freed; (2) the input to the last layer is immediately
+        used by the backward pass and won't result in memory savings.
+
     Args:
         module (nn.Module):
-            module to wrap
+            The module to be wrapped
         offload_to_cpu (Optional, bool):
-            whether to offload activations to CPU
+            Whether to offload activations to CPU.
 
     Returns:
         (nn.Module):
             wrapped module
     """
-    # Do not use functools.partial like:
+    # The use of weakref here is to prevent creating a ref cycle: m -> m.forward -> m.
+    # When such cycle exists, gc won't collect the module when the module is freed.
+    # That causes GPU memory to be leaked. See the unit test for how we catch that.
     #
-    #     module.forward = functools.partial(_checkpointed_forward, module.forward, offload_to_cpu)
-    #
-    # It causes the backward to hold-on to tensor memory even when model is
-    # freed.
-
-    # Use a wrapper to wrap the original module.
-    class CheckpointWrapper(nn.Module):
-        def __init__(self, module: nn.Module):
-            super().__init__()
-            self.module = module
-
-        def forward(self, *args: Any, **kwargs: Any) -> Any:
-            return _checkpointed_forward(self.module, offload_to_cpu, *args, **kwargs)
-
-    return CheckpointWrapper(module)
+    # We prefer this over a class wrapper since the class wrapper would have to
+    # proxy a lot of fields and methods.
+    module.forward = functools.partial(_checkpointed_forward, type(module).forward, weakref.ref(module), offload_to_cpu)  # type: ignore
+    return module
 
 
-def _checkpointed_forward(original_forward: Any, offload_to_cpu: bool, *args: Any, **kwargs: Any) -> Any:
+def _checkpointed_forward(
+    original_forward: Any, weak_self: Any, offload_to_cpu: bool, *args: Any, **kwargs: Any
+) -> Any:
     # Autograd Functions in PyTorch work best with positional args, since
     # the backward must return gradients (or None) for every input argument.
     # We can flatten keyword arguments to make this easier.
+    args = (weak_self(),) + args
     kwarg_keys, flat_args = pack_kwargs(*args, **kwargs)
     parent_ctx_dict: Dict[str, Any] = {"offload": offload_to_cpu}
     output = CheckpointFunction.apply(original_forward, parent_ctx_dict, kwarg_keys, *flat_args)

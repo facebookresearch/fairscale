@@ -931,11 +931,15 @@ def cast_inputs_to_fp16(*args: Any, **kwargs: Any) -> Tuple[Any, Any]:
 def cast_buffers_(
     module: nn.Module, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None
 ) -> None:
-    """Cast all of module.named_buffers to device, dtype."""
+    """Cast all of module.named_buffers to device and floating point buffers to dtype."""
     # if buffers are already on the right device and/or dtype this is just python loop cost
+    assert dtype in {torch.float32, torch.float16}  # assumes compute_dtype == float16
     for key, buf in module.named_buffers(recurse=False):
         if buf is not None:
-            setattr(module, key, buf.to(dtype=dtype, device=device))
+            buf = buf.to(device=device)
+            if torch.is_floating_point(buf):
+                buf = buf.to(dtype=dtype)
+            setattr(module, key, buf)
 
 
 def free_storage_(data: torch.Tensor) -> None:

@@ -29,8 +29,6 @@ from fairscale.utils.testing import (
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
 
-_BUFFER_NAME = "vocab_bias"
-
 
 class DistributedTest(unittest.TestCase):
     def setUp(self):
@@ -411,8 +409,9 @@ class TestLocalStateDict(DistributedTest):
 
         # Assert that parameters were updated since before training
         unchanged = []
+        buffers = {name for name, _ in model.module.named_buffers()}
         for k in state_1:
-            if (state_before_training[k] == state_after_training[k]).all() and (_BUFFER_NAME not in k):
+            if (state_before_training[k] == state_after_training[k]).all() and (k not in buffers):
                 unchanged.append(k)
         if unchanged:
             raise AssertionError(f"params {unchanged} not changed after training")
@@ -651,7 +650,8 @@ class TransformerWithSharedParams(nn.Module):
         self.output_proj = nn.Linear(d_model, d_vocab)
         # share the embedding and output projection weights
         self.output_proj.weight = self.embed_tokens.weight
-        self.register_buffer(_BUFFER_NAME, self.embed_tokens.weight.new_ones((d_model,)))
+        self.register_buffer("vocab_bias", self.embed_tokens.weight.new_ones((d_model,)))
+        self.register_buffer("long_buffer", torch.zeros_like(self.vocab_bias, dtype=torch.long))
 
     def get_input(self, device):
         torch.manual_seed(1 + self.rank)  # keep everything deterministic
@@ -661,7 +661,7 @@ class TransformerWithSharedParams(nn.Module):
 
     def forward(self, src_ids, tgt_ids):
         src = self.embed_tokens(src_ids)
-        src = src + self.vocab_bias
+        src = src + self.vocab_bias + self.long_buffer.type_as(src)
         tgt = self.embed_tokens(tgt_ids)
         x = self.transformer(src, tgt)
         return self.output_proj(x)

@@ -12,7 +12,6 @@ import time
 
 from datasets.wikitext2_data import get_real_dataloaders as get_real_wikitext2_dataloaders
 from datasets.wikitext2_data import get_synthetic_dataloaders as get_synthetic_wikitext2_dataloaders
-from golden_configs import lm_wikitext2
 from models import transformer_lm
 import numpy as np
 import torch
@@ -22,6 +21,7 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
+from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
