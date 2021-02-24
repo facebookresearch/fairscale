@@ -5,23 +5,28 @@ import torch.nn as nn
 from fairscale.optim import GradScaler
 
 
-def get_benchmark_config():
-
+def get_model_config():
     return {
-        "epochs": 1,
         "vocab_size": 10000,
         "ninp": 2048,  # embedding dimension
         "nhid": 2048,  # the dimension of the feedforward network model in nn.TransformerEncoder
         "nhead": 32,  # the number of heads in the multiheadattention models
         "dropout": 0,
         "initrange": 0.1,
-        "criterion": nn.CrossEntropyLoss(),
-        "lr": 0.001,  # learning rate
         "scaler": GradScaler(),
         "clip_value": 0.05,
-        "batch_size": 8,
         "num_decoder_layers": 10,
         "seq_len": 32,
+    }
+
+
+def get_benchmark_config():
+
+    return {
+        "epochs": 1,
+        "lr": 0.001,  # learning rate
+        "batch_size": 8,
+        "criterion": nn.CrossEntropyLoss(),
     }
 
 
