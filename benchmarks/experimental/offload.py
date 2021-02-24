@@ -21,7 +21,6 @@ from benchmarks.golden_configs.lm_wikitext2 import Offload_Sequential as offload
 from benchmarks.golden_configs.lm_wikitext2 import Offload_Transformer as lm_wikitext2
 from benchmarks.models import transformer_lm
 from fairscale.experimental.nn.offload import OffloadModel
-from fairscale.nn.pipe import LazyModule
 
 
 def init_random_seed(seed: int):

@@ -3,10 +3,6 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""
-A wrapper which streams the model in and out of the GPU automatically during FW and optionally BW passes
-(Can be used for inference only)
-"""
 
 from builtins import isinstance
 import functools
@@ -363,7 +359,7 @@ class OffloadModel(nn.Module):
 
     Args:
         module (~torch.nn.Sequential): Module to be offloaded.
-        
+
         device (torch.device):
             Device where the active model should reside.
 
