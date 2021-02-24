@@ -120,11 +120,11 @@ if __name__ == "__main__":
 
     parser.add_argument("--inputs", action="store", help="The dimension of the inputs", default=100, type=int)
     parser.add_argument("--hidden", action="store", help="The dimension of the hidden state", default=1000, type=int)
-    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=100, type=int)
+    parser.add_argument("--layers", action="store", help="he number of hidden layers", default=1000, type=int)
     parser.add_argument("--outputs", action="store", help="The number of predicted classes", default=5, type=int)
 
     parser.add_argument("--offload", action="store_true", default=False)
-    parser.add_argument("--slices", action="store", default=2, type=int)
+    parser.add_argument("--slices", action="store", default=3, type=int)
     parser.add_argument("--use_fp16", action="store_true", default=False)
     parser.add_argument("--checkpoint_activation", action="store_true", default=False)
     parser.add_argument("--use_profiler", action="store_true", default=False)
