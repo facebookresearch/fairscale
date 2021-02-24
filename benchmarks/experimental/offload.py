@@ -50,7 +50,7 @@ def get_model_and_optimizer(args, device, benchmark_config, model_specs):
         model_cpu=model,
         device=torch.device("cuda"),
         offload_device=torch.device("cpu"),
-        n_slices=benchmark_config["slices"],
+        num_slices=benchmark_config["slices"],
         checkpoint_activation=benchmark_config["checkpoint_activation"],
         num_microbatches=benchmark_config["num_microbatches"],
     )

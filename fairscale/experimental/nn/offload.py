@@ -355,27 +355,23 @@ class ShardSyncLayer(torch.autograd.Function):
 
 
 class OffloadModel(nn.Module):
-    """Implements training with optimizer state sharding and model sharding.
+    """Wrapper used offload parts of a model to the CPU.
 
-    This experiments with a different way to get to the full zero suite
-    The model is sharded, then the normal distributed data parallel algorithm can be used on a per-model shard basis.
-    Each shard is offloaded and loaded following a compute wavefront, during the forward and backward pass.
-
-    Each model shard can be updated by a normal pytorch optimizer.
+    The model is sharded such that parts of the model are copied
+    from CPU->GPU for the FW pass and back right after. The reverse
+    copy is carried out for the backward pass.
 
     Args:
-        module (~torch.nn.Sequential): module to be parallelized
-        optimizer (~torch.optim.Optimizer): optimizer to be used for training
-        optimizer_params(Dict): extra parameters for the optimizer
-
+        module (~torch.nn.Sequential): Module to be offloaded.
+        
         device (torch.device):
-            device where the active model should reside
+            Device where the active model should reside.
 
         offload_device (torch.device):
-            device where the inactive model should reside
+            Device where the inactive model should reside.
 
-        n_slices (int):
-            number of slices in which to decomppose the model
+        num_slices (int):
+            Number of slices into which the model should be chunked.
     """
 
     def __init__(
@@ -383,7 +379,7 @@ class OffloadModel(nn.Module):
         model_cpu: nn.Sequential,  # hard pre-requisite for now, easier model slicing
         device: torch.device,
         offload_device: torch.device = torch.device("cpu"),
-        n_slices: int = 5,
+        num_slices: int = 5,
         checkpoint_activation: bool = False,
         num_microbatches: int = 1,
     ):
@@ -394,7 +390,7 @@ class OffloadModel(nn.Module):
         self.offload_device = offload_device
 
         # Slice the model into roughly equivalent sequential shards.
-        splits = _split(model_cpu, n_slices)
+        splits = _split(model_cpu, num_slices)
 
         # List of model shards that will be placed on/off the device.
         self.model_slices: List[nn.Module] = []
