@@ -17,6 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 from torch import nn
 from torch.optim.optimizer import Optimizer
@@ -24,7 +25,6 @@ from torch.utils.data import DataLoader, Dataset
 
 from fairscale.experimental.nn.ampnet_pipe.pipe import AMPnetPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
-import pytest
 
 
 class MySGD(Optimizer):
