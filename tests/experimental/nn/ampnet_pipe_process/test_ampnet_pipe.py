@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from fairscale.experimental.nn.ampnet_pipe.pipe import AMPnetPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
+import pytest
 
 
 class MySGD(Optimizer):
@@ -82,6 +83,7 @@ class FakeDataset(Dataset):
 
 @torch_spawn([2])
 def async_event_loop_interleave_simple():
+    pytest.skip("Fix test before reenabling again.")
     model = nn.Sequential(nn.Linear(10, 10), nn.ReLU(inplace=False), nn.Linear(10, 10), nn.ReLU(inplace=False))
     pipe = AMPnetPipe(module=model, balance=[2, 2], worker_map=get_worker_map(), chunks=10, checkpoint="never",)
     fake_dataset = FakeDataset()
