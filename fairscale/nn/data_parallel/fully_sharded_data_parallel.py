@@ -372,7 +372,6 @@ class FullyShardedDataParallel(nn.Module):
         torch.cuda.synchronize()
         self._lazy_init()
         self._rebuild_full_params()
-        self._all_buffers_to(dtype=torch.float32)  # Buffers dtype stays consistent with parameters.
         state_dict = self.module.state_dict(*args, **kwargs)
         # We don't free the params after generating the state dict, since
         # freeing is done in-place (via the Storage) and would corrupt the
@@ -934,7 +933,7 @@ def cast_buffers_(
     """Cast all of module.named_buffers to device, dtype."""
     # if buffers are already on the right device and/or dtype this is just python loop cost
     for key, buf in module.named_buffers(recurse=False):
-        if buf is not None:
+        if buf is not None and torch.is_floating_point(buf):
             setattr(module, key, buf.to(dtype=dtype, device=device))
 
 
