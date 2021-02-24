@@ -409,8 +409,9 @@ class TestLocalStateDict(DistributedTest):
 
         # Assert that parameters were updated since before training
         unchanged = []
+        buffers = {name for name, _ in model.module.named_buffers()}
         for k in state_1:
-            if (state_before_training[k] == state_after_training[k]).all() and ("vocab_bias" not in k):
+            if (state_before_training[k] == state_after_training[k]).all() and (k not in buffers):
                 unchanged.append(k)
         if unchanged:
             raise AssertionError(f"params {unchanged} not changed after training")
