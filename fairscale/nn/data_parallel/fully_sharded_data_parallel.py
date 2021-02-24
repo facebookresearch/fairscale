@@ -933,8 +933,11 @@ def cast_buffers_(
     """Cast all of module.named_buffers to device, dtype."""
     # if buffers are already on the right device and/or dtype this is just python loop cost
     for key, buf in module.named_buffers(recurse=False):
-        if buf is not None and torch.is_floating_point(buf):
-            setattr(module, key, buf.to(dtype=dtype, device=device))
+        if buf is not None:
+            buf = buf.to(device=device)
+            if torch.is_floating_point(buf):
+                buf = buf.to(dtype=dtype)
+            setattr(module, key, buf)
 
 
 def free_storage_(data: torch.Tensor) -> None:
