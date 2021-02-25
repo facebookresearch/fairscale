@@ -1,12 +1,14 @@
 # Copyright (c) Tongzhou Wang
 # Licensed under the MIT License.
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
 from torch import Tensor
 import torch.nn as nn
+
+from fairscale.utils.state_dict import replace_by_prefix_
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -32,7 +34,8 @@ class FlattenParamsWrapper(nn.Module):
 
     def __init__(self, module: nn.Module, param_list: Optional[List[nn.Parameter]] = None):
         super().__init__()
-        self.module = module
+        self._fpw_module = module
+        self.is_flattened = False
 
         if param_list is not None:
             assert len(param_list) > 0, "param_list can't be empty"
@@ -53,7 +56,24 @@ class FlattenParamsWrapper(nn.Module):
         # register the views as plain attributes
         self._unflatten_params_as_views()
 
+        # Register hook to be called after state_dict() to remove the
+        # "_fpw_module." prefix and before load_state_dict() to add it back.
+        self._register_state_dict_hook(type(self)._post_state_dict_hook)
+        self._register_load_state_dict_pre_hook(self._pre_load_state_dict_hook)
+
+        # Flag to indicate whether state_dict() should automatically unflatten
+        # params. This defaults to True, but may be set to False if the user
+        # explicitly requests a flat state dict via flat_state_dict().
+        self._auto_unflatten_state_dict = True
+
+    @property
+    def module(self) -> nn.Module:
+        return self._fpw_module
+
     def _flatten_params(self) -> None:
+        assert not self.is_flattened
+        self.is_flattened = True
+
         param_infos = []
         shared_param_memo: Dict[nn.Parameter, Tuple[nn.Module, str]] = {}
         shared_param_infos = []
@@ -98,6 +118,9 @@ class FlattenParamsWrapper(nn.Module):
         return (t.view(s) for (t, s) in zip(self.flat_param.split(self._param_numels), self._param_shapes))
 
     def _unflatten_params(self) -> None:
+        assert self.is_flattened
+        self.is_flattened = False
+
         ps = self._get_param_views()
         for (m, n), p in zip(self._param_infos, ps):
             if hasattr(m, n):
@@ -110,6 +133,7 @@ class FlattenParamsWrapper(nn.Module):
         del self.flat_param
 
     def _unflatten_params_as_views(self) -> None:
+        assert self.is_flattened
         ps = self._get_param_views()
         for (m, n), p in zip(self._param_infos, ps):
             setattr(m, n, p)  # This will set as plain attr
@@ -117,11 +141,27 @@ class FlattenParamsWrapper(nn.Module):
             setattr(m, n, getattr(shared_m, shared_n))
 
     @contextmanager
-    def unflatten_params(self) -> Generator:
-        self._unflatten_params()
+    def unflatten_params(self, recurse: bool = True) -> Generator:
+        """
+        Unflatten params (optionally recursively on all nested instances).
+        If the current instance is already unflattened, then it will remain
+        unflattened after the context manager exits.
+        """
+        if recurse:
+            with ExitStack() as stack:
+                for module in self.modules():
+                    if isinstance(module, FlattenParamsWrapper):
+                        stack.enter_context(module.unflatten_params(recurse=False))
+                yield
+            return
+
+        orig_flattened = self.is_flattened
+        if self.is_flattened:
+            self._unflatten_params()
         yield
-        self._flatten_params()
-        self._unflatten_params_as_views()
+        if orig_flattened:
+            self._flatten_params()
+            self._unflatten_params_as_views()
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -131,22 +171,61 @@ class FlattenParamsWrapper(nn.Module):
             return getattr(self.module, name)  # fallback to wrapped module
 
     def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, Tensor]":  # type: ignore
-        """Return an unflattened state_dict."""
-        with self.unflatten_params():
-            return self.module.state_dict(*args, **kwargs)
+        """Return the wrapped module's state_dict (unflattened)."""
+        if self.is_flattened and self._auto_unflatten_state_dict:
+            with self.unflatten_params(recurse=False):
+                return super().state_dict(*args, **kwargs)
+        else:
+            return super().state_dict(*args, **kwargs)
+
+    def _post_state_dict_hook(
+        self, state_dict: "OrderedDict[str, Tensor]", prefix: str, *args: Any
+    ) -> "OrderedDict[str, Tensor]":
+        replace_by_prefix_(state_dict, prefix + "_fpw_module.", prefix)
+        return state_dict
 
     def flat_state_dict(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         """Return the flattened state_dict."""
-        return super().state_dict(*args, **kwargs)
+        assert self.is_flattened
+        with ExitStack() as stack:
+            # tell any nested FlattenParamsWrapper instances not to auto unflatten
+            for module in self.modules():  # includes self
+                if isinstance(module, FlattenParamsWrapper):
+                    stack.enter_context(module._no_auto_unflatten_state_dict())
+            state_dict = self.state_dict(*args, **kwargs)
+        return state_dict
+
+    @contextmanager
+    def _no_auto_unflatten_state_dict(self) -> Generator:
+        backup = self._auto_unflatten_state_dict
+        self._auto_unflatten_state_dict = False
+        yield
+        self._auto_unflatten_state_dict = backup
+        return
+
+    @staticmethod
+    def _pre_load_state_dict_hook(
+        state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], prefix: str, *args: Any
+    ) -> None:
+        replace_by_prefix_(state_dict, prefix, prefix + "_fpw_module.")
+        # flat_param actually needs to move one level up though
+        flat_param_key = prefix + "_fpw_module.flat_param"
+        if flat_param_key in state_dict:
+            replace_by_prefix_(state_dict, flat_param_key, prefix + "flat_param")
 
     def load_state_dict(
         self, state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], strict: bool = True
     ) -> NamedTuple:
-        if "flat_param" in state_dict:
-            return super().load_state_dict(state_dict, strict=strict)
+        """
+        Load a state dict. If necessary, ``unflatten_params`` will be called to
+        match the input state_dict.
+        """
+        # unflatten the module automatically if the state_dict is non-flat
+        if self.is_flattened and "flat_param" not in state_dict:
+            with self.unflatten_params(recurse=True):
+                return super().load_state_dict(state_dict, strict)
         else:
-            with self.unflatten_params():
-                return self.module.load_state_dict(state_dict, strict)
+            return super().load_state_dict(state_dict, strict)
 
     def forward(self, *inputs: Any, **kwinputs: Any) -> Any:
         self._unflatten_params_as_views()
