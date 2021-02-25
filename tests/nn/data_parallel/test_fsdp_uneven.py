@@ -55,6 +55,9 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
         if test_case["assert_ref_out"]:
             with model.summon_full_params():
                 weight_out = model.module.weight.data.T.clone()
+            # make sure we can do more fwd/bwd
+            loss = model(in_data)
+            loss.sum().backward()
 
     if test_case["assert_ref_out"]:
         torch.testing.assert_allclose(ref_forward_output_my_rank, out)

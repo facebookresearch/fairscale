@@ -458,6 +458,7 @@ class FullyShardedDataParallel(nn.Module):
             yield
         finally:
             self._free_full_params()
+            self._use_fp32_param_shard()
             self.training_state = TrainingState.IDLE
 
     def _reset_lazy_init(self) -> None:
