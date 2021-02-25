@@ -359,7 +359,7 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
         embed_dim=256, num_heads=2, num_layers=12, num_positions=INPUT_DIM * INPUT_DIM, num_vocab=512, num_classes=2
     ).to(device)
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
-    ddp_model = ShardedDataParallel(model, optimizer, reduce_buffer_size=0)
+    ddp_model = ShardedDataParallel(model, optimizer)
 
     # Optim loop
     def closure():
