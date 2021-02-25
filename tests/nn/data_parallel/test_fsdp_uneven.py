@@ -52,8 +52,9 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
         out.sum().backward()
         optim.step()
         optim.zero_grad()
-        with model.summon_full_params():
-            weight_out = model.module.weight.data.T.clone()
+        if test_case["assert_ref_out"]:
+            with model.summon_full_params():
+                weight_out = model.module.weight.data.T.clone()
 
     if test_case["assert_ref_out"]:
         torch.testing.assert_allclose(ref_forward_output_my_rank, out)
