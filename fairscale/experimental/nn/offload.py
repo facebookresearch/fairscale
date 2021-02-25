@@ -131,13 +131,17 @@ class ModelShard(nn.Module):
 
 class ActivationCheckpointing(torch.autograd.Function):
     """
-     This Function enables us to override the forward and backward pass of the nn.Module.
+     This Function enables checkpointing of intermediate activations at
+     shard boundaries by overriding the forward and backward pass of the nn.Module.
 
      - In the FW pass, it drops parameters in the previous shard and
      loads parameters for the next shard. No graph is constructed in the FW pass.
+     This enables us to offload intermediate activations present at the shard
+     boundaries.
 
-     - In the BW pass, it does the reverse. We run the forward pass and
-     calculate gradients as needed. The trade-off is latency vs memory.
+     - In the BW pass, it does the reverse. We run the forward pass using the 
+     saved intermediate activations and calculate gradients as needed. 
+     The trade-off is latency vs memory when using activation checkpointing.
 
      - Follows heavily from https://pytorch.org/docs/stable/_modules/torch/utils/checkpoint.html#checkpoint.
 
