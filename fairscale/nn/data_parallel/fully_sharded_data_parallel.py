@@ -73,8 +73,9 @@ class FullyShardedDataParallel(nn.Module):
 
     It is also possible to shard individual layers separately and have an outer
     wrapper handle any leftover parameters. This can be helpful to further
-    reduce memory usage and to improve training speed by overlapping the
-    all-gather step across the forward pass. For example::
+    reduce GPU memory usage, reduce system memory usage when initializing large
+    models and to improve training speed by overlapping the all-gather step
+    across the forward pass. For example::
 
         sharded_model = FullyShardedDataParallel(
             nn.Sequential(  # doesn't have to be nn.Sequential
@@ -84,6 +85,12 @@ class FullyShardedDataParallel(nn.Module):
                 nn.Linear(100, 5),
             )
         )
+
+    .. warning::
+
+        The optimizer must be initialized *after* the module has been wrapped,
+        since FSDP will shard parameters in-place and this will break any
+        previously initialized optimizers.
 
     Args:
         module (nn.Module):
@@ -217,14 +224,14 @@ class FullyShardedDataParallel(nn.Module):
         Returns:
             Total norm of the parameters (viewed as a single vector).
 
-        .. note: This is analogous to `torch.nn.utils.clip_grad_norm_` but
+        .. note:: This is analogous to `torch.nn.utils.clip_grad_norm_` but
             handles the partitioning and multiple devices per rank under the
             hood. The default torch util is not applicable here, because each
             rank only has a partial view of all the grads in the model, so
             calling it in the OSS context would lead to different scaling being
             applied per subset of model parameters.
 
-        .. warning: This needs to be called on all ranks, since synchronization
+        .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
         assert self._is_root, "clip_grad_norm should only be called on the root (parent) instance"
@@ -370,7 +377,11 @@ class FullyShardedDataParallel(nn.Module):
         """
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
-        wrapped Module without any sharding-specific logic. Returned tensors will always be typed float32
+        wrapped Module without any sharding-specific logic. Returned tensors
+        will always be typed float32.
+
+        .. warning:: This needs to be called on all ranks, since synchronization
+            primitives will be used.
         """
         torch.cuda.synchronize()
         self._lazy_init()
@@ -402,7 +413,12 @@ class FullyShardedDataParallel(nn.Module):
     def load_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
-        """Load a whole (unsharded) state_dict."""
+        """
+        Load a whole (unsharded) state_dict.
+
+        .. warning:: This needs to be called on all ranks, since synchronization
+            primitives will be used.
+        """
         torch.cuda.synchronize()
         self._lazy_init()
         self._rebuild_full_params()
