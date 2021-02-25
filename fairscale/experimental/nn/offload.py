@@ -357,9 +357,13 @@ class ShardSyncLayer(torch.autograd.Function):
 class OffloadModel(nn.Module):
     """Wrapper used offload parts of a model to the CPU.
 
-    The model is sharded such that parts of the model are copied
-    from CPU->GPU for the FW pass and back right after. The reverse
-    copy is carried out for the backward pass.
+    The model is sharded into chunks and at each iteration, a
+    single chunk is copied from CPU->GPU, FW pass is computed and
+    the chunk is copied back to CPU. This process is repeated for
+    all the chunks. In the BW pass, the same process happens in
+    reverse.
+
+    Note: OffloadModel currently only supports nn.Sequential models.
 
     Args:
         module (~torch.nn.Sequential): Module to be offloaded.
@@ -372,11 +376,19 @@ class OffloadModel(nn.Module):
 
         num_slices (int):
             Number of slices into which the model should be chunked.
+
+        checkpoint_activation (bool):
+            Boolean to indicate if we want to checkpoint intermediate
+            activation states on the CPU. Default value is False.
+
+        num_microbatches (int):
+            Number of microbatches which should be run per model
+            shard on device.
     """
 
     def __init__(
         self,
-        model_cpu: nn.Sequential,  # hard pre-requisite for now, easier model slicing
+        model_cpu: nn.Sequential,
         device: torch.device,
         offload_device: torch.device = torch.device("cpu"),
         num_slices: int = 5,
