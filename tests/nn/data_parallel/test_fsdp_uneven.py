@@ -27,15 +27,22 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
     result = dist_init(rank, world_size, tempfile_name, unused)
     assert result, "Dist init failed"
 
+    my_lr = 0.1
+
     if test_case["assert_ref_out"]:
         with torch.no_grad():
+            # Compute one iteration local output.
             weight = model.weight.T.clone().cuda()
             v = torch.Tensor(test_case["inputs"][0][rank]).cuda()
-            ref_out = torch.matmul(v, weight)
+            ref_forward_output_my_rank = torch.matmul(v, weight)
+            # Compute one iteration global weight update.
+            v = torch.Tensor(test_case["inputs"][0][:world_size]).cuda()
+            grad = v.sum(0).repeat(weight.shape[0], 1).div(world_size)
+            ref_weight_out = weight - grad.T * my_lr
     model.to("cuda")
     assert isinstance(fsdp_config, dict), str(fsdp_config)
     model = FSDP(model, **fsdp_config)
-    optim = SGD(model.parameters(), lr=0.1)
+    optim = SGD(model.parameters(), lr=my_lr)
     inputs = test_case["inputs"]
     assert len(inputs) == 1 or not test_case["assert_ref_out"]
     assert len(inputs[0]) >= world_size
@@ -45,9 +52,12 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
         out.sum().backward()
         optim.step()
         optim.zero_grad()
+        with model.summon_full_params():
+            weight_out = model.module.weight.data.T.clone()
 
     if test_case["assert_ref_out"]:
-        torch.testing.assert_allclose(ref_out, out)
+        torch.testing.assert_allclose(ref_forward_output_my_rank, out)
+        torch.testing.assert_allclose(ref_weight_out, weight_out)
 
     model.assert_state(TrainingState.IDLE)
     teardown()

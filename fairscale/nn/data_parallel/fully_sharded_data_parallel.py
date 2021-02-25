@@ -51,6 +51,7 @@ class TrainingState(Enum):
     IDLE = auto()
     FORWARD = auto()
     BACKWARD = auto()
+    SUMMON_FULL_PARAMS = auto()
 
 
 class FullyShardedDataParallel(nn.Module):
@@ -437,6 +438,27 @@ class FullyShardedDataParallel(nn.Module):
         finally:
             for m, old_flag in old_flags:
                 m.require_backward_grad_sync = old_flag
+
+    @contextlib.contextmanager
+    def summon_full_params(self) -> Generator:
+        """
+        A context manager to expose full params for the underlying model.
+        Can be useful after forward/backward for a model to get the params
+        for additional processing or checking.
+
+        This can be used on inner FSDPs.
+        """
+        self._lazy_init()
+        self.assert_state(TrainingState.IDLE)
+        # Set the state so that we assert when trying to go into
+        # forward/backward.
+        self.training_state = TrainingState.SUMMON_FULL_PARAMS
+        self._rebuild_full_params()
+        try:
+            yield
+        finally:
+            self._free_full_params()
+            self.training_state = TrainingState.IDLE
 
     def _reset_lazy_init(self) -> None:
         """Reset instance so :func:`_lazy_init` will run on the next forward."""
@@ -831,6 +853,10 @@ class FullyShardedDataParallel(nn.Module):
 
     @torch.no_grad()
     def _use_full_params(self) -> None:
+        """Switching p.data pointers to use the full params.
+
+           Note: this is used assuming full param gathering is already done.
+        """
         for p in self.params:
             if not p._is_sharded:
                 if self.mixed_precision:
