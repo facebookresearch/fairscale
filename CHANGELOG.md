@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 
+### Fixed
+- ShardedDDP auto catch trailing buckets (TBD)
+
 ## [0.3.0] - 2021-02-22
 ### Added
 - FullyShardedDataParallel (FSDP) ([#413](https://github.com/facebookresearch/fairscale/issues/413))

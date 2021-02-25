@@ -445,7 +445,7 @@ def check_same_models_across_ranks(
             for sync_p in receptacle[1:]:
                 assert not params_should_be_equal or torch.all(
                     torch.eq(receptacle[0], sync_p)
-                ), "Models differ in between ranks"
+                ), f"Models differ in between ranks {receptacle[0]} - {sync_p}"
 
     # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
     if check_broadcast_buffers:
@@ -456,7 +456,7 @@ def check_same_models_across_ranks(
                 for sync_b in receptacle[1:]:
                     assert not params_should_be_equal or torch.all(
                         torch.eq(receptacle[0], sync_b)
-                    ), "Models differ in between ranks"
+                    ), f"Models differ in between ranks {receptacle[0]} - {sync_b}"
 
 
 class DeviceAndTypeCheckModule(Base):

@@ -17,6 +17,7 @@ from typing import Any, Callable, Deque, Dict, Generator, List, Optional, Tuple,
 
 import torch
 from torch import nn
+from torch.autograd import Variable
 import torch.distributed as dist
 from torch.nn import Parameter
 
@@ -80,13 +81,6 @@ class ShardedDataParallel(nn.Module):
                 compatible with PytorchAMP.
 
     .. warning:
-        ShardedDDP uses buckets to speed up the network communications. If some parameters require_grad but are not actually
-        used, there is a chance that this would prevent the bucket mechanism to function, and that this could not be automatically
-        handled. In that case ShardedDDP will raise an exception and suggest to either remove the unused parameters from your model
-        (https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html?highlight=unused_parameters is helpful)
-        or set `reduce_buffer_size` to 0
-
-    .. warning:
         If `auto_refresh_trainable` is set to `True` (this is the default) then any trainability change in the model graph will be handled
         automatically.
         If `auto_refresh_trainable` is set to `False`, ShardedDDP will not refresh its assumptions with respect to trainable parameters
@@ -102,7 +96,7 @@ class ShardedDataParallel(nn.Module):
         process_group: Any = None,
         broadcast_buffers: bool = True,
         sync_models_at_startup: bool = True,
-        reduce_buffer_size: int = 0,
+        reduce_buffer_size: int = 2 ** 23,
         auto_refresh_trainable: bool = True,
         reduce_fp16: bool = False,
     ):
@@ -188,6 +182,7 @@ class ShardedDataParallel(nn.Module):
             self._sync_params_and_buffers()
 
         self._work_handles: Deque[Workhandle] = deque()
+        self._bucket_flush_callback_set = False
 
         self.refresh_trainable()
 
@@ -373,12 +368,14 @@ class ShardedDataParallel(nn.Module):
                 assert (
                     self.accumulate_grads_flipped or not self.training or self.should_accumulate_grads or bucket.sent
                 ), (
-                    "A bucket failed to be sent, probably unused parameters. "
-                    + "Either mark the unused parameter as not trainable (`.requires_grad = False`) "
-                    + "or de-activate ShardedDDP buckets -set `reduce_buffer_size` to 0-"
+                    "A bucket failed to be sent, cannot continue as results would be wrong. "
+                    + "You can trye de-activating ShardedDDP buckets -set `reduce_buffer_size` to 0-"
+                    + "Please submit a GitHub issue, this should not happen"
                 )
 
                 bucket.reset()
+
+            self._bucket_flush_callback_set = False
 
         if not self.should_accumulate_grads:
             self.accumulate_grads_flipped = False
@@ -407,6 +404,10 @@ class ShardedDataParallel(nn.Module):
                 # Skip gradient reduction, do not alter status flags
                 if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
                     assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
+
+                    if not self._bucket_flush_callback_set:
+                        Variable._execution_engine.queue_callback(self._flush_buckets)
+                        self._bucket_flush_callback_set = True
 
                     # Make sure that this is not fired twice
                     self._grad_to_be_reduced[index] = False
@@ -452,6 +453,10 @@ class ShardedDataParallel(nn.Module):
                 # Skip gradient reduction, do not alter status flags
                 if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
                     assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
+
+                    if not self._bucket_flush_callback_set:
+                        Variable._execution_engine.queue_callback(self._flush_buckets)
+                        self._bucket_flush_callback_set = True
 
                     # Make sure that this is not fired twice
                     self._grad_to_be_reduced[index] = False
@@ -617,3 +622,21 @@ class ShardedDataParallel(nn.Module):
             work_handle = self._work_handles.popleft()
             if work_handle.callback is not None:
                 work_handle.callback()
+
+    # Flush all the buckets, just in case
+    def _flush_buckets(self) -> None:
+        if self._bucket_list is not None:
+            last_handle = None
+            for bucket in self._bucket_list:
+                if not bucket.sent:
+                    # Normalize the bucket in one go
+                    bucket.buffer.mul_(self.world_size_scaling)
+
+                    # Reduce the bucket
+                    last_handle = dist.reduce(
+                        tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                    )
+                    bucket.sent = True
+
+            if last_handle is not None:
+                last_handle.wait()
