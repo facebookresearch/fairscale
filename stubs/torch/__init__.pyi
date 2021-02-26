@@ -28,6 +28,7 @@ from . import cuda as cuda
 from . import optim as optim
 from . import nn as nn
 from . import testing as testing
+from . import utils as utils
 
 #MODIFIED BY TORCHGPIPE
 from . import backends

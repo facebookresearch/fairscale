@@ -2,6 +2,7 @@
 
 from typing import Optional, Tuple, Union, Dict, Any
 import ctypes
+from . import amp
 from .. import device as _device
 
 def is_available() -> bool: ...
