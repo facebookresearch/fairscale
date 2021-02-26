@@ -21,8 +21,9 @@
 # mypy: disallow_untyped_decorators = False
 
 """
-Collection of some testing utilities for the Fairscale library. Please complement as you see fit, but refrain from ad-hoc test utils
-within the different feature sets and relative imports.
+Collection of some testing utilities for the Fairscale library. Please complement as
+you see fit, but refrain from ad-hoc test utils within the different feature sets and
+relative imports.
 """
 
 import functools

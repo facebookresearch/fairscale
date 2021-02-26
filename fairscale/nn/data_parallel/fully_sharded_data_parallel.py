@@ -389,10 +389,10 @@ class FullyShardedDataParallel(nn.Module):
             self._all_buffers_to(dtype=torch.float32)
 
             state_dict = self.module.state_dict(*args, **kwargs)
-            # We copy the state_dict since full param will be free after
+            # We copy the state_dict since full param will be freed after
             # we exit the summon_full_params() context.
-            # TODO (Min): if the state is huge, the copy can OOM.
-            state_dict = copy.deepcopy(state_dict)
+            for key in state_dict.keys():
+                state_dict[key] = state_dict[key].clone()
 
             # In case we are in mixed precision, restore buffers back to fp16.
             self._all_buffers_to(dtype=self.compute_dtype)
