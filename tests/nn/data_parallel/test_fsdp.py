@@ -434,11 +434,9 @@ class TestSaveLoadStateDict(DistributedTest):
         ddp_model.state_dict()
         ddp_model.state_dict()  # second call
 
-    @parameterized.expand([[False], [True]], name_func=rename_test)
-    def test_state_dict_after_forward_mixed_precision(self, mixed_precision):
-        test_fn = functools.partial(
-            self._test_module_state_dict, {"flatten_parameters": False, "mixed_precision": mixed_precision}
-        )
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_state_dict_after_forward(self, config):
+        test_fn = functools.partial(self._test_module_state_dict, config)
         spawn_and_init(test_fn)
 
     @parameterized.expand([[False], [True]], name_func=rename_test)
@@ -473,6 +471,62 @@ class TestSaveLoadStateDict(DistributedTest):
             assert False, "ddp_model.load_state_dict(new_ddp_model.state_dict()) succeeded"
         except Exception:
             pass
+
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_nested_wrapped_model(self, config):
+        if config["mixed_precision"]:
+            return  # TODO(myleott) this is broken until we support FP32 all-gather for state_dict
+        test_fn = functools.partial(self._test_nested_wrapped_model, config=config)
+        spawn_and_init(test_fn)
+
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_nested_wrapped_model_local_state_dict(self, config):
+        if config["mixed_precision"]:
+            return  # TODO(myleott) this is broken until we support FP32 all-gather for state_dict
+        test_fn = functools.partial(self._test_nested_wrapped_model_local_state_dict, config=config)
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_nested_wrapped_model(cls, rank, group, config=None):
+        # Get reference state dict without any nested FSDP instances.
+        model = NestedWrappedModule(group, None).cuda()
+        model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank, process_group=group)
+        cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
+        ref_state_dict = {k: v.clone() for k, v in model.module.state_dict().items()}
+
+        # Create a nested FSDP-wrapped instance.
+        model = NestedWrappedModule(group, config)
+        model = FullyShardedDataParallel(model, group, **config).cuda()
+        cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
+
+        # Round-trip state dict save/load/save.
+        state_dict = {k: v.clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(state_dict)
+        state_dict = model.state_dict()
+
+        assert ref_state_dict.keys() == state_dict.keys(), f"{ref_state_dict.keys()} != {state_dict.keys()}"
+        for key in ref_state_dict.keys():
+            assert objects_are_equal(
+                ref_state_dict[key], state_dict[key], raise_exception=False
+            ), f"{key}, {ref_state_dict[key]} != {state_dict[key]}"
+
+    @classmethod
+    def _test_nested_wrapped_model_local_state_dict(cls, rank, group, config=None, local=None):
+        # Create a nested FSDP-wrapped instance.
+        model = NestedWrappedModule(group, config)
+        model = FullyShardedDataParallel(model, group, **config).cuda()
+        cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
+
+        # Round trip state dict save/load/save.
+        ref_state_dict = {k: v.clone() for k, v in model.local_state_dict().items()}
+        model.load_local_state_dict(ref_state_dict)
+        state_dict = model.local_state_dict()
+
+        assert ref_state_dict.keys() == state_dict.keys(), f"{ref_state_dict.keys()} != {state_dict.keys()}"
+        for key in ref_state_dict.keys():
+            assert objects_are_equal(
+                ref_state_dict[key], state_dict[key], raise_exception=False
+            ), f"{key}, {ref_state_dict[key]} != {state_dict[key]}"
 
 
 class TestHooks(DistributedTest):
@@ -689,7 +743,10 @@ class NestedWrappedModule(nn.Module):
 
         torch.manual_seed(0)  # keep everything deterministic
         self.module = nn.Sequential(
-            nn.Linear(8, 4), _maybe_wrap(nn.Linear(4, 16)), _maybe_wrap(nn.Linear(16, 4)), nn.Linear(4, 8),
+            nn.Linear(8, 4),
+            _maybe_wrap(nn.Sequential(_maybe_wrap(nn.Linear(4, 16)), nn.Linear(16, 16),)),
+            _maybe_wrap(nn.Linear(16, 4)),
+            nn.Linear(4, 8),
         )
 
     def get_input(self, device):
