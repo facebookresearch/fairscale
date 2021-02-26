@@ -10,14 +10,21 @@ FairScale is a PyTorch extension library for high performance and large scale tr
 
 FairScale supports:
 * Parallelism:
-   * pipeline parallelism (fairscale.nn.Pipe)
+   * Pipeline parallelism (fairscale.nn.pipe)
+   * Asynchronous Pipeline parallelism (fairscale.nn.async_pipe)
+   * Mixture of experts (fairscale.nn.moe.moe_layer)
+   * Model Parallelism (fairscale.nn.model_parallel.layers)
+   * _experimental_ AmpNet (fairscale.experimental.nn.ampnet_pipe)
 * Sharded training:
-   * Optimizer state sharding (fairscale.optim.oss)
-   * Sharded grad scaler - automatic mixed precision
-   * Sharded distributed data parallel
+   * Optimizer state sharding (fairscale.optim.OSS)
+   * Sharded grad scaler - automatic mixed precision (fairscale.optim.grad_scaler)
+   * Sharded distributed data parallel (fairscale.nn.ShardedDataParallel)
+   * Fully Sharded Data Parallel (FSDP) (fairscale.nn.FullyShardedDataParallel)
+   * _experimental_ Offload (fairscale.experimental.nn.offload)
 * Optimization at scale:
-   * AdaScale SGD (from fairscale.optim import AdaScale)
-
+   * AdaScale SGD (fairscale.optim.AdaScale)
+* GPU memory optimization:
+   * Activation checkpointing wrapper(fairscale.nn.misc.checkpoint_wrapper)
 
 ## Requirements
 
@@ -184,3 +191,5 @@ Here is a list of all authors on relevant research papers this work is based on:
 * ZeRO: Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, Yuxiong He. [[Paper](https://arxiv.org/pdf/1910.02054.pdf)] [[Code](https://github.com/microsoft/DeepSpeed)]
 * Megatron-LM: Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley, Jared Casper, Bryan Catanzaro. [[Paper](https://arxiv.org/pdf/1909.08053.pdf)][[Code](https://github.com/NVIDIA/Megatron-LM)]
 * AdaScale SGD: Tyler B. Johnson, Pulkit Agrawal, Haijie Gu, Carlos Guestrin. [[Paper](https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Paper.pdf)]
+* GShard: Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu, Dehao Chen, Orhan Firat, Yanping Huang, Maxim Krikun, Noam Shazeer, Zhifeng Chen [[Paper]](https://arxiv.org/abs/2006.16668)
+* AMPNet:Alexander L. Gaunt, Matthew A. Johnson, Maik Riechert, Daniel Tarlow, Ryota Tomioka, Dimitrios Vytiniotis, Sam Webster [[Paper]](https://arxiv.org/abs/1705.09786)
