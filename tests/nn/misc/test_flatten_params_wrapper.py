@@ -16,12 +16,26 @@ from fairscale.utils.testing import objects_are_equal
 
 
 class TestFlattenParams(unittest.TestCase):
+    def _get_module_init_fns(self):
+        return [
+            self._get_shared_params_transformer,
+            self._get_nested_flat_module,
+        ]
+
     def _get_transformer(self, seed=0):
         torch.manual_seed(seed)  # keep everything deterministic
         module = torch.nn.Transformer(
             d_model=32, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=128, dropout=0.1,
         )
         module.register_buffer("dummy_buffer", torch.tensor(1.0))
+
+        def get_input(device, dtype):
+            torch.manual_seed(1)  # keep everything deterministic
+            src = torch.rand(20, 8, 32).to(device=device, dtype=dtype)  # T x B x C
+            tgt = torch.rand(10, 8, 32).to(device=device, dtype=dtype)  # T x B x C
+            return (src, tgt)
+
+        module.get_input = get_input
         return module
 
     def _get_shared_params_transformer(self, seed=0):
@@ -32,13 +46,27 @@ class TestFlattenParams(unittest.TestCase):
             dec_layer.linear2.weight = enc_layer.linear2.weight
         return module
 
+    def _get_nested_flat_module(self, seed=0):
+        module = torch.nn.Sequential(
+            FlattenParamsWrapper(
+                torch.nn.Sequential(torch.nn.Linear(4, 8), FlattenParamsWrapper(torch.nn.Linear(8, 8)))
+            ),
+            FlattenParamsWrapper(torch.nn.Sequential(FlattenParamsWrapper(torch.nn.Linear(8, 16)))),
+            FlattenParamsWrapper(torch.nn.Linear(16, 4)),
+        )
+
+        def get_input(device, dtype):
+            torch.manual_seed(1)  # keep everything deterministic
+            return (torch.rand(8, 4).to(device=device, dtype=dtype),)
+
+        module.get_input = get_input
+        return module
+
     def _get_output(self, module):
-        torch.manual_seed(1)  # keep everything deterministic
         device = next(module.parameters()).device
         dtype = next(module.parameters()).dtype
-        src = torch.rand(20, 8, 32).to(device=device, dtype=dtype)  # T x B x C
-        tgt = torch.rand(10, 8, 32).to(device=device, dtype=dtype)  # T x B x C
-        return module(src, tgt)
+        input = module.get_input(device, dtype)
+        return module(*input)
 
     def _get_pnorm_after_step(self, module):
         optim = torch.optim.SGD(module.parameters(), lr=0.01)
@@ -120,39 +148,53 @@ class TestFlattenParams(unittest.TestCase):
         torch.testing.assert_allclose(ref_pnorm_after_step, flat_pnorm_after_step)
 
     def test_state_dict_equality(self):
-        module = self._get_shared_params_transformer()
-        ref_state_dict = module.state_dict()
+        """Test that unflattened state dict matches original (unwrapped) one."""
+        modules_to_test = [init_fn() for init_fn in self._get_module_init_fns()]
+        for module in modules_to_test:
+            ref_state_dict = module.state_dict()
 
-        flat_module = FlattenParamsWrapper(module)
-        flat_state_dict = flat_module.state_dict()
+            flat_module = FlattenParamsWrapper(module)
+            flat_state_dict = flat_module.state_dict()
 
-        assert objects_are_equal(ref_state_dict, flat_state_dict)
+            assert (
+                ref_state_dict.keys() == flat_state_dict.keys()
+            ), f"{ref_state_dict.keys()} != {flat_state_dict.keys()}"
+            assert objects_are_equal(ref_state_dict, flat_state_dict), f"{ref_state_dict} != {flat_state_dict}"
 
     def test_load_state_dict(self):
-        module = self._get_shared_params_transformer()
-        ref_state_dict = module.state_dict()
-        ref_output = self._get_output(module)
+        """Test that original (unwrapped) state_dict can be loaded in wrapped module."""
+        for module_init_fn in self._get_module_init_fns():
+            module = module_init_fn()
+            ref_state_dict = module.state_dict()
+            ref_output = self._get_output(module)
 
-        module = self._get_shared_params_transformer(seed=1234)
-        flat_module = FlattenParamsWrapper(module)
-        flat_module.load_state_dict(ref_state_dict)
-        flat_output = self._get_output(flat_module)
+            module = module_init_fn(seed=1234)
+            flat_module = FlattenParamsWrapper(module)
 
-        assert objects_are_equal(ref_output, flat_output)
+            # This should work without the unflatten_params context manager
+            flat_module.load_state_dict(ref_state_dict)
+            flat_output = self._get_output(flat_module)
+            assert objects_are_equal(ref_output, flat_output)
+
+            # And it should work with the context manager too
+            with flat_module.unflatten_params():
+                flat_module.load_state_dict(ref_state_dict)
+            flat_output = self._get_output(flat_module)
+            assert objects_are_equal(ref_output, flat_output)
 
     def test_flat_state_dict(self):
-        flat_module = self._get_shared_params_transformer()
-        flat_module = FlattenParamsWrapper(flat_module)
-        ref_output = self._get_output(flat_module)
+        """Test that flat state dict can be reloaded and produces the same results."""
+        for module_init_fn in self._get_module_init_fns():
+            flat_module = FlattenParamsWrapper(module_init_fn())
+            ref_output = self._get_output(flat_module)
 
-        flat_state_dict = flat_module.flat_state_dict()
+            flat_state_dict = flat_module.flat_state_dict()
 
-        new_module = self._get_shared_params_transformer(seed=1234)
-        new_module = FlattenParamsWrapper(new_module)
-        new_module.load_state_dict(flat_state_dict)
-        new_output = self._get_output(new_module)
+            new_module = FlattenParamsWrapper(module_init_fn(seed=1234))
+            new_module.load_state_dict(flat_state_dict)
+            new_output = self._get_output(new_module)
 
-        assert objects_are_equal(ref_output, new_output)
+            assert objects_are_equal(ref_output, new_output)
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "test requires a GPU")
