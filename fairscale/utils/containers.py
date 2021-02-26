@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import torch
@@ -16,6 +17,11 @@ def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tu
     def _apply(x: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
         if torch.is_tensor(x):
             return fn(x)
+        elif isinstance(x, OrderedDict):
+            od = OrderedDict()
+            for key, value in x.items():
+                od[key] = _apply(value)
+            return od
         elif isinstance(x, dict):
             return {key: _apply(value) for key, value in x.items()}
         elif isinstance(x, list):

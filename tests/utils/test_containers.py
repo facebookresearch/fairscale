@@ -9,6 +9,7 @@
 
 """ Test utility classes from containers.py. """
 
+from collections import OrderedDict
 import random
 
 import pytest
@@ -44,6 +45,9 @@ def test_apply_to_tensors(devices):
     data.append({"key1": get_a_tensor(), "key2": {1: get_a_tensor()}, "key3": 3})
     data.insert(0, set(["x", get_a_tensor(), get_a_tensor()]))
     data.append(([1], get_a_tensor(), (1), [get_a_tensor()], set((1, 2))))
+    od = OrderedDict()
+    od["k"] = "value"
+    data.append(od)
 
     total = 0
 
@@ -52,8 +56,10 @@ def test_apply_to_tensors(devices):
         total += t.numel()
         return t
 
-    apply_to_tensors(fn, data)
+    new_data = apply_to_tensors(fn, data)
     assert total == expected, f"{total} vs. {expected}"
+    for i, v in enumerate(data):
+        assert type(new_data[i]) == type(v), f"expected type {type(v)} got {type(new_data[i])}"
 
 
 def test_pack_unpack():

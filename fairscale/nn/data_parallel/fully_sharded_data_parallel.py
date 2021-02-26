@@ -51,6 +51,7 @@ class TrainingState(Enum):
     IDLE = auto()
     FORWARD = auto()
     BACKWARD = auto()
+    SUMMON_FULL_PARAMS = auto()
 
 
 class FullyShardedDataParallel(nn.Module):
@@ -383,17 +384,18 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        torch.cuda.synchronize()
-        self._lazy_init()
-        self._rebuild_full_params()
-        self._all_buffers_to(dtype=torch.float32)  # Buffers dtype stays consistent with parameters.
-        state_dict = self.module.state_dict(*args, **kwargs)
-        # We don't free the params after generating the state dict, since
-        # freeing is done in-place (via the Storage) and would corrupt the
-        # returned state dict. However, we need to maintain the invariant that
-        # p.data corresponds to the FP32 param shard, so we do that here.
-        self._use_fp32_param_shard()
-        self._all_buffers_to(dtype=self.compute_dtype)
+        with self.summon_full_params():
+            # Buffers dtype stays consistent with parameters.
+            self._all_buffers_to(dtype=torch.float32)
+
+            state_dict = self.module.state_dict(*args, **kwargs)
+            # We copy the state_dict since full param will be freed after
+            # we exit the summon_full_params() context.
+            for key in state_dict.keys():
+                state_dict[key] = state_dict[key].clone()
+
+            # In case we are in mixed precision, restore buffers back to fp16.
+            self._all_buffers_to(dtype=self.compute_dtype)
         return state_dict
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
@@ -419,11 +421,8 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        torch.cuda.synchronize()
-        self._lazy_init()
-        self._rebuild_full_params()
-        output = self.module.load_state_dict(state_dict, strict)
-        self._free_full_params()
+        with self.summon_full_params():
+            output = self.module.load_state_dict(state_dict, strict)
         return output
 
     def load_local_state_dict(
@@ -456,6 +455,32 @@ class FullyShardedDataParallel(nn.Module):
         finally:
             for m, old_flag in old_flags:
                 m.require_backward_grad_sync = old_flag
+
+    @contextlib.contextmanager
+    def summon_full_params(self) -> Generator:
+        """
+        A context manager to expose full params for the underlying model.
+        Can be useful *after* forward/backward for a model to get the params
+        for additional processing or checking.
+
+        This can be used on inner FSDPs.
+
+        This can *not* be used within a forward or backward pass. Nor can forward
+        and backward be started from within this context.
+        """
+        torch.cuda.synchronize()
+        self._lazy_init()
+        self.assert_state(TrainingState.IDLE)
+        # Set the state so that we assert when trying to go into
+        # forward/backward.
+        self.training_state = TrainingState.SUMMON_FULL_PARAMS
+        self._rebuild_full_params()
+        try:
+            yield
+        finally:
+            self._free_full_params()
+            self._use_fp32_param_shard()
+            self.training_state = TrainingState.IDLE
 
     def _reset_lazy_init(self) -> None:
         """Reset instance so :func:`_lazy_init` will run on the next forward."""
@@ -815,8 +840,11 @@ class FullyShardedDataParallel(nn.Module):
         if self.move_grads_to_cpu:
             # Wait for the non-blocking GPU -> CPU grad transfers to finish.
             torch.cuda.current_stream().synchronize()
-        # A backward pass is done.
-        self.training_state = TrainingState.IDLE
+        # A backward pass is done, update root and nested FSDP's flags.
+        for m in self.modules():  # includes self
+            if isinstance(m, FullyShardedDataParallel):
+                m.assert_state(TrainingState.BACKWARD)
+                m.training_state = TrainingState.IDLE
 
     @torch.no_grad()
     def _rebuild_full_params(self) -> None:
@@ -851,6 +879,10 @@ class FullyShardedDataParallel(nn.Module):
 
     @torch.no_grad()
     def _use_full_params(self) -> None:
+        """Switching p.data pointers to use the full params.
+
+           Note: this is used assuming full param gathering is already done.
+        """
         for p in self.params:
             if not p._is_sharded:
                 if self.mixed_precision:
