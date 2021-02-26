@@ -65,6 +65,8 @@ def replace_by_prefix_(
         replace_by_prefix_(state_dict, "layer.", "module.layer.")
         assert state_dict == {"module.layer.xyz": torch.tensor(1)}
     """
+    if old_prefix == new_prefix:
+        raise ValueError("old_prefix and new_prefix must be distinct")
     for key in list(state_dict.keys()):
         if not key.startswith(old_prefix):
             continue

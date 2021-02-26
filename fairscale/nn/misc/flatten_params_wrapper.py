@@ -58,8 +58,8 @@ class FlattenParamsWrapper(nn.Module):
 
         # Register hook to be called after state_dict() to remove the
         # "_fpw_module." prefix and before load_state_dict() to add it back.
-        self._register_state_dict_hook(type(self)._post_state_dict_hook)
-        self._register_load_state_dict_pre_hook(self._pre_load_state_dict_hook)
+        self._register_state_dict_hook(_post_state_dict_hook)
+        self._register_load_state_dict_pre_hook(_pre_load_state_dict_hook)
 
         # Flag to indicate whether state_dict() should automatically unflatten
         # params. This defaults to True, but may be set to False if the user
@@ -149,19 +149,22 @@ class FlattenParamsWrapper(nn.Module):
         """
         if recurse:
             with ExitStack() as stack:
+                # unflatten any nested FlattenParamsWrapper instances
                 for module in self.modules():
                     if isinstance(module, FlattenParamsWrapper):
                         stack.enter_context(module.unflatten_params(recurse=False))
+                # yield to the caller, with unflattened params in all nested instances
                 yield
+            # exiting from the ExitStack will re-flatten params
             return
-
-        orig_flattened = self.is_flattened
-        if self.is_flattened:
-            self._unflatten_params()
-        yield
-        if orig_flattened:
-            self._flatten_params()
-            self._unflatten_params_as_views()
+        else:
+            orig_flattened = self.is_flattened
+            if self.is_flattened:
+                self._unflatten_params()
+            yield
+            if orig_flattened:
+                self._flatten_params()
+                self._unflatten_params_as_views()
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -177,12 +180,6 @@ class FlattenParamsWrapper(nn.Module):
                 return super().state_dict(*args, **kwargs)
         else:
             return super().state_dict(*args, **kwargs)
-
-    def _post_state_dict_hook(
-        self, state_dict: "OrderedDict[str, Tensor]", prefix: str, *args: Any
-    ) -> "OrderedDict[str, Tensor]":
-        replace_by_prefix_(state_dict, prefix + "_fpw_module.", prefix)
-        return state_dict
 
     def flat_state_dict(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         """Return the flattened state_dict."""
@@ -201,17 +198,6 @@ class FlattenParamsWrapper(nn.Module):
         self._auto_unflatten_state_dict = False
         yield
         self._auto_unflatten_state_dict = backup
-        return
-
-    @staticmethod
-    def _pre_load_state_dict_hook(
-        state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], prefix: str, *args: Any
-    ) -> None:
-        replace_by_prefix_(state_dict, prefix, prefix + "_fpw_module.")
-        # flat_param actually needs to move one level up though
-        flat_param_key = prefix + "_fpw_module.flat_param"
-        if flat_param_key in state_dict:
-            replace_by_prefix_(state_dict, flat_param_key, prefix + "flat_param")
 
     def load_state_dict(
         self, state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], strict: bool = True
@@ -230,3 +216,20 @@ class FlattenParamsWrapper(nn.Module):
     def forward(self, *inputs: Any, **kwinputs: Any) -> Any:
         self._unflatten_params_as_views()
         return self.module(*inputs, **kwinputs)
+
+
+def _post_state_dict_hook(
+    module: nn.Module, state_dict: "OrderedDict[str, Tensor]", prefix: str, *args: Any
+) -> "OrderedDict[str, Tensor]":
+    replace_by_prefix_(state_dict, prefix + "_fpw_module.", prefix)
+    return state_dict
+
+
+def _pre_load_state_dict_hook(
+    state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], prefix: str, *args: Any
+) -> None:
+    replace_by_prefix_(state_dict, prefix, prefix + "_fpw_module.")
+    # flat_param actually needs to move one level up though
+    flat_param_key = prefix + "_fpw_module.flat_param"
+    if flat_param_key in state_dict:
+        replace_by_prefix_(state_dict, flat_param_key, prefix + "flat_param")

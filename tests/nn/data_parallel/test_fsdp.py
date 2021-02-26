@@ -409,7 +409,8 @@ class TestLocalStateDict(DistributedTest):
 
         # Assert that parameters were updated since before training
         unchanged = []
-        buffers = {name for name, _ in model.module.named_buffers()}
+        unwrapped_model = model.module.module if config["flatten_parameters"] else model.module
+        buffers = {name for name, _ in unwrapped_model.named_buffers()}
         for k in state_1:
             if (state_before_training[k] == state_after_training[k]).all() and (k not in buffers):
                 unchanged.append(k)
