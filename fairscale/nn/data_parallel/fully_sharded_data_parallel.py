@@ -607,10 +607,13 @@ class FullyShardedDataParallel(nn.Module):
             return
         # No FullyShardedDataParallel instance wraps this, else _is_root would be set to False.
         self._is_root = True
+        assert self._queue_wait_for_post_backward_closure is None
+        self._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
         # As the root, we now set all children instances to False and
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
-        for n, m in self.named_modules():  # including self.
+        for n, m in self.named_modules():
+            # `n != ""` excludes self.
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 assert m._is_root is None
                 m._is_root = False
