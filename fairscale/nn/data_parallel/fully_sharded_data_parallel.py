@@ -8,7 +8,7 @@ import copy
 from enum import Enum, auto
 import functools
 from math import inf
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
 from torch.autograd import Variable
@@ -780,6 +780,7 @@ class FullyShardedDataParallel(nn.Module):
         # post-backward work has finished. We only need one callback and all instances
         # of FSDP (root and children) make this attempt here to queue to ensure it is queued
         # no matter which instance(s) has(have) params.
+        assert self._queue_wait_for_post_backward_closure is not None
         self._queue_wait_for_post_backward_closure()
 
         if not self._require_backward_grad_sync:
