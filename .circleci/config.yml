@@ -5,7 +5,7 @@
 # Adopted from
 # https://github.com/facebookresearch/detectron2/blob/master/.circleci/config.yml
 
-version: 2
+version: 2.1
 
 # -------------------------------------------------------------------------------------
 # Environments to run the jobs in
@@ -141,6 +141,10 @@ run_flake8: &run_flake8
         flake8 --show-source --statistics
 
 
+# TODO (Min): figure out how to do coverage nightly or on-demand. Doing it
+# on every commit seems like an overkill since we can easily figure out which
+# code is not covered without looking at coverage results from each commit.
+# Also, it is a long pole for testing time, which slows down development a lot.
 run_coverage: &run_coverage
   - run:
       name: Run Unit Tests With Coverage
@@ -148,12 +152,6 @@ run_coverage: &run_coverage
         pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./
         #Uploading test coverage for Python code
         bash <(curl -s https://codecov.io/bash) -f coverage.xml -cF Python
-
-run_unittests: &run_unittests
-  - run:
-      name: Run Unit Tests
-      command: |
-        pytest --junitxml=test-results/junit.xml --verbose --timeout 60
 
 run_mpi_unittests: &run_mpi_unittests
   - run:
@@ -211,6 +209,18 @@ run_doc_build: &run_doc_build
          make singlehtml | tee make.out
          ! tail make.out | grep -q warning
 
+commands:
+   run_unittests:
+     parameters:
+       test_dir:
+         type: string
+         default: "."  # Default to run all tests, which may take a long time on GPUs.
+     steps:
+       - run:
+           name: Run Unit Tests
+           command: |
+             pytest --junitxml=test-results/junit.xml --verbose --timeout 60 <<parameters.test_dir>>
+
 # -------------------------------------------------------------------------------------
 # Jobs to run
 # -------------------------------------------------------------------------------------
@@ -243,7 +253,7 @@ jobs:
       - <<: *run_black
       - <<: *run_mypy
       - <<: *run_flake8
-      - <<: *run_unittests
+      - run_unittests
       - <<: *run_mpi_unittests
       - <<: *run_doc_build
 
@@ -277,7 +287,7 @@ jobs:
       - <<: *run_black
       - <<: *run_mypy
       - <<: *run_flake8
-      - <<: *run_unittests
+      - run_unittests
       - <<: *run_mpi_unittests
       - <<: *run_doc_build
 
@@ -315,7 +325,7 @@ jobs:
       - <<: *run_black
       - <<: *run_mypy
       - <<: *run_flake8
-      - <<: *run_unittests
+      - run_unittests
       - <<: *run_mpi_unittests
       - <<: *run_doc_build
 
@@ -324,6 +334,11 @@ jobs:
 
 
   gpu_tests_151:
+    parameters:
+      test_dir:
+        type: string
+        default: "."
+      
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -351,12 +366,18 @@ jobs:
 
       - <<: *install_repo_gpu
 
-      - <<: *run_unittests
+      - run_unittests:
+          test_dir: <<parameters.test_dir>>
 
       - store_test_results:
           path: test-results
 
   gpu_tests_160:
+    parameters:
+      test_dir:
+        type: string
+        default: "."
+
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -384,12 +405,18 @@ jobs:
 
       - <<: *install_repo_gpu
 
-      - <<: *run_unittests
+      - run_unittests:
+          test_dir: <<parameters.test_dir>>
 
       - store_test_results:
           path: test-results
 
   gpu_tests_171:
+    parameters:
+      test_dir:
+        type: string
+        default: "."
+
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -417,7 +444,8 @@ jobs:
 
       - <<: *install_repo_gpu
 
-      - <<: *run_coverage
+      - run_unittests:
+          test_dir: <<parameters.test_dir>>
 
       - store_test_results:
           path: test-results
@@ -475,7 +503,28 @@ workflows:
       - cpu_tests_py37
       - cpu_tests_py38
       - cpu_tests_py39
-      - gpu_tests_151
-      - gpu_tests_160
-      - gpu_tests_171
+      - gpu_tests_151:
+          test_dir: tests/experimental
+      - gpu_tests_160:
+          test_dir: tests/experimental
+      - gpu_tests_171:
+          test_dir: tests/experimental
+      - gpu_tests_151:
+          test_dir: tests/nn
+      - gpu_tests_160:
+          test_dir: tests/nn
+      - gpu_tests_171:
+          test_dir: tests/nn
+      - gpu_tests_151:
+          test_dir: tests/optim
+      - gpu_tests_160:
+          test_dir: tests/optim
+      - gpu_tests_171:
+          test_dir: tests/optim
+      - gpu_tests_151:
+          test_dir: tests/utils
+      - gpu_tests_160:
+          test_dir: tests/utils
+      - gpu_tests_171:
+          test_dir: tests/utils
       - benchmarks
