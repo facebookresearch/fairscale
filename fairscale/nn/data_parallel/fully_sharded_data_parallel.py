@@ -401,9 +401,9 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        # TODO
-        # Buffers dtype stays consistent with parameters.
-        # self._all_buffers_to(dtype=torch.float32)
+        if self.mixed_precision:
+            # Buffers dtype stays consistent with parameters.
+            self._all_buffers_to(dtype=torch.float32)
 
         if self._return_full_state_dict:
             if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
@@ -422,9 +422,9 @@ class FullyShardedDataParallel(nn.Module):
             else:
                 state_dict = super().state_dict(*args, **kwargs)
 
-        # TODO
-        # In case we are in mixed precision, restore buffers back to fp16.
-        # self._all_buffers_to(dtype=self.compute_dtype)
+        if self.mixed_precision:
+            # In case we are in mixed precision, restore buffers back to fp16.
+            self._all_buffers_to(dtype=self.compute_dtype)
         return state_dict
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
