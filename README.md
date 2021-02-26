@@ -20,7 +20,6 @@ FairScale supports:
    * Sharded grad scaler - automatic mixed precision (fairscale.optim.grad_scaler)
    * Sharded distributed data parallel (fairscale.nn.ShardedDataParallel)
    * Fully Sharded Data Parallel (FSDP) (fairscale.nn.FullyShardedDataParallel)
-   * _experimental_ Offload (fairscale.experimental.nn.offload)
 * Optimization at scale:
    * AdaScale SGD (fairscale.optim.AdaScale)
 * GPU memory optimization:
