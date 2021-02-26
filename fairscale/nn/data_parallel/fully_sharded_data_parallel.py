@@ -173,11 +173,11 @@ class FullyShardedDataParallel(nn.Module):
         params = list(p for p in module.parameters() if not hasattr(p, "_is_sharded"))
 
         if self.flatten_parameters and len(params) > 0:
-            self._fsdp_module: nn.Module = FlattenParamsWrapper(module, param_list=params)
+            self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=params)
             del module  # free original module in case it helps garbage collection
-            self.params = [self._fsdp_module.flat_param]
+            self.params = [self._fsdp_wrapped_module.flat_param]
         else:
-            self._fsdp_module = module
+            self._fsdp_wrapped_module = module
             self.params = params
 
         # Shard module parameters in place
@@ -196,8 +196,8 @@ class FullyShardedDataParallel(nn.Module):
         # Enum to indicate if we're in the forward/backward pass, idle, etc.
         self.training_state = TrainingState.IDLE
 
-        # Register hook to be called after state_dict() to remove the
-        # "_fsdp_module." prefix and before load_state_dict() to add it back.
+        # Register hook after state_dict() to remove the "_fsdp_wrapped_module."
+        # prefix and before load_state_dict() to add it back.
         self._register_state_dict_hook(_post_state_dict_hook)
         self._register_load_state_dict_pre_hook(_pre_load_state_dict_hook)
 
@@ -208,7 +208,7 @@ class FullyShardedDataParallel(nn.Module):
 
     @property
     def module(self) -> nn.Module:
-        return self._fsdp_module  # note: may be a FlattenParamsWrapper instance
+        return self._fsdp_wrapped_module  # note: may be a FlattenParamsWrapper instance
 
     @torch.no_grad()
     def _all_buffers_to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> None:
@@ -1083,12 +1083,12 @@ def _post_state_dict_hook(
         for key in state_dict.keys():
             state_dict[key] = state_dict[key].clone()
 
-    # Remove "_fsdp_module." prefix
-    replace_by_prefix_(state_dict, prefix + "_fsdp_module.", prefix)
+    # Remove "_fsdp_wrapped_module." prefix
+    replace_by_prefix_(state_dict, prefix + "_fsdp_wrapped_module.", prefix)
     return state_dict
 
 
 def _pre_load_state_dict_hook(
     state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], prefix: str, *args: Any
 ) -> None:
-    replace_by_prefix_(state_dict, prefix, prefix + "_fsdp_module.")
+    replace_by_prefix_(state_dict, prefix, prefix + "_fsdp_wrapped_module.")
