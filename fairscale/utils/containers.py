@@ -3,8 +3,8 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from collections import OrderedDict
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import torch
 

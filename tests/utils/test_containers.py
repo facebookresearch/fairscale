@@ -9,8 +9,8 @@
 
 """ Test utility classes from containers.py. """
 
-import random
 from collections import OrderedDict
+import random
 
 import pytest
 import torch
