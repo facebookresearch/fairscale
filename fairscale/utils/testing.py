@@ -415,7 +415,7 @@ def objects_are_equal(a: Any, b: Any, raise_exception: bool = False) -> bool:
             shape_dtype_device_match = a.size() == b.size() and a.dtype == b.dtype and a.device == b.device
             assert shape_dtype_device_match
             return True
-        except AssertionError as e:
+        except (AssertionError, RuntimeError) as e:
             if raise_exception:
                 raise e
             else:
