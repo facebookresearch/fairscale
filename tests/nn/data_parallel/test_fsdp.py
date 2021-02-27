@@ -15,7 +15,7 @@ from parameterized import parameterized
 import torch
 from torch import nn
 
-from fairscale.nn.data_parallel import FullyShardedDataParallel
+from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
 from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
@@ -65,8 +65,8 @@ class DistributedTest(unittest.TestCase):
                 else:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm, norm_type)
             optim.step()
-        if hasattr(model, "assert_idle"):
-            model.assert_idle()
+        if isinstance(model, FullyShardedDataParallel):
+            model.assert_state(TrainingState.IDLE)
         return loss.detach()
 
     @staticmethod
@@ -181,6 +181,12 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     Compare losses and parameter values after several updates when using
     PyTorch DDP vs. FullyShardedDataParallel.
     """
+
+    def test_nested_all_wrapped_model(self):
+        config = {"mixed_precision": True}
+        model_fn = functools.partial(NestedWrappedModule, wrap_everything=True)
+        test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
+        spawn_and_init(test_fn)
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_parameterized(self, config):
@@ -730,7 +736,7 @@ class TransformerWithSharedParams(nn.Module):
 
 
 class NestedWrappedModule(nn.Module):
-    def __init__(self, group, wrapper_config):
+    def __init__(self, group, wrapper_config, wrap_everything=False):
         super().__init__()
         self.rank = group.rank()
         self.world_size = group.size()
@@ -748,6 +754,15 @@ class NestedWrappedModule(nn.Module):
             _maybe_wrap(nn.Linear(16, 4)),
             nn.Linear(4, 8),
         )
+
+        # Wrap all modules triggers a corner case where root FSDP doesn't have any params.
+        if wrap_everything:
+            self.module = nn.Sequential(
+                _maybe_wrap(nn.Linear(8, 4)),
+                _maybe_wrap(nn.Linear(4, 16)),
+                _maybe_wrap(nn.Linear(16, 4)),
+                _maybe_wrap(nn.Linear(4, 8)),
+            )
 
     def get_input(self, device):
         torch.manual_seed(1 + self.rank)  # keep everything deterministic
