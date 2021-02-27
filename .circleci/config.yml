@@ -4,6 +4,8 @@
 #
 # Adopted from
 # https://github.com/facebookresearch/detectron2/blob/master/.circleci/config.yml
+#
+# Pro tip: download circle ci cli to validate the config locally during development.
 
 version: 2.1
 
@@ -140,6 +142,12 @@ run_flake8: &run_flake8
       command: |
         flake8 --show-source --statistics
 
+check_test_list: &check_test_list
+  - run:
+      name: Verify that unit test list files are correct
+      command: |
+        bash ./tests/ci_test_list_check.sh
+
 
 # TODO (Min): figure out how to do coverage nightly or on-demand. Doing it
 # on every commit seems like an overkill since we can easily figure out which
@@ -209,17 +217,26 @@ run_doc_build: &run_doc_build
          make singlehtml | tee make.out
          ! tail make.out | grep -q warning
 
+run_unittests: &run_unittests
+   - run:
+       name: Run all unit tests.
+       # We run all and not stopping on failure on CPU since docker time is cheaper.
+       command: |
+         pytest --junitxml=test-results/junit.xml --verbose --timeout 60
+
 commands:
-   run_unittests:
+   run_unittests_from_list:
      parameters:
-       test_dir:
+       test_list_file:
          type: string
-         default: "."  # Default to run all tests, which may take a long time on GPUs.
+         default: "/dev/non_exist"  # Default to error out
      steps:
        - run:
            name: Run Unit Tests
+           # we use pytest -x so that it stops on first failure to save GPU time, which is expensive.
            command: |
-             pytest --junitxml=test-results/junit.xml --verbose --timeout 60 <<parameters.test_dir>>
+             if [ ! -f <<parameters.test_list_file>> ]; then exit 1; fi
+             pytest -x --junitxml=test-results/junit.xml --verbose --timeout 60 <<parameters.test_list_file>>
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
@@ -233,6 +250,7 @@ jobs:
 
     steps:
       - checkout
+      - <<: *check_test_list
       - <<: *setup_venv
 
       # Cache the venv directory that contains dependencies
@@ -267,6 +285,7 @@ jobs:
 
     steps:
       - checkout
+      - <<: *check_test_list
       - <<: *setup_venv
 
       # Cache the venv directory that contains dependencies
@@ -301,6 +320,7 @@ jobs:
 
     steps:
       - checkout
+      - <<: *check_test_list
       - <<: *setup_venv
 
       # Cache the venv directory that contains dependencies
@@ -335,9 +355,9 @@ jobs:
 
   gpu_tests_151:
     parameters:
-      test_dir:
+      test_list_file:
         type: string
-        default: "."
+        default: "/dev/non_exist"
       
     <<: *gpu
 
@@ -366,17 +386,17 @@ jobs:
 
       - <<: *install_repo_gpu
 
-      - run_unittests:
-          test_dir: <<parameters.test_dir>>
+      - run_unittests_from_list:
+          test_list_file: <<parameters.test_list_file>>
 
       - store_test_results:
           path: test-results
 
   gpu_tests_160:
     parameters:
-      test_dir:
+      test_list_file:
         type: string
-        default: "."
+        default: "/dev/non_exist"
 
     <<: *gpu
 
@@ -405,17 +425,17 @@ jobs:
 
       - <<: *install_repo_gpu
 
-      - run_unittests:
-          test_dir: <<parameters.test_dir>>
+      - run_unittests_from_list:
+          test_list_file: <<parameters.test_list_file>>
 
       - store_test_results:
           path: test-results
 
   gpu_tests_171:
     parameters:
-      test_dir:
+      test_list_file:
         type: string
-        default: "."
+        default: "/dev/non_exist"
 
     <<: *gpu
 
@@ -444,8 +464,8 @@ jobs:
 
       - <<: *install_repo_gpu
 
-      - run_unittests:
-          test_dir: <<parameters.test_dir>>
+      - run_unittests_from_list:
+          test_list_file: <<parameters.test_list_file>>
 
       - store_test_results:
           path: test-results
@@ -504,27 +524,21 @@ workflows:
       - cpu_tests_py38
       - cpu_tests_py39
       - gpu_tests_151:
-          test_dir: tests/experimental
+          test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_160:
-          test_dir: tests/experimental
+          test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_171:
-          test_dir: tests/experimental
+          test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_151:
-          test_dir: tests/nn
+          test_list_file: tests/ci_test_list_2.txt
       - gpu_tests_160:
-          test_dir: tests/nn
+          test_list_file: tests/ci_test_list_2.txt
       - gpu_tests_171:
-          test_dir: tests/nn
+          test_list_file: tests/ci_test_list_2.txt
       - gpu_tests_151:
-          test_dir: tests/optim
+          test_list_file: tests/ci_test_list_3.txt
       - gpu_tests_160:
-          test_dir: tests/optim
+          test_list_file: tests/ci_test_list_3.txt
       - gpu_tests_171:
-          test_dir: tests/optim
-      - gpu_tests_151:
-          test_dir: tests/utils
-      - gpu_tests_160:
-          test_dir: tests/utils
-      - gpu_tests_171:
-          test_dir: tests/utils
+          test_list_file: tests/ci_test_list_3.txt
       - benchmarks
