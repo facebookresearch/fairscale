@@ -8,7 +8,7 @@ import copy
 from enum import Enum, auto
 import functools
 from math import inf
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union, Iterator
 
 import torch
 from torch.autograd import Variable
@@ -1068,6 +1068,53 @@ class FullyShardedDataParallel(nn.Module):
         assert (
             self.training_state == state
         ), f"expected to be in state {state} but current state is {self.training_state}"
+
+    @staticmethod
+    @contextlib.contextmanager
+    def enable_auto_wrap(**kwargs) -> Iterator[None]:
+        """
+        Context manager to wrap modules in FullyShardedDataParallel.
+        Useful for when you'd like to apply the same parameters to all child modules that you wrap.
+
+            ...
+            with FullyShardedDataParallel.enable_auto_wrap(**fully_sharded_params):
+                self.l1 = FullyShardedDataParallel.auto_wrap(torch.nn.Linear(5, 5))
+                self.l2 = FullyShardedDataParallel.auto_wrap(torch.nn.Linear(5, 5))
+
+        """
+        with FullyShardedAutoWrap(**kwargs):
+            yield
+
+    @staticmethod
+    def auto_wrap(module, **kwargs):
+        if FullyShardedAutoWrap.in_autowrap_context:
+            kwargs = {**FullyShardedAutoWrap.kwargs, **kwargs}
+            return FullyShardedDataParallel(module, **kwargs)
+        return module
+
+
+class FullyShardedAutoWrap:
+    in_autowrap_context = False
+    kwargs = {}
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    @staticmethod
+    def enable_autowrap_context(kwargs):
+        FullyShardedAutoWrap.in_autowrap_context = True
+        FullyShardedAutoWrap.kwargs = kwargs
+
+    @staticmethod
+    def disable_autowrap_context():
+        FullyShardedAutoWrap.in_autowrap_context = False
+        FullyShardedAutoWrap.kwargs = {}
+
+    def __enter__(self):
+        self.enable_autowrap_context(self.kwargs)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.disable_autowrap_context()
 
 
 @torch.no_grad()

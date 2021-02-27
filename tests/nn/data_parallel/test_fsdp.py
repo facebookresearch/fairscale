@@ -697,6 +697,39 @@ class TestNoSync(DistributedTest):
         assert objects_are_equal(ref_grads, accumulated_grads, raise_exception=True)
 
 
+class TestAutoWrap(unittest.TestCase):
+
+    def setUp(self) -> None:
+        class TestDistributedGroup:
+            def size(self):
+                return 1
+
+            @property
+            def world_size(self):
+                return 1
+
+            def rank(self):
+                return 0
+
+        self.process_group = TestDistributedGroup()
+
+    def test_auto_wrap(self):
+        with FullyShardedDataParallel.enable_auto_wrap(flatten_parameters=False, process_group=self.process_group):
+            layer = FullyShardedDataParallel.auto_wrap(torch.nn.Linear(5, 5))
+        assert isinstance(layer, FullyShardedDataParallel)
+        assert layer.flatten_parameters is False
+
+    def test_auto_wrap_disabled_outside_context(self):
+        layer = FullyShardedDataParallel.auto_wrap(torch.nn.Linear(5, 5))
+        assert isinstance(layer, torch.nn.Linear)
+
+    def test_auto_wrap_override_defaults(self):
+        with FullyShardedDataParallel.enable_auto_wrap(flatten_parameters=False, process_group=self.process_group):
+            layer = FullyShardedDataParallel.auto_wrap(torch.nn.Linear(5, 5), flatten_parameters=True)
+        assert isinstance(layer, FullyShardedDataParallel)
+        assert layer.flatten_parameters
+
+
 class TransformerWithSharedParams(nn.Module):
     def __init__(self, group, *unused_args, d_vocab=23, d_model=16, **unused_kwargs):
         super().__init__()
