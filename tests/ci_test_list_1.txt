@@ -1,7 +1,11 @@
+tests/__init__.py
+tests/nn/__init__.py
+tests/nn/misc/__init__.py
 tests/nn/misc/test_flatten_params_wrapper.py
 tests/nn/misc/test_checkpoint_activations.py
 tests/nn/pipe_process/test_pipe.py
 tests/nn/pipe_process/test_transparency.py
+tests/nn/pipe_process/__init__.py
 tests/nn/pipe_process/test_inplace.py
 tests/nn/pipe_process/test_bugs.py
 tests/nn/pipe_process/conftest.py
