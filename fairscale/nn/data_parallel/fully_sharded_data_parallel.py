@@ -259,7 +259,10 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        torch.cuda.synchronize()
+        # We don't call torch.cuda.synchronize() here, since clipping can be
+        # inside the train loop and we probably don't want to force a GPU-CPU sync.
+        # _lazy_init should be sufficient, since it will force the other streams
+        # to sync with the default stream (via _wait_for_previous_optim_step).
         self._lazy_init()
         assert self._is_root, "clip_grad_norm should only be called on the root (parent) instance"
         self.assert_state(TrainingState.IDLE)
@@ -684,6 +687,11 @@ class FullyShardedDataParallel(nn.Module):
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 assert m._is_root is None
                 m._is_root = False
+                # When root instance doesn't have params, allow children instances
+                # to queue the post_backward hook.
+                #
+                # TODO (Min): we should think if we can have a empty param at the root
+                #             so that root always have a callback on the backward graph.
                 if not self._has_params:
                     assert m._queue_wait_for_post_backward_closure is None
                     m._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
