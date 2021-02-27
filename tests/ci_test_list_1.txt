@@ -17,5 +17,3 @@ tests/nn/data_parallel/test_fsdp.py
 tests/nn/data_parallel/test_fsdp_uneven.py
 tests/nn/data_parallel/test_features_sharded_ddp.py
 tests/nn/data_parallel/test_pytorch_parity_sharded_ddp.py
-tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
-tests/experimental/nn/test_offload.py
