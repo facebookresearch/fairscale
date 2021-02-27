@@ -93,18 +93,16 @@ install_dep_180: &install_dep_180
       name: Install Dependencies with torch 1.8.0 nightly
       command: |
         sudo apt-get install -y libopenmpi-dev
+        pip install --progress-bar off -r requirements-test.txt
+        pip install --progress-bar off -r requirements-benchmarks.txt
         # This will install 1.9.
         pip install --pre --progress-bar off torchvision==0.9.0.dev20210222+cu112 -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
         # Get it back to 1.8.
         pip install --pre --progress-bar off torch==1.8.0.dev20210210+cu112 -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
         pip install --progress-bar off  git+https://github.com/min-xu-ai/torch_pg.git@c723ab4#egg=torch-pg
-        pip install --progress-bar off -r requirements-test.txt
-        pip install --progress-bar off -r requirements-benchmarks.txt
-        # Try putting them back.
-        pip install --pre --progress-bar off torchvision==0.9.0.dev20210222+cu112 -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
-        pip install --pre --progress-bar off torch==1.8.0.dev20210210+cu112 -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "8"], "wrong torch version"'
+        pip list|grep torch
         python -m torch.utils.collect_env
 
 install_repo_cpu: &install_repo_cpu
@@ -331,7 +329,7 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py39-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-cpu-py39-180-1-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       # py3.9 doesn't work well with torch < 1.8. See this PR:
       # https://github.com/pytorch/pytorch/pull/50998
@@ -342,7 +340,7 @@ jobs:
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py39-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-py39-180-1-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_cpu
 
