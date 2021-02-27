@@ -29,6 +29,7 @@ from fairscale.utils.containers import (
 )
 from fairscale.utils.parallel import chunk_and_pad, validate_process_group
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
+from fairscale.utils.state_dict import replace_by_prefix_
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -179,11 +180,11 @@ class FullyShardedDataParallel(nn.Module):
 
         self._has_params = len(params) > 0
         if self.flatten_parameters and self._has_params:
-            self.module: nn.Module = FlattenParamsWrapper(module, param_list=params)
+            self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=params)
             del module  # free original module in case it helps garbage collection
-            self.params = [self.module.flat_param]
+            self.params = [self._fsdp_wrapped_module.flat_param]
         else:
-            self.module = module
+            self._fsdp_wrapped_module = module
             self.params = params
 
         # Shard module parameters in place
@@ -199,8 +200,22 @@ class FullyShardedDataParallel(nn.Module):
         # pass. This will be False when inside the no_sync context manager.
         self._require_backward_grad_sync: bool = True
 
-        # Initial state is IDLE
+        # Enum to indicate if we're in the forward/backward pass, idle, etc.
         self.training_state = TrainingState.IDLE
+
+        # Register hook after state_dict() to remove the "_fsdp_wrapped_module."
+        # prefix and before load_state_dict() to add it back.
+        self._register_state_dict_hook(_post_state_dict_hook)
+        self._register_load_state_dict_pre_hook(_pre_load_state_dict_hook)
+
+        # Flag to indicate whether state_dict() should automatically summon the
+        # full params. This defaults to True, but may be set to False if the
+        # user explicitly requests the local state dict via local_state_dict().
+        self._return_full_state_dict = True
+
+    @property
+    def module(self) -> nn.Module:
+        return self._fsdp_wrapped_module  # note: may be a FlattenParamsWrapper instance
 
     @torch.no_grad()
     def _all_buffers_to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> None:
@@ -384,7 +399,7 @@ class FullyShardedDataParallel(nn.Module):
         self._reset_lazy_init()
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
-    def state_dict(self, *args, **kwargs):  # type: ignore
+    def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
         """
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
@@ -394,16 +409,28 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        with self.summon_full_params():
+        if self.mixed_precision:
             # Buffers dtype stays consistent with parameters.
             self._all_buffers_to(dtype=torch.float32)
 
-            state_dict = self.module.state_dict(*args, **kwargs)
-            # We copy the state_dict since full param will be freed after
-            # we exit the summon_full_params() context.
-            for key in state_dict.keys():
-                state_dict[key] = state_dict[key].clone()
+        if self._return_full_state_dict:
+            if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
+                with self.summon_full_params():
+                    state_dict = super().state_dict(*args, **kwargs)
+            else:
+                torch.cuda.synchronize()
+                self._lazy_init()
+                state_dict = super().state_dict(*args, **kwargs)
+        else:
+            torch.cuda.synchronize()
+            self._lazy_init()
+            if self.flatten_parameters:
+                assert isinstance(self.module, FlattenParamsWrapper)
+                state_dict = self.module.flat_state_dict(*args, **kwargs)
+            else:
+                state_dict = super().state_dict(*args, **kwargs)
 
+        if self.mixed_precision:
             # In case we are in mixed precision, restore buffers back to fp16.
             self._all_buffers_to(dtype=self.compute_dtype)
         return state_dict
@@ -415,12 +442,21 @@ class FullyShardedDataParallel(nn.Module):
         so the resulting state_dict can only be loaded after the Module has been
         wrapped with FullyShardedDataParallel.
         """
-        torch.cuda.synchronize()
-        self._lazy_init()
-        if self.flatten_parameters:
-            return self.module.flat_state_dict(*args, **kwargs)  # type: ignore
-        else:
-            return self.module.state_dict(*args, **kwargs)
+        with contextlib.ExitStack() as stack:
+            # Tell any nested FSDP instances not to auto summon full params.
+            for module in self.modules():  # includes self
+                if isinstance(module, FullyShardedDataParallel):
+                    stack.enter_context(module._no_return_full_state_dict())
+            return self.state_dict(*args, **kwargs)
+
+    @contextlib.contextmanager
+    def _no_return_full_state_dict(self) -> Generator:
+        backup = self._return_full_state_dict
+        self._return_full_state_dict = False
+        try:
+            yield
+        finally:
+            self._return_full_state_dict = backup
 
     def load_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
@@ -431,16 +467,25 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        with self.summon_full_params():
-            output = self.module.load_state_dict(state_dict, strict)
-        return output
+        if self._return_full_state_dict:
+            with self.summon_full_params():
+                return self.module.load_state_dict(state_dict, strict)
+        else:
+            torch.cuda.synchronize()
+            self._lazy_init()
+            return self.module.load_state_dict(state_dict, strict)
 
     def load_local_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
         """Load a local (sharded) state_dict."""
-        torch.cuda.synchronize()
-        return self.module.load_state_dict(state_dict, strict)
+        with contextlib.ExitStack() as stack:
+            # Tell any nested FSDP instances not to auto summon full params.
+            for module in self.modules():  # includes self
+                if isinstance(module, FullyShardedDataParallel):
+                    stack.enter_context(module._no_return_full_state_dict())
+            output = self.load_state_dict(state_dict, strict)
+        return output
 
     @contextlib.contextmanager
     def no_sync(self) -> Generator:
@@ -467,30 +512,44 @@ class FullyShardedDataParallel(nn.Module):
                 m._require_backward_grad_sync = old_flag
 
     @contextlib.contextmanager
-    def summon_full_params(self) -> Generator:
+    def summon_full_params(self, recurse: bool = True) -> Generator:
         """
-        A context manager to expose full params for the underlying model.
-        Can be useful *after* forward/backward for a model to get the params
-        for additional processing or checking.
+        A context manager to expose full params for the current FSDP instance.
+        Can be useful *after* forward/backward for a model to get the params for
+        additional processing or checking.
 
-        This can be used on inner FSDPs.
+        By default this will recursively summon all params for nested FSDP
+        instances; this can be disabled by setting ``recurse=False``.
 
-        This can *not* be used within a forward or backward pass. Nor can forward
-        and backward be started from within this context.
+        .. note:: This can be used on inner FSDPs.
+
+        .. note:: This can *not* be used within a forward or backward pass. Nor
+            can forward and backward be started from within this context.
         """
-        torch.cuda.synchronize()
-        self._lazy_init()
-        self.assert_state(TrainingState.IDLE)
-        # Set the state so that we assert when trying to go into
-        # forward/backward.
-        self.training_state = TrainingState.SUMMON_FULL_PARAMS
-        self._rebuild_full_params()
-        try:
-            yield
-        finally:
-            self._free_full_params()
-            self._use_fp32_param_shard()
-            self.training_state = TrainingState.IDLE
+        if recurse:
+            with contextlib.ExitStack() as stack:
+                # summon all params for any nested FlattenParamsWrapper instances
+                for module in self.modules():
+                    if isinstance(module, FullyShardedDataParallel):
+                        stack.enter_context(module.summon_full_params(recurse=False))
+                # yield to the caller, with full params in all nested instances
+                yield
+            # exiting from the ExitStack will re-shard params
+            return
+        else:
+            torch.cuda.synchronize()
+            self._lazy_init()
+            self.assert_state(TrainingState.IDLE)
+            # Set the state so that we assert when trying to go into
+            # forward/backward.
+            self.training_state = TrainingState.SUMMON_FULL_PARAMS
+            self._rebuild_full_params()
+            try:
+                yield
+            finally:
+                self._free_full_params()
+                self._use_fp32_param_shard()
+                self.training_state = TrainingState.IDLE
 
     def _reset_lazy_init(self) -> None:
         """Reset instance so :func:`_lazy_init` will run on the next forward."""
@@ -1048,3 +1107,23 @@ def alloc_storage_(data: torch.Tensor, size: torch.Size) -> None:
         return
     assert data.storage().size() == 0
     data.storage().resize_(size.numel())
+
+
+def _post_state_dict_hook(
+    module: nn.Module, state_dict: "OrderedDict[str, torch.Tensor]", prefix: str, *args: Any
+) -> "OrderedDict[str, torch.Tensor]":
+    if module.training_state == TrainingState.SUMMON_FULL_PARAMS:
+        # We copy the state_dict since full param will be freed after
+        # we exit the summon_full_params() context.
+        for key in state_dict.keys():
+            state_dict[key] = state_dict[key].clone()
+
+    # Remove "_fsdp_wrapped_module." prefix
+    replace_by_prefix_(state_dict, prefix + "_fsdp_wrapped_module.", prefix)
+    return state_dict
+
+
+def _pre_load_state_dict_hook(
+    state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], prefix: str, *args: Any
+) -> None:
+    replace_by_prefix_(state_dict, prefix, prefix + "_fsdp_wrapped_module.")

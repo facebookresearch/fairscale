@@ -10,20 +10,20 @@ FairScale is a PyTorch extension library for high performance and large scale tr
 
 FairScale supports:
 * Parallelism:
-   * Pipeline parallelism (fairscale.nn.pipe)
-   * Asynchronous Pipeline parallelism (fairscale.nn.async_pipe)
-   * Mixture of experts (fairscale.nn.moe.moe_layer)
-   * Model Parallelism (fairscale.nn.model_parallel.layers)
-   * _experimental_ AmpNet (fairscale.experimental.nn.ampnet_pipe)
+   * Pipeline parallelism (`fairscale.nn.pipe`)
+   * Asynchronous Pipeline parallelism (`fairscale.nn.async_pipe`)
+   * Model Parallelism (`fairscale.nn.model_parallel.layers`)
+   * _experimental_ AmpNet (`fairscale.experimental.nn.ampnet_pipe`)
 * Sharded training:
-   * Optimizer state sharding (fairscale.optim.OSS)
-   * Sharded grad scaler - automatic mixed precision (fairscale.optim.grad_scaler)
-   * Sharded distributed data parallel (fairscale.nn.ShardedDataParallel)
-   * Fully Sharded Data Parallel (FSDP) (fairscale.nn.FullyShardedDataParallel)
+   * Optimizer state sharding (`fairscale.optim.OSS`)
+   * Sharded Data Parallel (SDP) (`fairscale.nn.ShardedDataParallel`)
+   * Fully Sharded Data Parallel (FSDP) (`fairscale.nn.FullyShardedDataParallel`)
 * Optimization at scale:
-   * AdaScale SGD (fairscale.optim.AdaScale)
+   * AdaScale SGD (`fairscale.optim.AdaScale`)
 * GPU memory optimization:
-   * Activation checkpointing wrapper(fairscale.nn.misc.checkpoint_wrapper)
+   * Activation checkpointing wrapper (`fairscale.nn.misc.checkpoint_wrapper`)
+* GPU speed optimization:
+   * Sharded grad scaler - automatic mixed precision (`fairscale.optim.grad_scaler`)
 
 ## Requirements
 
