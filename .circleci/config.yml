@@ -470,7 +470,7 @@ jobs:
       - store_test_results:
           path: test-results
 
-  benchmarks:
+  benchmarks_1:
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -505,6 +505,39 @@ jobs:
       - <<: *run_pipe_benchmark
 
       - <<: *run_mp_pipe_benchmark
+
+
+  benchmarks_2:
+    <<: *gpu
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+
+      - run: nvidia-smi
+
+      - run: pyenv uninstall -f 3.7.0
+
+      - run: pyenv install 3.7.0
+
+      - run: pyenv global 3.7.0
+
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_dep_171
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_repo_gpu
 
       - <<: *run_oss_benchmark
 
@@ -541,4 +574,5 @@ workflows:
           test_list_file: tests/ci_test_list_3.txt
       - gpu_tests_171:
           test_list_file: tests/ci_test_list_3.txt
-      - benchmarks
+      - benchmarks_1
+      - benchmarks_2
