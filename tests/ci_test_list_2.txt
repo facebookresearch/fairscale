@@ -1,11 +1,9 @@
-tests/nn/moe/__init__.py
 tests/nn/moe/test_moe_layer.py
 tests/nn/moe/test_top2gating.py
 tests/nn/model_parallel/test_initialize.py
 tests/nn/model_parallel/test_random.py
 tests/nn/model_parallel/test_cross_entropy.py
 tests/nn/model_parallel/test_layers.py
-tests/nn/pipe/__init__.py
 tests/nn/pipe/test_microbatch.py
 tests/nn/pipe/test_checkpoint.py
 tests/nn/pipe/test_worker.py
