@@ -8,7 +8,7 @@ import copy
 from enum import Enum, auto
 import functools
 from math import inf
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, Iterator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
 from torch.autograd import Variable
