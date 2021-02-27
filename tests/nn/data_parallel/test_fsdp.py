@@ -698,7 +698,6 @@ class TestNoSync(DistributedTest):
 
 
 class TestAutoWrap(unittest.TestCase):
-
     def setUp(self) -> None:
         class TestDistributedGroup:
             def size(self):
