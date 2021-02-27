@@ -238,7 +238,7 @@ commands:
            # we use pytest -x so that it stops on first failure to save GPU time, which is expensive.
            command: |
              if [ ! -f <<parameters.test_list_file>> ]; then exit 1; fi
-             pytest -x --junitxml=test-results/junit.xml --verbose --timeout 60 <<parameters.test_list_file>>
+             pytest -x --junitxml=test-results/junit.xml --verbose --timeout 60 `cat <<parameters.test_list_file>>`
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
