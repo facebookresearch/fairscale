@@ -271,7 +271,7 @@ jobs:
       - <<: *run_black
       - <<: *run_mypy
       - <<: *run_flake8
-      - run_unittests
+      - <<: *run_unittests
       - <<: *run_mpi_unittests
       - <<: *run_doc_build
 
@@ -306,7 +306,7 @@ jobs:
       - <<: *run_black
       - <<: *run_mypy
       - <<: *run_flake8
-      - run_unittests
+      - <<: *run_unittests
       - <<: *run_mpi_unittests
       - <<: *run_doc_build
 
@@ -345,7 +345,7 @@ jobs:
       - <<: *run_black
       - <<: *run_mypy
       - <<: *run_flake8
-      - run_unittests
+      - <<: *run_unittests
       - <<: *run_mpi_unittests
       - <<: *run_doc_build
 
