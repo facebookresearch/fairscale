@@ -29,17 +29,22 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
 
     my_lr = 0.1
 
+    device = torch.device("cuda")
+    dtype = torch.float16 if fsdp_config.get("mixed_precision", False) else torch.float32
+
     if test_case["assert_ref_out"]:
         with torch.no_grad():
             # Compute one iteration local output.
-            weight = model.weight.T.clone().cuda()
-            v = torch.Tensor(test_case["inputs"][0][rank]).cuda()
+            fp32_weight = model.weight.T.clone().to(device)
+            weight = fp32_weight.to(dtype)
+            v = torch.Tensor(test_case["inputs"][0][rank]).to(device, dtype)
             ref_forward_output_my_rank = torch.matmul(v, weight)
             # Compute one iteration global weight update.
-            v = torch.Tensor(test_case["inputs"][0][:world_size]).cuda()
-            grad = v.sum(0).repeat(weight.shape[0], 1).div(world_size)
-            ref_weight_out = weight - grad.T * my_lr
-    model.to("cuda")
+            v = torch.Tensor(test_case["inputs"][0][:world_size]).to(device, dtype)
+            grad = v.sum(0).repeat(weight.shape[0], 1).div(world_size).float()
+            ref_weight_out = fp32_weight - grad.T * my_lr
+            assert ref_weight_out.dtype == torch.float32
+    model.to(device)  # not dtype, since FSDP will manage mixed precision internally
     assert isinstance(fsdp_config, dict), str(fsdp_config)
     model = FSDP(model, **fsdp_config)
     optim = SGD(model.parameters(), lr=my_lr)
@@ -47,7 +52,7 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
     assert len(inputs) == 1 or not test_case["assert_ref_out"]
     assert len(inputs[0]) >= world_size
     for in_data in inputs:
-        in_data = Tensor(in_data[rank]).cuda()
+        in_data = Tensor(in_data[rank]).to(device, dtype)
         out = model(in_data)
         out.sum().backward()
         optim.step()
@@ -70,7 +75,7 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
 @skip_if_single_gpu
 @pytest.mark.parametrize("test_case", [{"inputs": [torch.rand(8, 3)], "assert_ref_out": True}])
 @pytest.mark.parametrize(
-    "fsdp_config", [{}, {"flatten_parameters": False}],
+    "fsdp_config", [{}, {"flatten_parameters": False}, {"mixed_precision": True}],
 )
 @pytest.mark.parametrize("world_size", list(range(2, 9)))
 def test_one_iteration(world_size, test_case, fsdp_config):
