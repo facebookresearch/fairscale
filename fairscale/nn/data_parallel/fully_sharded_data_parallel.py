@@ -93,6 +93,12 @@ class FullyShardedDataParallel(nn.Module):
         since FSDP will shard parameters in-place and this will break any
         previously initialized optimizers.
 
+    .. warning::
+
+        If you wrap every parameter inside a nested FSDP and leaving the outer
+        FSDP empty without any parameter, checkpointing activation may trigger
+        an assert on the backward pass. The solution is to leave some parameters
+        to the outer FSDP.
     Args:
         module (nn.Module):
             module to checkpoint
@@ -171,7 +177,8 @@ class FullyShardedDataParallel(nn.Module):
         # shard any leftover parameters.
         params = list(p for p in module.parameters() if not hasattr(p, "_is_sharded"))
 
-        if self.flatten_parameters and len(params) > 0:
+        self._has_params = len(params) > 0
+        if self.flatten_parameters and self._has_params:
             self.module: nn.Module = FlattenParamsWrapper(module, param_list=params)
             del module  # free original module in case it helps garbage collection
             self.params = [self.module.flat_param]
@@ -617,8 +624,9 @@ class FullyShardedDataParallel(nn.Module):
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 assert m._is_root is None
                 m._is_root = False
-                assert m._queue_wait_for_post_backward_closure is None
-                m._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
+                if not self._has_params:
+                    assert m._queue_wait_for_post_backward_closure is None
+                    m._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
                 if m.process_group != self.process_group:
                     self.children_share_process_group = False
 
@@ -783,8 +791,9 @@ class FullyShardedDataParallel(nn.Module):
         # post-backward work has finished. We only need one callback and all instances
         # of FSDP (root and children) make this attempt here to queue to ensure it is queued
         # no matter which instance(s) has(have) params.
-        assert self._queue_wait_for_post_backward_closure is not None
-        self._queue_wait_for_post_backward_closure()
+        assert self._queue_wait_for_post_backward_closure is not None or not self._is_root
+        if self._queue_wait_for_post_backward_closure is not None:
+            self._queue_wait_for_post_backward_closure()
 
         if not self._require_backward_grad_sync:
             return
