@@ -1,3 +1,9 @@
+tests/nn/pipe_process/test_pipe.py
+tests/nn/pipe_process/test_transparency.py
+tests/nn/pipe_process/test_inplace.py
+tests/nn/pipe_process/test_bugs.py
+tests/nn/pipe_process/conftest.py
+tests/nn/pipe_process/test_rpc.py
 tests/nn/moe/test_moe_layer.py
 tests/nn/moe/test_top2gating.py
 tests/nn/model_parallel/test_initialize.py
@@ -19,5 +25,3 @@ tests/nn/pipe/test_phony.py
 tests/nn/pipe/test_deferred_batch_norm.py
 tests/nn/pipe/test_dependency.py
 tests/nn/pipe/test_stream.py
-tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
-tests/experimental/nn/test_offload.py

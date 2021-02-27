@@ -16,3 +16,5 @@ tests/optim/test_adam.py
 tests/optim/test_oss.py
 tests/optim/test_oss_adascale.py
 tests/optim/test_ddp_adascale.py
+tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
+tests/experimental/nn/test_offload.py
