@@ -93,8 +93,8 @@ install_dep_180: &install_dep_180
       name: Install Dependencies with torch 1.8.0 nightly
       command: |
         sudo apt-get install -y libopenmpi-dev
-        pip install --pre --progress-bar off torch==1.8.0.dev20210208+cu110 -f https://download.pytorch.org/whl/nightly/cu110/torch_nightly.html
-        pip install --pre --progress-bar off torchvision==0.9.0.dev20210227 -f https://download.pytorch.org/whl/nightly/cu110/torch_nightly.html
+        pip install --pre --progress-bar off torch==1.8.0.dev20210210+cu112 -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
+        pip install --pre --progress-bar off torchvision==0.9.0.dev20210222+cu112 -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
         pip install --progress-bar off  git+https://github.com/min-xu-ai/torch_pg.git@c723ab4#egg=torch-pg
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
@@ -506,6 +506,10 @@ jobs:
 
       - <<: *run_mp_pipe_benchmark
 
+      - <<: *run_oss_amp
+
+      - <<: *run_oss_for_each
+
 
   benchmarks_2:
     <<: *gpu
@@ -542,10 +546,6 @@ jobs:
       - <<: *run_oss_benchmark
 
       - <<: *run_oss_gloo
-
-      - <<: *run_oss_amp
-
-      - <<: *run_oss_for_each
 
 
 
