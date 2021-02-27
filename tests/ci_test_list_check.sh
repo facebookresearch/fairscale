@@ -2,7 +2,7 @@
 
 # Verify that we don't miss any tests.
 
-find_total=`find tests -name \*.py -type f| sort | uniq | wc -l`
+find_total=`find tests -name \*.py -type f| grep -v __init__.py | sort | uniq | wc -l`
 grep_total=`grep py tests/ci_test_list*.txt | sort | uniq | wc -l`
 
 echo $find_total

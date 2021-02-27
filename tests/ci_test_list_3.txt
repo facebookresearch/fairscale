@@ -1,4 +1,3 @@
-tests/nn/pipe/skip/__init__.py
 tests/nn/pipe/skip/test_gpipe.py
 tests/nn/pipe/skip/test_verify_skippables.py
 tests/nn/pipe/skip/test_stash_pop.py
@@ -12,7 +11,6 @@ tests/utils/test_reduce_scatter_bucketer.py
 tests/utils/test_containers.py
 tests/utils/test_parallel.py
 tests/utils/test_state_dict.py
-tests/optim/__init__.py
 tests/optim/test_single_node_adascale.py
 tests/optim/test_adam.py
 tests/optim/test_oss.py
