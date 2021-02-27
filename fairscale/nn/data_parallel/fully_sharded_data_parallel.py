@@ -100,6 +100,7 @@ class FullyShardedDataParallel(nn.Module):
         FSDP empty without any parameter, checkpointing activation may trigger
         an assert on the backward pass. The solution is to leave some parameters
         to the outer FSDP.
+
     Args:
         module (nn.Module):
             module to checkpoint
