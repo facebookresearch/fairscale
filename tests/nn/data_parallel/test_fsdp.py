@@ -653,7 +653,7 @@ class TestNoSync(DistributedTest):
 
     @classmethod
     def _test_transformer(self, rank, group, config):
-        model = self.get_wrapped_model(group, config=config)
+        model = self.get_wrapped_model(group, config=config, add_bn=False)
         model.eval()  # turn off dropout for the test
         self._test_no_sync(model, batch_dim=1)
 
@@ -678,7 +678,7 @@ class TestNoSync(DistributedTest):
         for x, y in zip(batch1, batch2):
             assert not torch.all(x == y)
 
-        # Concat the batches along batch dimension.
+        # Concat the batches along batch dimension.  (This breaks the unit-test batch norm implem)
         concat_batch = tuple(torch.cat((x, y), dim=batch_dim) for (x, y) in zip(batch1, batch2))
 
         # Establish reference behavior on the concat batch.
