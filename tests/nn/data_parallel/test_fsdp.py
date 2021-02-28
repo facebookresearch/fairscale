@@ -195,9 +195,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
 
     def test_transformer_batch_norm_breaks(self):
         model_fn = functools.partial(TransformerWithSharedParams, add_bn=True)
-        test_fn = functools.partial(
-            self._test_identical_outputs, model_fn, {'mixed_precision': True}, lr=0.01
-        )
+        test_fn = functools.partial(self._test_identical_outputs, model_fn, {"mixed_precision": True}, lr=0.01)
         spawn_and_init(test_fn)
 
     def test_cpu_offload_and_cpu_grads(self):
@@ -723,21 +721,21 @@ class TransformerWithSharedParams(nn.Module):
 
         self.bs = 2
         self.bn = torch.nn.BatchNorm1d(self.bs) if add_bn else torch.nn.Identity()
-        print(f'FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}')
+        print(f"FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}")
 
     def get_input(self, device):
         torch.manual_seed(1 + self.rank)  # keep everything deterministic
-        src = torch.arange(self.bs*6, device=device).view(6, self.bs)  # T x B
-        tgt = torch.arange(self.bs*4, device=device).view(4, self.bs)  # T x B
+        src = torch.arange(self.bs * 6, device=device).view(6, self.bs)  # T x B
+        tgt = torch.arange(self.bs * 4, device=device).view(4, self.bs)  # T x B
         return (src, tgt)
 
     def forward(self, src_ids, tgt_ids):
         src = self.embed_tokens(src_ids)
         src = src + self.vocab_bias + self.long_buffer.type_as(src)
         tgt = self.embed_tokens(tgt_ids)
-        print(f'FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}')
+        print(f"FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}")
         tgt = self.bn(tgt)
-        #print(f'FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}')
+        # print(f'FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}')
         x = self.transformer(src, tgt)
         return self.output_proj(x)
 
