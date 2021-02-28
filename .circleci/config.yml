@@ -98,7 +98,7 @@ install_dep_180: &install_dep_180
         # and install ourselves for testing.
         #pip install --progress-bar off -r requirements-benchmarks.txt
         # torchvision nightly wants torch 1.9.
-        pip install --pre --progress-bar off torchtext==0.9.0.dev20210227 \
+        pip install --pre --progress-bar off torchtext==0.6.0 \
           torchvision==0.9.0.dev20210222+cu112 \
           -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
         # we only use it a bit in benchmarking, so it might be safe to use 1.8.
