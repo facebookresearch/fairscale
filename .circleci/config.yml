@@ -94,11 +94,16 @@ install_dep_180: &install_dep_180
       command: |
         sudo apt-get install -y libopenmpi-dev
         pip install --progress-bar off -r requirements-test.txt
-        pip install --progress-bar off -r requirements-benchmarks.txt
+        # Since we are using nightly builds, we bypass the benchmarks req file
+        # and install ourselves for testing.
+        #pip install --progress-bar off -r requirements-benchmarks.txt
         # torchvision nightly wants torch 1.9.
-        pip install --pre --progress-bar off torchvision==0.9.0.dev20210222+cu112 -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
-        # we only use it lightly, so put 1.8 back.
-        pip install --pre --progress-bar off torch==1.8.0.dev20210210+cu112 -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
+        pip install --pre --progress-bar off torchtext==0.9.0.dev20210227 \
+          torchvision==0.9.0.dev20210222+cu112 \
+          -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
+        # we only use it a bit in benchmarking, so it might be safe to use 1.8.
+        pip install --pre --progress-bar off torch==1.8.0.dev20210210+cu112 \
+          -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
         pip install --progress-bar off  git+https://github.com/min-xu-ai/torch_pg.git@c723ab4#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "8"], "wrong torch version"'
