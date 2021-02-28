@@ -196,10 +196,9 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def test_transformer_batch_norm_breaks(self):
         model_fn = functools.partial(TransformerWithSharedParams, add_bn=True)
         test_fn = functools.partial(
-            self._test_identical_outputs, model_fn, {}, use_cuda=False, lr=0.01
+            self._test_identical_outputs, model_fn, {'mixed_precision': True}, lr=0.01
         )
         spawn_and_init(test_fn)
-
 
     def test_cpu_offload_and_cpu_grads(self):
         # We don't test the False condition because that requires the optimizer to internally do
@@ -706,7 +705,7 @@ class TestNoSync(DistributedTest):
 
 
 class TransformerWithSharedParams(nn.Module):
-    def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=False, **unused_kwargs):
+    def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=True, **unused_kwargs):
         super().__init__()
         self.rank = group.rank()
         self.world_size = group.size()
@@ -717,7 +716,6 @@ class TransformerWithSharedParams(nn.Module):
             d_model=d_model, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=8, dropout=0.1,
         )
         self.output_proj = nn.Linear(d_model, d_vocab)
-
         # share the embedding and output projection weights
         self.output_proj.weight = self.embed_tokens.weight
         self.register_buffer("vocab_bias", self.embed_tokens.weight.new_ones((d_model,)))
@@ -725,10 +723,11 @@ class TransformerWithSharedParams(nn.Module):
 
         self.bs = 2
         self.bn = torch.nn.BatchNorm1d(self.bs) if add_bn else torch.nn.Identity()
+        print(f'FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}')
 
     def get_input(self, device):
         torch.manual_seed(1 + self.rank)  # keep everything deterministic
-        src = torch.arange(12, device=device).view(6, self.bs)  # T x B
+        src = torch.arange(self.bs*6, device=device).view(6, self.bs)  # T x B
         tgt = torch.arange(self.bs*4, device=device).view(4, self.bs)  # T x B
         return (src, tgt)
 
@@ -736,7 +735,9 @@ class TransformerWithSharedParams(nn.Module):
         src = self.embed_tokens(src_ids)
         src = src + self.vocab_bias + self.long_buffer.type_as(src)
         tgt = self.embed_tokens(tgt_ids)
+        print(f'FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}')
         tgt = self.bn(tgt)
+        #print(f'FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}')
         x = self.transformer(src, tgt)
         return self.output_proj(x)
 

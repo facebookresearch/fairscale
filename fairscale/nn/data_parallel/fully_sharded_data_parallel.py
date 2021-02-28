@@ -738,7 +738,8 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.mixed_precision:
             args, kwargs = cast_inputs_to_fp16(*args, **kwargs)
-            self._all_buffers_to(torch.float16)
+            # Buffers are cast to compute_dtype in lazy_init
+            self.compute_dtype
 
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
