@@ -193,6 +193,14 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # Test every combination of these options:
         spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config))
 
+    def test_transformer_batch_norm_breaks(self):
+        model_fn = functools.partial(TransformerWithSharedParams, add_bn=True)
+        test_fn = functools.partial(
+            self._test_identical_outputs, model_fn, {}, use_cuda=False, lr=0.01
+        )
+        spawn_and_init(test_fn)
+
+
     def test_cpu_offload_and_cpu_grads(self):
         # We don't test the False condition because that requires the optimizer to internally do
         # the device transfer and PyTorch optimizers don't support this.
@@ -260,7 +268,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def _test_identical_outputs(
         cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
     ):
-        if config["mixed_precision"]:
+        if config.get("mixed_precision", False):
             autocast = True
             # Force the compute dtype to be torch.float32 so that we get
             # identical results as PyTorch DDP when using autocast. Note that
@@ -698,7 +706,7 @@ class TestNoSync(DistributedTest):
 
 
 class TransformerWithSharedParams(nn.Module):
-    def __init__(self, group, *unused_args, d_vocab=23, d_model=16, **unused_kwargs):
+    def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=False, **unused_kwargs):
         super().__init__()
         self.rank = group.rank()
         self.world_size = group.size()
@@ -709,21 +717,26 @@ class TransformerWithSharedParams(nn.Module):
             d_model=d_model, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=8, dropout=0.1,
         )
         self.output_proj = nn.Linear(d_model, d_vocab)
+
         # share the embedding and output projection weights
         self.output_proj.weight = self.embed_tokens.weight
         self.register_buffer("vocab_bias", self.embed_tokens.weight.new_ones((d_model,)))
         self.register_buffer("long_buffer", torch.zeros_like(self.vocab_bias, dtype=torch.long))
 
+        self.bs = 2
+        self.bn = torch.nn.BatchNorm1d(self.bs) if add_bn else torch.nn.Identity()
+
     def get_input(self, device):
         torch.manual_seed(1 + self.rank)  # keep everything deterministic
-        src = torch.arange(12, device=device).view(6, 2)  # T x B
-        tgt = torch.arange(8, device=device).view(4, 2)  # T x B
+        src = torch.arange(12, device=device).view(6, self.bs)  # T x B
+        tgt = torch.arange(self.bs*4, device=device).view(4, self.bs)  # T x B
         return (src, tgt)
 
     def forward(self, src_ids, tgt_ids):
         src = self.embed_tokens(src_ids)
         src = src + self.vocab_bias + self.long_buffer.type_as(src)
         tgt = self.embed_tokens(tgt_ids)
+        tgt = self.bn(tgt)
         x = self.transformer(src, tgt)
         return self.output_proj(x)
 

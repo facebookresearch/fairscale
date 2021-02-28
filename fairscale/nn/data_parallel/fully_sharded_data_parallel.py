@@ -219,7 +219,7 @@ class FullyShardedDataParallel(nn.Module):
         return self._fsdp_wrapped_module  # note: may be a FlattenParamsWrapper instance
 
     @torch.no_grad()
-    def _all_buffers_to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> None:
+    def _all_buffers_to(self, dtype: torch.dtype, device: Optional[torch.device] = None) -> None:
         """Move all buffers to the specified device and dtype, recursively."""
         cast_fn = functools.partial(cast_buffers_, device=device, dtype=dtype)
         self.apply(cast_fn)
@@ -415,7 +415,7 @@ class FullyShardedDataParallel(nn.Module):
         """
         if self.mixed_precision:
             # Buffers dtype stays consistent with parameters.
-            self._all_buffers_to(dtype=torch.float32)
+            self._all_buffers_to(torch.float32)
 
         if self._return_full_state_dict:
             if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
@@ -436,7 +436,7 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.mixed_precision:
             # In case we are in mixed precision, restore buffers back to fp16.
-            self._all_buffers_to(dtype=self.compute_dtype)
+            self._all_buffers_to(self.compute_dtype)
         return state_dict
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
@@ -579,9 +579,9 @@ class FullyShardedDataParallel(nn.Module):
             self._setup_streams()
 
         if self.cpu_offload:  # Buffers stay on GPU, and don't get sharded
-            self._all_buffers_to(device=torch.device("cuda"), dtype=self.compute_dtype)
+            self._all_buffers_to(self.compute_dtype, device=torch.device("cuda"))
         else:
-            self._all_buffers_to(dtype=self.compute_dtype)
+            self._all_buffers_to(self.compute_dtype)
 
         if self._is_root:
             # Don't free the full params for the outer-most (root) instance,
@@ -738,6 +738,7 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.mixed_precision:
             args, kwargs = cast_inputs_to_fp16(*args, **kwargs)
+            self._all_buffers_to(torch.float16)
 
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
@@ -758,6 +759,7 @@ class FullyShardedDataParallel(nn.Module):
         # initialized with the correct dtype and (sharded) size, since optimizer
         # state is typically initialized lazily in ``optim.step()``.
         self._use_fp32_param_shard()
+        self._all_buffers_to(torch.float32)
 
         # Register pre-backward hooks to all-gather the params for the backward
         # pass (if needed).
@@ -1090,7 +1092,7 @@ def cast_buffers_(
 ) -> None:
     """Cast all of module.named_buffers to device and floating point buffers to dtype."""
     # if buffers are already on the right device and/or dtype this is just python loop cost
-    assert dtype in {torch.float32, torch.float16}  # assumes compute_dtype == float16
+    assert dtype in {torch.float32, torch.float16}, dtype  # assumes compute_dtype == float16
     for key, buf in module.named_buffers(recurse=False):
         if buf is not None:
             buf = buf.to(device=device)
