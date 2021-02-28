@@ -413,9 +413,6 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        if self.mixed_precision:
-            # Buffers dtype stays consistent with parameters.
-            self._all_buffers_to(torch.float32)
 
         if self._return_full_state_dict:
             if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
@@ -434,9 +431,6 @@ class FullyShardedDataParallel(nn.Module):
             else:
                 state_dict = super().state_dict(*args, **kwargs)
 
-        if self.mixed_precision:
-            # In case we are in mixed precision, restore buffers back to fp16.
-            self._all_buffers_to(self.compute_dtype)
         return state_dict
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
@@ -578,7 +572,7 @@ class FullyShardedDataParallel(nn.Module):
             self._set_is_root()
             self._setup_streams()
 
-        if self.cpu_offload:  # Buffers stay on GPU, and don't get sharded
+        if self.cpu_offload:  # Buffers stay on GPU, and don't get sharded, regardless of cpu_offload
             self._all_buffers_to(self.compute_dtype, device=torch.device("cuda"))
         else:
             self._all_buffers_to(self.compute_dtype)
