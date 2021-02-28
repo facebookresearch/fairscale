@@ -733,7 +733,6 @@ class FullyShardedDataParallel(nn.Module):
         if self.mixed_precision:
             args, kwargs = cast_inputs_to_fp16(*args, **kwargs)
             # Buffers are cast to compute_dtype in lazy_init
-            self.compute_dtype
 
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
@@ -1087,7 +1086,7 @@ def cast_buffers_(
 ) -> None:
     """Cast all of module.named_buffers to device and floating point buffers to dtype."""
     # if buffers are already on the right device and/or dtype this is just python loop cost
-    assert dtype in {torch.float32, torch.float16}, dtype  # assumes compute_dtype == float16
+    assert dtype in {torch.float32, torch.float16}, f"dtype {dtype} not in {torch.float32, torch.float16}"
     for key, buf in module.named_buffers(recurse=False):
         if buf is not None:
             buf = buf.to(device=device)
