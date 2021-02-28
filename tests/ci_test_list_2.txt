@@ -4,8 +4,6 @@ tests/nn/pipe_process/test_inplace.py
 tests/nn/pipe_process/test_bugs.py
 tests/nn/pipe_process/conftest.py
 tests/nn/pipe_process/test_rpc.py
-tests/nn/moe/test_moe_layer.py
-tests/nn/moe/test_top2gating.py
 tests/nn/model_parallel/test_initialize.py
 tests/nn/model_parallel/test_random.py
 tests/nn/model_parallel/test_cross_entropy.py
