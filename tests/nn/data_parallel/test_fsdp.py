@@ -193,11 +193,6 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # Test every combination of these options:
         spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config))
 
-    def test_transformer_batch_norm_breaks(self):
-        model_fn = functools.partial(TransformerWithSharedParams, add_bn=True)
-        test_fn = functools.partial(self._test_identical_outputs, model_fn, {"mixed_precision": True}, lr=0.01)
-        spawn_and_init(test_fn)
-
     def test_cpu_offload_and_cpu_grads(self):
         # We don't test the False condition because that requires the optimizer to internally do
         # the device transfer and PyTorch optimizers don't support this.
@@ -265,7 +260,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def _test_identical_outputs(
         cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
     ):
-        if config.get("mixed_precision", False):
+        if config["mixed_precision"]:
             autocast = True
             # Force the compute dtype to be torch.float32 so that we get
             # identical results as PyTorch DDP when using autocast. Note that
@@ -651,7 +646,7 @@ class TestNoSync(DistributedTest):
 
     @classmethod
     def _test_transformer(self, rank, group, config):
-        model = self.get_wrapped_model(group, config=config, add_bn=False)
+        model = self.get_wrapped_model(group, config=config)
         model.eval()  # turn off dropout for the test
         self._test_no_sync(model, batch_dim=1)
 
@@ -676,7 +671,7 @@ class TestNoSync(DistributedTest):
         for x, y in zip(batch1, batch2):
             assert not torch.all(x == y)
 
-        # Concat the batches along batch dimension.  (This breaks the unit-test batch norm implem)
+        # Concat the batches along batch dimension.
         concat_batch = tuple(torch.cat((x, y), dim=batch_dim) for (x, y) in zip(batch1, batch2))
 
         # Establish reference behavior on the concat batch.
@@ -703,7 +698,7 @@ class TestNoSync(DistributedTest):
 
 
 class TransformerWithSharedParams(nn.Module):
-    def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=True, **unused_kwargs):
+    def __init__(self, group, *unused_args, d_vocab=23, d_model=16, **unused_kwargs):
         super().__init__()
         self.rank = group.rank()
         self.world_size = group.size()
@@ -719,23 +714,16 @@ class TransformerWithSharedParams(nn.Module):
         self.register_buffer("vocab_bias", self.embed_tokens.weight.new_ones((d_model,)))
         self.register_buffer("long_buffer", torch.zeros_like(self.vocab_bias, dtype=torch.long))
 
-        self.bs = 2
-        self.bn = torch.nn.BatchNorm1d(self.bs) if add_bn else torch.nn.Identity()
-        print(f"FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}")
-
     def get_input(self, device):
         torch.manual_seed(1 + self.rank)  # keep everything deterministic
-        src = torch.arange(self.bs * 6, device=device).view(6, self.bs)  # T x B
-        tgt = torch.arange(self.bs * 4, device=device).view(4, self.bs)  # T x B
+        src = torch.arange(12, device=device).view(6, 2)  # T x B
+        tgt = torch.arange(8, device=device).view(4, 2)  # T x B
         return (src, tgt)
 
     def forward(self, src_ids, tgt_ids):
         src = self.embed_tokens(src_ids)
         src = src + self.vocab_bias + self.long_buffer.type_as(src)
         tgt = self.embed_tokens(tgt_ids)
-        print(f"FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}")
-        tgt = self.bn(tgt)
-        # print(f'FWD: {self.bn.weight.dtype, self.bn.running_mean.dtype}')
         x = self.transformer(src, tgt)
         return self.output_proj(x)
 
