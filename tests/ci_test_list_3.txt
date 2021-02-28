@@ -1,3 +1,4 @@
+tests/nn/data_parallel/test_fsdp_uneven.py
 tests/nn/data_parallel/test_features_sharded_ddp.py
 tests/nn/data_parallel/test_pytorch_parity_sharded_ddp.py
 tests/nn/pipe/skip/test_gpipe.py
@@ -11,10 +12,6 @@ tests/nn/pipe/skip/test_inspect_skip_layout.py
 tests/nn/pipe/test_checkpoint_ddp.py
 tests/nn/moe/test_moe_layer.py
 tests/nn/moe/test_top2gating.py
-tests/utils/test_reduce_scatter_bucketer.py
-tests/utils/test_containers.py
-tests/utils/test_parallel.py
-tests/utils/test_state_dict.py
 tests/optim/test_single_node_adascale.py
 tests/optim/test_adam.py
 tests/optim/test_oss.py

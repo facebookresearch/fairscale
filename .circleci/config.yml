@@ -518,6 +518,9 @@ jobs:
 
       - <<: *run_oss_for_each
 
+      - <<: *run_oss_gloo
+
+
 
   benchmarks_2:
     <<: *gpu
@@ -552,9 +555,6 @@ jobs:
       - <<: *install_repo_gpu
 
       - <<: *run_oss_benchmark
-
-      - <<: *run_oss_gloo
-
 
 
 workflows:
