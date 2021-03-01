@@ -736,7 +736,7 @@ class FullyShardedDataParallel(nn.Module):
         # Start of a forward pass.
         self.training_state = TrainingState.FORWARD
 
-        if self.mixed_precision:
+        if self._is_root and self.mixed_precision:
             args, kwargs = cast_inputs_to_fp16(*args, **kwargs)
 
         # All-gather full parameters. This will also transfer FP32 parameters to
