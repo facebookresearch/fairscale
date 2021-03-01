@@ -487,9 +487,8 @@ jobs:
 
       - run: nvidia-smi
 
-      - run: python3 --version
-
-      - run: pyenv global 3.7.0
+      # Run this to make sure we use python3 from the system.
+      - run: pyenv global 3.8.6
 
       - <<: *setup_venv
 
