@@ -122,8 +122,8 @@ class ConfigAutoWrap:
     See ``enable_wrap`` for more information.
     """
 
-    autowrap_blacklist = []
-    in_autowrap_context = False
+    autowrap_blacklist: List = []
+    in_autowrap_context: bool = False
     kwargs: Dict[str, Any] = {}
 
     def __init__(self, autowrap_blacklist: Optional[List] = None, **kwargs: Dict[str, Any]):
