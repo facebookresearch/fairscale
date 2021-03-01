@@ -54,7 +54,7 @@ setup_venv: &setup_venv
         python -m venv ~/venv
         echo ". ~/venv/bin/activate" >> $BASH_ENV
         . ~/venv/bin/activate
-        python --version
+        python3 --version
         which python
         which pip
         pip install --upgrade pip
