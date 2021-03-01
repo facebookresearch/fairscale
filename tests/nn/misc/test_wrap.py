@@ -57,6 +57,28 @@ class TestAutoWrap(unittest.TestCase):
         assert isinstance(model.module[2].module[0], nn.Linear)
         assert isinstance(model.module[2].module[1], nn.Linear)
 
+    def test_auto_wrap_preset_blacklist(self):
+        """
+        Test to ensure blacklisted modules are not wrapped.
+        """
+        with enable_wrap(process_group=self.process_group, flatten_parameters=False):
+            sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(5, 5)]))
+            model = auto_wrap(sequential, min_num_params=40)
+        assert isinstance(model[0], FSDP)
+        assert isinstance(model[1], nn.ModuleList)
+
+    def test_auto_wrap_preset_blacklist_custom(self):
+        """
+        Test to ensure blacklisted modules are not wrapped.
+        """
+        with enable_wrap(autowrap_blacklist=[nn.Linear], process_group=self.process_group, flatten_parameters=False):
+            sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(5, 5)]))
+            model = auto_wrap(sequential, min_num_params=40)
+        # Model was wrapped in FSDP as no inner modules were wrapped.
+        assert isinstance(model, FSDP)
+        assert isinstance(model.module[0], nn.Linear)
+        assert isinstance(model.module[1], nn.ModuleList)
+
     # todo: currently complains that address is in use, not sure why since I clear the proc group.
     # def test_auto_wrap_smoke(self):
     #     self._auto_wrap_smoke_test(enable_mixed_precision=False)

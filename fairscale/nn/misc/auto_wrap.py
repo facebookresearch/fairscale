@@ -4,16 +4,18 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
-from typing import Any, Callable, Dict, Generator, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import torch.nn as nn
 
 from fairscale.nn.data_parallel.fully_sharded_data_parallel import FullyShardedDataParallel
 from fairscale.nn.misc import checkpoint_wrapper
 
+PRESET_AUTOWRAP_BLACKLIST = [nn.ModuleList, nn.ModuleDict, nn.MultiheadAttention]
+
 
 @contextlib.contextmanager
-def enable_wrap(**kwargs: Any) -> Generator[None, None, None]:
+def enable_wrap(autowrap_blacklist: Optional[List] = None, **wrapper_kwargs: Any) -> Generator[None, None, None]:
     """
     Context manager to wrap modules in FullyShardedDataParallel.
 
@@ -33,10 +35,12 @@ def enable_wrap(**kwargs: Any) -> Generator[None, None, None]:
             self.l2 = auto_wrap(TransformerBlock(), min_num_params=1e8)
 
     Args:
-        **kwargs: Configuration settings that will be passed to all ``wrap``
+        autowrap_blacklist: List of additional Module Classes to not wrap when using auto_wrap.
+            This is useful to exclude custom unsupported modules when wrapping recursively.
+        **wrapper_kwargs: Configuration settings that will be passed to all ``wrap``
             instances inside the context
     """
-    with ConfigAutoWrap(**kwargs):
+    with ConfigAutoWrap(autowrap_blacklist, **wrapper_kwargs):
         yield
 
 
@@ -115,24 +119,29 @@ def auto_wrap(
 class ConfigAutoWrap:
     """
     Helper class to wrap modules based on default config args via a context manager.
-    See ``FullyShardedDataParallel.enable_wrap`` for more information.
+    See ``enable_wrap`` for more information.
     """
 
+    autowrap_blacklist = []
     in_autowrap_context = False
     kwargs: Dict[str, Any] = {}
 
-    def __init__(self, **kwargs: Dict[str, Any]):
+    def __init__(self, autowrap_blacklist, **kwargs: Dict[str, Any]):
+        if autowrap_blacklist:
+            self.autowrap_blacklist += autowrap_blacklist
         self.kwargs = kwargs
 
     @staticmethod
     def enable_autowrap_context(kwargs: Any) -> None:
         ConfigAutoWrap.in_autowrap_context = True
         ConfigAutoWrap.kwargs = kwargs
+        ConfigAutoWrap.autowrap_blacklist += PRESET_AUTOWRAP_BLACKLIST
 
     @staticmethod
     def disable_autowrap_context() -> None:
         ConfigAutoWrap.in_autowrap_context = False
         ConfigAutoWrap.kwargs = {}
+        ConfigAutoWrap.autowrap_blacklist = []
 
     def __enter__(self) -> None:
         self.enable_autowrap_context(self.kwargs)
@@ -149,6 +158,10 @@ class ConfigAutoWrap:
             x (nn.Module): module to recursively wrap
             min_num_params (int): min number of parameters for a child Module to be wrapped
         """
+        if isinstance(x, tuple(ConfigAutoWrap.autowrap_blacklist)):
+            # If the module has been blacklisted from wrapping, we return
+            return x, 0
+
         num_params = sum([p.numel() for p in x.parameters()])
 
         if len(list(x.named_children())) == 0:
