@@ -101,10 +101,15 @@ def validate_benchmark(measurements, final_loss, args, check_regression):
     logging.info(f"[{rank}] : Median speed: {median:.2f} +/- {mad:.2f}")
 
     if check_regression and rank == 0:
-        assert (median + 3.0 * mad) > golden_data["reference_speed"], "Speed regression detected"
-        assert max_memory < 1.05 * golden_data["reference_memory"], "Memory use regression detected"
-        assert abs(cast(float, final_loss) - golden_data["reference_loss"]) < 1e-3, "Loss regression detected"
-
+        assert median + 3.0 * mad > golden_data["reference_speed"], (
+            f"Speed regression detected: " f"{median + 3.0 * mad} vs.  {golden_data['reference_speed']}"
+        )
+        assert max_memory < 1.05 * golden_data["reference_memory"], (
+            f"Memory use regression detected: " f"{max_memory} vs. {1.05* golden_data['reference_memory']}"
+        )
+        assert abs(cast(float, final_loss) - golden_data["reference_loss"]) < 1e-3, (
+            f"Loss regression detected: " f"{final_loss} vs. {golden_data['reference_loss']}"
+        )
         logging.info("[Regression Test] VALID")
 
 
