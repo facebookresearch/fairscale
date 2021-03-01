@@ -36,7 +36,7 @@ def enable_wrap(**kwargs) -> Generator[None, None, None]:
         yield
 
 
-def wrap(module, cls: Callable = FullyShardedDataParallel, **wrap_overrides):
+def wrap(module: nn.Module, cls: Callable = FullyShardedDataParallel, **wrap_overrides) -> nn.Module:
     """
     Annotate that a module should be wrapped.
     Annotated modules will only be wrapped if inside of an ``enable_wrap``
@@ -62,7 +62,9 @@ def wrap(module, cls: Callable = FullyShardedDataParallel, **wrap_overrides):
     return module
 
 
-def auto_wrap(module, min_num_params: float = 1e8, cls: Callable = FullyShardedDataParallel, **kwargs):
+def auto_wrap(
+    module: nn.Module, min_num_params: float = 1e8, cls: Callable = FullyShardedDataParallel, **kwargs
+) -> nn.Module:
     """
     Annotate a module should be wrapped, and recursively wrap children modules if above min_num_params.
     This is useful when wrapping large complex layer, and automatically wrapping large layers that
