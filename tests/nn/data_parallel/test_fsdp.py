@@ -1,7 +1,8 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
-# This source code is licensed under the MIT license found in the
+# This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
+
 import functools
 import itertools
 from math import inf
@@ -150,7 +151,7 @@ class TestMixedPrecision(DistributedTest):
         # Patch torch.distributed.reduce_scatter to check the dtype of the reduction
         orig_reduce_scatter = torch.distributed.reduce_scatter
 
-        model = DeviceAndTypeCheckModule(
+        model: nn.Module = DeviceAndTypeCheckModule(
             expected_input_dtype=in_dtype, expected_param_dtype=p_dtype, expected_loss_dtype=loss_dtype,
         )
 
