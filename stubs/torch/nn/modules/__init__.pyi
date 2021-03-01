@@ -2,7 +2,7 @@
 
 from .module import Module as Module
 from .activation import CELU as CELU, ELU as ELU, GLU as GLU, GELU as GELU, Hardshrink as Hardshrink, \
-    Hardtanh as Hardtanh, LeakyReLU as LeakyReLU, LogSigmoid as LogSigmoid, LogSoftmax as LogSoftmax, PReLU as PReLU, \
+    Hardtanh as Hardtanh, LeakyReLU as LeakyReLU, LogSigmoid as LogSigmoid, LogSoftmax as LogSoftmax, MultiheadAttention as MultiheadAttention, PReLU as PReLU, \
     RReLU as RReLU, ReLU as ReLU, ReLU6 as ReLU6, SELU as SELU, Sigmoid as Sigmoid, Softmax as Softmax, \
     Softmax2d as Softmax2d, Softmin as Softmin, Softplus as Softplus, Softshrink as Softshrink, Softsign as Softsign, \
     Tanh as Tanh, Tanhshrink as Tanhshrink, Threshold as Threshold

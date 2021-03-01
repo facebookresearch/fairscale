@@ -57,9 +57,9 @@ class TestAutoWrap(unittest.TestCase):
         assert isinstance(model.module[2].module[0], nn.Linear)
         assert isinstance(model.module[2].module[1], nn.Linear)
 
-    def test_auto_wrap_preset_blacklist(self):
+    def test_auto_wrap_preset_blocklist(self):
         """
-        Test to ensure blacklisted modules are not wrapped.
+        Test to ensure blocklisted modules are not wrapped.
         """
         with enable_wrap(process_group=self.process_group, flatten_parameters=False):
             sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(5, 5)]))
@@ -67,11 +67,11 @@ class TestAutoWrap(unittest.TestCase):
         assert isinstance(model[0], FSDP)
         assert isinstance(model[1], nn.ModuleList)
 
-    def test_auto_wrap_preset_blacklist_custom(self):
+    def test_auto_wrap_preset_blocklist_custom(self):
         """
-        Test to ensure blacklisted modules are not wrapped.
+        Test to ensure blocklisted modules are not wrapped.
         """
-        with enable_wrap(autowrap_blacklist=[nn.Linear], process_group=self.process_group, flatten_parameters=False):
+        with enable_wrap(module_blocklist=[nn.Linear], process_group=self.process_group, flatten_parameters=False):
             sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(5, 5)]))
             model = auto_wrap(sequential, min_num_params=40)
         # Model was wrapped in FSDP as no inner modules were wrapped.
