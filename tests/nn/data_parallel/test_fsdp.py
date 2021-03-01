@@ -87,6 +87,7 @@ class TestMixedPrecision(DistributedTest):
             torch.float32,  # expected_param_dtype
             torch.float32,  # expected_loss_dtype
             torch.float32,  # expected_reduce_dtype
+            #torch.float32,  # expected_buffer_dtype
         )
 
     def test_mixed_precision(self):
@@ -167,9 +168,10 @@ class TestMixedPrecision(DistributedTest):
             x = torch.rand(2, 5).to(device)
             with torch.cuda.amp.autocast(enabled=autocast):
                 loss = model(x)
-            for n,b in model.named_buffers():
-                 model._check(f'{n}.after_fwd_dtype', b.dtype, expected=reduce_dtype)
+
             loss.backward()
+        for n,b in model.named_buffers():
+             model._check(f'{n}.after_fwd_dtype', b.dtype, expected=torch.float32)
 
 
 keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters"]
