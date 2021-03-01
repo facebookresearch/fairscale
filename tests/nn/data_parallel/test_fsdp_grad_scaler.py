@@ -19,7 +19,7 @@ except ImportError:
 
 @mock.patch.dict(os.environ, {"MASTER_ADDR": "localhost", "MASTER_PORT": "1337"}, clear=True)
 @skip_if_no_cuda
-def test_scaler_cpu_offload():
+def test_scaler_cpu_offload_breaks():
 
     device = torch.device("cuda")
     torch.cuda.set_device(0)
