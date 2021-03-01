@@ -3,20 +3,23 @@ from unittest import mock
 
 import pytest
 import torch
-from torch.cuda.amp import autocast
 import torch.nn as nn
 import torch.nn.functional as F
 
 from fairscale.nn import FullyShardedDataParallel
 from fairscale.optim.grad_scaler import ShardedGradScaler
-from fairscale.utils.testing import skip_if_no_cuda, torch_version
+from fairscale.utils.testing import skip_if_no_cuda
+
+try:
+    from torch.cuda.amp import autocast
+except ImportError:
+    # Older version doesn't support autocast. Skip this file.
+    pytestmark = pytest.mark.skip
 
 
 @mock.patch.dict(os.environ, {"MASTER_ADDR": "localhost", "MASTER_PORT": "1337"}, clear=True)
 @skip_if_no_cuda
 def test_scaler_cpu_offload():
-    if torch_version() < (1, 6, 0):
-        pytest.skip("Older version doesn't support autocast")
 
     device = torch.device("cuda")
     torch.cuda.set_device(0)
