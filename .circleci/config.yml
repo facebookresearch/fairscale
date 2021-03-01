@@ -27,6 +27,8 @@ cpu_py39: &cpu_py39
     - image: circleci/python:3.9
   resource_class: medium
 
+# Here are list of GPU images:
+#   https://circleci.com/docs/2.0/configuration-reference/#available-linux-gpu-images
 gpu: &gpu
   environment:
     CUDA_VERSION: "10.1"
@@ -252,6 +254,7 @@ run_doc_build: &run_doc_build
          make singlehtml | tee make.out
          ! tail make.out | grep -q warning
 
+# This is an alias to run all unit tests possible on a platform.
 run_unittests: &run_unittests
    - run:
        name: Run all unit tests.
@@ -260,6 +263,9 @@ run_unittests: &run_unittests
          pytest --junitxml=test-results/junit.xml --verbose --timeout 60
 
 commands:
+
+   # This is a command (like a function) that run tests from a given test_list_file.
+   # If test_list_file is not given, this results in an error.
    run_unittests_from_list:
      parameters:
        test_list_file:
