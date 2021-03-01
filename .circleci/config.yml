@@ -487,6 +487,8 @@ jobs:
 
       - run: nvidia-smi
 
+      - run: python --version
+
       - run: pyenv global 3.7.0
 
       - <<: *setup_venv
