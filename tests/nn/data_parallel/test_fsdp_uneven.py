@@ -30,7 +30,11 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
     my_lr = 0.1
 
     device = torch.device("cuda")
-    dtype = torch.float16 if fsdp_config.get("mixed_precision", False) else torch.float32
+    if fsdp_config.get("mixed_precision", False):
+        dtype = torch.float16
+        fsdp_config["fp32_reduce_scatter"] = True
+    else:
+        dtype = torch.float32
 
     if test_case["assert_ref_out"]:
         with torch.no_grad():
@@ -41,7 +45,7 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
             ref_forward_output_my_rank = torch.matmul(v, weight)
             # Compute one iteration global weight update.
             v = torch.Tensor(test_case["inputs"][0][:world_size]).to(device, dtype)
-            grad = v.sum(0).repeat(weight.shape[0], 1).div(world_size).float()
+            grad = v.float().sum(0).repeat(weight.shape[0], 1).div(world_size)
             ref_weight_out = fp32_weight - grad.T * my_lr
             assert ref_weight_out.dtype == torch.float32
     model.to(device)  # not dtype, since FSDP will manage mixed precision internally
@@ -54,7 +58,7 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
     for in_data in inputs:
         in_data = Tensor(in_data[rank]).to(device, dtype)
         out = model(in_data)
-        out.sum().backward()
+        out.float().sum().backward()
         optim.step()
         optim.zero_grad()
         if test_case["assert_ref_out"]:
