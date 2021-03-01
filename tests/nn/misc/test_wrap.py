@@ -5,7 +5,7 @@
 import os
 import unittest
 
-import mock
+from unittest import mock
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
