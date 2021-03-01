@@ -54,7 +54,7 @@ setup_venv: &setup_venv
         python -m venv ~/venv
         echo ". ~/venv/bin/activate" >> $BASH_ENV
         . ~/venv/bin/activate
-        python3 --version
+        python --version
         which python
         which pip
         pip install --upgrade pip
@@ -487,7 +487,7 @@ jobs:
 
       - run: nvidia-smi
 
-      - run: python --version
+      - run: python3 --version
 
       - run: pyenv global 3.7.0
 
