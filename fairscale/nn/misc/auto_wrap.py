@@ -25,12 +25,15 @@ def enable_wrap(**kwargs) -> Generator[None, None, None]:
 
     Usage::
 
-            with enable_wrap(**params):
-                # Wraps layer in FSDP by default if within context
-                self.l1 = wrap(torch.nn.Linear(5, 5))
-                # Wraps children modules by default based on min_num_params
-                self.l2 = auto_wrap(TransformerBlock(), min_num_params=1e8)
+        with enable_wrap(**params):
+            # Wraps layer in FSDP by default if within context
+            self.l1 = wrap(torch.nn.Linear(5, 5))
+            # Wraps children modules by default based on min_num_params
+            self.l2 = auto_wrap(TransformerBlock(), min_num_params=1e8)
 
+    Args:
+        **kwargs: Configuration settings that will be passed to all ``wrap``
+            instances inside the context
     """
     with ConfigAutoWrap(**kwargs):
         yield
@@ -70,12 +73,20 @@ def auto_wrap(
     This is useful when wrapping large complex layer, and automatically wrapping large layers that
     should be re-sharded during runtime when using ``FullyShardedDataParallel``.
 
+    .. warning:: It is not recommended to use ``auto_wrap`` with
+        ``FullyShardedDataParallel`` on modules that have shared parameters, as
+        the parameter sharing may be broken if they shared parameters are not
+        wrapped under the same FSDP wrapper.
+
     Usage::
 
         with enable_wrap(**params):
             # Wraps children modules by default based on min_num_params
             self.l1 = auto_wrap(TransformerBlock(), min_num_params=1e8)
 
+    Args:
+        min_num_params (int, Optional): min number of parameters for a child
+            Module to be wrapped
     """
     if ConfigAutoWrap.in_autowrap_context:
         wrapped_module, remainder = ConfigAutoWrap.recursive_wrap(
