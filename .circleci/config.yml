@@ -36,11 +36,11 @@ gpu: &gpu
     image: ubuntu-1604-cuda-10.1:201909-23
   resource_class: gpu.large
 
-gpu_cu102: &gpu_cu102
+gpu_cu111: &gpu_cu111
   environment:
-    CUDA_VERSION: "10.2"
+    CUDA_VERSION: "11.1"
   machine:
-    image: ubuntu-1604-cuda-10.2:202012-01
+    image: ubuntu-1604-cuda-11.1:202012-01
   resource_class: gpu.large
 
 # -------------------------------------------------------------------------------------
@@ -97,14 +97,14 @@ install_dep_171: &install_dep_171
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "7"], "wrong torch version"'
         python -m torch.utils.collect_env
 
-install_dep_171_cu102: &install_dep_171_cu102
+install_dep_171_cu110: &install_dep_171_cu110
   - run:
-      name: Install Dependencies with torch 1.7.1+cu102
+      name: Install Dependencies with torch 1.7.1+cu110
       command: |
         sudo add-apt-repository universe
         sudo apt-get update
         sudo apt-get install -y libopenmpi-dev
-        pip install --progress-bar off torch==1.7.1+cu102 torchvision==0.8.2+cu102 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off torch==1.7.1+cu110 torchvision==0.8.2+cu110 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         pip install --progress-bar off git+https://github.com/msbaines/torch_pg.git@c85c96f#egg=torch-pg
@@ -149,11 +149,11 @@ install_repo_gpu: &install_repo_gpu
         export CUDA_HOME=/usr/local/cuda-10.1
         pip install -e .
 
-install_repo_gpu_cu102: &install_repo_gpu_cu102
+install_repo_gpu_cu111: &install_repo_gpu_cu111
   - run:
       name: Install Repository
       command: |
-        export CUDA_HOME=/usr/local/cuda-10.2
+        export CUDA_HOME=/usr/local/cuda-11.1
         pip install -e .
 
 
@@ -480,7 +480,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu102
+    <<: *gpu_cu111
 
     working_directory: ~/fairscale
 
@@ -497,16 +497,16 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-gpu-cu102-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-gpu-cu111-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_171_cu102
+      - <<: *install_dep_171_cu110
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-gpu-cu102-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-gpu-cu111-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo_gpu_cu102
+      - <<: *install_repo_gpu_cu111
 
       - run_unittests_from_list:
           test_list_file: <<parameters.test_list_file>>
