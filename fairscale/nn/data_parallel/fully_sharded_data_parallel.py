@@ -532,6 +532,9 @@ class FullyShardedDataParallel(nn.Module):
         .. note:: This can *not* be used within a forward or backward pass. Nor
             can forward and backward be started from within this context.
 
+        .. note:: The full parameters will be freed after the context manager
+            exits; it is up to the caller to clone them if needed.
+
         Args:
             recurse (bool, Optional): recursively summon all params for nested
                 FSDP instances (default: True)
@@ -570,9 +573,11 @@ class FullyShardedDataParallel(nn.Module):
                     yield
                 finally:
                     stack.close()
-                    # _rebuild_full_param() above didn't create full params. So no need to free here.
+                    # _rebuild_full_param() above creates params in fresh
+                    # storage (if full_precision), so no need to free here.
                     if not full_precision:
                         self._free_full_params()
+                    # If full_precision, this will free the fresh storage.
                     self._use_fp32_param_shard()
                     self.training_state = TrainingState.IDLE
 
