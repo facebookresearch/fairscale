@@ -3,9 +3,10 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-import torch.nn as nn
 import contextlib
-from typing import Generator, Union, Tuple, Callable
+from typing import Callable, Generator, Tuple, Union
+
+import torch.nn as nn
 
 from fairscale.nn.data_parallel.fully_sharded_data_parallel import FullyShardedDataParallel
 

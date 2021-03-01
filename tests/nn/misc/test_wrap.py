@@ -4,15 +4,15 @@
 # LICENSE file in the root directory of this source tree.
 import os
 import unittest
-
 from unittest import mock
+
 import torch
+from torch.cuda.amp import autocast
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import autocast
 
 from fairscale.nn import FullyShardedDataParallel as FSDP
-from fairscale.nn import enable_wrap, wrap, auto_wrap
+from fairscale.nn import auto_wrap, enable_wrap, wrap
 
 
 class TestAutoWrap(unittest.TestCase):
