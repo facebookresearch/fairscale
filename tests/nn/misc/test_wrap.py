@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from torch.cuda.amp import autocast
 
 from fairscale.nn import FullyShardedDataParallel as FSDP
-from fairscale.nn.misc.auto_wrap import enable_wrap, wrap, auto_wrap
+from fairscale.nn import enable_wrap, wrap, auto_wrap
 
 
 class TestAutoWrap(unittest.TestCase):

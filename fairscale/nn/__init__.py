@@ -5,7 +5,7 @@
 
 from .data_parallel import FullyShardedDataParallel, ShardedDataParallel
 from .misc import FlattenParamsWrapper
-from .misc.auto_wrap import wrap, auto_wrap
+from .misc.auto_wrap import auto_wrap, enable_wrap, wrap
 from .moe import MOELayer, Top2Gate
 from .pipe import Pipe, PipeRPCWrapper
 
@@ -17,6 +17,7 @@ __all__ = [
     "PipeRPCWrapper",
     "ShardedDataParallel",
     "Top2Gate",
-    "wrap",
     "auto_wrap",
+    "enable_wrap",
+    "wrap",
 ]
