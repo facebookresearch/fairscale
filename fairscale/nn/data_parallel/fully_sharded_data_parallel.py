@@ -8,7 +8,7 @@ import copy
 from enum import Enum, auto
 import functools
 from math import inf
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, Iterator, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
 from torch.autograd import Variable
@@ -1068,97 +1068,6 @@ class FullyShardedDataParallel(nn.Module):
         assert (
             self.training_state == state
         ), f"expected to be in state {state} but current state is {self.training_state}"
-
-    @staticmethod
-    @contextlib.contextmanager
-    def enable_wrap(**kwargs) -> Iterator[None]:
-        """
-        Context manager to wrap modules in FullyShardedDataParallel.
-        Useful for when you'd like to apply the same parameters to all child modules that you wrap.
-
-            Usage::
-
-                with FSDP.enable_wrap(**fully_sharded_params):
-                    # Wraps layer in FSDP if within context
-                    self.l1 = FSDP.wrap(torch.nn.Linear(5, 5))
-                    # Wraps children modules based on bucket_size
-                    self.l2 = FSDP.auto_wrap(TransformerBlock(), bucket_size=1e8)
-
-        """
-        with FullyShardedAutoWrap(**kwargs):
-            yield
-
-    @staticmethod
-    def wrap(module, **kwargs):
-        if FullyShardedAutoWrap.in_autowrap_context:
-            kwargs = {**FullyShardedAutoWrap.kwargs, **kwargs}
-            return FullyShardedDataParallel(module, **kwargs)
-        return module
-
-    @staticmethod
-    def auto_wrap(module, bucket_size=1e8, **kwargs):
-        if FullyShardedAutoWrap.in_autowrap_context:
-            wrapped_module, remainder = FullyShardedAutoWrap.recursive_wrap(module, bucket_size=bucket_size, **kwargs)
-            return wrapped_module
-        return module
-
-
-class FullyShardedAutoWrap:
-    """
-    Helper class to wrap modules based on default config args via a context manager.
-    See ``FullyShardedDataParallel.enable_wrap`` for more information.
-    """
-
-    in_autowrap_context = False
-    kwargs = {}
-
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-    @staticmethod
-    def enable_autowrap_context(kwargs):
-        FullyShardedAutoWrap.in_autowrap_context = True
-        FullyShardedAutoWrap.kwargs = kwargs
-
-    @staticmethod
-    def disable_autowrap_context():
-        FullyShardedAutoWrap.in_autowrap_context = False
-        FullyShardedAutoWrap.kwargs = {}
-
-    def __enter__(self):
-        self.enable_autowrap_context(self.kwargs)
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.disable_autowrap_context()
-
-    @staticmethod
-    def recursive_wrap(x: nn.Module, bucket_size: Union[int, float], **kwargs) -> Tuple[nn.Module, int]:
-        num_params = sum([p.numel() for p in x.parameters()])
-
-        if len(list(x.named_children())) == 0:
-            # If the module has no children, no need to recurse, wrap it if needed
-            if num_params > bucket_size:
-                return FullyShardedDataParallel.wrap(x, **kwargs), num_params
-            return x, 0
-
-        if num_params >= bucket_size:
-            total_wrapped_params = 0
-            # Iterate through the children, recursively wrap if necessary
-            for name, module in x.named_children():
-                wrapped_module, num_wrapped_params = FullyShardedAutoWrap.recursive_wrap(
-                    x=module, bucket_size=bucket_size, **kwargs
-                )
-                setattr(x, name, wrapped_module)
-                # Keep track of how many parameters have been wrapped
-                total_wrapped_params += num_wrapped_params
-            # decide if we need to wrap the current module,
-            # since the left over parameters exceed the number of params to wrap
-            remainder = num_params - total_wrapped_params
-            if remainder >= bucket_size:
-                return FullyShardedDataParallel.wrap(x, **kwargs), num_params
-            else:
-                return x, total_wrapped_params
-        return x, 0
 
 
 @torch.no_grad()
