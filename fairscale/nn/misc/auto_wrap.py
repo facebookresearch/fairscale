@@ -75,7 +75,7 @@ def auto_wrap(
 
     .. warning:: It is not recommended to use ``auto_wrap`` with
         ``FullyShardedDataParallel`` on modules that have shared parameters, as
-        the parameter sharing may be broken if they shared parameters are not
+        the parameter sharing may be broken if the shared parameters are not
         wrapped under the same FSDP wrapper.
 
     Usage::
