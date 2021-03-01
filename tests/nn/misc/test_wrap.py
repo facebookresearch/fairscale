@@ -2,33 +2,27 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+
 import os
 import unittest
 from unittest import mock
 
 import torch
-from torch.cuda.amp import autocast
 import torch.nn as nn
 import torch.nn.functional as F
 
 from fairscale.nn import FullyShardedDataParallel as FSDP
 from fairscale.nn import auto_wrap, enable_wrap, wrap
+from fairscale.utils.testing import DummyProcessGroup
 
 
 class TestAutoWrap(unittest.TestCase):
     def setUp(self) -> None:
-        class TestDistributedGroup:
-            def size(self):
-                return 1
-
-            @property
-            def world_size(self):
-                return 1
-
-            def rank(self):
-                return 0
-
-        self.process_group = TestDistributedGroup()
+        version = torch.__version__.split(".")[:2]
+        major, minor = int(version[0]), int(version[1])
+        if major < 1 or (major == 1 and minor < 6):
+            raise unittest.SkipTest("Need pytorch version >= 1.6 due to autocast")
+        self.process_group = DummyProcessGroup(rank=0, size=1)
 
     def test_wrap(self):
         with enable_wrap(flatten_parameters=False, process_group=self.process_group):
@@ -73,9 +67,11 @@ class TestAutoWrap(unittest.TestCase):
         """
         self._auto_wrap_smoke_test(enable_mixed_precision=True)
 
-    @mock.patch.dict(os.environ, {"MASTER_ADDR": "localhost", "MASTER_PORT": "1337"}, clear=True)
+    @mock.patch.dict(os.environ, {"MASTER_ADDR": "localhost", "MASTER_PORT": "12345"}, clear=True)
     @unittest.skipIf(not torch.cuda.is_available(), "Test Requires CUDA")
     def _auto_wrap_smoke_test(self, enable_mixed_precision):
+        from torch.cuda.amp import autocast
+
         device = torch.device("cuda")
         torch.cuda.set_device(0)
         torch.distributed.init_process_group(backend="nccl", rank=0, world_size=1)
