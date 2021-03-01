@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
-from typing import Callable, Generator, Tuple, Union
+from typing import Any, Callable, Dict, Generator, Tuple, Union
 
 import torch.nn as nn
 
@@ -12,7 +12,7 @@ from fairscale.nn.data_parallel.fully_sharded_data_parallel import FullyShardedD
 
 
 @contextlib.contextmanager
-def enable_wrap(**kwargs) -> Generator[None, None, None]:
+def enable_wrap(**kwargs: Any) -> Generator[None, None, None]:
     """
     Context manager to wrap modules in FullyShardedDataParallel.
 
@@ -39,7 +39,7 @@ def enable_wrap(**kwargs) -> Generator[None, None, None]:
         yield
 
 
-def wrap(module: nn.Module, cls: Callable = FullyShardedDataParallel, **wrap_overrides) -> nn.Module:
+def wrap(module: nn.Module, cls: Callable = FullyShardedDataParallel, **wrap_overrides: Any) -> nn.Module:
     """
     Annotate that a module should be wrapped.
     Annotated modules will only be wrapped if inside of an ``enable_wrap``
@@ -66,7 +66,7 @@ def wrap(module: nn.Module, cls: Callable = FullyShardedDataParallel, **wrap_ove
 
 
 def auto_wrap(
-    module: nn.Module, min_num_params: float = 1e8, cls: Callable = FullyShardedDataParallel, **kwargs
+    module: nn.Module, min_num_params: float = 1e8, cls: Callable = FullyShardedDataParallel, **kwargs: Any
 ) -> nn.Module:
     """
     Annotate a module should be wrapped, and recursively wrap children modules if above min_num_params.
@@ -103,30 +103,30 @@ class ConfigAutoWrap:
     """
 
     in_autowrap_context = False
-    kwargs = {}
+    kwargs: Dict[str, Any] = {}
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Dict[str, Any]):
         self.kwargs = kwargs
 
     @staticmethod
-    def enable_autowrap_context(kwargs):
+    def enable_autowrap_context(kwargs: Any) -> None:
         ConfigAutoWrap.in_autowrap_context = True
         ConfigAutoWrap.kwargs = kwargs
 
     @staticmethod
-    def disable_autowrap_context():
+    def disable_autowrap_context() -> None:
         ConfigAutoWrap.in_autowrap_context = False
         ConfigAutoWrap.kwargs = {}
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         self.enable_autowrap_context(self.kwargs)
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.disable_autowrap_context()
 
     @staticmethod
     def recursive_wrap(
-        x: nn.Module, min_num_params: Union[int, float], cls: Callable, **kwargs
+        x: nn.Module, min_num_params: Union[int, float], cls: Callable, **kwargs: Any
     ) -> Tuple[nn.Module, int]:
         """
         Automatically wrap child modules of *x* that meet the given criteria with ``auto_wrap``.
