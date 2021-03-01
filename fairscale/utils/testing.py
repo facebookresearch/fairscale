@@ -481,6 +481,7 @@ class DeviceAndTypeCheckModule(Base):
         self.expected_loss_device = expected_loss_device
 
         self.linear = nn.Linear(5, 5)
+        self.register_buffer('buffer', torch.rand((5,)))
 
     def _check(
         self,
@@ -497,6 +498,7 @@ class DeviceAndTypeCheckModule(Base):
 
         param = self.linear.weight
         self._check("param.dtype", param.dtype, self.expected_param_dtype)
+        self._check("buffer.dtype", self.buffer.dtype, self.expected_param_dtype)
         self._check("param.device", param.device, self.expected_param_device)
 
         loss = self.linear(x).sum()
