@@ -101,6 +101,8 @@ install_dep_171_cu102: &install_dep_171_cu102
   - run:
       name: Install Dependencies with torch 1.7.1+cu102
       command: |
+        sudo add-apt-repository universe
+        sudo apt-get update
         sudo apt-get install -y libopenmpi-dev
         pip install --progress-bar off torch==1.7.1+cu102 torchvision==0.8.2+cu102 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
