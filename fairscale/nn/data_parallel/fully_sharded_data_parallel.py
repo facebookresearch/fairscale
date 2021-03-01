@@ -570,6 +570,7 @@ class FullyShardedDataParallel(nn.Module):
                     yield
                 finally:
                     stack.close()
+                    # _rebuild_full_param() above didn't create full params. So no need to free here.
                     if not full_precision:
                         self._free_full_params()
                     self._use_fp32_param_shard()
