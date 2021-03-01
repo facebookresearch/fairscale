@@ -57,22 +57,35 @@ class TestAutoWrap(unittest.TestCase):
         assert isinstance(model.module[2].module[0], nn.Linear)
         assert isinstance(model.module[2].module[1], nn.Linear)
 
-    def test_auto_wrap_preset_blocklist(self):
+    def test_auto_wrap_preset_exclude_wrap(self):
         """
-        Test to ensure blocklisted modules are not wrapped.
+        Test to ensure excluded modules are not wrapped, but children are.
         """
         with enable_wrap(process_group=self.process_group, flatten_parameters=False):
-            sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(5, 5)]))
+            sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(10, 10)]))
             model = auto_wrap(sequential, min_num_params=40)
         assert isinstance(model[0], FSDP)
         assert isinstance(model[1], nn.ModuleList)
+        assert isinstance(model[1][0], FSDP)
+
+    def test_auto_wrap_preset_blocklist(self):
+        """
+        Test to ensure blocklisted modules are not wrapped, and children are not wrapped.
+        """
+        with enable_wrap(process_group=self.process_group, flatten_parameters=False):
+            sequential = nn.Sequential(nn.Linear(10, 10), nn.MultiheadAttention(100, 1))
+            model = auto_wrap(sequential, min_num_params=40)
+        assert isinstance(model.module[0], FSDP)
+        # Assert children of multihead attention are not wrapped
+        assert isinstance(model.module[1], nn.MultiheadAttention)
+        assert isinstance(model.module[1].out_proj, nn.Linear)
 
     def test_auto_wrap_preset_blocklist_custom(self):
         """
         Test to ensure blocklisted modules are not wrapped.
         """
         with enable_wrap(module_blocklist=[nn.Linear], process_group=self.process_group, flatten_parameters=False):
-            sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(5, 5)]))
+            sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(10, 10)]))
             model = auto_wrap(sequential, min_num_params=40)
         # Model was wrapped in FSDP as no inner modules were wrapped.
         assert isinstance(model, FSDP)

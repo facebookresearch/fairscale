@@ -11,7 +11,8 @@ import torch.nn as nn
 from fairscale.nn.data_parallel.fully_sharded_data_parallel import FullyShardedDataParallel
 from fairscale.nn.misc import checkpoint_wrapper
 
-FSDP_MODULE_BLOCKLIST = [nn.ModuleList, nn.ModuleDict, nn.MultiheadAttention]
+FSDP_MODULE_EXCLUDE_WRAP = [nn.ModuleList, nn.ModuleDict]
+FSDP_MODULE_BLOCKLIST = [nn.MultiheadAttention]
 
 
 @contextlib.contextmanager
@@ -172,7 +173,7 @@ class ConfigAutoWrap:
 
         if len(list(module.named_children())) == 0:
             # If the module has no children, no need to recurse, wrap it if needed
-            if num_params >= min_num_params:
+            if num_params >= min_num_params and not isinstance(module, tuple(FSDP_MODULE_EXCLUDE_WRAP)):
                 return wrap(module, **kwargs), num_params
             return module, 0
 
@@ -189,7 +190,7 @@ class ConfigAutoWrap:
             # decide if we need to wrap the current module,
             # since the left over parameters exceed the number of params to wrap
             remainder = num_params - total_wrapped_params
-            if remainder >= min_num_params:
+            if remainder >= min_num_params and not isinstance(module, tuple(FSDP_MODULE_EXCLUDE_WRAP)):
                 return wrap(module, **kwargs), num_params
             else:
                 return module, total_wrapped_params
