@@ -54,21 +54,17 @@ class TestMemory(DistributedTest):
 class TestPersistence(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_non_volatile(self, config):
-        spawn_and_init(functools.partial(self._test_persistence, config, volatile=False))
+        spawn_and_init(functools.partial(self._test_persistence, config))
 
     @classmethod
     def _test_persistence(self, config, rank, group, volatile=False):
         model = self.get_wrapped_model(group, cuda_first=False, config=config)
 
-        with model.summon_full_params(volatile=volatile):
+        with model.summon_full_params(volatile=False):
             model.module.embed_tokens.weight.data.fill_(42)
         with model.summon_full_params():
-            if volatile:
-                # volatile changes are forgotten
-                assert not torch.all(model.module.embed_tokens.weight.data == 42.0)
-            else:
-                # non-volatile changes are persisted
-                assert torch.all(model.module.embed_tokens.weight.data == 42.0)
+            # non-volatile changes are persisted
+            assert torch.all(model.module.embed_tokens.weight.data == 42.0)
 
 
 if __name__ == "__main__":
