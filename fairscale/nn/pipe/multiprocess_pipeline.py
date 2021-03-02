@@ -49,8 +49,10 @@ class SendOperator(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def forward(ctx, src_rank, dst_rank, transport: Transport, input: List[Tensor], index: int) -> Tensors:
-        assert src_rank == torch.distributed.get_rank()
+    def forward(ctx, transport: Transport, input: List[Tensor], index: int) -> Tensors:
+        ranks = get_pipeline_parallel_ranks()
+        src_rank = torch.distributed.get_rank()
+        dst_rank = ranks[ranks.index(src_rank) + 1]
 
         transport.send_message(
             PipeMessage(src_rank, dst_rank, queue_name=ACTIVATIONS_GRADS_QUEUE, args=index, tensors=tuple(input)),
@@ -68,8 +70,7 @@ class RecvOperator(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def forward(ctx, dst_rank: int, tensor: Tensor, transport: Transport, index: int) -> Tensors:
-        assert dst_rank == torch.distributed.get_rank()
+    def forward(ctx, tensor: Tensor, transport: Transport, index: int) -> Tensors:
         ctx.transport = transport
         ctx.index = index
 
@@ -86,17 +87,12 @@ class RecvOperator(torch.autograd.Function):
     # type: ignore
     def backward(ctx, *grad: Tensor,) -> Tuple[Optional[Tensor], ...]:
         ranks = get_pipeline_parallel_ranks()
-        this_rank = torch.distributed.get_rank()
+        src_rank = torch.distributed.get_rank()
+        dst_rank = ranks[ranks.index(src_rank) - 1]
         ctx.transport.send_message(
-            PipeMessage(
-                this_rank,
-                ranks[ranks.index(this_rank) - 1],
-                queue_name=ACTIVATIONS_GRADS_QUEUE,
-                args=ctx.index,
-                tensors=tuple(grad),
-            ),
+            PipeMessage(src_rank, dst_rank, queue_name=ACTIVATIONS_GRADS_QUEUE, args=ctx.index, tensors=tuple(grad),),
         )
-        return (None, None, None, None, None)
+        return (None, None, None, None)
 
 
 # Queue is generic only in stubs.
@@ -204,15 +200,15 @@ class MultiProcessPipeline:
 
         skip_trackers = [SkipTrackerThroughPotals(self.skip_layout, i) for i in range(m)]
 
-        schedule = [(i, self.group.rank()) for i in range(m)]
+        rank = self.group.rank()
 
-        for i, j in schedule:
-            if self.group.rank() != 0:
+        for i in range(m):
+            if rank != 0:
                 batch = self.get_batch_from_previous_stage(i, skip_trackers, batches)
             else:
                 batch = batches[i]
 
-            task = create_task(self.checkpoint_stop, i, j, batch, self.partition, skip_trackers)
+            task = create_task(self.checkpoint_stop, i, rank, batch, self.partition, skip_trackers)
 
             batches[i] = self.execute_task(task, i, skip_trackers)
 
@@ -221,7 +217,7 @@ class MultiProcessPipeline:
     ) -> Batch:
 
         phony = torch.empty(0, device=self.input_device, requires_grad=True)
-        result = RecvOperator.apply(torch.distributed.get_rank(), phony, self.transport, i)
+        result = RecvOperator.apply(phony, self.transport, i)
         if len(result) == 1:
             batch = Batch(result[0], i)
         else:
@@ -231,9 +227,10 @@ class MultiProcessPipeline:
 
         return batch
 
-    def send_skip_tensors(
-        self, this_rank: int, ranks: List[int], batch: Batch, i: int, skip_trackers: List[SkipTrackerThroughPotals]
-    ) -> None:
+    def send_skip_tensors(self, batch: Batch, i: int, skip_trackers: List[SkipTrackerThroughPotals]) -> None:
+        ranks = get_pipeline_parallel_ranks()
+        this_rank = torch.distributed.get_rank()
+
         for next_j, ns, name in self.skip_layout.copy_policy_by_src(self.group.rank()):
             life = skip_trackers[i].portals[(ns, name)].tensor_life
             loaded = skip_trackers[i].load(batch, ns, name)
@@ -277,11 +274,8 @@ class MultiProcessPipeline:
         rank = self.group.rank()
 
         if not self.final_stage:
-            ranks = get_pipeline_parallel_ranks()
-            this_rank = torch.distributed.get_rank()
-
-            self.send_skip_tensors(this_rank, ranks, batch, i, skip_trackers)
-            SendOperator.apply(this_rank, ranks[ranks.index(this_rank) + 1], self.transport, [*batch], i)
+            self.send_skip_tensors(batch, i, skip_trackers)
+            SendOperator.apply(self.transport, [*batch], i)
 
         for portal in skip_trackers[i].portals.values():
             portal.pipeline = self
