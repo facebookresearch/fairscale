@@ -59,14 +59,26 @@ class TestAutoWrap(unittest.TestCase):
 
     def test_auto_wrap_preset_exclude_wrap(self):
         """
-        Test to ensure excluded modules are not wrapped, but children are.
+        Test to ensure excluded modules are not wrapped, regardless if the total param size is greater than the
+        min_num_params.
         """
         with enable_wrap(process_group=self.process_group, flatten_parameters=False):
-            sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(10, 10)]))
+            sequential = nn.ModuleList([nn.Linear(5, 5), nn.Linear(5, 5)])
             model = auto_wrap(sequential, min_num_params=40)
+        assert isinstance(model, nn.ModuleList)
+        assert isinstance(model[0], nn.Linear)
+        assert isinstance(model[1], nn.Linear)
+
+    def test_auto_wrap_preset_exclude_wrap_include_children(self):
+        """
+        Test to ensure excluded modules are not wrapped, but children are if param size is greater than
+        min_num_params
+        """
+        with enable_wrap(process_group=self.process_group, flatten_parameters=False):
+            sequential = nn.ModuleList([nn.Linear(10, 10)])
+            model = auto_wrap(sequential, min_num_params=40)
+        assert isinstance(model, nn.ModuleList)
         assert isinstance(model[0], FSDP)
-        assert isinstance(model[1], nn.ModuleList)
-        assert isinstance(model[1][0], FSDP)
 
     def test_auto_wrap_preset_blocklist(self):
         """
