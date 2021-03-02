@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
 
 import os
 import re
@@ -55,7 +58,7 @@ else:
 if __name__ == "__main__":
     setuptools.setup(
         name="fairscale",
-        description="fairscale: A PyTorch library for large-scale and high-performance training.",
+        description="FairScale: A PyTorch library for large-scale and high-performance training.",
         version=find_version("fairscale/__init__.py"),
         setup_requires=["ninja"],  # ninja is required to build extensions
         install_requires=fetch_requirements(),
