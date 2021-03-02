@@ -5,6 +5,7 @@
 import functools
 import itertools
 from math import inf
+import pickle
 import sys
 from typing import Dict
 import unittest
@@ -230,13 +231,6 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # Test every combination of these options:
         spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config))
 
-    def test_transformer_batch_norm_breaks(self):
-        model_fn = functools.partial(TransformerWithSharedParams, add_bn=True)
-        test_fn = functools.partial(
-            self._test_identical_outputs, model_fn, {"mixed_precision": True}, use_cuda=True, lr=0.01
-        )
-        spawn_and_init(test_fn,)
-
     def test_cpu_offload_and_cpu_grads(self):
         # We don't test the False condition because that requires the optimizer to internally do
         # the device transfer and PyTorch optimizers don't support this.
@@ -437,7 +431,7 @@ class TestLocalStateDict(DistributedTest):
         """Check that local_state_dict can be saved and loaded for a given worker, and that training updates it"""
         model = self.get_wrapped_model(
             group, cuda_first=False, config=config, d_vocab=d_vocab, d_model=d_model, add_bn=False
-        )
+        )  # Set bn=True here to show that BN doesn't get updated
         state_1 = model.local_state_dict()
         state_before_training = {k: v.cpu().clone() for k, v in state_1.items()}
         assert len(state_1) > 0
