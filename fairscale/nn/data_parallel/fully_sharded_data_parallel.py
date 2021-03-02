@@ -543,14 +543,15 @@ class FullyShardedDataParallel(nn.Module):
 
         .. note:: The full parameters can be modified, but only the portion
             corresponding to the local param shard will persist after the
-            context manager exits.
+            context manager exits (unless ``volatile=True``, in which case there
+            are no guarantees about persistence).
 
         Args:
             recurse (bool, Optional): recursively summon all params for nested
                 FSDP instances (default: True)
-            volatile (bool, Optional): modifications to params will not persist
-                after the context manager exists; enabling this can be slightly
-                more efficient (default: False)
+            volatile (bool, Optional): if ``True``, modifications to params are
+                not guaranteed persist after the context manager exists;
+                enabling this can be slightly more efficient (default: False)
         """
         if recurse:
             with contextlib.ExitStack() as stack:

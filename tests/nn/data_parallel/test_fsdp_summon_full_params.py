@@ -56,10 +56,6 @@ class TestPersistence(DistributedTest):
     def test_non_volatile(self, config):
         spawn_and_init(functools.partial(self._test_persistence, config, volatile=False))
 
-    # @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
-    # def test_volatile(self, config):
-    #    spawn_and_init(functools.partial(self._test_persistence, config, volatile=True))
-
     @classmethod
     def _test_persistence(self, config, rank, group, volatile=False):
         model = self.get_wrapped_model(group, cuda_first=False, config=config)
