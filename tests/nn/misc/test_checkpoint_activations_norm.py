@@ -84,6 +84,6 @@ def test_norm(device, norm_type, mixed_precision):
         out.sum().backward()
         optim.step()
 
-    if torch_version >= (1, 6, 0):
+    if torch_version() >= (1, 6, 0):
         # On 1.5.1, running mean & running var seems to be tracked differently, could be a bug.
         assert objects_are_equal(m_ref.state_dict(), m_cpt.state_dict())
