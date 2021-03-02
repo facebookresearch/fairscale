@@ -5,13 +5,14 @@
 
 from contextlib import contextmanager
 import functools
-from typing import Any, Dict, Generator, Optional, Tuple
+from typing import Any, Dict, Generator, Optional, Tuple, Callable
 import weakref
 
 import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.utils.checkpoint as torch_checkpoint
+from torch.nn.modules.batchnorm import _BatchNorm
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
@@ -63,25 +64,49 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         (nn.Module):
             wrapped module
     """
+    # Build a list of BN classes and use two functions only make them track
+    # running stats in one of the forward function.
+    bn_list = []
+    for name, child in module.named_modules():
+        # _BatchNorm is base for bn1d, bn2d, bn3d and sync_bn, apex_sync_bn
+        if isinstance(child, _BatchNorm):
+            bn_list.append([child, None])
+
+    def pre_forward():
+        for bn_and_bool in bn_list:
+            bn_and_bool[1] = bn_and_bool[0].track_running_stats
+            bn_and_bool[0].track_running_stats = False
+
+    def post_forward():
+        for bn_and_bool in bn_list:
+            assert bn_and_bool[1] is not None
+            bn_and_bool[0].track_running_stats = bn_and_bool[1]
+
     # The use of weakref here is to prevent creating a ref cycle: m -> m.forward -> m.
     # When such cycle exists, gc won't collect the module when the module is freed.
     # That causes GPU memory to be leaked. See the unit test for how we catch that.
     #
     # We prefer this over a class wrapper since the class wrapper would have to
     # proxy a lot of fields and methods.
-    module.forward = functools.partial(_checkpointed_forward, type(module).forward, weakref.ref(module), offload_to_cpu)  # type: ignore
+    module.forward = functools.partial(_checkpointed_forward, type(module).forward, 
+    weakref.ref(module), offload_to_cpu, pre_forward, post_forward)  # type: ignore
     return module
 
 
 def _checkpointed_forward(
-    original_forward: Any, weak_self: Any, offload_to_cpu: bool, *args: Any, **kwargs: Any
+    original_forward: Any, weak_self: Any, offload_to_cpu: bool,
+    pre_forward: Callable, post_forward: Callable, *args: Any, **kwargs: Any
 ) -> Any:
     # Autograd Functions in PyTorch work best with positional args, since
     # the backward must return gradients (or None) for every input argument.
     # We can flatten keyword arguments to make this easier.
     args = (weak_self(),) + args
     kwarg_keys, flat_args = pack_kwargs(*args, **kwargs)
-    parent_ctx_dict: Dict[str, Any] = {"offload": offload_to_cpu}
+    parent_ctx_dict: Dict[str, Any] = {
+        "offload": offload_to_cpu,
+        "pre_forward": pre_forward,
+        "post_forward": post_forward,
+    }
     output = CheckpointFunction.apply(original_forward, parent_ctx_dict, kwarg_keys, *flat_args)
     if not isinstance(output, torch.Tensor):
         packed_non_tensor_outputs = parent_ctx_dict["packed_non_tensor_outputs"]
@@ -158,7 +183,9 @@ class CheckpointFunction(torch.autograd.Function):
 
         with torch.no_grad():
             unpacked_args, unpacked_kwargs = unpack_kwargs(kwarg_keys, args)
+            parent_ctx_dict["pre_forward"]()
             outputs = run_function(*unpacked_args, **unpacked_kwargs)
+            parent_ctx_dict["post_forward"]()
 
         if not isinstance(outputs, torch.Tensor):
             # Autograd Functions don't like non-Tensor outputs. We can split the
