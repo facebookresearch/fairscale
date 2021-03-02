@@ -502,7 +502,7 @@ class DeviceAndTypeCheckModule(Base):
         self._check("param.dtype", param.dtype, self.expected_param_dtype)
         self._check("param.device", param.device, self.expected_param_device)
         self._check("buffer.dtype", self.buffer.dtype, self.expected_buffer_dtype)  # type: ignore
-        x = x+ self.buffer
+        x = x + self.buffer
         loss = (self.linear(x) + self.buffer).sum()
         self._check("loss.dtype", loss.dtype, self.expected_loss_dtype)
         self._check("loss.device", loss.device, self.expected_loss_device)
