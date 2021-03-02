@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
 import torch.nn as nn
 
@@ -12,9 +12,9 @@ from fairscale.nn.data_parallel.fully_sharded_data_parallel import FullyShardedD
 from fairscale.nn.misc import checkpoint_wrapper
 
 # Modules that don't wrap.
-FSDP_MODULE_EXCLUDE_WRAP = [nn.ModuleList, nn.ModuleDict]
+FSDP_MODULE_EXCLUDE_WRAP = {nn.ModuleList, nn.ModuleDict}
 # Modules that we don't recurse down to their children.
-FSDP_MODULE_BLOCKLIST = [nn.MultiheadAttention]
+FSDP_MODULE_BLOCKLIST = {nn.MultiheadAttention}
 
 
 @contextlib.contextmanager
@@ -141,6 +141,10 @@ class ConfigAutoWrap:
 
     @staticmethod
     def enable_autowrap_context(kwargs: Any) -> None:
+        if ConfigAutoWrap.in_autowrap_context:
+            raise NotImplementedError(
+                "You are already within an autowrap context and we currently do not supported nested autowrap."
+            )
         ConfigAutoWrap.in_autowrap_context = True
         ConfigAutoWrap.kwargs = kwargs
         ConfigAutoWrap.module_blocklist += FSDP_MODULE_BLOCKLIST
@@ -173,12 +177,6 @@ class ConfigAutoWrap:
             return module, 0
 
         num_params = sum([p.numel() for p in module.parameters()])
-
-        if len(list(module.named_children())) == 0:
-            # If the module has no children, no need to recurse, wrap it if needed
-            if num_params >= min_num_params and not isinstance(module, tuple(FSDP_MODULE_EXCLUDE_WRAP)):
-                return wrap(module, **kwargs), num_params
-            return module, 0
 
         if num_params >= min_num_params:
             total_wrapped_params = 0
