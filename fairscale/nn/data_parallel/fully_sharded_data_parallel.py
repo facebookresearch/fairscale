@@ -793,7 +793,8 @@ class FullyShardedDataParallel(nn.Module):
             self._prep_grads_for_backward()
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
-            t.register_hook(_pre_backward_hook)
+            if t.requires_grad:
+                t.register_hook(_pre_backward_hook)
             return t
 
         # Attach hooks to Tensor outputs.
