@@ -127,6 +127,8 @@ class FullyShardedDataParallel(nn.Module):
             dtype for full parameters for computation. This defaults to
             ``torch.float32`` unless *``mixed_precision``* is set, in which case
             it defaults to ``torch.float16``.
+        buffer_dtype (torch.dtype, Optional):
+            dtype for buffers for computation. This defaults to ``compute_dtype``.
         move_grads_to_cpu (bool, Optional):
             move gradient shard to CPU after reduction. This is useful when
             combined with CPU-based optimizers. It defaults to the value of
@@ -150,6 +152,7 @@ class FullyShardedDataParallel(nn.Module):
         flatten_parameters: bool = True,
         cpu_offload: bool = False,
         compute_dtype: Optional[torch.dtype] = None,
+        buffer_dtype: Optional[torch.dtype] = None,
         move_grads_to_cpu: Optional[bool] = None,
         bucket_cap_mb: int = 25,
     ):
@@ -163,6 +166,7 @@ class FullyShardedDataParallel(nn.Module):
         self.flatten_parameters = flatten_parameters
         self.cpu_offload = cpu_offload
         self.compute_dtype = compute_dtype or (torch.float16 if mixed_precision else torch.float32)
+        self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
 
@@ -436,7 +440,7 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.mixed_precision:
             # In case we are in mixed precision, restore buffers back to fp16.
-            self._all_buffers_to(dtype=self.compute_dtype)
+            self._all_buffers_to(dtype=self.buffer_dtype)
         return state_dict
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
@@ -579,9 +583,9 @@ class FullyShardedDataParallel(nn.Module):
             self._setup_streams()
 
         if self.cpu_offload:  # Buffers stay on GPU, and don't get sharded
-            self._all_buffers_to(device=torch.device("cuda"), dtype=self.compute_dtype)
+            self._all_buffers_to(device=torch.device("cuda"), dtype=self.buffer_dtype)
         else:
-            self._all_buffers_to(dtype=self.compute_dtype)
+            self._all_buffers_to(dtype=self.buffer_dtype)
 
         if self._is_root:
             # Don't free the full params for the outer-most (root) instance,
