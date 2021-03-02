@@ -776,7 +776,7 @@ class FullyShardedDataParallel(nn.Module):
         # Start of a forward pass.
         self.training_state = TrainingState.FORWARD
 
-        if self.mixed_precision:
+        if self._is_root and self.mixed_precision:
             args, kwargs = cast_inputs_to_fp16(*args, **kwargs)
 
         # All-gather full parameters. This will also transfer FP32 parameters to
@@ -833,7 +833,8 @@ class FullyShardedDataParallel(nn.Module):
             self._prep_grads_for_backward()
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
-            t.register_hook(_pre_backward_hook)
+            if t.requires_grad:
+                t.register_hook(_pre_backward_hook)
             return t
 
         # Attach hooks to Tensor outputs.

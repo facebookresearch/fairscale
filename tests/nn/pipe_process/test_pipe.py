@@ -34,6 +34,13 @@ from fairscale.nn.model_parallel.initialize import (
 from fairscale.nn.pipe import AsyncPipe, LazyModule, MultiProcessPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn, torch_version
 
+# Current on CI, there appears to be a bug with torch 1.8
+# See:
+# https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1892/workflows/8f658bf4-8052-4084-bb3e-4cc2c445c8aa/jobs/10080/parallel-runs/0/steps/0-112
+# So we skip this file in that case until it is fixed.
+if torch_version() >= (1, 8, 0):
+    pytestmark = pytest.mark.skip
+
 
 @torch_spawn([2])
 @pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
