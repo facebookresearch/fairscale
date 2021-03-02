@@ -26,21 +26,21 @@ from .worker import Task
 
 def create_task(
     checkpoint_stop: int,
-    i: int,
-    j: int,
+    chunk_id: int,
+    part_id: int,
     batch: Batch,
     partition: nn.Sequential,
     skip_trackers: List[SkipTrackerThroughPotals],
 ) -> Task:
     # Determine whether checkpointing or not.
-    if i < checkpoint_stop:
+    if chunk_id < checkpoint_stop:
 
         def function(
             input: TensorOrTensors,
             partition: nn.Sequential = partition,
-            skip_tracker: SkipTrackerThroughPotals = skip_trackers[i],
-            chunk_id: int = i,
-            part_id: int = j,
+            skip_tracker: SkipTrackerThroughPotals = skip_trackers[chunk_id],
+            chunk_id: int = chunk_id,
+            part_id: int = part_id,
         ) -> TensorOrTensors:
             with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
                 ret = partition(input)
@@ -58,9 +58,9 @@ def create_task(
         def compute(
             batch: Batch = batch,
             partition: nn.Sequential = partition,
-            skip_tracker: SkipTrackerThroughPotals = skip_trackers[i],
-            chunk_id: int = i,
-            part_id: int = j,
+            skip_tracker: SkipTrackerThroughPotals = skip_trackers[chunk_id],
+            chunk_id: int = chunk_id,
+            part_id: int = part_id,
         ) -> Batch:
             with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
                 return batch.call(partition)
