@@ -11,7 +11,9 @@ import torch.nn as nn
 from fairscale.nn.data_parallel.fully_sharded_data_parallel import FullyShardedDataParallel
 from fairscale.nn.misc import checkpoint_wrapper
 
+# Modules that don't wrap.
 FSDP_MODULE_EXCLUDE_WRAP = [nn.ModuleList, nn.ModuleDict]
+# Modules that we don't recurse down to their children.
 FSDP_MODULE_BLOCKLIST = [nn.MultiheadAttention]
 
 
@@ -83,7 +85,7 @@ def wrap(
 
 def auto_wrap(
     module: nn.Module,
-    min_num_params: float = 1e8,
+    min_num_params: int = int(1e8),
     cls: Callable = FullyShardedDataParallel,
     activation_checkpoint: bool = False,
     **kwargs: Any
@@ -95,8 +97,9 @@ def auto_wrap(
 
     .. warning:: It is not recommended to use :func:`auto_wrap` with
         :class:`FullyShardedDataParallel` on modules that have shared
-        parameters, as the parameter sharing may be broken if the shared
-        parameters are not wrapped under the same FSDP wrapper.
+        parameters, as the parameter sharing may be broken (i.e. end up not
+        shared) if the shared parameters are not (auto-)wrapped under the same
+        FSDP wrapper instance.
 
     Usage::
 
@@ -155,7 +158,7 @@ class ConfigAutoWrap:
         self.disable_autowrap_context()
 
     @staticmethod
-    def recursive_wrap(module: nn.Module, min_num_params: Union[int, float], **kwargs: Any) -> Tuple[nn.Module, int]:
+    def recursive_wrap(module: nn.Module, min_num_params: int, **kwargs: Any) -> Tuple[nn.Module, int]:
         """
         Automatically wrap child modules of *module* that meet the given
         criteria with :func:`auto_wrap`.
