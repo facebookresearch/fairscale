@@ -20,7 +20,6 @@
 import os
 from queue import Empty as QueueEmpty
 from queue import Queue
-from threading import Event
 from types import TracebackType
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Type, Union
 
@@ -38,6 +37,16 @@ from .skip.layout import SkipLayout
 from .skip.tracker import SkipTrackerThroughPotals, use_skip_tracker
 from .types import ACTIVATIONS_GRADS_QUEUE, PORTAL_QUEUE, SKIP_TENSOR_QUEUE, PipeMessage, TensorOrTensors, Tensors
 from .worker import Task
+
+# Queue is generic only in stubs.
+# https://mypy.readthedocs.io/en/latest/common_issues.html#using-classes-that-are-generic-in-stubs-but-not-at-runtime
+if TYPE_CHECKING:
+    InQueue = Queue[Optional[Task]]
+    OutQueue = Queue[Tuple[bool, Union[Tuple[Task, Batch], ExcInfo, None]]]
+else:
+    InQueue = Queue
+    OutQueue = Queue
+
 
 __all__: List[str] = []
 
@@ -95,63 +104,6 @@ class RecvOperator(torch.autograd.Function):
         return (None, None, None, None)
 
 
-# Queue is generic only in stubs.
-# https://mypy.readthedocs.io/en/latest/common_issues.html#using-classes-that-are-generic-in-stubs-but-not-at-runtime
-if TYPE_CHECKING:
-    InQueue = Queue[Optional["Task"]]
-    OutQueue = Queue[Tuple[bool, Union[Tuple["Task", Batch], ExcInfo, None]]]
-else:
-    InQueue = Queue
-    OutQueue = Queue
-
-
-def create_task(
-    checkpoint_stop: int,
-    i: int,
-    j: int,
-    batch: Batch,
-    partition: nn.Sequential,
-    skip_trackers: List[SkipTrackerThroughPotals],
-) -> Task:
-    # Determine whether checkpointing or not.
-    if i < checkpoint_stop:
-
-        def function(
-            input: TensorOrTensors,
-            partition: nn.Sequential = partition,
-            skip_tracker: SkipTrackerThroughPotals = skip_trackers[i],
-            chunk_id: int = i,
-            part_id: int = j,
-        ) -> TensorOrTensors:
-            with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
-                ret = partition(input)
-                # We do a check here because the backtrace from the checkpoint backward code path
-                # is very hard to make sense. It would be much easier to check earlier at this point.
-                assert type(ret) is not list, "Only Tensor or Tuple of Tensor output is supported"
-                return ret
-
-        chk = Checkpointing(function, batch)
-        task = Task(None, compute=chk.checkpoint, finalize=chk.recompute)
-        del function, chk  # TODO(tom) maybe remove
-
-    else:
-
-        def compute(
-            batch: Batch = batch,
-            partition: nn.Sequential = partition,
-            skip_tracker: SkipTrackerThroughPotals = skip_trackers[i],
-            chunk_id: int = i,
-            part_id: int = j,
-        ) -> Batch:
-            with use_skip_tracker(skip_tracker), record_function("chunk%d-part%d" % (chunk_id, part_id)):
-                return batch.call(partition)
-
-        task = Task(None, compute=compute, finalize=None)
-        del compute  # TODO(tom) maybe remove
-
-    return task
-
-
 class MultiProcessPipeline:
     """The multiprocess pipeline parallelism for Pipe."""
 
@@ -187,7 +139,7 @@ class MultiProcessPipeline:
             return 0
         return self.__checkpoint_stop
 
-    def run(self, training: bool, batches: List[Batch], event: Optional[Event]) -> None:
+    def run(self, training: bool, batches: List[Batch]) -> None:
 
         """Runs pipeline parallelism.
 
@@ -208,9 +160,24 @@ class MultiProcessPipeline:
             else:
                 batch = batches[i]
 
-            task = create_task(self.checkpoint_stop, i, rank, batch, self.partition, skip_trackers)
+            with use_skip_tracker(skip_trackers[i]), record_function("chunk%d-part%d" % (i, rank)):
+                if i < self.checkpoint_stop:
+                    chk = Checkpointing(self.partition, batch)
+                    batch = chk.checkpoint()
+                else:
+                    batch = batch.call(self.partition)
 
-            batches[i] = self.execute_task(task, i, skip_trackers)
+            if not self.final_stage:
+                self.send_skip_tensors(batch, i, skip_trackers)
+                SendOperator.apply(self.transport, [*batch], i)
+
+            for portal in skip_trackers[i].portals.values():
+                portal.pipeline = self
+
+            if i < self.checkpoint_stop:
+                chk.recompute(batch)
+
+            batches[i] = batch
 
     def get_batch_from_previous_stage(
         self, i: int, skip_trackers: List[SkipTrackerThroughPotals], batches: List[Batch]
@@ -267,22 +234,6 @@ class MultiProcessPipeline:
                     skip_trackers[si].portals[(ns, name)].tensor_life = life
             except QueueEmpty:
                 break
-
-    def execute_task(self, task: Task, i: int, skip_trackers: List[SkipTrackerThroughPotals]) -> Batch:
-        batch = task.compute()
-
-        rank = self.group.rank()
-
-        if not self.final_stage:
-            self.send_skip_tensors(batch, i, skip_trackers)
-            SendOperator.apply(self.transport, [*batch], i)
-
-        for portal in skip_trackers[i].portals.values():
-            portal.pipeline = self
-
-        task.finalize(batch)
-
-        return batch
 
     def send_portal_grad(self, ns_name: Tuple[Namespace, str], index: int, grad: TensorOrTensors) -> None:
         dest, src = self.skip_layout.by_ns_name.get(ns_name, (-1, -1))

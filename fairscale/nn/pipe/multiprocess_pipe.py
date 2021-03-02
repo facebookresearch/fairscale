@@ -256,7 +256,7 @@ class MultiProcessPipe(Module):
         """Iterates over children of the underlying sequential module."""
         return self.partition.__iter__()
 
-    def forward(self, input: TensorOrTensors, *, event=None) -> TensorOrTensors:  # type: ignore
+    def forward(self, input: TensorOrTensors) -> TensorOrTensors:  # type: ignore
         """:class:`MultiProcessPipe` is a fairly transparent module wrapper. It doesn't
         modify the input and output signature of the underlying module. But
         there's type restriction. Input and output have to be a
@@ -284,7 +284,7 @@ class MultiProcessPipe(Module):
 
         # Run pipeline parallelism.
         with self.lock:
-            self.pipeline.run(self.training, batches, event)
+            self.pipeline.run(self.training, batches)
 
             if self.final_stage:
                 # Merge the micro-batches into one mini-batch.
