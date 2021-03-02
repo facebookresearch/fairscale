@@ -5,14 +5,14 @@
 
 from contextlib import contextmanager
 import functools
-from typing import Any, Dict, Generator, Optional, Tuple, Callable
+from typing import Any, Callable, Dict, Generator, Optional, Tuple
 import weakref
 
 import torch
 from torch import Tensor
 import torch.nn as nn
-import torch.utils.checkpoint as torch_checkpoint
 from torch.nn.modules.batchnorm import _BatchNorm
+import torch.utils.checkpoint as torch_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
@@ -72,15 +72,15 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         if isinstance(child, _BatchNorm):
             bn_list.append([child, None])
 
-    def pre_forward():
+    def pre_forward() -> None:
         for bn_and_bool in bn_list:
-            bn_and_bool[1] = bn_and_bool[0].track_running_stats
-            bn_and_bool[0].track_running_stats = False
+            bn_and_bool[1] = bn_and_bool[0].track_running_stats  # type: ignore
+            bn_and_bool[0].track_running_stats = False  # type: ignore
 
-    def post_forward():
+    def post_forward() -> None:
         for bn_and_bool in bn_list:
             assert bn_and_bool[1] is not None
-            bn_and_bool[0].track_running_stats = bn_and_bool[1]
+            bn_and_bool[0].track_running_stats = bn_and_bool[1]  # type: ignore
 
     # The use of weakref here is to prevent creating a ref cycle: m -> m.forward -> m.
     # When such cycle exists, gc won't collect the module when the module is freed.
@@ -88,14 +88,20 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
     #
     # We prefer this over a class wrapper since the class wrapper would have to
     # proxy a lot of fields and methods.
-    module.forward = functools.partial(_checkpointed_forward, type(module).forward, 
-    weakref.ref(module), offload_to_cpu, pre_forward, post_forward)  # type: ignore
+    module.forward = functools.partial(  # type: ignore
+        _checkpointed_forward, type(module).forward, weakref.ref(module), offload_to_cpu, pre_forward, post_forward
+    )
     return module
 
 
 def _checkpointed_forward(
-    original_forward: Any, weak_self: Any, offload_to_cpu: bool,
-    pre_forward: Callable, post_forward: Callable, *args: Any, **kwargs: Any
+    original_forward: Any,
+    weak_self: Any,
+    offload_to_cpu: bool,
+    pre_forward: Callable,
+    post_forward: Callable,
+    *args: Any,
+    **kwargs: Any
 ) -> Any:
     # Autograd Functions in PyTorch work best with positional args, since
     # the backward must return gradients (or None) for every input argument.
