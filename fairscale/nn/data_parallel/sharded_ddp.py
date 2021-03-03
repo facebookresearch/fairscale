@@ -626,17 +626,19 @@ class ShardedDataParallel(nn.Module):
     # Flush all the buckets, just in case
     def _flush_buckets(self) -> None:
         if self._bucket_list is not None:
-            last_handle = None
+            handles = []
             for bucket in self._bucket_list:
                 if not bucket.sent:
                     # Normalize the bucket in one go
                     bucket.buffer.mul_(self.world_size_scaling)
 
                     # Reduce the bucket
-                    last_handle = dist.reduce(
-                        tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                    handles.append(
+                        dist.reduce(
+                            tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                        )
                     )
                     bucket.sent = True
 
-            if last_handle is not None:
-                last_handle.wait()
+            for handle in handles:
+                handle.wait()
