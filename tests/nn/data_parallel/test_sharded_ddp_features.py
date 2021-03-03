@@ -83,7 +83,7 @@ def run_one_step(
         return loss
 
     # The models should stay the same in between the ranks
-    for i in range(5):
+    for _ in range(5):
         _ = optimizer.step(closure=closure)
         # when running on cpu/gloo the "nodes" are not really different
         same_params = device == torch.device("cpu") or not grad_accumulation

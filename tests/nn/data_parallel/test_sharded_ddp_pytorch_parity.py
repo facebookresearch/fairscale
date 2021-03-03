@@ -39,8 +39,12 @@ Check that ShardedDDP gets the same results as DDP in a variety of scenarii
 
 _test_fp16_reduction = [False]
 
-if hasattr(dist, "algorithms.ddp_com_hooks.default_hooks"):
+try:
+    from torch.distributed.algorithms.ddp_comm_hooks.default_hooks import fp16_compress_hook
+
     _test_fp16_reduction.append(True)
+except ImportError:
+    pass
 
 
 def _get_mlp():
@@ -122,8 +126,6 @@ def run_ddp_parity(
         ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True, find_unused_parameters=True)
 
         if fp16_reduction:
-            from dist.algorithms.ddp_com_hooks.default_hooks import fp16_compress_hook
-
             ddp_model.register_comm_hook(state=None, hook=fp16_compress_hook)  # type: ignore
 
         ddp_scaler = TorchGradScaler() if amp else None
@@ -203,6 +205,9 @@ def run_ddp_parity(
 @pytest.mark.parametrize("change_train_graph", [True, False])
 @pytest.mark.parametrize("fp16_reduction", _test_fp16_reduction)
 def test_ddp_parity(reduce_buffer_size, grad_accumulation, change_train_graph, fp16_reduction):
+    if reduce_buffer_size > 0 and fp16_reduction:
+        pytest.skip("Incompatible combination")
+
     world_size = torch.cuda.device_count()
     backend = dist.Backend.NCCL
     mp.spawn(

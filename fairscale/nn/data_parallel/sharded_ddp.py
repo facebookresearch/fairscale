@@ -96,9 +96,9 @@ class ShardedDataParallel(nn.Module):
         process_group: Any = None,
         broadcast_buffers: bool = True,
         sync_models_at_startup: bool = True,
-        reduce_buffer_size: int = 2 ** 23,
+        reduce_buffer_size: int = 0,
         auto_refresh_trainable: bool = True,
-        reduce_fp16: bool = False,
+        reduce_fp16: bool = True,
     ):
         super().__init__()
 
@@ -170,6 +170,7 @@ class ShardedDataParallel(nn.Module):
         self.buckets: Dict[torch.device, List[Bucket]] = {}
         self._should_bucket_grad: List[bool] = []
         self._bucket_list: Optional[List[Bucket]] = None
+        self._grad_fp16_buffer: List[Optional[torch.Tensor]] = []
 
         # - setup backward hooks which will be called by Torch's autograd in due time
         self._grad_accs: List[Callable] = []
@@ -361,6 +362,7 @@ class ShardedDataParallel(nn.Module):
         """Reset all the grad reduce and call counters"""
         self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
         self._bucket_flush_callback_set = False
+        self._grad_fp16_buffer = [None for _ in self._grad_to_be_reduced]  # same size on purpose
 
         # Do not reset the buckets
         if self.use_buckets:
@@ -414,21 +416,23 @@ class ShardedDataParallel(nn.Module):
                     param.grad.mul_(self.world_size_scaling)
 
                     if self.reduce_fp16:
-                        param.grad.data = param.grad.data.half()
+                        self._grad_fp16_buffer[index] = param.grad.to(torch.float16)
+                        if dst_rank != self.global_rank:
+                            param.grad = None
 
                     # Future work includes clearing up the buffer if possible
                     def cleanup() -> None:
-                        if dst_rank != self.global_rank:
+                        if self._grad_fp16_buffer[index] is not None:
+                            param.grad = self._grad_fp16_buffer[index].to(dtype=param.dtype)  # type: ignore  # mypy is drunk
+                        elif dst_rank != self.global_rank:
                             param.grad = None
-                        else:
-                            assert param.grad is not None
-                            param.grad.data = param.grad.data.to(dtype=param.dtype)
+                        self._grad_fp16_buffer[index] = None
 
                     # Async reduce for this buffer, log the future
                     self._work_handles.append(
                         Workhandle(
                             handle=dist.reduce(
-                                tensor=param.grad.data,
+                                tensor=self._grad_fp16_buffer[index] if self.reduce_fp16 else param.grad.data,  # type: ignore  # mypy is drunk
                                 dst=self._local_to_global_rank[dst_rank],
                                 group=self.process_group,
                                 async_op=True,
