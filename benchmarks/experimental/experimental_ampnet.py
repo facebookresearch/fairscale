@@ -537,7 +537,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     # bench_multi_process(args, all_at_once=True)
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
-        print(f"Can't run benchmark")
+        print("Can't run benchmark")
         sys.exit(1)
 
     else:
