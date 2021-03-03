@@ -535,6 +535,10 @@ jobs:
       - restore_cache:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      # Cache the MNIST directory that contains benchmark data
+      - restore_cache:
+          keys:
             - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
       - <<: *install_dep_171
@@ -586,6 +590,12 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
+
+      # Cache the MNIST directory that contains benchmark data
+      - restore_cache:
+          keys:
+            - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
+
       - <<: *install_dep_171
 
       - save_cache:
@@ -596,6 +606,11 @@ jobs:
       - <<: *install_repo_gpu
 
       - <<: *run_oss_benchmark
+
+      - save_cache:
+          paths:
+            - /tmp/MNIST
+          key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
 
 workflows:
