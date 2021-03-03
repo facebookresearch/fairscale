@@ -1,7 +1,8 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
-# This source code is licensed under the MIT license found in the
+# This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
+
 import functools
 import itertools
 from math import inf
@@ -24,6 +25,7 @@ from fairscale.utils.testing import (
     get_cycles_per_ms,
     objects_are_equal,
     spawn_for_all_world_sizes,
+    torch_version,
 )
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
@@ -32,10 +34,8 @@ from fairscale.utils.testing import (
 
 class DistributedTest(unittest.TestCase):
     def setUp(self):
-        major, minor = torch.__version__.split(".")[:2]
-        major, minor = int(major), int(minor)
-        if major < 1 or (major == 1 and minor < 6):
-            raise unittest.SkipTest("Need pytorch version >= 1.6 due to autocast")
+        if torch_version() < (1, 6, 0):
+            raise unittest.SkipTest("Need pytorch version >= 1.6 due to lack of reduce_scatter")
         if not torch.cuda.is_available():
             raise unittest.SkipTest("CUDA not available, skipping test")
         if sys.platform == "win32":
@@ -182,8 +182,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     PyTorch DDP vs. FullyShardedDataParallel.
     """
 
-    def test_nested_all_wrapped_model(self):
-        config = {"mixed_precision": True}
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_nested_wrapped_model(self, config):
+        test_fn = functools.partial(self._test_identical_outputs, NestedWrappedModule, config)
+        spawn_and_init(test_fn)
+
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_nested_all_wrapped_model(self, config):
         model_fn = functools.partial(NestedWrappedModule, wrap_everything=True)
         test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
         spawn_and_init(test_fn)
@@ -280,6 +285,9 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             model = ref_ddp_fn(model, group)
         ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
         ref_state_dict = model.module.state_dict()
+        if config.get("cpu_offload", False):
+            for k in ref_state_dict.keys():
+                ref_state_dict[k] = ref_state_dict[k].cpu()
 
         # Confirm we get the same behavior using FullyShardedDataParallel.
         model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
@@ -456,9 +464,8 @@ class TestSaveLoadStateDict(DistributedTest):
     def _test_state_dict_before_forward(cls, config, rank, group):
         ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
         sd = ddp_model.state_dict()
-        expected_dtype = torch.float16 if ddp_model.mixed_precision else torch.float32
         wt = sd["embed_tokens.weight"]
-        assert wt.dtype == expected_dtype, f"got dtype {wt.dtype} expected {expected_dtype}"
+        assert wt.dtype == torch.float32, f"got dtype {wt.dtype} expected torch.float32"
         cls._train_for_several_steps(ddp_model, 1, ddp_model.mixed_precision)
 
     @classmethod
@@ -480,15 +487,11 @@ class TestSaveLoadStateDict(DistributedTest):
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_nested_wrapped_model(self, config):
-        if config["mixed_precision"]:
-            return  # TODO(myleott) this is broken until we support FP32 all-gather for state_dict
         test_fn = functools.partial(self._test_nested_wrapped_model, config=config)
         spawn_and_init(test_fn)
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_nested_wrapped_model_local_state_dict(self, config):
-        if config["mixed_precision"]:
-            return  # TODO(myleott) this is broken until we support FP32 all-gather for state_dict
         test_fn = functools.partial(self._test_nested_wrapped_model_local_state_dict, config=config)
         spawn_and_init(test_fn)
 
@@ -501,6 +504,8 @@ class TestSaveLoadStateDict(DistributedTest):
         ref_state_dict = {k: v.clone() for k, v in model.module.state_dict().items()}
 
         # Create a nested FSDP-wrapped instance.
+        if config["mixed_precision"]:
+            config["compute_dtype"] = torch.float32
         model = NestedWrappedModule(group, config)
         model = FullyShardedDataParallel(model, group, **config).cuda()
         cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])

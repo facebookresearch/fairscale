@@ -180,7 +180,10 @@ class FullyShardedDataParallel(nn.Module):
         params = list(p for p in module.parameters() if not hasattr(p, "_is_sharded"))
 
         self._has_params = len(params) > 0
-        if self.flatten_parameters and self._has_params:
+        if not self._has_params:
+            self.flatten_parameters = False
+
+        if self.flatten_parameters:
             self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=params)
             del module  # free original module in case it helps garbage collection
             self.params = [self._fsdp_wrapped_module.flat_param]
@@ -335,21 +338,26 @@ class FullyShardedDataParallel(nn.Module):
                 continue
             p._is_sharded = True
 
-            # Shard using torch.chunk to match all-gather/reduce-scatter.
-            chunks = list(torch.flatten(p.data).chunk(self.world_size))
-            while len(chunks) < self.world_size:
-                chunks.append(chunks[0].new_empty(0))
-
-            # Determine number of padding elements.
-            num_to_pad = chunks[0].numel() - chunks[self.rank].numel()
-            assert num_to_pad >= 0, num_to_pad
-
             # Replace p.data with the relevant shard.
             orig_data = p.data
-            p.data = chunks[self.rank].clone()  # clone since we free storage below
-            if num_to_pad > 0:
-                p.data = F.pad(p.data, [0, num_to_pad])
+            p.data = self._get_shard(p.data)
             free_storage_(orig_data)
+
+    def _get_shard(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Return the local shard of a given full tensor."""
+        # Shard using torch.chunk to match all-gather/reduce-scatter.
+        chunks = list(torch.flatten(tensor).chunk(self.world_size))
+        while len(chunks) < self.world_size:
+            chunks.append(chunks[0].new_empty(0))
+
+        # Determine number of padding elements.
+        num_to_pad = chunks[0].numel() - chunks[self.rank].numel()
+        assert num_to_pad >= 0, num_to_pad
+
+        shard = chunks[self.rank].clone()
+        if num_to_pad > 0:
+            shard = F.pad(shard, [0, num_to_pad])
+        return shard
 
     def extra_repr(self) -> str:
         return (
@@ -408,31 +416,33 @@ class FullyShardedDataParallel(nn.Module):
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
         wrapped Module without any sharding-specific logic. Returned tensors
-        will always be typed float32.
+        will be full precision (e.g., FP32).
 
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
+        torch.cuda.synchronize()
+        self._lazy_init()
         if self.mixed_precision:
             # Buffers dtype stays consistent with parameters.
             self._all_buffers_to(dtype=torch.float32)
 
         if self._return_full_state_dict:
             if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
-                with self.summon_full_params():
+                with self.summon_full_params(volatile=True):
                     state_dict = super().state_dict(*args, **kwargs)
             else:
-                torch.cuda.synchronize()
-                self._lazy_init()
                 state_dict = super().state_dict(*args, **kwargs)
         else:
-            torch.cuda.synchronize()
-            self._lazy_init()
             if self.flatten_parameters:
                 assert isinstance(self.module, FlattenParamsWrapper)
                 state_dict = self.module.flat_state_dict(*args, **kwargs)
             else:
                 state_dict = super().state_dict(*args, **kwargs)
+
+        if self.cpu_offload:
+            for k in state_dict.keys():
+                state_dict[k] = state_dict[k].cpu()
 
         if self.mixed_precision:
             # In case we are in mixed precision, restore buffers back to fp16.
@@ -516,29 +526,42 @@ class FullyShardedDataParallel(nn.Module):
                 m._require_backward_grad_sync = old_flag
 
     @contextlib.contextmanager
-    def summon_full_params(self, recurse: bool = True) -> Generator:
+    def summon_full_params(self, recurse: bool = True, volatile: bool = False) -> Generator:
         """
         A context manager to expose full params for the current FSDP instance.
         Can be useful *after* forward/backward for a model to get the params for
-        additional processing or checking.
-
-        By default this will recursively summon all params for nested FSDP
-        instances; this can be disabled by setting ``recurse=False``.
+        additional processing or checking. Parameters will be gathered in full
+        precision (e.g., FP32).
 
         .. note:: This can be used on inner FSDPs.
 
         .. note:: This can *not* be used within a forward or backward pass. Nor
             can forward and backward be started from within this context.
+
+        .. note:: The full parameters will be freed after the context manager
+            exits; it is up to the caller to clone them if needed.
+
+        .. note:: The full parameters can be modified, but only the portion
+            corresponding to the local param shard will persist after the
+            context manager exits (unless ``volatile=True``, in which case there
+            are no guarantees about persistence).
+
+        Args:
+            recurse (bool, Optional): recursively summon all params for nested
+                FSDP instances (default: True)
+            volatile (bool, Optional): if ``True``, modifications to params are
+                not guaranteed persist after the context manager exists;
+                enabling this can be slightly more efficient (default: False)
         """
         if recurse:
             with contextlib.ExitStack() as stack:
-                # summon all params for any nested FlattenParamsWrapper instances
+                # Summon all params for any nested FSDP instances.
                 for module in self.modules():
                     if isinstance(module, FullyShardedDataParallel):
-                        stack.enter_context(module.summon_full_params(recurse=False))
-                # yield to the caller, with full params in all nested instances
+                        stack.enter_context(module.summon_full_params(recurse=False, volatile=volatile))
+                # Yield to the caller, with full params in all nested instances.
                 yield
-            # exiting from the ExitStack will re-shard params
+            # Exiting from the ExitStack will re-shard params.
             return
         else:
             torch.cuda.synchronize()
@@ -547,13 +570,30 @@ class FullyShardedDataParallel(nn.Module):
             # Set the state so that we assert when trying to go into
             # forward/backward.
             self.training_state = TrainingState.SUMMON_FULL_PARAMS
-            self._rebuild_full_params()
-            try:
-                yield
-            finally:
-                self._free_full_params()
-                self._use_fp32_param_shard()
-                self.training_state = TrainingState.IDLE
+            full_tensors = self._rebuild_full_params(full_precision=True)
+            with contextlib.ExitStack() as stack:
+                if self.flatten_parameters and self.module.is_flattened:
+                    # Update flattened views to point to fully-sized tensors. We
+                    # use self.params[0] instead of full_tensors since the
+                    # latter may contain padding.
+                    assert len(self.params) == 1
+                    assert isinstance(self.module, FlattenParamsWrapper)
+                    stack.enter_context(self.module.unflatten_params(recurse=False, flat_param=self.params[0]))
+                try:
+                    yield
+                finally:
+                    stack.close()
+                    assert len(full_tensors) == len(self.params)
+                    for p, (full_tensor, safe_to_free) in zip(self.params, full_tensors):
+                        if not volatile:
+                            # Copy any changes made to the full params back into
+                            # the corresponding local shards.
+                            local_shard = self._get_shard(full_tensor)
+                            p._fp32_shard.copy_(local_shard.view_as(p._fp32_shard))
+                        if safe_to_free:
+                            free_storage_(full_tensor)
+                    self._use_fp32_param_shard()
+                    self.training_state = TrainingState.IDLE
 
     def _reset_lazy_init(self) -> None:
         """Reset instance so :func:`_lazy_init` will run on the next forward."""
@@ -953,35 +993,61 @@ class FullyShardedDataParallel(nn.Module):
                 m.training_state = TrainingState.IDLE
 
     @torch.no_grad()
-    def _rebuild_full_params(self) -> None:
-        """Gather all shards of params."""
+    def _rebuild_full_params(self, full_precision: bool = False) -> List[Tuple[torch.Tensor, bool]]:
+        """
+        Gather all shards of params.
+
+        Args:
+            full_precision (bool, Optional): by default params will be gathered
+                in ``compute_dtype`` (e.g., FP16), unless *full_precision* is
+                ``True``, in which case they will be gathered in full precision
+                (e.g., FP32), possibly in fresh storage.
+
+        Returns:
+            a list of tuples, where the first element is the full-sized param
+            and the second element is a bool indicating if it's safe for the
+            caller to free the full-sized param
+        """
+        output_tensors: List[Tuple[torch.Tensor, bool]] = []
         with torch.cuda.stream(self._streams["all_gather"]):
-            if self.mixed_precision:
+            if self.mixed_precision and not full_precision:
                 self._cast_fp32_param_shards_to_fp16()
 
             for p in self.params:
-                if not p._is_sharded:
-                    if self.mixed_precision:
+                if not p._is_sharded:  # e.g., when world_size == 1
+                    if self.mixed_precision and not full_precision:
                         p.data = p._fp16_shard
+                        output_tensors.append((p.data, True))
+                    else:
+                        output_tensors.append((p.data, False))
                     continue
 
+                # If self.cpu_offload and full_precision, we need to cast the
+                # FP32 CPU param to CUDA for the all-gather.
+                p_data = p.data.to(p._full_param_padded.device)
+
                 p_size = p._full_param_padded.size()
-                if p._full_param_padded.storage().size() != p_size.numel():
-                    # Allocate based on full size from all shards.
-                    alloc_storage_(p._full_param_padded, size=p_size)
-                    assert p_size.numel() % self.world_size == 0
-                    if p._is_sharded:
-                        # Fill p._full_param_padded with (p.data for each shard in self.world_size)
-                        chunks = list(p._full_param_padded.chunk(self.world_size))
-                        dist.all_gather(chunks, p.data, group=self.process_group)
-                    else:
-                        p._full_param_padded.copy_(torch.flatten(p.data), non_blocking=True)
+                assert p_size.numel() % self.world_size == 0
+                if not self.mixed_precision or not full_precision:
+                    if p._full_param_padded.storage().size() != p_size.numel():
+                        # Allocate based on full size from all shards.
+                        alloc_storage_(p._full_param_padded, size=p_size)
+                    output_tensor = p._full_param_padded
+                else:
+                    # Allocate fresh tensor in full precision.
+                    output_tensor = p_data.new_zeros(p_size)
+                output_tensors.append((output_tensor, True))
 
-                p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
+                # Fill output_tensor with (p.data for each shard in self.world_size)
+                chunks = list(output_tensor.chunk(self.world_size))
+                dist.all_gather(chunks, p_data, group=self.process_group)
 
-                if self.mixed_precision:
+                p.data = output_tensor[: p._orig_size.numel()].view(p._orig_size)
+
+                if self.mixed_precision and not full_precision:
                     self._free_fp16_param_shard([p])
         torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
+        return output_tensors
 
     @torch.no_grad()
     def _use_full_params(self) -> None:
@@ -1013,7 +1079,7 @@ class FullyShardedDataParallel(nn.Module):
         current_stream = torch.cuda.current_stream()
         with torch.cuda.stream(self._streams["all_gather"]):
             for p in params:
-                if not p._is_sharded:
+                if not p._is_sharded:  # e.g., world_size == 1
                     if self.mixed_precision:
                         self._free_fp16_param_shard([p])
                     continue

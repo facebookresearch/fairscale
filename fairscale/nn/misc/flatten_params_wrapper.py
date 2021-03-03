@@ -53,9 +53,6 @@ class FlattenParamsWrapper(nn.Module):
 
         self._flatten_params()
 
-        # register the views as plain attributes
-        self._unflatten_params_as_views()
-
         # Register hook to be called after state_dict() to remove the
         # "_fpw_module." prefix and before load_state_dict() to add it back.
         self._register_state_dict_hook(_post_state_dict_hook)
@@ -70,10 +67,7 @@ class FlattenParamsWrapper(nn.Module):
     def module(self) -> nn.Module:
         return self._fpw_module
 
-    def _flatten_params(self) -> None:
-        assert not self.is_flattened
-        self.is_flattened = True
-
+    def _init_flatten_params(self) -> List[Tensor]:
         param_infos = []
         shared_param_memo: Dict[nn.Parameter, Tuple[nn.Module, str]] = {}
         shared_param_infos = []
@@ -102,11 +96,22 @@ class FlattenParamsWrapper(nn.Module):
         self._param_numels = tuple(param_numels)
         self._param_shapes = tuple(param_shapes)
 
+        return params
+
+    def _flatten_params(self, flat_param: Optional[nn.Parameter] = None) -> None:
+        assert not self.is_flattened
+        self.is_flattened = True
+
+        if not hasattr(self, "_param_infos"):
+            assert flat_param is None
+            params = self._init_flatten_params()
+            flat_param = nn.Parameter(torch.cat([p.reshape(-1) for p in params], 0))
+            self.param_numel = flat_param.numel()
+            del params
+
         # flatten
-        flat_param = nn.Parameter(torch.cat([p.reshape(-1) for p in params], 0))
+        assert flat_param is not None
         self.register_parameter("flat_param", flat_param)
-        self.param_numel = flat_param.numel()
-        del params
 
         # deregister the names as parameters
         for m, n in self._param_infos:
@@ -114,14 +119,18 @@ class FlattenParamsWrapper(nn.Module):
         for m, n, _, _ in self._shared_param_infos:
             delattr(m, n)
 
-    def _get_param_views(self) -> Generator:
-        return (t.view(s) for (t, s) in zip(self.flat_param.split(self._param_numels), self._param_shapes))
+        # register the views as plain attributes
+        self._unflatten_params_as_views()
 
-    def _unflatten_params(self) -> None:
-        assert self.is_flattened
+    def _get_param_views(self, flat_param: Tensor) -> Generator:
+        return (t.view(s) for (t, s) in zip(flat_param.split(self._param_numels), self._param_shapes))
+
+    def _unflatten_params(self, flat_param: Optional[Tensor] = None) -> None:
+        assert self.is_flattened or flat_param is not None
         self.is_flattened = False
+        flat_param = flat_param if flat_param is not None else self.flat_param
 
-        ps = self._get_param_views()
+        ps = self._get_param_views(flat_param)
         for (m, n), p in zip(self._param_infos, ps):
             if hasattr(m, n):
                 delattr(m, n)
@@ -130,41 +139,60 @@ class FlattenParamsWrapper(nn.Module):
             if hasattr(m, n):
                 delattr(m, n)
             m.register_parameter(n, getattr(shared_m, shared_n))
-        del self.flat_param
+        if hasattr(self, "flat_param"):
+            del self.flat_param
 
     def _unflatten_params_as_views(self) -> None:
         assert self.is_flattened
-        ps = self._get_param_views()
+        ps = self._get_param_views(self.flat_param)
         for (m, n), p in zip(self._param_infos, ps):
             setattr(m, n, p)  # This will set as plain attr
         for (m, n, shared_m, shared_n) in self._shared_param_infos:
             setattr(m, n, getattr(shared_m, shared_n))
 
     @contextmanager
-    def unflatten_params(self, recurse: bool = True) -> Generator:
+    def unflatten_params(self, recurse: bool = True, flat_param: Optional[Tensor] = None) -> Generator:
         """
-        Unflatten params (optionally recursively on all nested instances).
-        If the current instance is already unflattened, then it will remain
-        unflattened after the context manager exits.
+        Unflatten params. If the current instance is already unflattened, then
+        it will remain unflattened after the context manager exits.
+
+        Args:
+            recurse (bool, Optional): recursively unflatten all nested instances
+                (default: True)
+            flat_param (Tensor, Optional): flat param to use for unflattening.
+                If provided, the current instance must be in a flattened state
+                at the start of the context manager. The provided Tensor must be
+                appropriately sized and will only be used within the context
+                manager. After the context manager exits, we will revert to
+                using ``self.flat_param`` (default: None).
         """
         if recurse:
             with ExitStack() as stack:
                 # unflatten any nested FlattenParamsWrapper instances
-                for module in self.modules():
+                for name, module in self.named_modules():
                     if isinstance(module, FlattenParamsWrapper):
-                        stack.enter_context(module.unflatten_params(recurse=False))
+                        is_self = name == ""
+                        stack.enter_context(
+                            module.unflatten_params(recurse=False, flat_param=flat_param if is_self else None)
+                        )
                 # yield to the caller, with unflattened params in all nested instances
                 yield
             # exiting from the ExitStack will re-flatten params
             return
         else:
+            assert (
+                flat_param is None or self.is_flattened
+            ), "Unflattening with custom flat_param requires current instance to be flattened"
+
             orig_flattened = self.is_flattened
-            if self.is_flattened:
-                self._unflatten_params()
-            yield
             if orig_flattened:
-                self._flatten_params()
-                self._unflatten_params_as_views()
+                orig_flat_param = self.flat_param
+                self._unflatten_params(flat_param)
+
+            yield
+
+            if orig_flattened:
+                self._flatten_params(orig_flat_param)
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
