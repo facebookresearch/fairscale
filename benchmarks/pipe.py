@@ -104,15 +104,15 @@ def log_number_of_parameters(model):
         if torch.cuda.is_available():
             total = total.cuda()
         torch.distributed.all_reduce(total, group=model.group)
-        logging.info(
+        logging.debug(
             f"training model, #params = {num_params}, group: {model.group.rank()}, grank:"
             f" {torch.distributed.get_rank()}, sizes {model.group.size()}"
         )
         torch.distributed.barrier()
         if model.group.rank() == 0:
-            logging.info(f"total #prams = {total.item()}")
+            logging.debug(f"total #prams = {total.item()}")
     else:
-        logging.info(f"training model, #params = {num_params}")
+        logging.debug(f"training model, #params = {num_params}")
 
 
 def get_device(model, index):
@@ -231,7 +231,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
                 if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
-                    logging.info(
+                    logging.debug(
                         "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
                             i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
                         )
@@ -299,7 +299,7 @@ def verify_lm_run(wps, golden_config, args):
     if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
         # Assert that words per second is within 3 standard deviations of the average
         # of five golden runs
-        logging.debug("Throughput(wps) is {:.2f}.".format(wps))
+        logging.info("Throughput(wps) is {:.2f}.".format(wps))
         if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
             raise RuntimeError(
                 "Throughput(wps):{:.2f} is below the golden threshold of an "
