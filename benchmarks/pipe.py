@@ -7,7 +7,6 @@ import gc
 import logging
 import math
 import operator
-import pprint
 import time
 
 from datasets.wikitext2_data import get_real_dataloaders as get_real_wikitext2_dataloaders
@@ -95,66 +94,6 @@ def get_tensors_by_size_bucket():
             size_buckets[(*obj.size(),) + (obj.element_size(),)] += 1
 
     return size_buckets
-
-
-def dump_size_buckets(size_buckets, prefix=""):
-
-    total = 0
-    for key, value in size_buckets.items():
-        this = reduce(operator.mul, key) * value
-        total += this
-        print(prefix + f"{key} : {value}, {this}")
-
-    print(prefix + f"total = {total}")
-
-
-last_size_buckets = None
-once = True
-
-
-def safe_rank():
-    try:
-        return torch.distributed.get_rank()
-    except AssertionError:
-        return 0
-
-
-def check_size_buckets():
-    global last_size_buckets
-    global once
-    size_buckets = get_tensors_by_size_bucket()
-    if last_size_buckets is not None:
-        if size_buckets != last_size_buckets:
-            print(f"difference is oustanding tensors: {safe-rank()}")
-            dump_size_buckets(last_size_buckets, "old: ")
-            dump_size_buckets(size_buckets, "new: ")
-        if once:
-            print(f"dumping buckets for: {safe_rank()}")
-            dump_size_buckets(last_size_buckets, "old: ")
-            dump_size_buckets(size_buckets, "new: ")
-            once = False
-    else:
-        print(f"size buckets none on {safe_rank()}")
-    last_size_buckets = size_buckets
-
-
-def dump_cuda_tensors():
-    print(f"dumping cuda tensors...")
-
-    for obj in gc.get_objects():
-        if not isinstance(obj, torch.Tensor):
-            continue
-        if obj.device.type == "cuda":
-            size_buckets[(*obj.size(),) + (obj.element_size(),)] += 1
-
-    print(f"outstanding cuda tensors:")
-    total = 0
-    for key, value in size_buckets.items():
-        this = reduce(operator.mul, key) * value
-        total += this
-        print(f"{key} : {value}, {this}")
-    print(f"total size = {total}")
-    pprint.pprint(torch.cuda.memory_stats())
 
 
 def log_number_of_parameters(model):
@@ -292,7 +231,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
                 if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
-                    print(
+                    logging.info(
                         "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
                             i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
                         )
@@ -341,7 +280,9 @@ def get_number_of_words(data):
 
 
 def verify_peak_memory(rank, golden_config, std_dev):
-    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]))
+    logging.debug(
+        "Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"])
+    )
     current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
     golden_ref = golden_config["peak_mem_usage"][rank]
     if not current_device_usage < golden_ref * std_dev:
@@ -358,7 +299,7 @@ def verify_lm_run(wps, golden_config, args):
     if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
         # Assert that words per second is within 3 standard deviations of the average
         # of five golden runs
-        print("Throughput(wps) is {:.2f}.".format(wps))
+        logging.debug("Throughput(wps) is {:.2f}.".format(wps))
         if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
             raise RuntimeError(
                 "Throughput(wps):{:.2f} is below the golden threshold of an "
@@ -379,17 +320,17 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
     epoch = benchmark_config["epochs"]
     start_time = time.time()
     if dist.get_rank() == dist.get_world_size() - 1:
-        print("-" * 110)
-        print("| start of epoch {:1d}".format(epoch))
-        print("-" * 110)
+        logging.debug("-" * 110)
+        logging.debug("| start of epoch {:1d}".format(epoch))
+        logging.debug("-" * 110)
     wps, loss = train(model_config, model, benchmark_config, model_specs, args)
     elapsed_time = time.time() - start_time
     if dist.get_rank() == dist.get_world_size() - 1:
-        print("-" * 110)
-        print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
-        print("-" * 110)
-        print("Throughput(wps) is {:.2f}.".format(wps))
-    print(
+        logging.debug("-" * 110)
+        logging.debug("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
+        logging.debug("-" * 110)
+        logging.debug("Throughput(wps) is {:.2f}.".format(wps))
+    logging.debug(
         "Peak allocated bytes on cuda:{}: {:1d}".format(
             dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]
         )
@@ -400,17 +341,6 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
             verify_lm_run(wps, golden_config, args)
         else:
             raise RuntimeError("Unrecognized args.model_name " % args.model_name)
-
-
-def generate_balance_weighted(num_devices, num_layers, fraction=0.5):
-    balance = []
-    layers_assigned = 0
-    average_count = num_layers / num_devices
-    last_layers = int(average_count * fraction)
-
-    balance = generate_balance(num_devices - 1, num_layers - last_layers)
-    balance.append(last_layers)
-    return balance
 
 
 def generate_balance(num_devices, num_layers):
@@ -539,9 +469,6 @@ def run_mp_worker(args, available_workers):
     )
     if torch.cuda.is_available():
         pipe_model = pipe_model.cuda()
-    if args.all_at_once and pipe_model.pipeline:
-        print(f"running all at once")
-        pipe_model.pipeline.all_at_once = True
 
     if args.dry_run:
         train(model_config, pipe_model, benchmark_config, model_specs, args)
@@ -610,16 +537,16 @@ parser.add_argument(
     default="lm",
     help="Language Model(LM) used to benchmark nn.pipe.",
 )
+parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
 
 if __name__ == "__main__":
     args = parser.parse_args()
-
-    # TODO(anj-s): Remove print statements and introduce logging levels.
+    logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
 
     if not args.multiprocess:
-        print(f"Running single process benchmark with args: {args}")
+        logging.info(f"Running single process benchmark with args: {args}")
         benchmark_single_process(args)
     else:
         world_size = max(torch.cuda.device_count(), 1)
-        print(f"Running multiprocess benchmark with args: {args}")
+        logging.info(f"Running multiprocess benchmark with args: {args}")
         mp.spawn(benchmark_multiprocess, args=(world_size, args), nprocs=world_size, join=True)
