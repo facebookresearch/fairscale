@@ -116,6 +116,9 @@ install_dep_180: &install_dep_180
   - run:
       name: Install Dependencies with torch 1.8.0 nightly
       command: |
+        # check if we have restored cache correctly, if so, just skip
+        python -c 'import torch; assert torch.__version__.split(".")[:2] != ["1", "8"]' || exit 0
+        # start installing
         sudo apt-get install -y libopenmpi-dev
         pip install --progress-bar off -r requirements-test.txt
         # Since we are using nightly builds, we bypass the benchmarks req file
