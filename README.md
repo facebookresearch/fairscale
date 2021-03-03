@@ -17,7 +17,7 @@ FairScale supports:
 * Sharded training:
    * Optimizer state sharding (`fairscale.optim.OSS`)
    * Sharded Data Parallel (SDP) (`fairscale.nn.ShardedDataParallel`)
-   * Fully Sharded Data Parallel (FSDP) (`fairscale.nn.FullyShardedDataParallel`)
+   * Fully Sharded Data Parallel (FSDP) (`fairscale.nn.FullyShardedDataParallel`) (PyTorch >= 1.6)
 * Optimization at scale:
    * AdaScale SGD (`fairscale.optim.AdaScale`)
 * GPU memory optimization:
