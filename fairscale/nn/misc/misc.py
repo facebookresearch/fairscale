@@ -3,14 +3,14 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Tuple
+from typing import List
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 from torch.nn.modules.batchnorm import _BatchNorm
 
 
-def patch_batchnorm(module: nn.Module) -> Tuple:
+def patch_batchnorm(module: nn.Module) -> List:
     """Patch all batchnorm instances (1d, 2d, 3d, sync_bn, etc.) of a module
        so that they don't track running stats when torch.no_grad() is enabled.
 
@@ -24,17 +24,18 @@ def patch_batchnorm(module: nn.Module) -> Tuple:
             The module to be patched in-place.
 
     Returns:
-        (tuple):
+        (list):
             A list of hook handles, late can be freed.
     """
     hooks = []
-    def pre_forward(module, input) -> None:
+
+    def pre_forward(module: _BatchNorm, input: Tensor) -> None:
         if torch.is_grad_enabled():
             return
         module._track_running_stats_backup = module.track_running_stats
         module.track_running_stats = False
 
-    def post_forward(module, input, result) -> None:
+    def post_forward(module: _BatchNorm, input: Tensor, result: Tensor) -> None:
         if torch.is_grad_enabled():
             return
         module.track_running_stats = module._track_running_stats_backup
