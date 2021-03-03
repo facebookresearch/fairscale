@@ -25,6 +25,7 @@ from fairscale.utils.testing import (
     get_cycles_per_ms,
     objects_are_equal,
     spawn_for_all_world_sizes,
+    torch_version,
 )
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
@@ -33,10 +34,8 @@ from fairscale.utils.testing import (
 
 class DistributedTest(unittest.TestCase):
     def setUp(self):
-        major, minor = torch.__version__.split(".")[:2]
-        major, minor = int(major), int(minor)
-        if major < 1 or (major == 1 and minor < 6):
-            raise unittest.SkipTest("Need pytorch version >= 1.6 due to autocast")
+        if torch_version() < (1, 6, 0):
+            raise unittest.SkipTest("Need pytorch version >= 1.6 due to lack of reduce_scatter")
         if not torch.cuda.is_available():
             raise unittest.SkipTest("CUDA not available, skipping test")
         if sys.platform == "win32":

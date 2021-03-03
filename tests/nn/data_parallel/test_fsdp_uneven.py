@@ -85,7 +85,7 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
 def test_one_iteration(world_size, test_case, fsdp_config):
     """Test FSDP with uneven divide of parameter shards."""
     if torch_version() < (1, 6, 0):
-        pytest.skip("older pytorch doesn't support reduce_scatter in gloo backend")
+        pytest.skip("older pytorch doesn't support reduce_scatter")
 
     if world_size > torch.cuda.device_count():
         pytest.skip("Not enough GPUs.")
