@@ -5,7 +5,6 @@ import argparse
 from enum import Enum
 import importlib
 import logging
-import shutil
 import tempfile
 import time
 from typing import Any, List, Optional, cast
@@ -24,6 +23,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torchvision.datasets import MNIST
 from torchvision.transforms import Compose, Resize, ToTensor
 
+from benchmarks.datasets.mnist import setup_cached_mnist
 from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
@@ -302,23 +302,7 @@ if __name__ == "__main__":
     BACKEND = "nccl" if (not args.gloo or not torch.cuda.is_available()) and not args.cpu else "gloo"
 
     # Download dataset once for all processes
-    dataset, tentatives = None, 0
-    while dataset is None and tentatives < 5:
-        try:
-            dataset = MNIST(transform=None, download=True, root=TEMPDIR)
-        except (RuntimeError, EOFError) as e:
-            if isinstance(e, RuntimeError):
-                # Corrupted data, erase and restart
-                shutil.rmtree(TEMPDIR + "/MNIST")
-
-            logging.warning("Failed loading dataset: %s " % e)
-            tentatives += 1
-
-    if dataset is None:
-        logging.error("Could not download MNIST dataset")
-        exit(-1)
-    else:
-        logging.info("Dataset downloaded")
+    setup_cached_mnist()
 
     # Benchmark the different configurations, via multiple processes
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:
