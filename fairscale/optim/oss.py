@@ -593,4 +593,5 @@ class OSS(Optimizer):
                     else:
                         self.buckets[device][dst_rank] = bucket
                 else:
+                    # This rank has an empty shard, that's fine
                     self.buckets[device].append(torch.zeros(0, device=device))
