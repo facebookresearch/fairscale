@@ -111,20 +111,18 @@ class FakeDataset(Dataset):
 
 @torch_spawn([2])
 def async_event_loop_interleave_simple():
-    #    pytest.skip("Fix test before reenabling again.")
     model = nn.Sequential(nn.Linear(10, 10), nn.ReLU(inplace=False), nn.Linear(10, 10), nn.ReLU(inplace=False))
     pipe = AMPnetPipe(module=model, balance=[2, 2], worker_map=get_worker_map(), chunks=10, checkpoint="never",)
     fake_dataset = FakeDataset()
     fake_dataloader = DataLoader(fake_dataset, batch_size=4, shuffle=True, num_workers=0)
     loss = nn.MSELoss()
-    transform_and_log = AMPnetDelegate()
     opt = MySGD(model.parameters(), lr=0.01)
+    transform_and_log = AMPnetDelegate()
     pipe.interleave(fake_dataloader, loss, opt, transform_and_log)
 
 
 @torch_spawn([4])
 def async_event_loop_interleave_hard():
-    #    pytest.skip("Fix test before reenabling again.")
     model = nn.Sequential(nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 10))
     pipe = AMPnetPipe(module=model, balance=[1, 1, 1, 1], worker_map=get_worker_map(), chunks=10, checkpoint="never",)
     fake_dataset = FakeDataset()
