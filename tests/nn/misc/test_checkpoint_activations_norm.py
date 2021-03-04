@@ -34,9 +34,8 @@ def get_model(norm_type, checkpointed, mixed_precision):
             p.data = p.data.half()
         for m in model:
             for n, b in m.named_buffers():
-                setattr(b, n, b.half())
-
-    if mixed_precision == "call_half":
+                setattr(m, n, b.half())
+    elif mixed_precision == "call_half":
         model.half()
 
     if checkpointed:
@@ -71,12 +70,7 @@ def test_norm(device, norm_type, mixed_precision):
     for model in (m_ref, m_cpt):
         optim = SGD(model.parameters(), lr=0.1)
         if device == "cpu" and mixed_precision != "fp32":
-            # Got: RuntimeError: "batch_norm" not implemented for 'Half'.
-            with pytest.raises(RuntimeError):
-                out = model(in_data)
-            return
-        if device == "cuda" and norm_type == BatchNorm2d and mixed_precision == "fp16":
-            # Got: RuntimeError: expected scalar type Float but found Half.
+            # Got: RuntimeError: "batch_norm"/"layer_norm" not implemented for 'Half'.
             with pytest.raises(RuntimeError):
                 out = model(in_data)
             return
