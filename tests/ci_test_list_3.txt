@@ -1,8 +1,8 @@
 tests/nn/data_parallel/test_fsdp_uneven.py
 tests/nn/data_parallel/test_fsdp_grad_scaler.py
 tests/nn/data_parallel/test_fsdp_summon_full_params.py
-tests/nn/data_parallel/test_features_sharded_ddp.py
-tests/nn/data_parallel/test_pytorch_parity_sharded_ddp.py
+tests/nn/data_parallel/test_sharded_ddp_features.py
+tests/nn/data_parallel/test_sharded_ddp_pytorch_parity.py
 tests/nn/pipe/skip/test_gpipe.py
 tests/nn/pipe/skip/test_verify_skippables.py
 tests/nn/pipe/skip/test_stash_pop.py

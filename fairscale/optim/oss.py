@@ -97,8 +97,9 @@ class OSS(Optimizer):
         self.world_size = dist.get_world_size(self.group)
         self.rank = dist.get_rank(self.group)
         self.global_rank = self.get_global_rank(self.group, self.rank)
-        self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
+        self._local_to_global_rank = [self.get_global_rank(self.group, i) for i in range(self.world_size)]
 
+        self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
         self._all_states: List[Dict[str, Any]] = []  # Optional consolidated optimizer state
         self._default_device = torch.device("cpu")
 
@@ -377,6 +378,7 @@ class OSS(Optimizer):
 
         # Make sure that the parameters are sorted in the state, as expected
         state_dict["state"] = dict(sorted(state_dict["state"].items()))
+
         return state_dict
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
@@ -440,12 +442,10 @@ class OSS(Optimizer):
                     dist_device=self._default_device,
                 )
             else:
-                global_rank = self.get_global_rank(self.group, rank)
-
                 # Discard this tensor/rank, broadcast necessary for syncing and because NCCL does not support gather
                 broadcast_object(
                     torch.tensor([dummy_sync_tensor], dtype=torch.uint8, device=self._default_device),
-                    src_rank=global_rank,
+                    src_rank=self._local_to_global_rank[rank],
                     group=self.group,
                     dist_device=self._default_device,
                 )
@@ -470,10 +470,9 @@ class OSS(Optimizer):
                 )
             else:
                 # Fetch the optim state from the other replicas
-                global_rank = self.get_global_rank(self.group, rank)
                 replica_state = broadcast_object(
                     torch.tensor([0], dtype=torch.uint8, device=self._default_device),
-                    src_rank=global_rank,
+                    src_rank=self._local_to_global_rank[rank],
                     group=self.group,
                     dist_device=self._default_device,
                 )
@@ -548,7 +547,7 @@ class OSS(Optimizer):
                 if bucket.numel() > 0:
                     global_src_rank = self.get_global_rank(self.group, src_rank)
                     last_work_handle = dist.broadcast(
-                        tensor=bucket, src=global_src_rank, group=self.group, async_op=True
+                        tensor=bucket, src=self._local_to_global_rank[src_rank], group=self.group, async_op=True
                     )
 
         # Only check on the last handle, they're all inlined on the same CUDA stream
