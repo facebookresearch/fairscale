@@ -4,23 +4,72 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, Optional, Set, Tuple, cast
 
 import torch.nn as nn
 
-from fairscale.nn.data_parallel.fully_sharded_data_parallel import FullyShardedDataParallel
 from fairscale.nn.misc import checkpoint_wrapper
 
-# Modules that don't wrap.
-FSDP_MODULE_EXCLUDE_WRAP = {nn.ModuleList, nn.ModuleDict}
-# Modules that we don't recurse down to their children.
-FSDP_MODULE_BLOCKLIST = {nn.MultiheadAttention}
+
+def should_wrap_default(
+    should_recurse: bool,
+    module: nn.Module,
+    unwrapped_params: int,
+    # These are customizable for this default policy function.
+    min_num_params: int = int(1e8),
+    blacklist: Optional[Set] = None,
+    exclude_wrap: Optional[Set] = None,
+) -> bool:
+    """Default policy function on with :func:`auto_wrap`.
+
+       Return if a module should be wrapped during :func:`auto_wrap`.
+
+       The first three parameters are used by :func:`auto_wrap`. If
+       you write a custom version of this policy function, your version
+       needs to at least accept the first three parameters and free
+       to do whatever you want in the function.
+
+    Args:
+       should_recurse (bool):
+           Indicate if this is called to make a decision on whether we
+           should recurse down a subgraph of the module structure.
+           If False, it means this function is called to make a decision
+           on whether we should wrap the said module.
+       module (nn.Module):
+           The module to be considered in this decision.
+       unwrapped_params (int):
+           The number of parameters yet to be wrapped in this module.
+
+       min_num_params (int):
+           Customizable policy input. It controls the size threshold
+           on how big should a module be to be considered wrapped.
+       blacklist (set):
+           Customizable set of module types to be blacklisted to be
+           broken apart.
+       exclude_wrap (set):
+           Customizable set of module types to be excluded in wrapping.
+    """
+    blacklist = should_wrap_default.MODULE_BLACKLIST if blacklist is None else blacklist  # type: ignore
+    exclude_wrap = should_wrap_default.MODULE_EXCLUDE_WRAP if exclude_wrap is None else exclude_wrap  # type: ignore
+
+    is_large = unwrapped_params >= min_num_params
+    if should_recurse:
+        # We should recurse if the module is big enough but not blacklisted.
+        return is_large and not isinstance(module, tuple(blacklist))
+    else:
+        # If we are not recursing, we should wrap but not the exclude list.
+        return is_large and not isinstance(module, tuple(exclude_wrap))
+
+
+# Set those defaults to the should_wrap_default function. Make them easy to be imported.
+should_wrap_default.MODULE_EXCLUDE_WRAP = {nn.ModuleList, nn.ModuleDict}  # type: ignore
+should_wrap_default.MODULE_BLACKLIST = {nn.MultiheadAttention}  # type: ignore
 
 
 @contextlib.contextmanager
-def enable_wrap(module_blocklist: Optional[List] = None, **wrapper_kwargs: Any) -> Generator[None, None, None]:
+def enable_wrap(should_wrap: Optional[Callable] = None, **wrapper_kwargs: Any) -> Generator[None, None, None]:
     """
-    Context manager to wrap modules in FullyShardedDataParallel.
+    Context manager to wrap modules using a wrapper.
 
     Useful for when you'd like to apply the same parameters to all child modules
     that you wrap. A particularly important use case is wrapping large layers so
@@ -34,26 +83,25 @@ def enable_wrap(module_blocklist: Optional[List] = None, **wrapper_kwargs: Any) 
         with enable_wrap(**params):
             # Wraps layer in FSDP by default if within context
             self.l1 = wrap(torch.nn.Linear(5, 5))
-            # Wraps children modules by default based on min_num_params
-            self.l2 = auto_wrap(TransformerBlock(), min_num_params=1e8)
+            # Wraps children modules based on a different min_num_params
+            my_should_wrap = functools.partial(should_wrap, min_num_params=1e7)
+            self.l2 = auto_wrap(TransformerBlock(), shuold_wrap=my_should_wrap)
 
     Args:
-        module_blocklist: List of additional Module Classes to not wrap when
-            using :func:`auto_wrap`. This is useful to exclude unsupported
-            modules when wrapping recursively.
-        **wrapper_kwargs: Configuration settings that will be passed to all ``wrap``
+        should_wrap (Callable, Optional):
+            Custom function to control how to do :func:`auto_wrap`. This is
+            useful to exclude unsupported modules or wrap based on sizes when
+            wrapping recursively.
+            (default: :func:`should_wrap_default`)
+        **wrapper_kwargs:
+            Configuration settings that will be passed to all ``wrap``
             instances inside the context
     """
-    with ConfigAutoWrap(module_blocklist, **wrapper_kwargs):
+    with ConfigAutoWrap(should_wrap_default, **wrapper_kwargs):
         yield
 
 
-def wrap(
-    module: nn.Module,
-    cls: Callable = FullyShardedDataParallel,
-    activation_checkpoint: bool = False,
-    **wrap_overrides: Any
-) -> nn.Module:
+def wrap(module: nn.Module, activation_checkpoint: bool = False, **wrap_overrides: Any) -> nn.Module:
     """
     Annotate that a module should be wrapped. Annotated modules will only be
     wrapped if inside of an :func:`enable_wrap` context manager. An important
@@ -68,8 +116,6 @@ def wrap(
 
     Args:
         module (nn.Module): module to wrap (if in :func:`enable_wrap` context)
-        cls (Callable): class wrapper to wrap the model with if in context
-            (default: :class:`FullyShardedDataParallel`)
         activation_checkpoint (bool): use activation checkpointing wrapper
             (default: False)
         **wrap_overrides: configuration overrides that will take priority over
@@ -79,21 +125,19 @@ def wrap(
         wrap_overrides = {**ConfigAutoWrap.kwargs, **wrap_overrides}
         if activation_checkpoint:
             module = checkpoint_wrapper(module)
-        return cls(module, **wrap_overrides)
+        assert ConfigAutoWrap.wrapper_cls is not None
+        return ConfigAutoWrap.wrapper_cls(module, **wrap_overrides)
     return module
 
 
 def auto_wrap(
-    module: nn.Module,
-    min_num_params: int = int(1e8),
-    cls: Callable = FullyShardedDataParallel,
-    activation_checkpoint: bool = False,
-    **kwargs: Any
+    module: nn.Module, should_wrap: Optional[Callable] = None, activation_checkpoint: bool = False, **kwargs: Any
 ) -> nn.Module:
     """
-    Annotate that a module should be wrapped with *cls* and recursively wrap
-    children modules that meet the given criteria. This is useful for wrapping
-    large complex layers.
+    Annotate that a module should be wrapped with the *wrapper_cls* from the
+    :func:`enable_wrap` context (if the context exists) and recursively wrap
+    children modules that meet the criteria given by :func:`should_wrap`. This
+    is useful for wrapping large complex layers.
 
     .. warning:: It is not recommended to use :func:`auto_wrap` with
         :class:`FullyShardedDataParallel` on modules that have shared
@@ -104,21 +148,22 @@ def auto_wrap(
     Usage::
 
         with enable_wrap(**params):
-            # Wraps children modules by default based on min_num_params
-            self.l1 = auto_wrap(TransformerBlock(), min_num_params=1e8)
+            # Wraps children modules.
+            self.l1 = auto_wrap(TransformerBlock())
 
     Args:
-        module (nn.Module): module to wrap (if in :func:`enable_wrap` context)
-        cls (Callable): class wrapper to wrap the model with if in context
-            (default: :class:`FullyShardedDataParallel`)
-        min_num_params (int, Optional): min number of parameters for a child
-            Module to be wrapped
-        activation_checkpoint (bool): use activation checkpointing wrapper
+        module (nn.Module):
+            module to wrap (if in :func:`enable_wrap` context)
+        should_wrap (Callable):
+            a function to determine should Module to be wrapped.
+            (default: wrap if > 100M parameters)
+        activation_checkpoint (bool):
+            use activation checkpointing wrapper
             (default: False)
     """
     if ConfigAutoWrap.in_autowrap_context:
         wrapped_module, remainder = ConfigAutoWrap.recursive_wrap(
-            module, cls=cls, activation_checkpoint=activation_checkpoint, min_num_params=min_num_params, **kwargs
+            module, activation_checkpoint=activation_checkpoint, should_wrap=should_wrap, **kwargs
         )
         return wrapped_module
     return module
@@ -130,60 +175,76 @@ class ConfigAutoWrap:
     See :func:`enable_wrap` for more information.
     """
 
-    module_blocklist: List = []
-    in_autowrap_context: bool = False
-    kwargs: Dict[str, Any] = {}
+    in_autowrap_context: bool = False  # Context flag
+    wrapper_cls: Optional[Callable] = None  # The wrapper class
+    kwargs: Dict[str, Any] = {}  # Wrapper's args
+    should_wrap: Optional[Callable] = None  # Used only in auto_wrap
 
-    def __init__(self, module_blocklist: Optional[List] = None, **kwargs: Dict[str, Any]):
-        if module_blocklist:
-            self.module_blocklist += module_blocklist
+    def __init__(self, should_wrap: Optional[Callable] = None, **kwargs: Dict[str, Any]):
+        self.should_wrap = should_wrap
         self.kwargs = kwargs
 
     @staticmethod
-    def enable_autowrap_context(kwargs: Any) -> None:
+    def enable_autowrap_context(should_wrap: Optional[Callable], kwargs: Any) -> None:
         if ConfigAutoWrap.in_autowrap_context:
             raise NotImplementedError(
                 "You are already within an autowrap context and we currently do not supported nested autowrap."
             )
         ConfigAutoWrap.in_autowrap_context = True
+        # Get and save the wrapper cls for the context.
+        assert "wrapper_cls" in kwargs.keys()
+        ConfigAutoWrap.wrapper_cls = cast(Callable, kwargs["wrapper_cls"])
+        del kwargs["wrapper_cls"]
+        # Save the rest.
+        ConfigAutoWrap.should_wrap = should_wrap_default if should_wrap is None else should_wrap
         ConfigAutoWrap.kwargs = kwargs
-        ConfigAutoWrap.module_blocklist += FSDP_MODULE_BLOCKLIST
 
     @staticmethod
     def disable_autowrap_context() -> None:
         ConfigAutoWrap.in_autowrap_context = False
+        ConfigAutoWrap.wrapper_cls = None
         ConfigAutoWrap.kwargs = {}
-        ConfigAutoWrap.module_blocklist = []
+        ConfigAutoWrap.should_wrap = None
 
     def __enter__(self) -> None:
-        self.enable_autowrap_context(self.kwargs)
+        self.enable_autowrap_context(self.should_wrap, self.kwargs)
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.disable_autowrap_context()
 
     @staticmethod
-    def recursive_wrap(module: nn.Module, min_num_params: int, **kwargs: Any) -> Tuple[nn.Module, int]:
+    def recursive_wrap(module: nn.Module, should_wrap: Optional[Callable], **kwargs: Any) -> Tuple[nn.Module, int]:
         """
         Automatically wrap child modules of *module* that meet the given
         criteria with :func:`auto_wrap`.
 
         Args:
-            module (nn.Module): module to recursively wrap
-            min_num_params (int): min number of parameters for a child Module to
-                be wrapped
-        """
-        if isinstance(module, tuple(ConfigAutoWrap.module_blocklist)):
-            # If the module has been blocklisted from wrapping, we return
-            return module, 0
+            module (nn.Module):
+                module to recursively wrap
+            should_wrap (Callable, Optional):
+                optionally, override the :func:`should_wrap` from the context.
 
+        Returns:
+            (nn.Module, int):
+                Wrapped module and the number parameters wrapped recursively.
+        """
+        if should_wrap is None:
+            should_wrap = ConfigAutoWrap.should_wrap
+
+        # Make sure no child is not already wrapped.
+        for _, child in module.named_modules():
+            assert not isinstance(child, cast(type, ConfigAutoWrap.wrapper_cls))
+
+        # We count all params, assuming none of them is already wrapped.
         num_params = sum([p.numel() for p in module.parameters()])
 
-        if num_params >= min_num_params:
+        assert should_wrap is not None
+        if should_wrap(True, module, num_params):
             total_wrapped_params = 0
             # Iterate through the children, recursively wrap if necessary
             for name, child in module.named_children():
                 wrapped_child, num_wrapped_params = ConfigAutoWrap.recursive_wrap(
-                    module=child, min_num_params=min_num_params, **kwargs
+                    module=child, should_wrap=should_wrap, **kwargs
                 )
                 setattr(module, name, wrapped_child)
                 # Keep track of how many parameters have been wrapped
@@ -191,7 +252,8 @@ class ConfigAutoWrap:
             # decide if we need to wrap the current module,
             # since the left over parameters exceed the number of params to wrap
             remainder = num_params - total_wrapped_params
-            if remainder >= min_num_params and not isinstance(module, tuple(FSDP_MODULE_EXCLUDE_WRAP)):
+            if should_wrap(False, module, remainder):
+                # Leaf node or final wrapping of the remainder both happen here.
                 return wrap(module, **kwargs), num_params
             else:
                 return module, total_wrapped_params

@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import functools
 import os
 import unittest
 from unittest import mock
@@ -12,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from fairscale.nn import FullyShardedDataParallel as FSDP
-from fairscale.nn import auto_wrap, enable_wrap, wrap
+from fairscale.nn import auto_wrap, enable_wrap, should_wrap_default, wrap
 from fairscale.utils.testing import DummyProcessGroup
 
 
@@ -25,7 +26,7 @@ class TestAutoWrap(unittest.TestCase):
         self.process_group = DummyProcessGroup(rank=0, size=1)
 
     def test_wrap(self):
-        with enable_wrap(flatten_parameters=False, process_group=self.process_group):
+        with enable_wrap(wrapper_cls=FSDP, flatten_parameters=False, process_group=self.process_group):
             layer = wrap(nn.Linear(5, 5))
         assert isinstance(layer, FSDP)
         assert layer.flatten_parameters is False
@@ -35,7 +36,7 @@ class TestAutoWrap(unittest.TestCase):
         assert isinstance(layer, nn.Linear)
 
     def test_wrap_override_defaults(self):
-        with enable_wrap(flatten_parameters=False, process_group=self.process_group):
+        with enable_wrap(wrapper_cls=FSDP, flatten_parameters=False, process_group=self.process_group):
             layer = wrap(nn.Linear(5, 5), flatten_parameters=True)
         assert isinstance(layer, FSDP)
         assert layer.flatten_parameters
@@ -45,11 +46,12 @@ class TestAutoWrap(unittest.TestCase):
         Test to ensure with auto wrap, we wrap child modules correctly based on the min_num_params.
         ``nn.Linear(5, 5)`` does not exceed the bucket size, but combined they do.
         """
-        with enable_wrap(process_group=self.process_group, flatten_parameters=False):
+        with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.Sequential(
                 nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
             )
-            model = auto_wrap(sequential, min_num_params=40)
+            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            model = auto_wrap(sequential, should_wrap=my_should_wrap)
         assert isinstance(model, FSDP)
         assert isinstance(model.module[0], nn.Linear)
         assert isinstance(model.module[1], nn.Linear)
@@ -62,9 +64,10 @@ class TestAutoWrap(unittest.TestCase):
         Test to ensure excluded modules are not wrapped, regardless if the total param size is greater than the
         min_num_params.
         """
-        with enable_wrap(process_group=self.process_group, flatten_parameters=False):
+        with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.ModuleList([nn.Linear(5, 5), nn.Linear(5, 5)])
-            model = auto_wrap(sequential, min_num_params=40)
+            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            model = auto_wrap(sequential, should_wrap=my_should_wrap)
         assert isinstance(model, nn.ModuleList)
         assert isinstance(model[0], nn.Linear)
         assert isinstance(model[1], nn.Linear)
@@ -74,31 +77,38 @@ class TestAutoWrap(unittest.TestCase):
         Test to ensure excluded modules are not wrapped, but children are if param size is greater than
         min_num_params
         """
-        with enable_wrap(process_group=self.process_group, flatten_parameters=False):
+        with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.ModuleList([nn.Linear(10, 10)])
-            model = auto_wrap(sequential, min_num_params=40)
+            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            model = auto_wrap(sequential, should_wrap=my_should_wrap)
         assert isinstance(model, nn.ModuleList)
         assert isinstance(model[0], FSDP)
 
-    def test_auto_wrap_preset_blocklist(self):
+    def test_auto_wrap_preset_blacklist(self):
         """
-        Test to ensure blocklisted modules are not wrapped, and children are not wrapped.
+        Test to ensure blacklisted modules are not wrapped, and children are not wrapped.
         """
-        with enable_wrap(process_group=self.process_group, flatten_parameters=False):
+        with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.Sequential(nn.Linear(10, 10), nn.MultiheadAttention(100, 1))
-            model = auto_wrap(sequential, min_num_params=40)
+            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            model = auto_wrap(sequential, should_wrap=my_should_wrap)
         assert isinstance(model.module[0], FSDP)
         # Assert children of multihead attention are not wrapped
         assert isinstance(model.module[1], nn.MultiheadAttention)
         assert isinstance(model.module[1].out_proj, nn.Linear)
 
-    def test_auto_wrap_preset_blocklist_custom(self):
+    def test_auto_wrap_preset_blacklist_custom(self):
         """
-        Test to ensure blocklisted modules are not wrapped.
+        Test to ensure blacklisted modules are not wrapped.
         """
-        with enable_wrap(module_blocklist=[nn.Linear], process_group=self.process_group, flatten_parameters=False):
+        my_should_wrap = functools.partial(
+            should_wrap_default, min_num_params=40, blacklist=should_wrap_default.MODULE_BLACKLIST.union({nn.Linear})
+        )
+        with enable_wrap(
+            should_wrap=my_should_wrap, wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False
+        ):
             sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(10, 10)]))
-            model = auto_wrap(sequential, min_num_params=40)
+            model = auto_wrap(sequential, should_wrap=my_should_wrap)
         # Model was wrapped in FSDP as no inner modules were wrapped.
         assert isinstance(model, FSDP)
         assert isinstance(model.module[0], nn.Linear)
@@ -123,11 +133,12 @@ class TestAutoWrap(unittest.TestCase):
         torch.cuda.set_device(0)
         torch.distributed.init_process_group(backend="nccl", rank=0, world_size=1)
 
-        with enable_wrap(mixed_precision=enable_mixed_precision):
+        with enable_wrap(wrapper_cls=FSDP, mixed_precision=enable_mixed_precision):
             sequential = nn.Sequential(
                 nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
             )
-            model = auto_wrap(sequential, min_num_params=40)
+            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            model = auto_wrap(sequential, should_wrap=my_should_wrap)
         model.to(device)
         input = torch.rand((1, 5), dtype=torch.float).to(device)
 
