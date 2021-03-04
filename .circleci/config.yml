@@ -350,7 +350,6 @@ jobs:
       - restore_cache:
           keys:
             - cache-key-cpu-py38-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-
       - <<: *install_dep_171
 
       - save_cache:
@@ -416,7 +415,7 @@ jobs:
       test_list_file:
         type: string
         default: "/dev/non_exist"
-      
+
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -552,6 +551,11 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
+      # Cache the MNIST directory that contains benchmark data
+      - restore_cache:
+          keys:
+            - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
+
       - <<: *install_dep_171
 
       - save_cache:
@@ -570,6 +574,11 @@ jobs:
       - <<: *run_oss_for_each
 
       - <<: *run_oss_gloo
+
+      - save_cache:
+          paths:
+            - /tmp/MNIST
+          key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
 
 
@@ -596,6 +605,12 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
+
+      # Cache the MNIST directory that contains benchmark data
+      - restore_cache:
+          keys:
+            - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
+
       - <<: *install_dep_171
 
       - save_cache:
@@ -606,6 +621,11 @@ jobs:
       - <<: *install_repo_gpu
 
       - <<: *run_oss_benchmark
+
+      - save_cache:
+          paths:
+            - /tmp/MNIST
+          key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
 
 workflows:
