@@ -510,7 +510,11 @@ class FullyShardedDataParallel(nn.Module):
         A context manager to disable gradient synchronizations across DDP
         processes. Within this context, gradients will be accumulated on module
         variables, which will later be synchronized in the first
-        forward-backward pass exiting the context.
+        forward-backward pass after exiting the context.
+
+        .. note:: This may result in higher memory usage because we will
+            accumulate the full model gradients (instead of gradient shards)
+            until the eventual sync.
         """
         self._lazy_init()
         assert self._is_root, "no_sync on inner FSDP is not supported"
@@ -596,6 +600,7 @@ class FullyShardedDataParallel(nn.Module):
                             p._fp32_shard.copy_(local_shard.view_as(p._fp32_shard))
                         if safe_to_free:
                             free_storage_(full_tensor)
+                    self.has_full_params = False
                     self._use_fp32_param_shard()
                     self.training_state = TrainingState.IDLE
 
@@ -893,14 +898,18 @@ class FullyShardedDataParallel(nn.Module):
 
         if not self._is_root or self._require_backward_grad_sync:
             # Free full params. As a special case, we don't free the full params
-            # on the root instance when in a ``no_sync`` context, since we will
-            # need the params again immediately for the next forward.
+            # on the root instance when in a ``no_sync`` context (as indicated
+            # by ``self._require_backward_grad_sync``), since we will need the
+            # params again immediately for the next forward.
             self._free_full_params([param])
         if self.mixed_precision:
             # This is a no-op if reshard_after_forward is True, since we already
             # free the param shard when rebuilding the full params in the
             # pre_backward_hook.
             self._free_fp16_param_shard([param])
+        # Switch to FP32 shard after backward.
+        self._use_fp32_param_shard([param])
+
         # Switch to FP32 shard after backward.
         self._use_fp32_param_shard([param])
 
@@ -1018,52 +1027,63 @@ class FullyShardedDataParallel(nn.Module):
             caller to free the full-sized param. This will be ``None`` if
             ``full_precision=False`` and the full params are already gathered.
         """
+        output_tensors: List[Tuple[torch.Tensor, bool]] = []
+
+        def update_p_data(custom_output_tensor: Optional[torch.Tensor] = None) -> None:
+            if custom_output_tensor is not None:
+                assert p._is_sharded
+                p.data = custom_output_tensor[: p._orig_size.numel()].view(p._orig_size)
+                output_tensors.append((p.data, True))
+            elif not p._is_sharded:
+                if self.mixed_precision and not full_precision:
+                    p.data = p._fp16_shard[: p._orig_size.numel()].view(p._orig_size)
+                    output_tensors.append((p.data, True))
+                else:
+                    # Here p.data == p._fp32_shard, so it's not safe to free.
+                    output_tensors.append((p.data, False))
+            else:
+                p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
+                output_tensors.append((p.data, True))
+
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not full_precision:
             for p in self.params:
-                if p._is_sharded:
-                    p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
-            return None
+                update_p_data()
+            return output_tensors
 
         self.has_full_params = True
-        output_tensors: List[Tuple[torch.Tensor, bool]] = []
+
         with torch.cuda.stream(self._streams["all_gather"]):
             if self.mixed_precision and not full_precision:
                 self._cast_fp32_param_shards_to_fp16()
 
             for p in self.params:
                 if not p._is_sharded:  # e.g., when world_size == 1
-                    if self.mixed_precision and not full_precision:
-                        p.data = p._fp16_shard
-                        output_tensors.append((p.data, True))
-                    else:
-                        output_tensors.append((p.data, False))
-                    continue
-
-                # If self.cpu_offload and full_precision, we need to cast the
-                # FP32 CPU param to CUDA for the all-gather.
-                p_data = p.data.to(p._full_param_padded.device)
-
-                p_size = p._full_param_padded.size()
-                assert p_size.numel() % self.world_size == 0
-                if not self.mixed_precision or not full_precision:
-                    if p._full_param_padded.storage().size() != p_size.numel():
-                        # Allocate based on full size from all shards.
-                        alloc_storage_(p._full_param_padded, size=p_size)
-                    output_tensor = p._full_param_padded
+                    update_p_data()
                 else:
-                    # Allocate fresh tensor in full precision.
-                    output_tensor = p_data.new_zeros(p_size)
-                output_tensors.append((output_tensor, True))
+                    # If self.cpu_offload and full_precision, we need to cast
+                    # the FP32 CPU param to CUDA for the all-gather.
+                    p_data = p.data.to(p._full_param_padded.device)
 
-                # Fill output_tensor with (p.data for each shard in self.world_size)
-                chunks = list(output_tensor.chunk(self.world_size))
-                dist.all_gather(chunks, p_data, group=self.process_group)
+                    p_size = p._full_param_padded.size()
+                    assert p_size.numel() % self.world_size == 0
+                    if not self.mixed_precision or not full_precision:
+                        if p._full_param_padded.storage().size() != p_size.numel():
+                            # Allocate based on full size from all shards.
+                            alloc_storage_(p._full_param_padded, size=p_size)
+                        output_tensor = p._full_param_padded
+                    else:
+                        # Allocate fresh tensor in full precision.
+                        output_tensor = p_data.new_zeros(p_size)
 
-                p.data = output_tensor[: p._orig_size.numel()].view(p._orig_size)
+                    # Fill output_tensor with (p.data for each shard in self.world_size)
+                    chunks = list(output_tensor.chunk(self.world_size))
+                    dist.all_gather(chunks, p_data, group=self.process_group)
 
-                if self.mixed_precision and not full_precision:
-                    self._free_fp16_param_shard([p])
+                    update_p_data(output_tensor)
+
+                    if self.mixed_precision and not full_precision:
+                        self._free_fp16_param_shard([p])
         torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
         return output_tensors
 
@@ -1195,7 +1215,6 @@ def free_storage_(data: torch.Tensor) -> None:
         # Since we're modifying the Tensor's Storage directly, make sure the Tensor
         # is the sole occupant of the Storage.
         assert data.storage_offset() == 0
-        assert data.storage().size() == data.numel()
         data.storage().resize_(0)
 
 

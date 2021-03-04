@@ -620,7 +620,7 @@ class TestNoGrad(DistributedTest):
         with torch.no_grad():
             no_grad_output = model(*input)
 
-        assert objects_are_equal(ref_output, no_grad_output), "no_grad_output did not match ref_output"
+        assert objects_are_equal(ref_output, no_grad_output, raise_exception=True)
 
 
 class TransformerWithSharedParams(nn.Module):
