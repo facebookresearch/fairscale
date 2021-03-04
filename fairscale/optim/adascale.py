@@ -596,6 +596,13 @@ class AdaScale(Optimizer):
             # not needed, so the smoothing factor is 0.
             self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
 
+    def __getattr__(self, name: str) -> Any:
+        """Forward missing attributes to wrapped optimizer."""
+        try:
+            return super().__getattr__(name)  # defer to Optimizer logic
+        except AttributeError:
+            return getattr(self._optimizer, name)  # fallback to wrapped optim
+
 
 class AdaScaleWrapper(AdaScale):
     """

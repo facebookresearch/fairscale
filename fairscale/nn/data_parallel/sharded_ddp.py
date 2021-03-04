@@ -103,7 +103,7 @@ class ShardedDataParallel(nn.Module):
         super().__init__()
 
         self.module = module
-        self.sharded_optimizers = [sharded_optimizer] if isinstance(sharded_optimizer, OSS) else sharded_optimizer
+        self.sharded_optimizers = [sharded_optimizer] if not isinstance(sharded_optimizer, list) else sharded_optimizer
         self.enable_broadcast_buffers = broadcast_buffers
         self.auto_refresh_trainable = auto_refresh_trainable
         self.reduce_fp16 = reduce_fp16
