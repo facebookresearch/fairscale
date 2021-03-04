@@ -207,6 +207,9 @@ class FullyShardedDataParallel(nn.Module):
         # Enum to indicate if we're in the forward/backward pass, idle, etc.
         self.training_state = TrainingState.IDLE
 
+        # Flag to indicate if the full params are gathered.
+        self.has_full_params: bool = False
+
         # Register hook after state_dict() to remove the "_fsdp_wrapped_module."
         # prefix and before load_state_dict() to add it back.
         self._register_state_dict_hook(_post_state_dict_hook)
@@ -571,6 +574,7 @@ class FullyShardedDataParallel(nn.Module):
             # forward/backward.
             self.training_state = TrainingState.SUMMON_FULL_PARAMS
             full_tensors = self._rebuild_full_params(full_precision=True)
+            assert full_tensors is not None
             with contextlib.ExitStack() as stack:
                 if self.flatten_parameters and self.module.is_flattened:
                     # Update flattened views to point to fully-sized tensors. We
@@ -887,14 +891,18 @@ class FullyShardedDataParallel(nn.Module):
         if param.grad.requires_grad:
             raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require grad")
 
-        # Free full params and switch to FP32 shard after backward.
-        self._free_full_params([param])
-        self._use_fp32_param_shard([param])
+        if not self._is_root or self._require_backward_grad_sync:
+            # Free full params. As a special case, we don't free the full params
+            # on the root instance when in a ``no_sync`` context, since we will
+            # need the params again immediately for the next forward.
+            self._free_full_params([param])
         if self.mixed_precision:
             # This is a no-op if reshard_after_forward is True, since we already
             # free the param shard when rebuilding the full params in the
             # pre_backward_hook.
             self._free_fp16_param_shard([param])
+        # Switch to FP32 shard after backward.
+        self._use_fp32_param_shard([param])
 
         # (try to) Enqueue a callback at the end of the backward pass to ensure that all
         # post-backward work has finished. We only need one callback and all instances
@@ -978,14 +986,15 @@ class FullyShardedDataParallel(nn.Module):
         """
         assert self._is_root
         self.assert_state(TrainingState.BACKWARD)
-        # Flush any unreduced buckets in the post_backward stream.
-        with torch.cuda.stream(self._streams["post_backward"]):
-            assert self._reducer is not None
-            self._reducer.flush()
-        torch.cuda.current_stream().wait_stream(self._streams["post_backward"])
-        if self.move_grads_to_cpu:
-            # Wait for the non-blocking GPU -> CPU grad transfers to finish.
-            torch.cuda.current_stream().synchronize()
+        if self._require_backward_grad_sync:
+            # Flush any unreduced buckets in the post_backward stream.
+            with torch.cuda.stream(self._streams["post_backward"]):
+                assert self._reducer is not None
+                self._reducer.flush()
+            torch.cuda.current_stream().wait_stream(self._streams["post_backward"])
+            if self.move_grads_to_cpu:
+                # Wait for the non-blocking GPU -> CPU grad transfers to finish.
+                torch.cuda.current_stream().synchronize()
         # A backward pass is done, update root and nested FSDP's flags.
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
@@ -993,7 +1002,7 @@ class FullyShardedDataParallel(nn.Module):
                 m.training_state = TrainingState.IDLE
 
     @torch.no_grad()
-    def _rebuild_full_params(self, full_precision: bool = False) -> List[Tuple[torch.Tensor, bool]]:
+    def _rebuild_full_params(self, full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -1004,10 +1013,19 @@ class FullyShardedDataParallel(nn.Module):
                 (e.g., FP32), possibly in fresh storage.
 
         Returns:
-            a list of tuples, where the first element is the full-sized param
+            A list of tuples, where the first element is the full-sized param
             and the second element is a bool indicating if it's safe for the
-            caller to free the full-sized param
+            caller to free the full-sized param. This will be ``None`` if
+            ``full_precision=False`` and the full params are already gathered.
         """
+        # Early exit if we already have full params and don't need full precision.
+        if self.has_full_params and not full_precision:
+            for p in self.params:
+                if p._is_sharded:
+                    p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
+            return None
+
+        self.has_full_params = True
         output_tensors: List[Tuple[torch.Tensor, bool]] = []
         with torch.cuda.stream(self._streams["all_gather"]):
             if self.mixed_precision and not full_precision:
@@ -1051,10 +1069,12 @@ class FullyShardedDataParallel(nn.Module):
 
     @torch.no_grad()
     def _use_full_params(self) -> None:
-        """Switching p.data pointers to use the full params.
-
-           Note: this is used assuming full param gathering is already done.
         """
+        Switch p.data pointers to use the full params.
+
+        Note: this assumes full params are already gathered.
+        """
+        assert self.has_full_params
         for p in self.params:
             if not p._is_sharded:
                 if self.mixed_precision:
@@ -1074,6 +1094,9 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
         """Free up storage for full parameters."""
+        if not self.has_full_params:
+            return
+        self.has_full_params = False
         if params is None:
             params = self.params
         current_stream = torch.cuda.current_stream()
