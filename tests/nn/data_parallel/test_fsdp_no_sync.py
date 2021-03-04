@@ -10,7 +10,6 @@ from unittest.mock import patch
 import torch
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel
-from fairscale.nn.data_parallel.fully_sharded_data_parallel import dist as fsdp_dist
 from fairscale.utils.testing import DummyProcessGroup, objects_are_equal
 
 from .test_fsdp import DistributedTest, NestedWrappedModule, spawn_and_init
