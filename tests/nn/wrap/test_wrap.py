@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from fairscale.nn import FullyShardedDataParallel as FSDP
-from fairscale.nn import auto_wrap, enable_wrap, should_wrap_default, wrap
+from fairscale.nn import auto_wrap, default_should_wrap_policy, enable_wrap, wrap
 from fairscale.utils.testing import DummyProcessGroup
 
 
@@ -50,7 +50,7 @@ class TestAutoWrap(unittest.TestCase):
             sequential = nn.Sequential(
                 nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
             )
-            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
             model = auto_wrap(sequential, should_wrap=my_should_wrap)
         assert isinstance(model, FSDP)
         assert isinstance(model.module[0], nn.Linear)
@@ -66,7 +66,7 @@ class TestAutoWrap(unittest.TestCase):
         """
         with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.ModuleList([nn.Linear(5, 5), nn.Linear(5, 5)])
-            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
             model = auto_wrap(sequential, should_wrap=my_should_wrap)
         assert isinstance(model, nn.ModuleList)
         assert isinstance(model[0], nn.Linear)
@@ -79,30 +79,32 @@ class TestAutoWrap(unittest.TestCase):
         """
         with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.ModuleList([nn.Linear(10, 10)])
-            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
             model = auto_wrap(sequential, should_wrap=my_should_wrap)
         assert isinstance(model, nn.ModuleList)
         assert isinstance(model[0], FSDP)
 
-    def test_auto_wrap_preset_blacklist(self):
+    def test_auto_wrap_preset_force_leaf(self):
         """
-        Test to ensure blacklisted modules are not wrapped, and children are not wrapped.
+        Test to ensure force-leaf modules are not wrapped, and children are not wrapped.
         """
         with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.Sequential(nn.Linear(10, 10), nn.MultiheadAttention(100, 1))
-            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
             model = auto_wrap(sequential, should_wrap=my_should_wrap)
         assert isinstance(model.module[0], FSDP)
         # Assert children of multihead attention are not wrapped
         assert isinstance(model.module[1], nn.MultiheadAttention)
         assert isinstance(model.module[1].out_proj, nn.Linear)
 
-    def test_auto_wrap_preset_blacklist_custom(self):
+    def test_auto_wrap_preset_force_leaf_custom(self):
         """
-        Test to ensure blacklisted modules are not wrapped.
+        Test to ensure force-leaf modules are not wrapped.
         """
         my_should_wrap = functools.partial(
-            should_wrap_default, min_num_params=40, blacklist=should_wrap_default.MODULE_BLACKLIST.union({nn.Linear})
+            default_should_wrap_policy,
+            min_num_params=40,
+            force_leaf_modules=default_should_wrap_policy.FORCE_LEAF_MODULES.union({nn.Linear}),
         )
         with enable_wrap(
             should_wrap=my_should_wrap, wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False
@@ -137,7 +139,7 @@ class TestAutoWrap(unittest.TestCase):
             sequential = nn.Sequential(
                 nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
             )
-            my_should_wrap = functools.partial(should_wrap_default, min_num_params=40)
+            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
             model = auto_wrap(sequential, should_wrap=my_should_wrap)
         model.to(device)
         input = torch.rand((1, 5), dtype=torch.float).to(device)

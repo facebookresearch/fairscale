@@ -4,23 +4,21 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
-from typing import Any, Callable, Dict, Generator, Optional, Set, Tuple, cast
+from typing import Any, Callable, Dict, Generator, Optional, Set, Tuple, Type, cast
 
 import torch.nn as nn
 
-from fairscale.nn.misc import checkpoint_wrapper
 
-
-def should_wrap_default(
-    should_recurse: bool,
+def default_should_wrap_policy(
+    recurse: bool,
     module: nn.Module,
     unwrapped_params: int,
     # These are customizable for this default policy function.
     min_num_params: int = int(1e8),
-    blacklist: Optional[Set] = None,
-    exclude_wrap: Optional[Set] = None,
+    force_leaf_modules: Optional[Set[Type[nn.Module]]] = None,
+    exclude_wrap_modules: Optional[Set[Type[nn.Module]]] = None,
 ) -> bool:
-    """Default policy function on with :func:`auto_wrap`.
+    """Default policy function for :func:`auto_wrap`.
 
        Return if a module should be wrapped during :func:`auto_wrap`.
 
@@ -30,7 +28,7 @@ def should_wrap_default(
        to do whatever you want in the function.
 
     Args:
-       should_recurse (bool):
+       recurse (bool):
            Indicate if this is called to make a decision on whether we
            should recurse down a subgraph of the module structure.
            If False, it means this function is called to make a decision
@@ -43,27 +41,34 @@ def should_wrap_default(
        min_num_params (int):
            Customizable policy input. It controls the size threshold
            on how big should a module be to be considered wrapped.
-       blacklist (set):
-           Customizable set of module types to be blacklisted to be
-           broken apart.
-       exclude_wrap (set):
+       force_leaf_modules (Set[Type[nn.Module]]): set of module types to
+           keep as leaves, i.e., their children will never be wrapped.
+       exclude_wrap_modules (Set[Type[nn.Module]]):
            Customizable set of module types to be excluded in wrapping.
     """
-    blacklist = should_wrap_default.MODULE_BLACKLIST if blacklist is None else blacklist  # type: ignore
-    exclude_wrap = should_wrap_default.MODULE_EXCLUDE_WRAP if exclude_wrap is None else exclude_wrap  # type: ignore
+    force_leaf_modules = (
+        default_should_wrap_policy.FORCE_LEAF_MODULES  # type: ignore
+        if force_leaf_modules is None
+        else force_leaf_modules
+    )
+    exclude_wrap_modules = (
+        default_should_wrap_policy.EXCLUDE_WRAP_MODULES  # type: ignore
+        if exclude_wrap_modules is None
+        else exclude_wrap_modules
+    )
 
     is_large = unwrapped_params >= min_num_params
-    if should_recurse:
-        # We should recurse if the module is big enough but not blacklisted.
-        return is_large and not isinstance(module, tuple(blacklist))
+    if recurse:
+        # We should recurse if the module is big enough but not force_leaf_modulesed.
+        return is_large and not isinstance(module, tuple(force_leaf_modules))
     else:
         # If we are not recursing, we should wrap but not the exclude list.
-        return is_large and not isinstance(module, tuple(exclude_wrap))
+        return is_large and not isinstance(module, tuple(exclude_wrap_modules))
 
 
-# Set those defaults to the should_wrap_default function. Make them easy to be imported.
-should_wrap_default.MODULE_EXCLUDE_WRAP = {nn.ModuleList, nn.ModuleDict}  # type: ignore
-should_wrap_default.MODULE_BLACKLIST = {nn.MultiheadAttention}  # type: ignore
+# Set those defaults to the default_should_wrap_policy function. Make them easy to be imported.
+default_should_wrap_policy.EXCLUDE_WRAP_MODULES = {nn.ModuleList, nn.ModuleDict}  # type: ignore
+default_should_wrap_policy.FORCE_LEAF_MODULES = {nn.MultiheadAttention}  # type: ignore
 
 
 @contextlib.contextmanager
@@ -92,16 +97,16 @@ def enable_wrap(should_wrap: Optional[Callable] = None, **wrapper_kwargs: Any) -
             Custom function to control how to do :func:`auto_wrap`. This is
             useful to exclude unsupported modules or wrap based on sizes when
             wrapping recursively.
-            (default: :func:`should_wrap_default`)
+            (default: :func:`default_should_wrap_policy`)
         **wrapper_kwargs:
             Configuration settings that will be passed to all ``wrap``
             instances inside the context
     """
-    with ConfigAutoWrap(should_wrap_default, **wrapper_kwargs):
+    with ConfigAutoWrap(default_should_wrap_policy, **wrapper_kwargs):
         yield
 
 
-def wrap(module: nn.Module, activation_checkpoint: bool = False, **wrap_overrides: Any) -> nn.Module:
+def wrap(module: nn.Module, **wrap_overrides: Any) -> nn.Module:
     """
     Annotate that a module should be wrapped. Annotated modules will only be
     wrapped if inside of an :func:`enable_wrap` context manager. An important
@@ -116,23 +121,17 @@ def wrap(module: nn.Module, activation_checkpoint: bool = False, **wrap_override
 
     Args:
         module (nn.Module): module to wrap (if in :func:`enable_wrap` context)
-        activation_checkpoint (bool): use activation checkpointing wrapper
-            (default: False)
         **wrap_overrides: configuration overrides that will take priority over
             the values provided by the :func:`enable_wrap` context
     """
     if ConfigAutoWrap.in_autowrap_context:
         wrap_overrides = {**ConfigAutoWrap.kwargs, **wrap_overrides}
-        if activation_checkpoint:
-            module = checkpoint_wrapper(module)
         assert ConfigAutoWrap.wrapper_cls is not None
         return ConfigAutoWrap.wrapper_cls(module, **wrap_overrides)
     return module
 
 
-def auto_wrap(
-    module: nn.Module, should_wrap: Optional[Callable] = None, activation_checkpoint: bool = False, **kwargs: Any
-) -> nn.Module:
+def auto_wrap(module: nn.Module, should_wrap: Optional[Callable] = None, **kwargs: Any) -> nn.Module:
     """
     Annotate that a module should be wrapped with the *wrapper_cls* from the
     :func:`enable_wrap` context (if the context exists) and recursively wrap
@@ -157,14 +156,9 @@ def auto_wrap(
         should_wrap (Callable):
             a function to determine should Module to be wrapped.
             (default: wrap if > 100M parameters)
-        activation_checkpoint (bool):
-            use activation checkpointing wrapper
-            (default: False)
     """
     if ConfigAutoWrap.in_autowrap_context:
-        wrapped_module, remainder = ConfigAutoWrap.recursive_wrap(
-            module, activation_checkpoint=activation_checkpoint, should_wrap=should_wrap, **kwargs
-        )
+        wrapped_module, remainder = ConfigAutoWrap.recursive_wrap(module, should_wrap=should_wrap, **kwargs)
         return wrapped_module
     return module
 
@@ -196,7 +190,7 @@ class ConfigAutoWrap:
         ConfigAutoWrap.wrapper_cls = cast(Callable, kwargs["wrapper_cls"])
         del kwargs["wrapper_cls"]
         # Save the rest.
-        ConfigAutoWrap.should_wrap = should_wrap_default if should_wrap is None else should_wrap
+        ConfigAutoWrap.should_wrap = default_should_wrap_policy if should_wrap is None else should_wrap
         ConfigAutoWrap.kwargs = kwargs
 
     @staticmethod

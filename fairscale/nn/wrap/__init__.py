@@ -1,1 +1,1 @@
-from .auto_wrap import auto_wrap, enable_wrap, should_wrap_default, wrap
+from .auto_wrap import auto_wrap, default_should_wrap_policy, enable_wrap, wrap
