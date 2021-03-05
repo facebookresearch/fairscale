@@ -63,6 +63,8 @@ install_dep_151: &install_dep_151
   - run:
       name: Install Dependencies with torch 1.5.1
       command: |
+        # make sure that apt-get retries if needed
+        sudo sh -c "echo 'APT::Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries"
         sudo apt-get install -y libopenmpi-dev
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.5 && exit 0; fi
@@ -79,6 +81,8 @@ install_dep_160: &install_dep_160
   - run:
       name: Install Dependencies with torch 1.6.0
       command: |
+        # make sure that apt-get retries if needed
+        sudo sh -c "echo 'APT::Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries"
         sudo apt-get install -y libopenmpi-dev
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.6 && exit 0; fi
@@ -96,6 +100,8 @@ install_dep_171: &install_dep_171
   - run:
       name: Install Dependencies with torch 1.7.1
       command: |
+        # make sure that apt-get retries if needed
+        sudo sh -c "echo 'APT::Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries"
         sudo apt-get install -y libopenmpi-dev
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.7 && exit 0; fi
@@ -113,6 +119,8 @@ install_dep_171_cu110: &install_dep_171_cu110
   - run:
       name: Install Dependencies with torch 1.7.1+cu110
       command: |
+        # make sure that apt-get retries if needed
+        sudo sh -c "echo 'APT::Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries"
         sudo add-apt-repository universe
         sudo apt-get update
         sudo apt-get install -y libopenmpi-dev
@@ -132,6 +140,8 @@ install_dep_180: &install_dep_180
   - run:
       name: Install Dependencies with torch 1.8.0 nightly
       command: |
+        # make sure that apt-get retries if needed
+        sudo sh -c "echo 'APT::Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries"
         sudo apt-get install -y libopenmpi-dev
         # check if we have restored cache correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.8 && exit 0; fi
