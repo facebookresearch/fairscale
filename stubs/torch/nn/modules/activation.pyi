@@ -208,3 +208,7 @@ class LogSoftmax(Module):
     def forward(self, input: Tensor) -> Tensor: ...  # type: ignore
 
     def __call__(self, input: Tensor) -> Tensor: ...  # type: ignore
+
+
+class MultiheadAttention(Module):
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float, bias: bool, add_bias_kv: bool, add_zero_attn: bool, kdim: Optional[int], vdim: Optional[int]) -> None: ...

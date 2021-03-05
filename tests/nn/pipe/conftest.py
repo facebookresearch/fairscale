@@ -58,7 +58,7 @@ def pytest_report_header() -> str:
 
 
 def pytest_runtest_setup(item: Any) -> None:
-    print(f"setup mpi function called")
+    print("setup mpi function called")
 
 
 def pytest_runtest_teardown(item: Any) -> None:

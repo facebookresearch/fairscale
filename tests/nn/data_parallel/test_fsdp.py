@@ -1,7 +1,8 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
-# This source code is licensed under the MIT license found in the
+# This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
+
 import functools
 import itertools
 from math import inf
@@ -24,6 +25,7 @@ from fairscale.utils.testing import (
     get_cycles_per_ms,
     objects_are_equal,
     spawn_for_all_world_sizes,
+    torch_version,
 )
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
@@ -32,10 +34,8 @@ from fairscale.utils.testing import (
 
 class DistributedTest(unittest.TestCase):
     def setUp(self):
-        major, minor = torch.__version__.split(".")[:2]
-        major, minor = int(major), int(minor)
-        if major < 1 or (major == 1 and minor < 6):
-            raise unittest.SkipTest("Need pytorch version >= 1.6 due to autocast")
+        if torch_version() < (1, 6, 0):
+            raise unittest.SkipTest("Need pytorch version >= 1.6 due to lack of reduce_scatter")
         if not torch.cuda.is_available():
             raise unittest.SkipTest("CUDA not available, skipping test")
         if sys.platform == "win32":
@@ -110,6 +110,18 @@ class TestMixedPrecision(DistributedTest):
             torch.float16,  # expected_reduce_dtype
         )
 
+    def test_mixed_precision_autocast_buffer_type_fp32(self):
+        """If autocast enabled, loss should be fp32."""
+        self._spawn_test_case(
+            {"mixed_precision": True, "buffer_dtype": torch.float32},
+            True,  # autocast enabled
+            torch.float16,  # expected_input_dtype
+            torch.float16,  # expected_param_dtype
+            torch.float32,  # expected_loss_dtype
+            torch.float16,  # expected_reduce_dtype
+            expected_buffer_type=torch.float32,
+        )
+
     def test_mixed_precision_autocast_fp32_compute(self):
         self._spawn_test_case(
             {"mixed_precision": True, "compute_dtype": torch.float32},
@@ -118,6 +130,7 @@ class TestMixedPrecision(DistributedTest):
             torch.float32,  # expected_param_dtype
             torch.float32,  # expected_loss_dtype
             torch.float32,  # expected_reduce_dtype
+            expected_buffer_type=torch.float32,
         )
 
     def test_fp32_reduce_scatter(self):
@@ -128,6 +141,7 @@ class TestMixedPrecision(DistributedTest):
             torch.float16,  # expected_param_dtype
             torch.float16,  # expected_loss_dtype
             torch.float32,  # expected_reduce_dtype
+            expected_buffer_type=torch.float16,
         )
 
     def test_fp32_reduce_scatter_autocast(self):
@@ -140,18 +154,42 @@ class TestMixedPrecision(DistributedTest):
             torch.float32,  # expected_reduce_dtype
         )
 
-    def _spawn_test_case(self, cfg, autocast_enabled, in_dtype, p_dtype, loss_dtype, reduce_dtype, world_size=2):
+    def _spawn_test_case(
+        self,
+        cfg,
+        autocast_enabled,
+        in_dtype,
+        p_dtype,
+        loss_dtype,
+        reduce_dtype,
+        expected_buffer_type=None,
+        world_size=2,
+    ):
         """Call test_dtypes inside of torch.multiprocessing.spawn"""
-        fn = functools.partial(self._test_dtypes, cfg, autocast_enabled, in_dtype, p_dtype, loss_dtype, reduce_dtype)
+        fn = functools.partial(
+            self._test_dtypes,
+            cfg,
+            autocast_enabled,
+            in_dtype,
+            p_dtype,
+            loss_dtype,
+            reduce_dtype,
+            expected_buffer_type=expected_buffer_type,
+        )
         spawn_and_init(fn, world_sizes=[world_size])
 
     @staticmethod
-    def _test_dtypes(cfg: Dict, autocast, in_dtype, p_dtype, loss_dtype, reduce_dtype, rank, group):
+    def _test_dtypes(
+        cfg: Dict, autocast, in_dtype, p_dtype, loss_dtype, reduce_dtype, rank, group, expected_buffer_type=None
+    ):
         # Patch torch.distributed.reduce_scatter to check the dtype of the reduction
         orig_reduce_scatter = torch.distributed.reduce_scatter
 
-        model = DeviceAndTypeCheckModule(
-            expected_input_dtype=in_dtype, expected_param_dtype=p_dtype, expected_loss_dtype=loss_dtype,
+        model: nn.Module = DeviceAndTypeCheckModule(
+            expected_input_dtype=in_dtype,
+            expected_param_dtype=p_dtype,
+            expected_loss_dtype=loss_dtype,
+            expected_buffer_dtype=expected_buffer_type,
         )
 
         def _reduce_scatter(output, input_list, **kwargs):
@@ -182,8 +220,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     PyTorch DDP vs. FullyShardedDataParallel.
     """
 
-    def test_nested_all_wrapped_model(self):
-        config = {"mixed_precision": True}
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_nested_wrapped_model(self, config):
+        test_fn = functools.partial(self._test_identical_outputs, NestedWrappedModule, config)
+        spawn_and_init(test_fn)
+
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_nested_all_wrapped_model(self, config):
         model_fn = functools.partial(NestedWrappedModule, wrap_everything=True)
         test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
         spawn_and_init(test_fn)
@@ -260,7 +303,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def _test_identical_outputs(
         cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
     ):
-        if config["mixed_precision"]:
+        if config.get("mixed_precision", False):
             autocast = True
             # Force the compute dtype to be torch.float32 so that we get
             # identical results as PyTorch DDP when using autocast. Note that
@@ -280,6 +323,9 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             model = ref_ddp_fn(model, group)
         ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
         ref_state_dict = model.module.state_dict()
+        if config.get("cpu_offload", False):
+            for k in ref_state_dict.keys():
+                ref_state_dict[k] = ref_state_dict[k].cpu()
 
         # Confirm we get the same behavior using FullyShardedDataParallel.
         model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
@@ -391,7 +437,9 @@ class TestLocalStateDict(DistributedTest):
     @classmethod
     def _load_local_and_train(self, config, rank, group, d_model=16, d_vocab=23):
         """Check that local_state_dict can be saved and loaded for a given worker, and that training updates it"""
-        model = self.get_wrapped_model(group, cuda_first=False, config=config, d_vocab=d_vocab, d_model=d_model)
+        model = self.get_wrapped_model(
+            group, cuda_first=False, config=config, d_vocab=d_vocab, d_model=d_model, add_bn=False
+        )  # Set bn=True here to show that BN doesn't get updated
         state_1 = model.local_state_dict()
         state_before_training = {k: v.cpu().clone() for k, v in state_1.items()}
         assert len(state_1) > 0
@@ -456,9 +504,8 @@ class TestSaveLoadStateDict(DistributedTest):
     def _test_state_dict_before_forward(cls, config, rank, group):
         ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
         sd = ddp_model.state_dict()
-        expected_dtype = torch.float16 if ddp_model.mixed_precision else torch.float32
         wt = sd["embed_tokens.weight"]
-        assert wt.dtype == expected_dtype, f"got dtype {wt.dtype} expected {expected_dtype}"
+        assert wt.dtype == torch.float32, f"got dtype {wt.dtype} expected torch.float32"
         cls._train_for_several_steps(ddp_model, 1, ddp_model.mixed_precision)
 
     @classmethod
@@ -480,15 +527,11 @@ class TestSaveLoadStateDict(DistributedTest):
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_nested_wrapped_model(self, config):
-        if config["mixed_precision"]:
-            return  # TODO(myleott) this is broken until we support FP32 all-gather for state_dict
         test_fn = functools.partial(self._test_nested_wrapped_model, config=config)
         spawn_and_init(test_fn)
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_nested_wrapped_model_local_state_dict(self, config):
-        if config["mixed_precision"]:
-            return  # TODO(myleott) this is broken until we support FP32 all-gather for state_dict
         test_fn = functools.partial(self._test_nested_wrapped_model_local_state_dict, config=config)
         spawn_and_init(test_fn)
 
@@ -501,6 +544,8 @@ class TestSaveLoadStateDict(DistributedTest):
         ref_state_dict = {k: v.clone() for k, v in model.module.state_dict().items()}
 
         # Create a nested FSDP-wrapped instance.
+        if config["mixed_precision"]:
+            config["compute_dtype"] = torch.float32
         model = NestedWrappedModule(group, config)
         model = FullyShardedDataParallel(model, group, **config).cuda()
         cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
@@ -634,7 +679,7 @@ class TestNoSync(DistributedTest):
 
     def test_no_sync_before_first_forward(self):
         group = DummyProcessGroup(rank=0, size=1)
-        model = self.get_wrapped_model(group, config={})
+        model = self.get_wrapped_model(group, config={}, add_bn=False)
         batch = model.module.get_input(torch.device("cuda"))
         with model.no_sync():
             output = model(*batch)
@@ -646,7 +691,7 @@ class TestNoSync(DistributedTest):
 
     @classmethod
     def _test_transformer(self, rank, group, config):
-        model = self.get_wrapped_model(group, config=config)
+        model = self.get_wrapped_model(group, config=config, add_bn=False)
         model.eval()  # turn off dropout for the test
         self._test_no_sync(model, batch_dim=1)
 
@@ -698,7 +743,7 @@ class TestNoSync(DistributedTest):
 
 
 class TransformerWithSharedParams(nn.Module):
-    def __init__(self, group, *unused_args, d_vocab=23, d_model=16, **unused_kwargs):
+    def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=True, **unused_kwargs):
         super().__init__()
         self.rank = group.rank()
         self.world_size = group.size()
@@ -709,21 +754,26 @@ class TransformerWithSharedParams(nn.Module):
             d_model=d_model, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=8, dropout=0.1,
         )
         self.output_proj = nn.Linear(d_model, d_vocab)
+
         # share the embedding and output projection weights
         self.output_proj.weight = self.embed_tokens.weight
         self.register_buffer("vocab_bias", self.embed_tokens.weight.new_ones((d_model,)))
         self.register_buffer("long_buffer", torch.zeros_like(self.vocab_bias, dtype=torch.long))
 
+        self.bs = 2
+        self.bn = torch.nn.BatchNorm1d(self.bs) if add_bn else torch.nn.Identity()
+
     def get_input(self, device):
         torch.manual_seed(1 + self.rank)  # keep everything deterministic
-        src = torch.arange(12, device=device).view(6, 2)  # T x B
-        tgt = torch.arange(8, device=device).view(4, 2)  # T x B
+        src = torch.arange(12, device=device).view(6, self.bs)  # T x B
+        tgt = torch.arange(self.bs * 4, device=device).view(4, self.bs)  # T x B
         return (src, tgt)
 
     def forward(self, src_ids, tgt_ids):
         src = self.embed_tokens(src_ids)
         src = src + self.vocab_bias + self.long_buffer.type_as(src)
         tgt = self.embed_tokens(tgt_ids)
+        tgt = self.bn(tgt)
         x = self.transformer(src, tgt)
         return self.output_proj(x)
 

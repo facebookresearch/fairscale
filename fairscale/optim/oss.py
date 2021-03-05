@@ -140,13 +140,6 @@ class OSS(Optimizer):
                     param_group_rank["params"] = params
                     self._partition_parameters[rank].append(param_group_rank)
 
-            assert min(sum(len(pg["params"]) for pg in partition) for partition in self._partition_parameters) > 0, (
-                "One or more empty shards detected, the world size is too big or the model too small.\n"
-                + "Please reduce your world size if this is the model you would like to train\n"
-                + f"Current world size: {self.world_size}\n"
-                + "Current number of parameters: {}".format(sum(len(pg["params"]) for pg in self.param_groups))
-            )
-
         return self._partition_parameters
 
     @property
@@ -552,8 +545,11 @@ class OSS(Optimizer):
 
         for device in self.buckets.keys():
             for src_rank, bucket in enumerate(self.buckets[device]):
-                global_src_rank = self.get_global_rank(self.group, src_rank)
-                last_work_handle = dist.broadcast(tensor=bucket, src=global_src_rank, group=self.group, async_op=True)
+                if bucket.numel() > 0:
+                    global_src_rank = self.get_global_rank(self.group, src_rank)
+                    last_work_handle = dist.broadcast(
+                        tensor=bucket, src=global_src_rank, group=self.group, async_op=True
+                    )
 
         # Only check on the last handle, they're all inlined on the same CUDA stream
         if last_work_handle:
@@ -597,4 +593,5 @@ class OSS(Optimizer):
                     else:
                         self.buckets[device][dst_rank] = bucket
                 else:
-                    self.buckets[device].append(torch.zeros(1, device=device))
+                    # This rank has an empty shard, that's fine
+                    self.buckets[device].append(torch.zeros(0, device=device))

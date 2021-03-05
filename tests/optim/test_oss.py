@@ -262,19 +262,31 @@ def test_zero_grad():
     mp.spawn(run_test_zero_grad, args=(world_size, temp_file_name), nprocs=world_size, join=True)
 
 
-def run_test_catch_empty_shardd(rank, world_size, tempfile_name):
-    dist_init(rank, world_size, tempfile_name, backend="gloo")
+def run_test_empty_shard(rank, world_size, tempfile_name, backend):
+    dist_init(rank, world_size, tempfile_name, backend=backend)
     m = torch.nn.Linear(1, 1)
-    with pytest.raises(AssertionError):
-        _ = optim.OSS(m.parameters(), lr=0.1)
+    x = torch.rand(20, 1)
+
+    if torch.cuda.is_available():
+        m = m.to(rank)
+        x = x.to(rank)
+
+    o = optim.OSS(m.parameters(), lr=0.1)
+    y = m(x).sum()
+    y.backward()
+    o.step()
 
     dist.destroy_process_group()
 
 
-def test_empty_shard():
+@pytest.mark.parametrize("backend", ["gloo", "nccl"])
+def test_empty_shard(backend):
     world_size = 4
-
-    mp.spawn(run_test_catch_empty_shardd, args=(world_size, tempfile.mkstemp()[1]), nprocs=world_size, join=True)
+    if torch.cuda.is_available() and torch.cuda.device_count() < world_size:
+        world_size = min(world_size, torch.cuda.device_count())
+    if world_size == 1 or (backend == "nccl" and not torch.cuda.is_available()):
+        pytest.skip("Not enough GPUs to test with NCCL, or CUDA not present")
+    mp.spawn(run_test_empty_shard, args=(world_size, tempfile.mkstemp()[1], backend), nprocs=world_size, join=True)
 
 
 def run_test_step(rank, world_size, tempfile_name):
