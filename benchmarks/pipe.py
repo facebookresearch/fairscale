@@ -24,7 +24,7 @@ from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
-from fairscale.nn.pipe import LazyModule, MultiProcessPipe
+from fairscale.nn.pipe import MultiProcessPipe
 from fairscale.utils.testing import dist_init, get_worker_map
 
 MPI_PORT = 29500
@@ -64,18 +64,7 @@ def get_lm_model(args, device, config):
     nhid = config["nhid"]
     ndecoder = config["num_decoder_layers"]
 
-    if args.lazy_construction:
-        layers = [
-            LazyModule(lambda: transformer_lm.EmbeddingLayer(vocab_size, ninp, initrange)),
-            LazyModule(lambda: transformer_lm.PositionalEncodingLayer(ninp, dropout)),
-        ]
-        for _ in range(ndecoder):
-            layers.append(LazyModule(lambda: transformer_lm.TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
-
-        layers.append(LazyModule(lambda: transformer_lm.LinearLayer(ninp, vocab_size, initrange)))
-        model = layers
-    else:
-        model = transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
+    model = transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
     return model
 
@@ -499,10 +488,6 @@ parser.add_argument("--multiprocess", action="store_true", help="Runs single pro
 parser.add_argument("--host", "-o", type=str, default="localhost", help="hostname")
 parser.add_argument("--chunks", type=int, default=1, help="number of microbatches per batch")
 parser.add_argument("--batch-size", type=int, default=8, help="size of a batch")
-# TODO(anj-s): Should we remove this as well since we are not testing it?
-parser.add_argument(
-    "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
-)
 parser.add_argument(
     "--checkpoint", default="never", choices=["always", "except_last", "never"], help="Checkpointing strategy for pipe"
 )
