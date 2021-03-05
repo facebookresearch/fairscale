@@ -64,18 +64,25 @@ install_dep_151: &install_dep_151
       name: Install Dependencies with torch 1.5.1
       command: |
         sudo apt-get install -y libopenmpi-dev
+        # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
+        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.5 && exit 0; fi
+        # start installing
         pip install --progress-bar off torch==1.5.1+cu101 torchvision==0.6.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "5"], "wrong torch version"'
         python -m torch.utils.collect_env
+        wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
 install_dep_160: &install_dep_160
   - run:
       name: Install Dependencies with torch 1.6.0
       command: |
         sudo apt-get install -y libopenmpi-dev
+        # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
+        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.6 && exit 0; fi
+        # start installing
         pip install --progress-bar off torch==1.6.0+cu101 torchvision==0.7.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
@@ -83,12 +90,16 @@ install_dep_160: &install_dep_160
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "6"], "wrong torch version"'
         python -m torch.utils.collect_env
+        wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
 install_dep_171: &install_dep_171
   - run:
       name: Install Dependencies with torch 1.7.1
       command: |
         sudo apt-get install -y libopenmpi-dev
+        # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
+        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.7 && exit 0; fi
+        # start installing
         pip install --progress-bar off torch==1.7.1+cu101 torchvision==0.8.2+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
@@ -96,6 +107,7 @@ install_dep_171: &install_dep_171
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "7"], "wrong torch version"'
         python -m torch.utils.collect_env
+        wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
 install_dep_171_cu110: &install_dep_171_cu110
   - run:
@@ -104,6 +116,9 @@ install_dep_171_cu110: &install_dep_171_cu110
         sudo add-apt-repository universe
         sudo apt-get update
         sudo apt-get install -y libopenmpi-dev
+        # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
+        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.7 && exit 0; fi
+        # start installing
         pip install --progress-bar off torch==1.7.1+cu110 torchvision==0.8.2+cu110 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
@@ -111,12 +126,16 @@ install_dep_171_cu110: &install_dep_171_cu110
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "7"], "wrong torch version"'
         python -m torch.utils.collect_env
+        wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
 install_dep_180: &install_dep_180
   - run:
       name: Install Dependencies with torch 1.8.0 nightly
       command: |
         sudo apt-get install -y libopenmpi-dev
+        # check if we have restored cache correctly, if so, just skip
+        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.8 && exit 0; fi
+        # start installing
         pip install --progress-bar off -r requirements-test.txt
         # Since we are using nightly builds, we bypass the benchmarks req file
         # and install ourselves for testing.
@@ -131,8 +150,8 @@ install_dep_180: &install_dep_180
         pip install --progress-bar off  git+https://github.com/min-xu-ai/torch_pg.git@c723ab4#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "8"], "wrong torch version"'
-        pip list|grep torch
         python -m torch.utils.collect_env
+        wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
 install_repo_cpu: &install_repo_cpu
   - run:
@@ -335,7 +354,6 @@ jobs:
       - restore_cache:
           keys:
             - cache-key-cpu-py38-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-
       - <<: *install_dep_171
 
       - save_cache:
@@ -401,7 +419,7 @@ jobs:
       test_list_file:
         type: string
         default: "/dev/non_exist"
-      
+
     <<: *gpu
 
     working_directory: ~/fairscale
@@ -537,6 +555,11 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
+      # Cache the MNIST directory that contains benchmark data
+      - restore_cache:
+          keys:
+            - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
+
       - <<: *install_dep_171
 
       - save_cache:
@@ -555,6 +578,11 @@ jobs:
       - <<: *run_oss_for_each
 
       - <<: *run_oss_gloo
+
+      - save_cache:
+          paths:
+            - /tmp/MNIST
+          key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
 
 
@@ -581,6 +609,12 @@ jobs:
           keys:
             - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
+
+      # Cache the MNIST directory that contains benchmark data
+      - restore_cache:
+          keys:
+            - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
+
       - <<: *install_dep_171
 
       - save_cache:
@@ -591,6 +625,11 @@ jobs:
       - <<: *install_repo_gpu
 
       - <<: *run_oss_benchmark
+
+      - save_cache:
+          paths:
+            - /tmp/MNIST
+          key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
 
 workflows:

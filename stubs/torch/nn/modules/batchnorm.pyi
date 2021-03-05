@@ -15,6 +15,9 @@ class _BatchNorm(Module):
     weight: Parameter = ...
     bias: Parameter = ...
 
+    # This field is used by fairscale.nn.misc.misc::patch_batchnorm
+    _track_running_stats_backup: bool
+
 #MODIFIED BY TORCHGPIPE
     running_mean: Tensor
     running_var: Tensor
@@ -27,10 +30,6 @@ class _BatchNorm(Module):
     def reset_running_stats(self) -> None: ...
 
     def reset_parameters(self) -> None: ...
-
-    def forward(self, input: Tensor) -> Tensor: ...  # type: ignore
-
-    def __call__(self, input: Tensor) -> Tensor: ...  # type: ignore
 
 
 class BatchNorm1d(_BatchNorm): ...
@@ -46,7 +45,3 @@ class SyncBatchNorm(_BatchNorm):
     # TODO set process_group to the write type once torch.distributed is stubbed
     def __init__(self, num_features: int, eps: float = ..., momentum: float = ..., affine: bool = ...,
                  track_running_stats: bool = ..., process_group: Optional[Any] = ...) -> None: ...
-
-    def forward(self, input: Tensor) -> Tensor: ...  # type: ignore
-
-    def __call__(self, input: Tensor) -> Tensor: ...  # type: ignore
