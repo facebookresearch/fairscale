@@ -77,7 +77,7 @@ class ModelFSDP1Level(Module):
 
 
 class ModelFSDPCkpt2Level(Module):
-    """ Model that has two level checkpoint."""
+    """ Model that has two level FSDP & checkpoint child (not grandchild)."""
 
     def __init__(self):
         super().__init__()
@@ -88,6 +88,7 @@ class ModelFSDPCkpt2Level(Module):
     def forward(self, x):
         x = self.child1(x)
         x = self.child2(x)
+        x = self.root(x)  # change to use and not use this layer?
         return x
 
 
