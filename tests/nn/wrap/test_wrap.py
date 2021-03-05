@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from fairscale.nn import FullyShardedDataParallel as FSDP
-from fairscale.nn import auto_wrap, default_should_wrap_policy, enable_wrap, wrap
+from fairscale.nn import auto_wrap, default_auto_wrap_policy, enable_wrap, wrap
 from fairscale.utils.testing import DummyProcessGroup
 
 
@@ -50,8 +50,8 @@ class TestAutoWrap(unittest.TestCase):
             sequential = nn.Sequential(
                 nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
             )
-            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
-            model = auto_wrap(sequential, should_wrap=my_should_wrap)
+            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
+            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
         assert isinstance(model, FSDP)
         assert isinstance(model.module[0], nn.Linear)
         assert isinstance(model.module[1], nn.Linear)
@@ -66,8 +66,8 @@ class TestAutoWrap(unittest.TestCase):
         """
         with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.ModuleList([nn.Linear(5, 5), nn.Linear(5, 5)])
-            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
-            model = auto_wrap(sequential, should_wrap=my_should_wrap)
+            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
+            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
         assert isinstance(model, nn.ModuleList)
         assert isinstance(model[0], nn.Linear)
         assert isinstance(model[1], nn.Linear)
@@ -79,8 +79,8 @@ class TestAutoWrap(unittest.TestCase):
         """
         with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.ModuleList([nn.Linear(10, 10)])
-            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
-            model = auto_wrap(sequential, should_wrap=my_should_wrap)
+            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
+            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
         assert isinstance(model, nn.ModuleList)
         assert isinstance(model[0], FSDP)
 
@@ -90,8 +90,8 @@ class TestAutoWrap(unittest.TestCase):
         """
         with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
             sequential = nn.Sequential(nn.Linear(10, 10), nn.MultiheadAttention(100, 1))
-            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
-            model = auto_wrap(sequential, should_wrap=my_should_wrap)
+            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
+            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
         assert isinstance(model.module[0], FSDP)
         # Assert children of multihead attention are not wrapped
         assert isinstance(model.module[1], nn.MultiheadAttention)
@@ -101,13 +101,16 @@ class TestAutoWrap(unittest.TestCase):
         """
         Test to ensure force-leaf modules are not wrapped.
         """
-        my_should_wrap = functools.partial(
-            default_should_wrap_policy,
+        my_auto_wrap_policy = functools.partial(
+            default_auto_wrap_policy,
             min_num_params=40,
-            force_leaf_modules=default_should_wrap_policy.FORCE_LEAF_MODULES.union({nn.Linear}),
+            force_leaf_modules=default_auto_wrap_policy.FORCE_LEAF_MODULES.union({nn.Linear}),
         )
         with enable_wrap(
-            should_wrap=my_should_wrap, wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False
+            auto_wrap_policy=my_auto_wrap_policy,
+            wrapper_cls=FSDP,
+            process_group=self.process_group,
+            flatten_parameters=False,
         ):
             sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(10, 10)]))
             model = auto_wrap(sequential)
@@ -139,8 +142,8 @@ class TestAutoWrap(unittest.TestCase):
             sequential = nn.Sequential(
                 nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
             )
-            my_should_wrap = functools.partial(default_should_wrap_policy, min_num_params=40)
-            model = auto_wrap(sequential, should_wrap=my_should_wrap)
+            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
+            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
         model.to(device)
         input = torch.rand((1, 5), dtype=torch.float).to(device)
 
