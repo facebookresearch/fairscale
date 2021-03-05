@@ -1,4 +1,5 @@
 tests/nn/data_parallel/test_fsdp_uneven.py
+tests/nn/data_parallel/test_fsdp_fwd_multiple_times.py
 tests/nn/data_parallel/test_fsdp_grad_scaler.py
 tests/nn/data_parallel/test_fsdp_summon_full_params.py
 tests/nn/data_parallel/test_sharded_ddp_features.py
