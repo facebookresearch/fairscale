@@ -4,20 +4,22 @@
 # LICENSE file in the root directory of this source tree.
 
 from .data_parallel import FullyShardedDataParallel, ShardedDataParallel
-from .misc import FlattenParamsWrapper
+from .misc import FlattenParamsWrapper, checkpoint_wrapper
 from .moe import MOELayer, Top2Gate
 from .pipe import Pipe, PipeRPCWrapper
-from .wrap import auto_wrap, enable_wrap, wrap
+from .wrap import auto_wrap, default_auto_wrap_policy, enable_wrap, wrap
 
 __all__ = [
     "FlattenParamsWrapper",
+    "checkpoint_wrapper",
     "FullyShardedDataParallel",
-    "LazyModule",
+    "ShardedDataParallel",
     "Pipe",
     "PipeRPCWrapper",
-    "ShardedDataParallel",
+    "MOELayer",
     "Top2Gate",
     "auto_wrap",
+    "default_auto_wrap_policy",
     "enable_wrap",
     "wrap",
 ]
