@@ -15,6 +15,8 @@ import torch.utils.checkpoint as torch_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
+from .misc import patch_batchnorm
+
 
 def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Module:
     """
@@ -61,15 +63,20 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
 
     Returns:
         (nn.Module):
-            wrapped module
+            Wrapped module
     """
+    # Patch the batchnorm layers in case there are any.
+    patch_batchnorm(module)
+
     # The use of weakref here is to prevent creating a ref cycle: m -> m.forward -> m.
     # When such cycle exists, gc won't collect the module when the module is freed.
     # That causes GPU memory to be leaked. See the unit test for how we catch that.
     #
     # We prefer this over a class wrapper since the class wrapper would have to
     # proxy a lot of fields and methods.
-    module.forward = functools.partial(_checkpointed_forward, type(module).forward, weakref.ref(module), offload_to_cpu)  # type: ignore
+    module.forward = functools.partial(  # type: ignore
+        _checkpointed_forward, type(module).forward, weakref.ref(module), offload_to_cpu
+    )
     return module
 
 
@@ -81,7 +88,9 @@ def _checkpointed_forward(
     # We can flatten keyword arguments to make this easier.
     args = (weak_self(),) + args
     kwarg_keys, flat_args = pack_kwargs(*args, **kwargs)
-    parent_ctx_dict: Dict[str, Any] = {"offload": offload_to_cpu}
+    parent_ctx_dict: Dict[str, Any] = {
+        "offload": offload_to_cpu,
+    }
     output = CheckpointFunction.apply(original_forward, parent_ctx_dict, kwarg_keys, *flat_args)
     if not isinstance(output, torch.Tensor):
         packed_non_tensor_outputs = parent_ctx_dict["packed_non_tensor_outputs"]

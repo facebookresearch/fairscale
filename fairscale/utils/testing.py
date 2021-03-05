@@ -471,6 +471,7 @@ class DeviceAndTypeCheckModule(Base):
         expected_param_device: Optional[torch.device] = None,
         expected_loss_dtype: Optional[torch.dtype] = None,
         expected_loss_device: Optional[torch.device] = None,
+        expected_buffer_dtype: Optional[torch.device] = None,
     ):
         super().__init__()
         self.expected_input_dtype = expected_input_dtype
@@ -479,8 +480,10 @@ class DeviceAndTypeCheckModule(Base):
         self.expected_param_device = expected_param_device
         self.expected_loss_dtype = expected_loss_dtype
         self.expected_loss_device = expected_loss_device
+        self.expected_buffer_dtype = expected_buffer_dtype
 
         self.linear = nn.Linear(5, 5)
+        self.register_buffer("buffer", torch.rand((5,)))
 
     def _check(
         self,
@@ -498,8 +501,9 @@ class DeviceAndTypeCheckModule(Base):
         param = self.linear.weight
         self._check("param.dtype", param.dtype, self.expected_param_dtype)
         self._check("param.device", param.device, self.expected_param_device)
-
-        loss = self.linear(x).sum()
+        self._check("buffer.dtype", self.buffer.dtype, self.expected_buffer_dtype)  # type: ignore
+        x = x + self.buffer
+        loss = (self.linear(x) + self.buffer).sum()
         self._check("loss.dtype", loss.dtype, self.expected_loss_dtype)
         self._check("loss.device", loss.device, self.expected_loss_device)
 
