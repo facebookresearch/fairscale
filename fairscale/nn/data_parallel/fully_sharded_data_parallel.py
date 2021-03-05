@@ -79,14 +79,15 @@ class FullyShardedDataParallel(nn.Module):
     models and to improve training speed by overlapping the all-gather step
     across the forward pass. For example::
 
-        sharded_model = FullyShardedDataParallel(
-            nn.Sequential(  # doesn't have to be nn.Sequential
-                nn.Linear(5, 100),
-                FullyShardedDataParallel(nn.Linear(100, 100)),
-                FullyShardedDataParallel(nn.Linear(100, 100)),
-                nn.Linear(100, 5),
-            )
-        )
+        from fairscale.nn.auto_wrap import enable_wrap, auto_wrap
+        from fairscale.
+        fsdp_params = dict(mixed_precision=True, flatten_parameters=True)
+        with enable_wrap(**fsdp_params):
+            # Wraps layer in FSDP by default if within context
+            self.l1 = wrap(torch.nn.Linear(5, 5))
+            assert isinstance(self.l1)
+            # Separately Wraps children modules with more than 1e8 params
+            self.l2 = auto_wrap(TransformerBlock(), min_num_params=1e8)
 
     .. warning::
 
