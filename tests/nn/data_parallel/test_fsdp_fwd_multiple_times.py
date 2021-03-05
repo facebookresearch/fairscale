@@ -39,8 +39,8 @@ class ModelCkpt1Level(Module):
 
     def __init__(self):
         super().__init__()
-        self.child1 = ckpt(Linear(3, 3, bias=False))
-        self.child2 = ckpt(Linear(3, 3, bias=False))
+        self.child1 = ckpt(Linear(3, 3))
+        self.child2 = ckpt(Linear(3, 3))
 
     def forward(self, x):
         x = self.child1(x)
@@ -53,8 +53,8 @@ class ModelCkpt2Level(Module):
 
     def __init__(self):
         super().__init__()
-        self.child1 = ckpt(Sequential(ckpt(Linear(3, 3, bias=False)), ckpt(Linear(3, 3, bias=False))))
-        self.child2 = ckpt(Sequential(ckpt(Linear(3, 3, bias=False)), ckpt(Linear(3, 3, bias=False))))
+        self.child1 = ckpt(Sequential(ckpt(Linear(3, 3)), ckpt(Linear(3, 3))))
+        self.child2 = ckpt(Sequential(ckpt(Linear(3, 3)), ckpt(Linear(3, 3))))
 
     def forward(self, x):
         x = self.child1(x)
@@ -67,8 +67,23 @@ class ModelFSDP1Level(Module):
 
     def __init__(self):
         super().__init__()
-        self.child1 = wrap(Linear(3, 3, bias=False))
-        self.child2 = wrap(Linear(3, 3, bias=False))
+        self.child1 = wrap(Linear(3, 3))
+        self.child2 = wrap(Linear(3, 3))
+
+    def forward(self, x):
+        x = self.child1(x)
+        x = self.child2(x)
+        return x
+
+
+class ModelFSDPCkpt2Level(Module):
+    """ Model that has two level checkpoint."""
+
+    def __init__(self):
+        super().__init__()
+        self.child1 = ckpt(wrap(Sequential(wrap(Linear(3, 3)), wrap(Linear(3, 3)))))
+        self.child2 = ckpt(wrap(Sequential(wrap(Linear(3, 3)), wrap(Linear(3, 3)))))
+        self.root = Linear(3, 3)
 
     def forward(self, x):
         x = self.child1(x)
@@ -77,7 +92,7 @@ class ModelFSDP1Level(Module):
 
 
 # List of all Models.
-MODELS = [ModelCkpt1Level, ModelCkpt2Level, ModelFSDP1Level]
+MODELS = [ModelCkpt1Level, ModelCkpt2Level, ModelFSDP1Level, ModelFSDPCkpt2Level]
 
 
 def _test_func(rank, world_size, model_cls, fsdp_config, tempfile_name, unused):
@@ -87,7 +102,7 @@ def _test_func(rank, world_size, model_cls, fsdp_config, tempfile_name, unused):
     assert isinstance(fsdp_config, dict), str(fsdp_config)
     fsdp_config["wrapper_cls"] = FSDP
     with enable_wrap(**fsdp_config):
-        model = model_cls().cuda()
+        model = wrap(model_cls()).cuda()
 
     # Use Adam to increase overall coverage among all FSDP tests.
     optim = Adam(model.parameters(), lr=5e-4)
