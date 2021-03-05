@@ -110,7 +110,7 @@ class TestAutoWrap(unittest.TestCase):
             should_wrap=my_should_wrap, wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False
         ):
             sequential = nn.Sequential(nn.Linear(10, 10), nn.ModuleList([nn.Linear(10, 10)]))
-            model = auto_wrap(sequential, should_wrap=my_should_wrap)
+            model = auto_wrap(sequential)
         # Model was wrapped in FSDP as no inner modules were wrapped.
         assert isinstance(model, FSDP)
         assert isinstance(model.module[0], nn.Linear)

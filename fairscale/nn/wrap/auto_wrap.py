@@ -102,7 +102,7 @@ def enable_wrap(should_wrap: Optional[Callable] = None, **wrapper_kwargs: Any) -
             Configuration settings that will be passed to all ``wrap``
             instances inside the context
     """
-    with ConfigAutoWrap(default_should_wrap_policy, **wrapper_kwargs):
+    with ConfigAutoWrap(should_wrap, **wrapper_kwargs):
         yield
 
 
