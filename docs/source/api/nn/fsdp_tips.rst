@@ -1,5 +1,9 @@
+FSDP Tips and Tricks
+========================================
+
+
 Overview
-~~~~~~~~
+-------
 
 Recent work by `Microsoft <https://arxiv.org/abs/1910.02054>`__ and
 `Google <https://arxiv.org/abs/2004.13336>`__ has shown that data
@@ -11,17 +15,17 @@ These ideas are encapsulated in the new **``FullyShardedDataParallel``
 
 Compared to PyTorch ``DistributedDataParallel`` (DDP):
 
-    * FSDP shards parameters (FP16 + FP32) and optimizer state across data parallel GPUs
-    * FSDP with ``reshard_after_forward=False`` has the same communication cost as PyTorch DDP and is similar to ZeRO-2
-    * FSDP with``reshard_after_forward=True`` increases total communication by 50% and is similar to ZeRO-3:
-        * all-gather parameters at start of forward pass and start of backward pass
-        * reduce-scatter grads at end of backwardpass
-    * in practice, FSDP is faster than PyTorch DDP because the optimizer step is sharded, and the extra communication can be overlapped with the forward pass
-    * FSDP enables training 13B parameter models on 8 GPUs and 175B parameter models on 128 GPUs. When using the ``cpu_offload=True`` option, it's possible to train 1T parameter models on 256 GPUs.
+* FSDP shards parameters (FP16 + FP32) and optimizer state across data parallel GPUs
+* FSDP with ``reshard_after_forward=False`` has the same communication cost as PyTorch DDP and is similar to ZeRO-2
+* FSDP with ``reshard_after_forward=True`` increases total communication by 50% and is similar to ZeRO-3:
+    * all-gather parameters at start of forward pass and start of backward pass
+    * reduce-scatter grads at end of backwardpass
+* In practice, FSDP is faster than PyTorch DDP because the optimizer step is sharded, and the extra communication can be overlapped with the forward pass.
+* FSDP enables training 13B parameter models on 8 GPUs and 175B parameter models on 128 GPUs. When using the ``cpu_offload=True`` option, it's possible to train 1T parameter models on 256 GPUs.
 
 
 General usage notes
-~~~~~~~~~~~~~~~~~~~
+------------------
 
 -  for best memory efficiency use ``auto_wrap`` to wrap each layer in your network with ``FSDP`` and set ``reshard_after_forward=True``
 -  for best training speed set ``reshard_after_forward=False`` (wrapping each layer is not required, but will improve speed further)
@@ -36,7 +40,7 @@ General usage notes
    Optimizers, e.g., Adagrad, Adafactor, LAMB, etc.
 
 How it works
-~~~~~~~~~~~~
+------------
 In standard distributed data parallel (DDP) training every worker processes a separate batch and the gradients are summed across workers using an `all-reduce operation <https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html#allreduce>`__.
 While DDP has become very popular, it wastes GPU memory because the model weights and optimizer states are replicated across all DDP workers.
 
@@ -77,7 +81,7 @@ implemented by applying the FSDP wrapper to every layer in your network
             reduce-scatter gradients for layer_i
 
 Mixed Precision
-^^^^^^^^^^^^^^^
+--------------
 
 When ``mixed_precision=True``:
 
