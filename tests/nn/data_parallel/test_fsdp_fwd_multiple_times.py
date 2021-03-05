@@ -33,7 +33,7 @@ class MyModel(Module):
     def forward(self, x):
         # Same layer, multiple times.
         x = self.layer(x)
-        # x = self.layer(x)
+        x = self.layer(x)
         return x
 
 
