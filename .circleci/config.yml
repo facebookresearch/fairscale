@@ -59,24 +59,6 @@ setup_venv: &setup_venv
         which pip
         pip install --upgrade pip
 
-install_dep_151: &install_dep_151
-  - run:
-      name: Install Dependencies with torch 1.5.1
-      command: |
-        # make sure that apt-get retries if needed
-        sudo sh -c "echo 'APT::Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries"
-        sudo apt-get install -y libopenmpi-dev
-        # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
-        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.5 && exit 0; fi
-        # start installing
-        pip install --progress-bar off torch==1.5.1+cu101 torchvision==0.6.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
-        pip install --progress-bar off -r requirements-test.txt
-        pip install --progress-bar off -r requirements-benchmarks.txt
-        python -c 'import torch; print("Torch version:", torch.__version__)'
-        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "5"], "wrong torch version"'
-        python -m torch.utils.collect_env
-        wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
-
 install_dep_160: &install_dep_160
   - run:
       name: Install Dependencies with torch 1.6.0
@@ -138,7 +120,7 @@ install_dep_171_cu110: &install_dep_171_cu110
 
 install_dep_180: &install_dep_180
   - run:
-      name: Install Dependencies with torch 1.8.0 nightly
+      name: Install Dependencies with torch 1.8.0
       command: |
         # make sure that apt-get retries if needed
         sudo sh -c "echo 'APT::Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries"
@@ -146,17 +128,30 @@ install_dep_180: &install_dep_180
         # check if we have restored cache correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.8 && exit 0; fi
         # start installing
+        pip install --progress-bar off torch==1.8.0 torchvision==0.9.0 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
-        # Since we are using nightly builds, we bypass the benchmarks req file
-        # and install ourselves for testing.
-        #pip install --progress-bar off -r requirements-benchmarks.txt
-        # torchvision nightly wants torch 1.9.
-        pip install --pre --progress-bar off torchtext==0.6.0 \
-          torchvision==0.9.0.dev20210222+cu112 \
-          -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
-        # we only use it a bit in benchmarking, so it might be safe to use 1.8.
-        pip install --pre --progress-bar off torch==1.8.0.dev20210210+cu112 \
-          -f https://download.pytorch.org/whl/nightly/cu112/torch_nightly.html
+        pip install --progress-bar off -r requirements-benchmarks.txt
+        pip install --progress-bar off  git+https://github.com/min-xu-ai/torch_pg.git@c723ab4#egg=torch-pg
+        python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "8"], "wrong torch version"'
+        python -m torch.utils.collect_env
+        wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
+
+install_dep_180_cu111: &install_dep_180_cu111
+  - run:
+      name: Install Dependencies with torch 1.8.0+cu111
+      command: |
+        # make sure that apt-get retries if needed
+        sudo sh -c "echo 'APT::Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries"
+        sudo add-apt-repository universe
+        sudo apt-get update
+        sudo apt-get install -y libopenmpi-dev
+        # check if we have restored cache correctly, if so, just skip
+        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.8 && exit 0; fi
+        # start installing
+        pip install --progress-bar off torch==1.8.0+cu111 torchvision==0.9.0+cu111 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off -r requirements-test.txt
+        pip install --progress-bar off -r requirements-benchmarks.txt
         pip install --progress-bar off  git+https://github.com/min-xu-ai/torch_pg.git@c723ab4#egg=torch-pg
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "8"], "wrong torch version"'
@@ -424,45 +419,6 @@ jobs:
           path: test-results
 
 
-  gpu_tests_151:
-    parameters:
-      test_list_file:
-        type: string
-        default: "/dev/non_exist"
-
-    <<: *gpu
-
-    working_directory: ~/fairscale
-
-    steps:
-      - checkout
-
-      - run: nvidia-smi
-
-      - run: pyenv global 3.7.0
-
-      - <<: *setup_venv
-
-      # Cache the venv directory that contains dependencies
-      - restore_cache:
-          keys:
-            - cache-key-gpu-151-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-
-      - <<: *install_dep_151
-
-      - save_cache:
-          paths:
-            - ~/venv
-          key: cache-key-gpu-151-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-
-      - <<: *install_repo_gpu
-
-      - run_unittests_from_list:
-          test_list_file: <<parameters.test_list_file>>
-
-      - store_test_results:
-          path: test-results
-
   gpu_tests_160:
     parameters:
       test_list_file:
@@ -525,14 +481,54 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-gpu-cu111-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-gpu-cu110-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_171_cu110
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-gpu-cu111-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-gpu-cu110-171-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_repo_gpu_cu111
+
+      - run_unittests_from_list:
+          test_list_file: <<parameters.test_list_file>>
+
+      - store_test_results:
+          path: test-results
+
+  gpu_tests_180:
+    parameters:
+      test_list_file:
+        type: string
+        default: "/dev/non_exist"
+
+    <<: *gpu_cu111
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+
+      - run: nvidia-smi
+
+      # Run this to make sure we use python3 from the system.
+      - run: pyenv global 3.8.6
+
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-gpu-cu111-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_dep_180_cu111
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-gpu-cu111-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_gpu_cu111
 
@@ -543,7 +539,7 @@ jobs:
           path: test-results
 
   benchmarks_1:
-    <<: *gpu
+    <<: *gpu_cu111
 
     working_directory: ~/fairscale
 
@@ -570,7 +566,7 @@ jobs:
           keys:
             - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
-      - <<: *install_dep_171
+      - <<: *install_dep_180_cu111
 
       - save_cache:
           paths:
@@ -597,7 +593,7 @@ jobs:
 
 
   benchmarks_2:
-    <<: *gpu
+    <<: *gpu_cu111
 
     working_directory: ~/fairscale
 
@@ -617,7 +613,7 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-benchmarks-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
 
       # Cache the MNIST directory that contains benchmark data
@@ -625,12 +621,12 @@ jobs:
           keys:
             - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
-      - <<: *install_dep_171
+      - <<: *install_dep_180_cu111
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-benchmarks-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo_gpu
 
@@ -649,23 +645,23 @@ workflows:
       - cpu_tests_py37
       - cpu_tests_py38
       - cpu_tests_py39
-      - gpu_tests_151:
-          test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_160:
           test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_171:
           test_list_file: tests/ci_test_list_1.txt
-      - gpu_tests_151:
-          test_list_file: tests/ci_test_list_2.txt
+      - gpu_tests_180:
+          test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_160:
           test_list_file: tests/ci_test_list_2.txt
       - gpu_tests_171:
           test_list_file: tests/ci_test_list_2.txt
-      - gpu_tests_151:
-          test_list_file: tests/ci_test_list_3.txt
+      - gpu_tests_180:
+          test_list_file: tests/ci_test_list_2.txt
       - gpu_tests_160:
           test_list_file: tests/ci_test_list_3.txt
       - gpu_tests_171:
+          test_list_file: tests/ci_test_list_3.txt
+      - gpu_tests_180:
           test_list_file: tests/ci_test_list_3.txt
       - benchmarks_1
       - benchmarks_2
