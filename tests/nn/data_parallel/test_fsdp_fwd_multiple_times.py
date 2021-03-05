@@ -35,11 +35,13 @@ class MyModel(Module):
             self.layer_in_root_fsdp = Linear(3, 3, bias=False)
 
     def forward(self, x):
-        # Same layer, multiple times.
+        # Same layers, once.
         x = self.child1(x)
-        # x = self.child1(x)
         x = self.child2(x)
-        # x = self.child2(x)
+        # Twice.
+        x = self.child1(x)
+        x = self.child2(x)
+        # Optionally, params in root FSDP.
         if self.params_in_root:
             x = self.layer_in_root_fsdp(x)
         return x
