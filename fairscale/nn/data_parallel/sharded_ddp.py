@@ -603,19 +603,20 @@ class ShardedDataParallel(nn.Module):
 
     def _flush_reduce_calls(self) -> None:
         if self._bucket_list is not None:
-            last_handle = None
             for bucket in self._bucket_list:
                 if not bucket.sent:
                     # Normalize the bucket in one go
                     bucket.buffer.mul_(self.world_size_scaling)
 
                     # Reduce the bucket
-                    last_handle = dist.reduce(
-                        tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                    self._work_handles.append(
+                        Workhandle(
+                            handle=dist.reduce(
+                                tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                            ),
+                            callback=None,
+                        )
                     )
                     bucket.sent = True
-
-            if last_handle is not None:
-                last_handle.wait()
 
         self._consume_work_handles()
