@@ -842,6 +842,7 @@ class FullyShardedDataParallel(nn.Module):
                 self._rebuild_full_params()
             else:
                 self._use_full_params()
+
             # Make sure p.grad has the correct size/device (or set it to None).
             self._prep_grads_for_backward()
 
@@ -906,13 +907,12 @@ class FullyShardedDataParallel(nn.Module):
             # by ``self._require_backward_grad_sync``), since we will need the
             # params again immediately for the next forward.
             self._free_full_params([param])
+
         if self.mixed_precision:
             # This is a no-op if reshard_after_forward is True, since we already
             # free the param shard when rebuilding the full params in the
             # pre_backward_hook.
             self._free_fp16_param_shard([param])
-        # Switch to FP32 shard after backward.
-        self._use_fp32_param_shard([param])
 
         # Switch to FP32 shard after backward.
         self._use_fp32_param_shard([param])
@@ -983,9 +983,10 @@ class FullyShardedDataParallel(nn.Module):
 
     def _queue_wait_for_post_backward(self) -> None:
         """Try to queue a `wait_for_post_backward` callback.
-           Only called on root and only queue one callback.
-           But can be called by children FSDPs via a closure in case the
-           root instance doesn't own any params.
+
+        Only called on root and only queue one callback. But can be called by
+        children FSDPs via a closure in case the root instance doesn't own any
+        params.
         """
         assert self._is_root
         self.assert_state(TrainingState.BACKWARD)
@@ -995,8 +996,7 @@ class FullyShardedDataParallel(nn.Module):
 
     @torch.no_grad()
     def _wait_for_post_backward(self) -> None:
-        """Wait for post-backward work to finish. Only called on root instance.
-        """
+        """Wait for post-backward to finish. Only called on root instance."""
         assert self._is_root
         self.assert_state(TrainingState.BACKWARD)
         if self._require_backward_grad_sync:
@@ -1036,18 +1036,20 @@ class FullyShardedDataParallel(nn.Module):
         def update_p_data(custom_output_tensor: Optional[torch.Tensor] = None) -> None:
             if custom_output_tensor is not None:
                 assert p._is_sharded
-                p.data = custom_output_tensor[: p._orig_size.numel()].view(p._orig_size)
+                p.data = custom_output_tensor
                 output_tensors.append((p.data, True))
             elif not p._is_sharded:
                 if self.mixed_precision and not full_precision:
-                    p.data = p._fp16_shard[: p._orig_size.numel()].view(p._orig_size)
+                    p.data = p._fp16_shard
                     output_tensors.append((p.data, True))
                 else:
                     # Here p.data == p._fp32_shard, so it's not safe to free.
                     output_tensors.append((p.data, False))
             else:
-                p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
+                p.data = p._full_param_padded
                 output_tensors.append((p.data, True))
+            # Trim any padding and reshape to match original size.
+            p.data = p.data[: p._orig_size.numel()].view(p._orig_size)
 
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not full_precision:
@@ -1084,6 +1086,7 @@ class FullyShardedDataParallel(nn.Module):
                     chunks = list(output_tensor.chunk(self.world_size))
                     dist.all_gather(chunks, p_data, group=self.process_group)
 
+                    # Set p.data = output_tensor (with padding trimmed)
                     update_p_data(output_tensor)
 
                     if self.mixed_precision and not full_precision:
@@ -1118,11 +1121,9 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
         """Free up storage for full parameters."""
-        if not self.has_full_params:
-            return
-        self.has_full_params = False
         if params is None:
             params = self.params
+        self.has_full_params = False
         current_stream = torch.cuda.current_stream()
         with torch.cuda.stream(self._streams["all_gather"]):
             for p in params:

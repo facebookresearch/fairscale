@@ -48,7 +48,11 @@ class TestMemory(DistributedTest):
 
         del state_dict
         mems.append(get_cuda_mem())
-        assert mems[4] == mems[0]
+        # Any value other than `==` indicates a memory leak. If mems[4] >
+        # mems[0], that indicates we're not cleaning up params properly in
+        # summon_full_params. If mems[4] < mems[0], that indicates there's a
+        # memory leak in _train_for_several_steps.
+        assert mems[4] == mems[0], f"memory leak detected, {mems[4]} != {mems[0]}"
 
 
 class TestPersistence(DistributedTest):

@@ -31,7 +31,7 @@ class TestNoSync(DistributedTest):
 
     def test_no_sync_before_first_forward(self):
         group = DummyProcessGroup(rank=0, size=1)
-        model = self.get_wrapped_model(group, config={})
+        model = self.get_wrapped_model(group, config={}, add_bn=False)
         batch = model.module.get_input(torch.device("cuda"))
         with model.no_sync():
             output = model(*batch)
@@ -43,7 +43,7 @@ class TestNoSync(DistributedTest):
 
     @classmethod
     def _test_transformer(self, rank, group, config):
-        model = self.get_wrapped_model(group, config=config)
+        model = self.get_wrapped_model(group, config=config, add_bn=False)
         model.eval()  # turn off dropout for the test
         self._test_no_sync(model, batch_dim=1)
 
