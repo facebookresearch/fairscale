@@ -5,8 +5,8 @@
 
 import functools
 import os
+import random
 import unittest
-from unittest import mock
 
 import torch
 import torch.nn as nn
@@ -16,13 +16,14 @@ from fairscale.nn import FullyShardedDataParallel as FSDP
 from fairscale.nn import auto_wrap, default_auto_wrap_policy, enable_wrap, wrap
 from fairscale.utils.testing import DummyProcessGroup
 
+try:
+    from torch.cuda.amp import autocast
+except ImportError:
+    autocast = None  # type: ignore
+
 
 class TestAutoWrap(unittest.TestCase):
     def setUp(self) -> None:
-        version = torch.__version__.split(".")[:2]
-        major, minor = int(version[0]), int(version[1])
-        if major < 1 or (major == 1 and minor < 6):
-            raise unittest.SkipTest("Need pytorch version >= 1.6 due to autocast")
         self.process_group = DummyProcessGroup(rank=0, size=1)
 
     def test_wrap(self):
@@ -129,26 +130,32 @@ class TestAutoWrap(unittest.TestCase):
         """
         self._auto_wrap_smoke_test(enable_mixed_precision=True)
 
-    @mock.patch.dict(os.environ, {"MASTER_ADDR": "localhost", "MASTER_PORT": "12345"}, clear=True)
     @unittest.skipIf(not torch.cuda.is_available(), "Test Requires CUDA")
+    @unittest.skipIf(autocast is None, "Test Requires autocast")
     def _auto_wrap_smoke_test(self, enable_mixed_precision):
-        from torch.cuda.amp import autocast
-
         device = torch.device("cuda")
         torch.cuda.set_device(0)
+
+        # Random port in case the next test run quickly, same port would cause conflict.
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = str(random.randint(2000, 3000))
         torch.distributed.init_process_group(backend="nccl", rank=0, world_size=1)
 
-        with enable_wrap(wrapper_cls=FSDP, mixed_precision=enable_mixed_precision):
-            sequential = nn.Sequential(
-                nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
-            )
-            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
-            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
-        model.to(device)
-        input = torch.rand((1, 5), dtype=torch.float).to(device)
+        try:
+            with enable_wrap(wrapper_cls=FSDP, mixed_precision=enable_mixed_precision):
+                sequential = nn.Sequential(
+                    nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
+                )
+                my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
+                model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
+            model.to(device)
+            input = torch.rand((1, 5), dtype=torch.float).to(device)
 
-        with autocast(enabled=enable_mixed_precision):
-            output = model(input)
-            loss = F.mse_loss(input, output)
-        loss.backward()
-        torch.distributed.destroy_process_group()
+            with autocast(enabled=enable_mixed_precision):
+                output = model(input)
+                loss = F.mse_loss(input, output)
+            loss.backward()
+        finally:
+            torch.distributed.destroy_process_group()
+            del os.environ["MASTER_ADDR"]
+            del os.environ["MASTER_PORT"]

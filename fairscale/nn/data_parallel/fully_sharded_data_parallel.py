@@ -20,13 +20,7 @@ import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.optim.utils import calc_grad_norm
-from fairscale.utils.containers import (
-    apply_to_tensors,
-    pack_kwargs,
-    split_non_tensors,
-    unpack_kwargs,
-    unpack_non_tensors,
-)
+from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import chunk_and_pad, validate_process_group
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
@@ -1145,15 +1139,8 @@ class FullyShardedDataParallel(nn.Module):
 def cast_inputs_to_fp16(*args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     """
     Cast any Tensors in *args or **kwargs to FP16.
-
-    Doesn't currently support Tensors nested inside containers (e.g., dict).
     """
-    kwarg_keys, flat_args = pack_kwargs(*args, **kwargs)
-    tensor_inputs, packed_non_tensor_inputs = split_non_tensors(flat_args)
-    tensor_inputs = tuple(t.half() if torch.is_floating_point(t) else t for t in tensor_inputs)
-    flat_args = unpack_non_tensors(tensor_inputs, packed_non_tensor_inputs)
-    args, kwargs = unpack_kwargs(kwarg_keys, flat_args)
-    return args, kwargs
+    return apply_to_tensors(lambda x: x.half(), args), apply_to_tensors(lambda x: x.half(), kwargs)
 
 
 def cast_buffers_(
