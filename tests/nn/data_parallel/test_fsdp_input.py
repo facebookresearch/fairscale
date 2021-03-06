@@ -47,7 +47,6 @@ def test_it(fsdp_config, input_cls):
                 self.layer = Linear(4, 4)
 
             def forward(self, input):
-                print("XXX", input)
                 if isinstance(input, list):
                     input = input[0]
                 else:
