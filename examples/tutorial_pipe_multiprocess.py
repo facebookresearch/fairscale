@@ -29,7 +29,6 @@ def run(rank, world_size):
     model = MultiProcessPipe(
         model,
         balance=[2, 1],
-        style=MultiProcessPipe.MultiProcess,
         worker_map={0: "worker0", 1: "worker1"},  # Needed to convert ranks to RPC worker names
         input_device=device,
     ).to(device)
