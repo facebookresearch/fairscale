@@ -1140,7 +1140,11 @@ def cast_inputs_to_fp16(*args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     """
     Cast any Tensors in *args or **kwargs to FP16.
     """
-    return apply_to_tensors(lambda x: x.half(), args), apply_to_tensors(lambda x: x.half(), kwargs)
+    def fn(x):
+        if x.dtype is torch.float32:
+            return x.half()
+        return x
+    return apply_to_tensors(fn, args), apply_to_tensors(fn, kwargs)
 
 
 def cast_buffers_(
