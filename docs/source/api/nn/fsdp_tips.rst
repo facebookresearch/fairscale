@@ -31,7 +31,7 @@ General usage notes
 -  For best memory efficiency use ``auto_wrap`` to wrap each layer in your network with ``FSDP`` and set ``reshard_after_forward=True``
 -  For best training speed set ``reshard_after_forward=False`` (wrapping each layer is not required, but will improve speed further)
 -  If you're using ``torch.cuda.amp.autocast`` for mixed precision, that's fully compatible with the FSDP wrapper, just set ``mixed_precision=True``
--  Uf combining with `activation checkpointing <https://github.com/facebookresearch/fairscale/blob/master/fairscale/nn/misc/checkpoint_activations.py>`__,
+-  If combining with `activation checkpointing <https://github.com/facebookresearch/fairscale/blob/master/fairscale/nn/misc/checkpoint_activations.py>`__,
    prefer ``FSDP(checkpoint_wrapper(module))`` over ``checkpoint_wrapper(FSDP(module))``. The latter will result in more communication and will be slower.
 -  Results should be identical to DDP with pointwise Optimizers, e.g.,
    Adam, AdamW, Adadelta, Adamax, SGD, etc.. However, the sharding will
@@ -53,8 +53,9 @@ and
 `reduce-scatter <https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html#reducescatter>`__
 operations:
 
-.. |Figure 1| image:: https://user-images.githubusercontent.com/231798/108780259-26870a00-7536-11eb-890d-51720f39d098.png
+.. |Figure 1| image:: https://user-images.githubusercontent.com/23240128/110170085-a67b6280-7dc7-11eb-9128-88d813fc7037.png
 
+|Figure 1|
 
 Then, we can rearrange the reduce-scatter + all-gather so that each DDP worker only needs to store a single shard of parameters and optimizer state. The figure below illustrates standard DDP training (left) and fully sharded training (right):
 
@@ -176,21 +177,24 @@ State Management with extra parameter attributes
 We manage several attributes on each Parameter instance. The first two
 are set by :func:`_shard_parameters_`:
 
-    ``_is_sharded``: ``True`` if the Parameter is sharded or ``False``
-        if the Parameter is intentionally not sharded (in which case we
-        will all-reduce grads for this param).
-    ``_orig_size``: the size of the original Parameter (before sharding)
+- ``_is_sharded``: ``True`` if the Parameter is sharded or ``False``
+    if the Parameter is intentionally not sharded (in which case we
+    will all-reduce grads for this param).
+- ``_orig_size``: the size of the original Parameter (before sharding)
 
-The remaining attributes are set in :func:``_init_param_attributes()``:
-    ``_fp32_shard``: a single shard of the parameters in full precision
-        (typically FP32, but this is dependent on the dtype of the model
-        as it's passed in by the user). This can be on CPU or GPU depending on the value of *``cpu_offload``*.
-    ``_fp16_shard``: if *``mixed_precision``* is ``True``, this will be
-        a single shard of the parameters in FP16, used for all-gather.
-    ``_full_param_padded``: the full weight (padded to be evenly divisible by ``world_size``), used for computation in the
-        forward and backward pass. This will be resized in place and only materialized (via all-gather) as needed.
+
+The remaining attributes are set in ``_init_param_attributes()``:
+
+- ``_fp32_shard``: a single shard of the parameters in full precision
+    (typically FP32, but this is dependent on the dtype of the model
+    as it's passed in by the user). This can be on CPU or GPU depending on the value of *``cpu_offload``*.
+- ``_fp16_shard``: if ``mixed_precision`` is ``True``, this will be
+    a single shard of the parameters in FP16, used for all-gather.
+- ``_full_param_padded``: the full weight (padded to be evenly divisible by ``world_size``), used for computation in the
+    forward and backward pass. This will be resized in place and only materialized (via all-gather) as needed.
 
 Misc
 ----
 -  we don't start the FP32 -> FP16 transfer until after the optimization step completes.
+- any direct weight accesses outside of the fwd/bwd, should be in the ``_summon_full_params`` context
 
