@@ -13,7 +13,7 @@ from torch.nn.utils.rnn import PackedSequence
 
 
 def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
-    """Recursively apply to all tensor in 6 kinds of container types."""
+    """Recursively apply to all tensor in different kinds of container types."""
 
     def _apply(x: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
         if torch.is_tensor(x):
