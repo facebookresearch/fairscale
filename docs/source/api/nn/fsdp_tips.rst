@@ -1,6 +1,6 @@
 FSDP Notes
 ========================================
-This document describes how `FSDP` works, including subtle behaviors that can change performance significantly.
+This document describes how ``FSDP`` works, including subtle behaviors that can change performance significantly.
 See :doc:`FullyShardedDataParallel <fsdp>` for python docstrings.
 
 Overview
@@ -37,7 +37,7 @@ General usage notes
    Adam, AdamW, Adadelta, Adamax, SGD, etc.. However, the sharding will
    result in slightly different results when using non-pointwise
    Optimizers, e.g., Adagrad, Adafactor, LAMB, etc.
-
+- In `fairseq <https://github.com/pytorch/fairseq>`_, FSDP is activated by the command line option ``--ddp-backend=fully_sharded``.
 
 How it works
 ------------
