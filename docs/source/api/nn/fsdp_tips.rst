@@ -1,7 +1,7 @@
-FSDP Notes
-========================================
+Fully Sharded Data Parallel Notes
+=======================================================
 This document describes how ``FSDP`` works, including subtle behaviors that can change performance significantly.
-See :doc:`FullyShardedDataParallel <fsdp>` for python docstrings.
+See :doc:`this page <fsdp>` for python docstrings.
 
 Overview
 ---------
