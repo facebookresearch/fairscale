@@ -972,14 +972,17 @@ class FullyShardedDataParallel(nn.Module):
         # before the move_grads_to_cpu step so that this entire hook remains
         # non-blocking. The downside is a bit more D2H transfer in that case.
         if self.mixed_precision:
+            orig_param_grad_data = param.grad.data
             param.grad.data = param.grad.data.to(dtype=param.data.dtype)
+            # Don't let this memory get reused until after the transfer.
+            orig_param_grad_data.record_stream(torch.cuda.current_stream())
         # Optionally move gradients to CPU, typically used if one is running
         # the optimizer on the CPU.
         if self.move_grads_to_cpu:
-            param._cpu_grad.copy_(param.grad.data, non_blocking=True)
+            param._cpu_grad.copy_(param.grad.data, non_blocking=False)
+            # Don't let this memory get reused until after the transfer.
+            param.grad.data.record_stream(torch.cuda.current_stream())
             param.grad.data = param._cpu_grad
-        # Don't let this memory get reused until after the transfers.
-        reduced_grad.record_stream(torch.cuda.current_stream())
 
     def _queue_wait_for_post_backward(self) -> None:
         """Try to queue a `wait_for_post_backward` callback.
