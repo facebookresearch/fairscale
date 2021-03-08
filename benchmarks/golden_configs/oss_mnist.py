@@ -4,7 +4,7 @@
 def get_golden_real_stats():
 
     return {
-        "reference_speed": 650,
+        "reference_speed": 660,
         "reference_memory": 1000,
         "reference_loss": 0.026,
     }
