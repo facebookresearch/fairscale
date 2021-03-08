@@ -131,7 +131,7 @@ class MySGD(Optimizer):
         lr (float): learning rate (required)
     """
 
-    def __init__(self, params, lr=0.01):
+    def __init__(self, params, lr):
         defaults = dict(lr=lr)
         super(MySGD, self).__init__(params, defaults)
 
@@ -167,10 +167,10 @@ class SpectrainSGDMomentum(Optimizer):
             params (iterable): iterable of parameters to optimize or dicts defining
                 parameter groups
             lr (float): learning rate (required)
+            momentum (float): momentum (default=0.9)
     """
 
-    def __init__(self, params, lr=0.01, momentum=0.9):
-        print("called")
+    def __init__(self, params, lr, momentum=0.9):
         defaults = dict(lr=lr, momentum=momentum)
         params = list(params)
         super(SpectrainSGDMomentum, self).__init__(params, defaults)
@@ -232,6 +232,7 @@ class SpectrainSGDMomentum(Optimizer):
     def step(self, weight_prediction=True, closure=None):
         """ Performs a single optimization step.
         Arguments:
+            weight_prediction (bool, optional): Enable weight prediction based updates
             closure (callable, optional): A closure that reevaluates the model
                 and returns the loss.
         """
