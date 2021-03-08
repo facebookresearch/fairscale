@@ -88,7 +88,7 @@ Saving and Loading
 There are two ways to load and save FSDP instances,
 
 - ``state_dict()`` returns a dictionary containing all parameters, which can be loaded with ``load_local_state_dict()``
-- ``local_state_dict()`` returns a dictionary containing a shard's parameters, which can be loaded with ``load_local_state_dict()``
+- ``local_state_dict()`` returns a dictionary containing a shard's parameters, which can be loaded with ``load_state_dict()``
 
 
 Mixed Precision
@@ -98,14 +98,14 @@ When ``mixed_precision=True``:
 
 -  Sharded parameters are downcast to ``fp16`` before ``forward``, promoted to ``fp32`` after forward.
 -  buffers are kept in ``fp16``, unless ``buffer_dtype=torch.float32`` is passed. Buffers are not sharded regardless of arguments.
--  By default, gradients will be computed and reduced
--  ``fp32_reduce_scatter=True`` controls the quantization of the gradient communication
+-  By default, gradients will be computed and reduced in FP16. If FP32 reductions are important, set ``fp32_reduce_scatter=True``
 -  If ``torch.amp.autocast`` is enabled it will override the output dtypes of some operations, like ``BatchNorm2D``
 
 
 Auto-wrap
 ~~~~~~~~~
 Auto wrapping sub-modules with ``FSDP`` is a convenient way to improve training speed by overlapping the all-gather step across the forward passes of different submodules.
+It also improves memory efficiency by freeing gathered parameters after each layer finishes executing.
 
 
 
@@ -113,27 +113,27 @@ Auto wrapping sub-modules with ``FSDP`` is a convenient way to improve training 
 
     import torch
     from fairscale.nn.wrap import auto_wrap, enable_wrap, wrap
-    from fairscale.nn.data_parallel import FullyShardedDataParallel
+    from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
     from fairscale.utils.testing import DummyProcessGroup
     tfmr = torch.nn.Transformer(num_encoder_layers=2, num_decoder_layers=2)
 
     group = DummyProcessGroup(rank=0, size=1)
     fsdp_params = dict(mixed_precision=True, flatten_parameters=True)
-    with enable_wrap(process_group=group, **fsdp_params):
+    with enable_wrap(wrapper_cls=FSDP, process_group=group, **fsdp_params):
 
         # Wraps layer in FSDP by default if within context
         l1 = wrap(torch.nn.Linear(5, 5))
-        assert isinstance(l1, FullyShardedDataParallel)
+        assert isinstance(l1, FSDP)
         assert l1.mixed_precision and l1.flatten_parameters
         # Separately Wraps children modules with more than 1e8 params
         tfmr_auto_wrapped = auto_wrap(tfmr, min_num_params=1e6)
         assert isinstance(l2, nn.Transformer)
         for l in l2.encoder.layers:
-            assert isinstance(l, FullyShardedDataParallel)
+            assert isinstance(l, FSDP)
             assert l.mixed_precision and l.flatten_parameters
-            assert isinstance(l.linear1, FullyShardedDataParallel)
-            assert isinstance(l.linear2, FullyShardedDataParallel)
-            assert not isinstance(l.self_attn, FullyShardedDataParallel) # self attention is not auto-wrapped
+            assert isinstance(l.linear1, FSDP)
+            assert isinstance(l.linear2, FSDP)
+            assert not isinstance(l.self_attn, FSDP) # self attention is not auto-wrapped
 
 
 .. warning:: It is not recommended to use :func:`auto_wrap` with
@@ -150,9 +150,7 @@ Using CPU RAM
 moved to CPU.
 
 -  ``cpu_offload`` moves weights to CPU when they are not being used.
--  ``move_grads_to_cpu`` moves gradients to CPU. The use of this option
-   requires that the optimizer has a copy of the model parameters on
-   CPU.
+- ``move_grads_to_cpu`` moves gradients to CPU so that the optimizer step also happens on CPU. This option requires ``cpu_offload=True``.
 
 Gradient Clipping
 -----------------

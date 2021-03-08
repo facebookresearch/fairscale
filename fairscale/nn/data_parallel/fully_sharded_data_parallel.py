@@ -80,12 +80,12 @@ class FullyShardedDataParallel(nn.Module):
     across the forward pass. For example::
 
         from fairscale.nn.auto_wrap import enable_wrap, auto_wrap
-        from fairscale.
+        from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
         fsdp_params = dict(mixed_precision=True, flatten_parameters=True)
         with enable_wrap(**fsdp_params):
             # Wraps layer in FSDP by default if within context
             self.l1 = wrap(torch.nn.Linear(5, 5))
-            assert isinstance(self.l1)
+            assert isinstance(self.l1, FSDP)
             # Separately Wraps children modules with more than 1e8 params
             self.l2 = auto_wrap(TransformerBlock(), min_num_params=1e8)
 
