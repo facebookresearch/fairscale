@@ -150,7 +150,8 @@ def train(
 
     if optim_type == OptimType.oss_sharded_ddp:
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
-        model = ShardedDDP(model, optimizer)
+        # Single node run typically, no need for reduce buckets
+        model = ShardedDDP(model, optimizer, reduce_buffer_size=0)
     else:
         device_ids = None if args.cpu else [rank]
         model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
