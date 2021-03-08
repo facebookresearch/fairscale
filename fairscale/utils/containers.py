@@ -7,12 +7,13 @@ from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import torch
+from torch.nn.utils.rnn import PackedSequence
 
 """Useful functions to deal with tensor types with other python container types."""
 
 
 def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
-    """Recursively apply to all tensor in 4 kinds of container types."""
+    """Recursively apply to all tensor in 6 kinds of container types."""
 
     def _apply(x: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
         if torch.is_tensor(x):
@@ -22,6 +23,9 @@ def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tu
             for key, value in x.items():
                 od[key] = _apply(value)
             return od
+        elif isinstance(x, PackedSequence):
+            _apply(x.data)
+            return x
         elif isinstance(x, dict):
             return {key: _apply(value) for key, value in x.items()}
         elif isinstance(x, list):
