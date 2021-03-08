@@ -59,6 +59,8 @@ class FullyShardedDataParallel(nn.Module):
 
     Usage::
 
+        import torch
+        from fairscale.nn.data_parallel import FullyShardedDataParallel
         torch.cuda.set_device(device_id)
         sharded_module = FullyShardedDataParallel(my_module)
         optim = torch.optim.Adam(sharded_module.parameters(), lr=0.0001)
@@ -73,15 +75,18 @@ class FullyShardedDataParallel(nn.Module):
     models and to improve training speed by overlapping the all-gather step
     across the forward pass. For example::
 
+        import torch
         from fairscale.nn.auto_wrap import enable_wrap, auto_wrap
         from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
         fsdp_params = dict(mixed_precision=True, flatten_parameters=True)
-        with enable_wrap(**fsdp_params):
+        with enable_wrap(wrapper_cls=FSDP, **fsdp_params):
             # Wraps layer in FSDP by default if within context
             self.l1 = wrap(torch.nn.Linear(5, 5))
             assert isinstance(self.l1, FSDP)
             # Separately Wraps children modules with more than 1e8 params
-            self.l2 = auto_wrap(TransformerBlock(), min_num_params=1e8)
+            large_tfmr = torch.nn.Transformer(d_model=2048, encoder_layers=12, decoder_layers=12)
+            self.l2 = auto_wrap(large_tfmr, min_num_params=1e8)
+            assert isinstance(self.l2, FSDP)
 
     .. warning::
 
