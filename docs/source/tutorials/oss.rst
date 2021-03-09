@@ -94,7 +94,8 @@ DDP can be used in place of ShardedDDP in the example below, but the memory savi
                 optimizer.step()
 
 
-The above `train` function will then need to be run via a `multiprocessing.spawn` function.
+The above `train` function can then be run via a `multiprocessing.spawn` call. Note that any launcher can be used,
+the only assumption being that each of the ranks lives in its own python process.
 
 .. code-block:: python
 
