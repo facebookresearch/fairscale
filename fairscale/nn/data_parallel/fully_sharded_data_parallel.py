@@ -1127,7 +1127,7 @@ class FullyShardedDataParallel(nn.Module):
         if params is None:
             params = self.params
         self.has_full_params = False
-        current_stream = torch.cuda.current_stream()
+        self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self._streams["all_gather"]):
             for p in params:
                 if not p._is_sharded:  # e.g., world_size == 1
@@ -1140,7 +1140,6 @@ class FullyShardedDataParallel(nn.Module):
                 # unshard parameters, we should reuse the original Tensor
                 # Storage object and unshard it in-place. For now, just resize
                 # the Storage to 0 to save memory.
-                p._full_param_padded.record_stream(current_stream)
                 free_storage_(p._full_param_padded)
 
     @torch.no_grad()
