@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - FSDP docs ([#455](https://github.com/facebookresearch/fairscale/issues/455))
 - enable\_wrap and auto\_wrap APIs ([#446](https://github.com/facebookresearch/fairscale/issues/446))
-- experimental offload module ([#432](https://github.com/facebookresearch/fairscale/issues/432))
+- Added experimental.nn.OffloadModel API for training large models on a single GPU.([#432](https://github.com/facebookresearch/fairscale/issues/432))
 
 ### Fixed
 - Many FSDP fixes
