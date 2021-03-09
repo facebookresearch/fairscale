@@ -24,6 +24,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import fairscale.optim as optim
 from fairscale.utils.testing import (
     check_same_model_params,
+    check_same_models_across_ranks,
     skip_if_no_cuda,
     skip_if_py39_no_cuda,
     skip_if_single_gpu,
@@ -448,6 +449,14 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
     for state in optimizer.state.values():
         for _, _ in state.items():
             pass
+
+    # Test the state dict materialization on all ranks
+    _ = optimizer.step(closure=closure)
+    optimizer_state_dict = optimizer.state_dict(all_ranks=True)  # one per rank
+    optimizer.load_state_dict(optimizer_state_dict)
+    _ = optimizer.step(closure=closure)
+    check_same_models_across_ranks(model, dist.group.WORLD, params_should_be_equal=True, check_broadcast_buffers=False)
+
     dist.destroy_process_group()
 
 
@@ -477,6 +486,7 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
 
     model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
     model.to(device)
+    model = DDP(model, device_ids=[device])
 
     loss_fn = torch.nn.L1Loss()
     loss_fn.to(device)
@@ -486,20 +496,16 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
     def closure():
         optimizer.zero_grad()
         output = model(inputs)
-        loss = loss_fn(output, target)
+        loss = loss_fn(output, target) / world_size
+        dist.all_reduce(loss)
         loss.backward()
         return loss
 
     _ = optimizer.step(closure=closure)
 
-    # Update the optimizer state on the reference rank
-    optimizer.consolidate_state_dict(recipient_rank=reference_rank)
-
-    # Fetch the state on the reference rank, broadcast to the other ones
-    if rank == reference_rank:
-        optimizer_state_dict = optimizer.state_dict()
-    else:
-        optimizer_state_dict = {}
+    # Get a snapshot of the state at this point
+    optimizer_state_dict = copy.deepcopy(optimizer.state_dict(all_ranks=True))
+    model_state_dict = copy.deepcopy(model.state_dict())
 
     # Run two steps, log the loss
     _ = optimizer.step(closure=closure)
@@ -507,13 +513,14 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
 
     # Load the optimizer state dict, rewind the state two steps back
     optimizer.load_state_dict(optimizer_state_dict)
+    model.load_state_dict(model_state_dict)
 
     # Run two new steps, log the loss again and check that we get the same
     _ = optimizer.step(closure=closure)
     test_loss = optimizer.step(closure=closure)
 
-    assert torch.allclose(reference_loss, test_loss)
-
+    assert torch.allclose(reference_loss, test_loss), f"{reference_loss} vs {test_loss}"
+    # exit(-1)
     dist.destroy_process_group()
 
 
@@ -530,7 +537,7 @@ def test_reproducibility():
     reference_rank = 0
 
     mp.spawn(
-        run_test_collect_shards, args=(world_size, reference_rank, temp_file_name), nprocs=world_size, join=True,
+        run_test_reproducibility, args=(world_size, reference_rank, temp_file_name), nprocs=world_size, join=True,
     )
 
 
