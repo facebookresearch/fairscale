@@ -140,7 +140,7 @@ class MySGD(Optimizer):
 
     def step(self, closure=None):
         """ Performs a single optimization step.
-        Arguments:
+        Args:
             closure (callable, optional): A closure that reevaluates the model
                 and returns the loss.
         """
@@ -217,7 +217,7 @@ class SpectrainSGDMomentum(Optimizer):
                     param_state = self.state[p]
                     p.data.sub_(param_state["momentum_buffer"].data, alpha=multiplier)
 
-        if not forward:
+        else:
             # In backward pass:
             # 1. load old weights
             # 2. predict new weights and modify
@@ -231,7 +231,7 @@ class SpectrainSGDMomentum(Optimizer):
 
     def step(self, weight_prediction=True, closure=None):
         """ Performs a single optimization step.
-        Arguments:
+        Args:
             weight_prediction (bool, optional): Enable weight prediction based updates
             closure (callable, optional): A closure that reevaluates the model
                 and returns the loss.
