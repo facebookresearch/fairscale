@@ -416,7 +416,7 @@ class ShardedDataParallel(nn.Module):
                     param.grad.mul_(self.world_size_scaling)
 
                     if self.reduce_fp16:
-                        self._grad_fp16_buffer[index] = param.grad.to(torch.float16)
+                        self._grad_fp16_buffer[index] = param.grad.to(torch.float16, non_blocking=False)
                         if dst_rank != self.global_rank:
                             param.grad = None
 
