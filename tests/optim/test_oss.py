@@ -22,7 +22,13 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
-from fairscale.utils.testing import check_same_model_params, skip_if_no_cuda, skip_if_py39_no_cuda, skip_if_single_gpu
+from fairscale.utils.testing import (
+    check_same_model_params,
+    skip_if_no_cuda,
+    skip_if_py39_no_cuda,
+    skip_if_single_gpu,
+    torch_version,
+)
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
@@ -811,9 +817,11 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
 
         # Define a model to be trained by OSS
         oss_module = torch.nn.Sequential(trunk, head)
+
+        # Make sure that the param groups are interleaved, to catch an ordering bug in the state dict
         oss_trainable_params = [
-            {"params": trunk.parameters(), "lr": 1e-5},
-            {"params": head.parameters(), "lr": 1e-4},
+            {"params": list(trunk.parameters())[:-1] + list(head.parameters()), "lr": 1e-5},
+            {"params": list(trunk.parameters())[-1], "lr": 1e-4},
         ]
 
         optimizer_settings: Dict[Any, Any] = {}
@@ -836,8 +844,8 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
         ddp_module = torch.nn.Sequential(ddp_trunk, ddp_head)
 
         ddp_trainable_params = [
-            {"params": ddp_trunk.parameters(), "lr": 1e-5},
-            {"params": ddp_head.parameters(), "lr": 1e-4},
+            {"params": list(ddp_trunk.parameters())[:-1] + list(ddp_head.parameters()), "lr": 1e-5},
+            {"params": list(ddp_trunk.parameters())[-1], "lr": 1e-4},
         ]
         ddp_optimizer = optimizer(ddp_trainable_params, **optimizer_settings)  # type: ignore
         ddp_model = DDP(module=ddp_module, device_ids=[rank], broadcast_buffers=True, find_unused_parameters=True)
@@ -880,25 +888,26 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
                 next(oss_module.parameters()).requires_grad = not next(oss_module.parameters()).requires_grad
                 # sharded_optimizer.refresh_trainable()
 
-        # Check that the checkpoints are compatible
-        # - get states
-        ddp_state_dict = ddp_optimizer.state_dict()
-        sharded_optimizer.consolidate_state_dict(recipient_rank=RECIPIENT_RANK)
-        sharded_optim_state_dict = sharded_optimizer.state_dict() if rank == RECIPIENT_RANK else {}
-        sharded_optim_state_dict = sync_object_ranks(sharded_optim_state_dict, RECIPIENT_RANK, device)
+        # Check that the checkpoints are compatible (post pytorch 1.5)
+        if torch_version()[1] > 5:
+            # - get states
+            ddp_state_dict = ddp_optimizer.state_dict()
+            sharded_optimizer.consolidate_state_dict(recipient_rank=RECIPIENT_RANK)
+            sharded_optim_state_dict = sharded_optimizer.state_dict() if rank == RECIPIENT_RANK else {}
+            sharded_optim_state_dict = sync_object_ranks(sharded_optim_state_dict, RECIPIENT_RANK, device)
 
-        # - cross load the states
-        # run one step and check that the models are still the same
-        ddp_state_dict_ref = copy.deepcopy(ddp_state_dict)  # OSS will remove some states
-        ddp_optimizer.load_state_dict(sharded_optim_state_dict)  # mixup on purpose !
-        sharded_optimizer.load_state_dict(ddp_state_dict)
-        check_step()
+            # - cross load the states
+            # run one step and check that the models are still the same
+            ddp_state_dict_ref = copy.deepcopy(ddp_state_dict)  # OSS will remove some states
+            ddp_optimizer.load_state_dict(sharded_optim_state_dict)  # mixup on purpose !
+            sharded_optimizer.load_state_dict(ddp_state_dict)
+            check_step()
 
-        #  - self load, rewind, check no problem
-        # run one step and check that the models are still the same
-        ddp_optimizer.load_state_dict(ddp_state_dict_ref)
-        sharded_optimizer.load_state_dict(sharded_optim_state_dict)
-        check_step()
+            #  - self load, rewind, check no problem
+            # run one step and check that the models are still the same
+            ddp_optimizer.load_state_dict(ddp_state_dict_ref)
+            sharded_optimizer.load_state_dict(sharded_optim_state_dict)
+            check_step()
 
     for opt in [torch.optim.Adam, torch.optim.SGD]:
         check_optimizer_equivalence(opt, change_train_graph=False)

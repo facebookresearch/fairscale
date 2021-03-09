@@ -85,7 +85,6 @@ class OSS(Optimizer):
         self._per_device_params: Dict[torch.device, List[List[Parameter]]] = OrderedDict()  # device, rank, params
         self._param_rank: Dict[torch.Tensor, int] = {}
         self._partition_parameters: List[List[dict]] = []
-        self._index_to_param: Dict[int, torch.Tensor] = {}
         self._param_to_index: Dict[int, int] = {}
         self._local_params: Optional[List[torch.Tensor]] = None
 
@@ -159,15 +158,6 @@ class OSS(Optimizer):
 
         # Make sure that the iterator is not consumed, only expose a copy
         return self._local_params
-
-    @property
-    def index_to_param(self) -> Dict[int, torch.Tensor]:
-        """ Hash table in between parameter indices in the global optimizer scheme, and the actual params
-        """
-        if len(self._index_to_param) == 0:
-            self._index_to_param = {i: p for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
-
-        return self._index_to_param
 
     @property
     def param_to_index(self) -> Dict[int, int]:
@@ -376,7 +366,7 @@ class OSS(Optimizer):
                         global_id = self.param_to_index[local_index_to_param_id[local_param_index]]
                         state_dict["state"][global_id] = s["state"][local_param_index]
 
-        # Make sure that the parameters are sorted in the state, as expected
+        # Make sure that the parameters are sorted in the state, as expected for a pytorch dict
         state_dict["state"] = dict(sorted(state_dict["state"].items()))
 
         return state_dict
@@ -389,17 +379,34 @@ class OSS(Optimizer):
                 from a call to :meth:`state_dict`
         """
 
-        # NOTE: PyTorch 1.5 does not index linearly but with the id(params) at saving time
-        # we work around that here by using the fact that the params are ordered as in the param_groups
-        pytorch15_index_redirect = {k: i for i, k in enumerate(state_dict["state"].keys())}
+        # Update the state, trusting the ordering in param_groups
+        # Apart from the removal of states not owned by this rank, the pytorch logic is kept
+        # (See torch.optim.optimizer)
+        id_map = {
+            old_id: p
+            for old_id, p in zip(
+                chain.from_iterable((g["params"] for g in state_dict["param_groups"])),
+                chain.from_iterable((g["params"] for g in self.param_groups)),
+            )
+        }
+
+        # FIXME: pytorch1.5 compatibility, to be removed when 1.5 support ends
+        _param_list = list(chain.from_iterable((g["params"] for g in self.param_groups)))
 
         for key, value in state_dict["state"].items():
-            param = self.index_to_param[pytorch15_index_redirect[key]]
+            if key in id_map:
+                param = id_map[key]
 
-            # Populate the sharded optimizer state on the fly
-            if self.param_to_rank[param] != self.rank:
-                state_dict["state"][key] = None
+                # Populate the sharded optimizer state on the fly,
+                # remove the params that this rank does not own
+                if self.param_to_rank[param] != self.rank:
+                    state_dict["state"][key] = None
+                else:
+                    self.optim.state[param] = recursive_copy_to_device(value, non_blocking=True, device=param.device)
             else:
+                # Not a param, copied as-is (backward compatibility or exotic optimizers)
+                print(key, "not in idmap")
+                param = _param_list[key]
                 self.optim.state[param] = recursive_copy_to_device(value, non_blocking=True, device=param.device)
 
         super().load_state_dict(state_dict)
@@ -515,7 +522,6 @@ class OSS(Optimizer):
         self._partition_parameters.clear()
         self._per_device_params.clear()
         self._param_rank.clear()
-        self._index_to_param.clear()
         self._param_to_index.clear()
         self._local_params = None
 
