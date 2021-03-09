@@ -153,8 +153,9 @@ def train(model_config, model, benchmark_config, model_specs, args):
     pipe_group = model.group if hasattr(model, "group") else None
 
     # TODO(anj-s): Avoid sending fake data to all replicas except the first and last one.
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
-        lm_dataloader, _, _ = get_synthetic_dataloaders(args, benchmark_config, model_specs)
+        lm_dataloader, _, _ = get_synthetic_dataloaders(args, device, benchmark_config, model_specs)
 
     total_tokens = 0
     total_tokens_per_log_interval = 0
