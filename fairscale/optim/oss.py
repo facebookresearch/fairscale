@@ -449,7 +449,6 @@ class OSS(Optimizer):
                     self.optim.state[param] = recursive_copy_to_device(value, non_blocking=True, device=param.device)
             else:
                 # Not a param, copied as-is (backward compatibility or exotic optimizers)
-                print(key, "not in idmap")
                 param = _param_list[key]
                 self.optim.state[param] = recursive_copy_to_device(value, non_blocking=True, device=param.device)
 

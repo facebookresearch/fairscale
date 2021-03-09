@@ -496,8 +496,7 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
     def closure():
         optimizer.zero_grad()
         output = model(inputs)
-        loss = loss_fn(output, target) / world_size
-        dist.all_reduce(loss)
+        loss = loss_fn(output, target)
         loss.backward()
         return loss
 
@@ -519,13 +518,14 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
     _ = optimizer.step(closure=closure)
     test_loss = optimizer.step(closure=closure)
 
-    assert torch.allclose(reference_loss, test_loss), f"{reference_loss} vs {test_loss}"
-    # exit(-1)
+    assert torch.allclose(reference_loss, test_loss), f"{reference_loss} vs {test_loss}. Reproducibility is broken"
+
     dist.destroy_process_group()
 
 
 # TODO(blefaudeux) Fix for torch v1.8.0
 @pytest.mark.skipif(torch.__version__.split("+")[0].split(".") == ["1", "8", "0"], reason="disabled for torch 1.8.0")
+@skip_if_single_gpu
 def test_reproducibility():
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
