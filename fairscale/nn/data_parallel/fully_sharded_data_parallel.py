@@ -901,11 +901,11 @@ class FullyShardedDataParallel(nn.Module):
         if param.grad.requires_grad:
             raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require grad")
 
-        if not self._is_root or self._require_backward_grad_sync:
+        if self._require_backward_grad_sync or self.reshard_after_forward:
             # Free full params. As a special case, we don't free the full params
-            # on the root instance when in a ``no_sync`` context (as indicated
-            # by ``self._require_backward_grad_sync``), since we will need the
-            # params again immediately for the next forward.
+            # when in a ``no_sync`` context (as inversely indicated by
+            # ``self._require_backward_grad_sync``), since the params will not
+            # get updated before the next forward.
             self._free_full_params([param])
 
         if self.mixed_precision:
