@@ -159,7 +159,7 @@ Primary goal is to allow scaling to bigger batch sizes without losing model accu
 
 At a high level, we want ML researchers to:
   * go parallel more easily (i.e. no need to find new learning rate schedules)
-  * not worrying about lossing accuracy
+  * not worrying about losing accuracy
   * potentially higher GPU efficiency (fewer steps, less networking overhead, etc.)
 
 # Testing
