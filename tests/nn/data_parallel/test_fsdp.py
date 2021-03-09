@@ -287,6 +287,20 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         )
         spawn_and_init(test_fn)
 
+    @parameterized.expand([[{"checkpoint_act": False}], [{"checkpoint_act": True}]], name_func=rename_test)
+    def test_mixture_of_experts_with_delay_before_free(self, moe_config):
+        fsdp_config = {"mixed_precision": True}
+        test_fn = functools.partial(
+            self._test_identical_outputs,
+            functools.partial(MixtureOfExperts, delay_before_free_ms=250, **moe_config),
+            fsdp_config,
+            # MixtureOfExperts implements custom reduce logic, so the reference
+            # behavior should use that logic instead of PyTorch DDP.
+            ref_ddp_fn=self._dummy_ddp_fn,
+            norm_type=None,
+        )
+        spawn_and_init(test_fn)
+
     def test_mixture_of_experts_grad_clip_breaks(self):
         config = {"mixed_precision": True}
         test_fn = functools.partial(
@@ -760,9 +774,10 @@ class DummyDDP(nn.Module):
 
 
 class MixtureOfExperts(NestedWrappedModule):
-    def __init__(self, group, wrapper_config, checkpoint_act=False):
+    def __init__(self, group, wrapper_config, checkpoint_act=False, delay_before_free_ms=0):
         super().__init__(group, wrapper_config)
         self.group = group
+        self.delay_before_free_ms = delay_before_free_ms
 
         # "expert" params are different on each rank
         torch.manual_seed(42 + group.rank())
@@ -786,6 +801,22 @@ class MixtureOfExperts(NestedWrappedModule):
             shared = FullyShardedDataParallel(shared, group, **wrapper_config)
 
         self.module = nn.Sequential(nn.Linear(8, 4), shared, expert, nn.Linear(4, 8))
+
+    def forward(self, x):
+        if self.delay_before_free_ms > 0:
+            expert = self.module[2]
+            if isinstance(expert, FullyShardedDataParallel):
+                orig_free_full_params = self.module[2]._free_full_params
+
+                def _free_full_params_with_delay(*args):
+                    torch.cuda._sleep(int(self.delay_before_free_ms * get_cycles_per_ms()))
+                    return orig_free_full_params(*args)
+
+                assert hasattr(expert, "_free_full_params")
+                with mock.patch.object(expert, "_free_full_params", _free_full_params_with_delay):
+                    return self.module(x)
+
+        return self.module(x)
 
     def run_backward(self, loss):
         loss.backward()
