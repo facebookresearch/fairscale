@@ -319,7 +319,7 @@ class ShardedDataParallel(nn.Module):
                 dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True)
             )
 
-        if blocking:
+        if blocking and work_handles:
             if self.backend != dist.Backend.NCCL:
                 _ = list(filter(lambda x: x.wait(), work_handles))
             else:
@@ -518,7 +518,7 @@ class ShardedDataParallel(nn.Module):
         # gloo does not guarantee inlining like NCCL, wait for all requests
         if self.backend != dist.Backend.NCCL:
             _ = list(filter(lambda x: x.wait(), work_handles))
-        else:
+        elif work_handles:
             work_handles[-1].wait()
 
     def _passing_sync_batchnorm_handle(self, module: nn.Module) -> None:
