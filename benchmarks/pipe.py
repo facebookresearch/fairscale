@@ -162,6 +162,8 @@ def train(model_config, model, benchmark_config, model_specs, args):
             epoch_start_time = time.time()
 
         source, target = get_batch(batch)
+        if args.max_batch and i > args.max_batch:
+            break
 
         if i > 0:
             total_tokens += source.numel()
@@ -491,6 +493,7 @@ parser.add_argument("--batch-size", type=int, default=8, help="size of a batch")
 parser.add_argument(
     "--checkpoint", default="never", choices=["always", "except_last", "never"], help="Checkpointing strategy for pipe"
 )
+parser.add_argument("--max-batch", type=int, default=4, help="Max number of batches")
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
