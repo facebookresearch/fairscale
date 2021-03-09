@@ -546,19 +546,19 @@ class OSS(Optimizer):
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
 
-        last_work_handle = None  # Work handles are consumed within this scope, no callback
+        work_handles = []  # Work handles are consumed within this scope, no callback
 
         for device in self.buckets.keys():
             for src_rank, bucket in enumerate(self.buckets[device]):
                 if bucket.numel() > 0:
-                    global_src_rank = self.get_global_rank(self.group, src_rank)
-                    last_work_handle = dist.broadcast(
-                        tensor=bucket, src=self._local_to_global_rank[src_rank], group=self.group, async_op=True
+                    work_handles.append(
+                        dist.broadcast(
+                            tensor=bucket, src=self._local_to_global_rank[src_rank], group=self.group, async_op=True
+                        )
                     )
 
         # Only check on the last handle, they're all inlined on the same CUDA stream
-        if last_work_handle:
-            last_work_handle.wait()
+        _ = list(filter(lambda x: x.wait(), work_handles))
 
     def _setup_flat_buffers(self) -> None:
         """Make all params which are on the same device and tied to the same rank views of a single buffer.
