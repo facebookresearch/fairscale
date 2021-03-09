@@ -24,7 +24,7 @@ from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
-from fairscale.nn.pipe import MultiProcessPipe
+from fairscale.nn.pipe import LazyModule, MultiProcessPipe
 from fairscale.utils.testing import dist_init, get_worker_map
 
 MPI_PORT = 29500
