@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - experimental offload module ([#432](https://github.com/facebookresearch/fairscale/issues/432))
 
 ### Fixed
-- Many FSDP fixes
+- OSS: fix a broken state dict when using non contiguous param groups
 - Several SDP fixes around performance and corner cases
+- Many FSDP fixes
 - AdaScale & SDP/FSDP test added but not officially supported
 
 ## [0.3.0] - 2021-02-22
