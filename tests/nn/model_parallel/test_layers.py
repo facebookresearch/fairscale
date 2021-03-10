@@ -537,6 +537,10 @@ def run_test_pipe(rank, world_size, filename, filename_rpc, skip_dist_init=False
     torch.distributed.destroy_process_group()
 
 
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+
 def test_affine_weight():
     spawn_for_all_world_sizes(run_test_initialize_affine_weight)
 
