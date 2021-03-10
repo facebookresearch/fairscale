@@ -146,12 +146,17 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
 
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
 
+        tp_options = {"init_method": url_rpc}
+        # Workaround for bug in torch v1.8.0. Should be fixed in v1.8.1
+        if torch_version() == (1, 8, 0):
+            tp_options["_transports"] = ["uv"]  # type: ignore
+
         rpc.init_rpc(
             f"Test{rank}",
             rank=rank,
             world_size=world_size,
             backend=rpc.BackendType.TENSORPIPE,
-            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method=url_rpc),
+            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(**tp_options),
         )
 
     else:
