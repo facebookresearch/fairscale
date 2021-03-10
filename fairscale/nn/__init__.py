@@ -3,7 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from .data_parallel import ShardedDataParallel, SlowMoDistributedDataParallel
+from .data_parallel import ShardedDataParallel
 from .misc import FlattenParamsWrapper
 from .moe import MOELayer, Top2Gate
 from .pipe import Pipe, PipeRPCWrapper

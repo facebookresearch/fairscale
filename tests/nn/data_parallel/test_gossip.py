@@ -17,7 +17,7 @@ import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.testing._internal.common_distributed import requires_nccl
 
-import fairscale.nn.data_parallel.gossip as gossip
+import fairscale.experimental.nn.data_parallel.gossip as gossip
 from fairscale.utils.testing import skip_if_single_gpu
 
 # Enfore CUBLAS reproducibility, see https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
