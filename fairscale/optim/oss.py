@@ -318,7 +318,9 @@ class OSS(Optimizer):
             if rank == self.rank:
                 if should_collect_state:
                     logging.debug("Saving self state")
-                    self._all_states.append(self.optim.state_dict())
+                    self._all_states.append(
+                        recursive_copy_to_device(self.optim.state_dict(), non_blocking=True, device=torch.device("cpu"))
+                    )
 
                 # Sync with other replicas
                 state_to_share = (
