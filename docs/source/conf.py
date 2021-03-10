@@ -24,12 +24,12 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 # -- Project information -----------------------------------------------------
 
-project = "fairscale"
-copyright = "2020, Facebook AI Research"
+project = "FairScale"
+copyright = "2020-2021, Facebook AI Research"
 author = "Facebook AI Research"
 
 # The full version, including alpha/beta/rc tags
-release = "0.0.2"
+release = "0.3.1"
 
 
 # -- General configuration ---------------------------------------------------
@@ -37,7 +37,11 @@ release = "0.0.2"
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ["sphinx.ext.autodoc", "sphinx.ext.autosectionlabel"]
+extensions = [
+    "sphinx.ext.autodoc",
+    "sphinx.ext.autosectionlabel",
+    "sphinx.ext.napoleon",  # support NumPy and Google style docstrings
+]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]

@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 import torchtext
 from torchtext.data.utils import get_tokenizer
 
-from experimental.nn.ampnet_pipe import pipe
+from fairscale.experimental.nn.ampnet_pipe import pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import LazyModule
@@ -537,7 +537,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     # bench_multi_process(args, all_at_once=True)
     if args.no_mpi or "OMPI_COMM_WORLD_RANK" not in os.environ:
-        print(f"Can't run benchmark")
+        print("Can't run benchmark")
         sys.exit(1)
 
     else:

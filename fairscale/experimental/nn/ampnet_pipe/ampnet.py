@@ -82,7 +82,7 @@ class AsyncAMPnetEventLoop:
         self.checkpoint_stop = checkpoint_stop
         self.input_device = input_device
 
-    def perform_optimizer_step(self, optimizer, num_gradients):
+    def perform_optimizer_step(self, optimizer: Any, num_gradients: Any) -> Any:
         return (optimizer is not None) and ((num_gradients % self.min_update_interval == 0) or self.weight_prediction)
 
     def async_send_inner(self, batch: Batch, index: int) -> Tuple[Batch, PipeMessage]:
@@ -160,7 +160,7 @@ class AsyncAMPnetEventLoop:
                 reqd_input = transform_logger_object.transform_input(cur_batch).to(self.input_device)
                 batch = Batch(reqd_input, count)
                 if self.weight_prediction:
-                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)  # type: ignore
+                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)
                 activations[count], message = self.async_send_inner(batch, count)
                 self.transport.send_message(message, sync=True)
                 count += 1
@@ -177,7 +177,7 @@ class AsyncAMPnetEventLoop:
                 reqd_input = transform_logger_object.transform_input(cur_batch).to(self.input_device)
                 batch = Batch(reqd_input, count)
                 if self.weight_prediction:
-                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)  # type: ignore
+                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)
                 activations[count], forward_message = self.async_send_inner(batch, count)
                 count += 1
 
@@ -186,7 +186,7 @@ class AsyncAMPnetEventLoop:
                 args: AsyncMessageBody = message.args
                 assert args.message_type is AsyncMessageType.Gradients
                 if self.weight_prediction:
-                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)  # type: ignore
+                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)
                 self.async_grad_inner(message, activations)
 
                 # Send after grad
@@ -208,7 +208,7 @@ class AsyncAMPnetEventLoop:
             args = message.args
             assert args.message_type is AsyncMessageType.Gradients
             if self.weight_prediction:
-                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)  # type: ignore
+                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)
             self.async_grad_inner(message, activations)
             num_gradients += 1
 
@@ -248,7 +248,7 @@ class AsyncAMPnetEventLoop:
                 batch = self.get_batch_from_message(message, EVENT_LOOP_GRADIENTS_QUEUE)
 
                 if self.weight_prediction:
-                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)  # type: ignore
+                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)
                 task = create_task_without_skip_trackers(
                     self.checkpoint_stop, args.microbatch_index, self.group.rank(), batch, self.partitions[0].module,
                 )
@@ -257,7 +257,7 @@ class AsyncAMPnetEventLoop:
                 task.finalize(output)
                 # one backward
                 if self.weight_prediction:
-                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)  # type: ignore
+                    optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)
 
                 output_tensor = transform_logger_object.transform_output_before_loss(output.tensor)
                 loss = criterion(output_tensor, reqd_target)
@@ -307,7 +307,7 @@ class AsyncAMPnetEventLoop:
         n_warmup = ranks[-1] - cur_rank
         for _ in range(n_warmup):
             if self.weight_prediction:
-                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)  # type: ignore
+                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)
             message = self.event_loop_trunk_forward_helper(activations)
             self.transport.send_message(message, sync=True)
             num_activations += 1
@@ -316,13 +316,13 @@ class AsyncAMPnetEventLoop:
         while num_activations < num_microbatch:
             # 1 Forward
             if self.weight_prediction:
-                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)  # type: ignore
+                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=True)
             message = self.event_loop_trunk_forward_helper(activations)
 
             num_activations += 1
             # 1 Backward
             if self.weight_prediction:
-                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)  # type: ignore
+                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)
             self.event_loop_trunk_backward_helper(activations)
             num_gradients += 1
             if self.perform_optimizer_step(optimizer, num_gradients):
@@ -336,7 +336,7 @@ class AsyncAMPnetEventLoop:
         remaining = len(activations)
         for _ in range(remaining):
             if self.weight_prediction:
-                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)  # type: ignore
+                optimizer.update_weight_using_future_predictions(cur_rank, N, forward=False)
             self.event_loop_trunk_backward_helper(activations)
             num_gradients += 1
             if self.perform_optimizer_step(optimizer, num_gradients):

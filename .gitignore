@@ -1,14 +1,17 @@
+# Editor
 *~
 *.swp
 
+# Testing
 *.pyc
 *.pyo
-
 .mypy_cache/
 *.egg-info/
 
+# Build and release
 build/
 dist/
+.eggs/
 
 # Pytest verbose output
 test-results/
@@ -27,3 +30,4 @@ ENV/
 env.bak/
 venv.bak/
 .vscode/*
+*.DS_Store

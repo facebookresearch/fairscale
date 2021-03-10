@@ -4,7 +4,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [next rel] - TBD
+## NEXT - TBD
+
+### Added
+
+### Fixed
+
+## [0.3.1] - 2021-03-09
+### Added
+- FSDP docs ([#455](https://github.com/facebookresearch/fairscale/issues/455))
+- enable\_wrap and auto\_wrap APIs ([#446](https://github.com/facebookresearch/fairscale/issues/446))
+- Added experimental.nn.OffloadModel API for training large models on a single GPU.([#432](https://github.com/facebookresearch/fairscale/issues/432))
+
+### Fixed
+- OSS: fix a broken state dict when using non contiguous param groups
+- Several SDP fixes around performance and corner cases
+- Many FSDP fixes
+- AdaScale & SDP/FSDP test added but not officially supported
+
+## [0.3.0] - 2021-02-22
+### Added
+- FullyShardedDataParallel (FSDP) ([#413](https://github.com/facebookresearch/fairscale/issues/413))
+- ShardedDDP fp16 grad reduction option ([#402](https://github.com/facebookresearch/fairscale/issues/402))
+- Expose experimental algorithms within the pip package ([#410](https://github.com/facebookresearch/fairscale/pull/410))
+
+### Fixed
+- Catch corner case when the model is too small with respect to the world size, and shards are empty ([#406](https://github.com/facebookresearch/fairscale/pull/406))
+- Memory leak in checkpoint\_wrapper ([#412](https://github.com/facebookresearch/fairscale/pull/412))
+
+## [0.1.7] - 2021-02-19
+### Fixed
+- ShardedDDP and OSS handle model trainability changes during training ([#369](https://github.com/facebookresearch/fairscale/issues/369))
+- ShardedDDP state dict load/save bug ([#386](https://github.com/facebookresearch/fairscale/issues/386))
+- ShardedDDP handle train/eval modes ([#393](https://github.com/facebookresearch/fairscale/issues/393))
+- AdaScale handling custom scaling factors ([#401](https://github.com/facebookresearch/fairscale/issues/401))
+
+### Added
+- ShardedDDP manual reduce option for checkpointing ([#389](https://github.com/facebookresearch/fairscale/issues/389))
 
 ## [0.1.6] - 2021-02-10
 ### Added

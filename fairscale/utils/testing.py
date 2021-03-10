@@ -21,8 +21,9 @@
 # mypy: disallow_untyped_decorators = False
 
 """
-Collection of some testing utilities for the Fairscale library. Please complement as you see fit, but refrain from ad-hoc test utils
-within the different feature sets and relative imports.
+Collection of some testing utilities for the Fairscale library. Please complement as
+you see fit, but refrain from ad-hoc test utils within the different feature sets and
+relative imports.
 """
 
 import contextlib
@@ -34,11 +35,12 @@ import os
 import random
 import sys
 import tempfile
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy
 import pytest
 import torch
+from torch import Tensor
 import torch.distributed as dist
 from torch.distributed import rpc
 import torch.multiprocessing as mp
@@ -47,12 +49,21 @@ import torch.nn as nn
 from fairscale.nn.model_parallel import destroy_model_parallel, initialize_model_parallel
 from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
 
+if TYPE_CHECKING:
+    Base = nn.Module[Tensor]
+else:
+    Base = nn.Module
+
 skip_if_no_cuda = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 1, reason="CUDA required"
 )
 
 skip_if_single_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 2, reason="multiple GPUs required"
+)
+
+skip_if_less_than_four_gpu = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.device_count() < 4, reason="4 GPUs or more required"
 )
 
 skip_if_py38 = pytest.mark.skipif(
@@ -64,15 +75,20 @@ skip_if_py39_no_cuda = pytest.mark.skipif(
     reason="Python3.9 wo CUDA is skipped",
 )
 
+available_devices = ["cpu"]
+if torch.cuda.is_available():
+    available_devices.append("cuda")
+
+
 _, filename_mpi = tempfile.mkstemp()
 
 
-class IdentityLayer(torch.nn.Module):
+class IdentityLayer(Base):
     def __init__(self, size: int, scale: float = 1.0) -> None:
         super(IdentityLayer, self).__init__()
         self.weight = torch.nn.Parameter(scale * torch.randn(size))
 
-    def forward(self, *_: Any, **__: Any) -> Any:
+    def forward(self, *_: Any, **__: Any) -> Tensor:
         return self.weight
 
 
@@ -95,7 +111,7 @@ def torch_version() -> Tuple[int, ...]:
 
         # Assuming that we're interested in the second usecase more than the first,
         # return the pre-release or dev numbering
-        logging.warning(f"Pytorch pre-relase version {torch.__version__} - assuming intent to test it")
+        logging.warning(f"Pytorch pre-release version {torch.__version__} - assuming intent to test it")
         numbering[2] = "0"
 
     return tuple(int(n) for n in numbering)
@@ -305,7 +321,7 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
     return prepare_test
 
 
-class _Block(nn.Module):
+class _Block(Base):
     def __init__(self, embed_dim: int, num_heads: int) -> None:
         super().__init__()
         self.ln_1 = nn.LayerNorm(embed_dim)
@@ -313,7 +329,7 @@ class _Block(nn.Module):
         self.attn = nn.MultiheadAttention(embed_dim, num_heads)  # type: ignore
         self.mlp = nn.Sequential(nn.Linear(embed_dim, embed_dim * 4), nn.GELU(), nn.Linear(embed_dim * 4, embed_dim),)
 
-    def forward(self, *inputs: Any, **kwargs: Any) -> Any:
+    def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
         x = inputs[0]
         attn_mask = torch.full((len(x), len(x)), -float("Inf"), device=x.device, dtype=x.dtype)
         attn_mask = torch.triu(attn_mask, diagonal=1)
@@ -326,7 +342,7 @@ class _Block(nn.Module):
         return x
 
 
-class GPT2(nn.Module):
+class GPT2(Base):
     """
     GPT2 pytorch implementation, for testing purposes in the image-GPT context
     Credits: https://github.com/teddykoker/image-gpt"""
@@ -353,7 +369,7 @@ class GPT2(nn.Module):
         self.head = nn.Linear(embed_dim, num_vocab, bias=False)
         self.clf_head = nn.Linear(embed_dim, num_classes)
 
-    def forward(self, x: torch.Tensor, classify=False) -> Any:  # type: ignore
+    def forward(self, x: Tensor, classify: bool = False) -> Any:  # type: ignore
         """
         Expect input as shape [sequence len, batch]
         If classify, return classification logits
@@ -412,10 +428,136 @@ def objects_are_equal(a: Any, b: Any, raise_exception: bool = False) -> bool:
             shape_dtype_device_match = a.size() == b.size() and a.dtype == b.dtype and a.device == b.device
             assert shape_dtype_device_match
             return True
-        except AssertionError as e:
+        except (AssertionError, RuntimeError) as e:
             if raise_exception:
                 raise e
             else:
                 return False
     else:
         return a == b
+
+
+def check_same_model_params(model_a: torch.nn.Module, model_b: torch.nn.Module, message: str = "") -> None:
+    for p_a, p_b in zip(model_a.parameters(), model_b.parameters()):
+        assert torch.allclose(p_a, p_b, atol=1e-3), f"Model parameters differ\n{p_a} {p_b}\n" + message
+
+    for b_a, b_b in zip(model_a.buffers(), model_b.buffers()):
+        assert torch.allclose(b_a, b_b), f"Model buffers differ {b_a} - {b_b}\n" + message
+
+
+def check_same_models_across_ranks(
+    model: torch.nn.Module, process_group: Any, params_should_be_equal: bool, check_broadcast_buffers: bool
+) -> None:
+    world_size = dist.get_world_size(process_group)
+    rank = dist.get_rank(process_group)
+    for param in model.parameters():
+        # collect the params across the rank
+        receptacle = [param.clone() for _ in range(world_size)]
+        dist.all_gather(receptacle, param, group=process_group)
+
+        if rank == 0:
+            for sync_p in receptacle[1:]:
+                assert not params_should_be_equal or torch.all(
+                    torch.eq(receptacle[0], sync_p)
+                ), f"Models differ in between ranks {receptacle[0]} - {sync_p}"
+
+    # Check that all the buffers are in sync (authoritative rank is 0, its buffer is 0)
+    if check_broadcast_buffers:
+        for buffer in model.buffers():
+            receptacle = [buffer.clone() for _ in range(world_size)]
+            dist.all_gather(receptacle, buffer, group=process_group)
+            if rank == 0:
+                for sync_b in receptacle[1:]:
+                    assert not params_should_be_equal or torch.all(
+                        torch.eq(receptacle[0], sync_b)
+                    ), f"Models differ in between ranks {receptacle[0]} - {sync_b}"
+
+
+class DeviceAndTypeCheckModule(Base):
+    """A simple module for checking Tensor devices and dtypes."""
+
+    def __init__(
+        self,
+        expected_input_dtype: Optional[torch.dtype] = None,
+        expected_input_device: Optional[torch.device] = None,
+        expected_param_dtype: Optional[torch.dtype] = None,
+        expected_param_device: Optional[torch.device] = None,
+        expected_loss_dtype: Optional[torch.dtype] = None,
+        expected_loss_device: Optional[torch.device] = None,
+        expected_buffer_dtype: Optional[torch.device] = None,
+    ):
+        super().__init__()
+        self.expected_input_dtype = expected_input_dtype
+        self.expected_input_device = expected_input_device
+        self.expected_param_dtype = expected_param_dtype
+        self.expected_param_device = expected_param_device
+        self.expected_loss_dtype = expected_loss_dtype
+        self.expected_loss_device = expected_loss_device
+        self.expected_buffer_dtype = expected_buffer_dtype
+
+        self.linear = nn.Linear(5, 5)
+        self.register_buffer("buffer", torch.rand((5,)))
+
+    def _check(
+        self,
+        key: str,
+        x: Union[torch.device, torch.dtype],
+        expected: Union[Optional[torch.device], Optional[torch.dtype]],
+    ) -> None:
+        assert expected in {None, x}, f"{key} ({x}) != expected ({expected})"
+
+    def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
+        x = input[0]
+        self._check("input.dtype", x.dtype, self.expected_input_dtype)
+        self._check("input.device", x.device, self.expected_input_device)
+
+        param = self.linear.weight
+        self._check("param.dtype", param.dtype, self.expected_param_dtype)
+        self._check("param.device", param.device, self.expected_param_device)
+        self._check("buffer.dtype", self.buffer.dtype, self.expected_buffer_dtype)  # type: ignore
+        x = x + self.buffer
+        loss = (self.linear(x) + self.buffer).sum()
+        self._check("loss.dtype", loss.dtype, self.expected_loss_dtype)
+        self._check("loss.device", loss.device, self.expected_loss_device)
+
+        return loss
+
+
+@functools.lru_cache()
+def get_cycles_per_ms() -> float:
+    """Approximate number of cycles per millisecond for torch.cuda._sleep
+
+    Copied from: github.com/pytorch/pytorch/blob/master/test/test_cuda.py
+
+    ..note::
+        This doesn't seems to return consistent cycles on desktop GPUs likely
+        due to frequency scaling.
+        >>> get_cycles_per_ms()
+        227.6441091140009
+        # new python process
+        >>> get_cycles_per_ms()
+        564.652154766248
+        # new python process
+        >>> get_cycles_per_ms()
+        245.56459442962856
+    """
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    torch.cuda._sleep(1000000)
+    end.record()
+    end.synchronize()
+    cycles_per_ms = 1000000 / start.elapsed_time(end)
+    return cycles_per_ms
+
+
+class DummyProcessGroup:
+    def __init__(self, rank: int, size: int):
+        self._rank = rank
+        self._size = size
+
+    def rank(self) -> int:
+        return self._rank
+
+    def size(self) -> int:
+        return self._size

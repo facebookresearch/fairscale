@@ -409,9 +409,9 @@ class SlowMoDistributedDataParallel(Module):
     ) -> Iterable[Tuple[torch.Tensor, torch.Tensor]]:
         """ Iterator for those fp16 parameters which have a fp32 copy """
         # Handle apex fp16 optimizer
-        if hasattr(optimizer, "_amp_stash") and hasattr(optimizer._amp_stash, "fp16_groups"):  # type: ignore
+        if hasattr(optimizer, "_amp_stash") and hasattr(optimizer._amp_stash, "fp16_groups"):
             for p_fp16_group, p_fp32_group in zip(
-                optimizer._amp_stash.fp16_groups, optimizer._amp_stash.fp32_from_fp16_groups,  # type: ignore
+                optimizer._amp_stash.fp16_groups, optimizer._amp_stash.fp32_from_fp16_groups,
             ):
                 for p_fp16, p_fp32 in zip(p_fp16_group, p_fp32_group):
                     yield p_fp16, p_fp32

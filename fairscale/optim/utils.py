@@ -3,11 +3,12 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+import collections
 import io
-from typing import Any, Callable, Dict, Optional
+from math import inf
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
-from torch._six import container_abcs
 import torch.distributed as dist
 
 
@@ -38,7 +39,7 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
 
         return values if isinstance(value, list) else tuple(values)
 
-    if isinstance(value, container_abcs.Mapping):
+    if isinstance(value, collections.abc.Mapping):
         device_val: Dict[str, Any] = {}
         for key, val in value.items():
             device_val[key] = recursive_copy_to_device(val, non_blocking=non_blocking, device=device)
@@ -89,6 +90,7 @@ class Bucket:
         self.max_size = buffer.numel()
 
         # Current status for this buffer
+        self.fill = 0
         self.params_checked_in = 0
         self.max_params_checked_in = 0  # atttribute present for convenience purposes
         self.destination = -1
@@ -101,3 +103,22 @@ class Bucket:
     def full(self) -> bool:
         """ is the bucket full ? """
         return self.max_params_checked_in == self.params_checked_in
+
+
+def calc_grad_norm(parameters: List[torch.nn.Parameter], p: float) -> torch.Tensor:
+    r"""Calculate gradient norm of an iterable of parameters.
+    Returns:
+        Total norm of the parameters (viewed as a single vector).
+    """
+    if isinstance(parameters, torch.Tensor):
+        parameters = [parameters]
+    parameters = list(filter(lambda par: par.grad is not None, parameters))
+
+    if len(parameters) == 0:
+        return torch.tensor(0.0)
+    p = float(p)
+    if p == inf:
+        local_norm = max(par.grad.detach().abs().max() for par in parameters)  # type: ignore
+    else:
+        local_norm = torch.norm(torch.stack([torch.norm(par.grad.detach(), p) for par in parameters]), p)  # type: ignore
+    return local_norm

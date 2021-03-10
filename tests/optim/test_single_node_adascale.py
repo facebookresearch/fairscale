@@ -63,7 +63,7 @@ def test_loss_accum_cpu():
 @pytest.mark.parametrize("test_case", adascale_test_data)
 def test_grad_accum(test_case, cpu):
     """Test the basic functionality on CPU/GPU with gradient accumulation without DDP"""
-    model = Linear(2, 2, bias=False)
+    model = Linear(2, 2, bias=True)
     if not cpu:
         if torch.cuda.device_count() < 1:
             pytest.skip("1 GPU is required")
@@ -375,3 +375,10 @@ def test_unhook():
     del optim
     torch.cuda.empty_cache()
     assert not find_tensor_by_shape(target_shape), "tensor should have been released"
+
+
+def test_custom_smoothing_factor():
+    """Test custom smoothing since we had a bug around it."""
+    model = Linear(1, 1)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), smoothing=0.12345, num_gradients_to_accumulate=3)
+    assert optim._smoothing == 0.12345

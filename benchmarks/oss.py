@@ -5,7 +5,6 @@ import argparse
 from enum import Enum
 import importlib
 import logging
-import shutil
 import tempfile
 import time
 from typing import Any, List, Optional, cast
@@ -24,6 +23,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torchvision.datasets import MNIST
 from torchvision.transforms import Compose, Resize, ToTensor
 
+from benchmarks.datasets.mnist import setup_cached_mnist
 from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
@@ -101,10 +101,15 @@ def validate_benchmark(measurements, final_loss, args, check_regression):
     logging.info(f"[{rank}] : Median speed: {median:.2f} +/- {mad:.2f}")
 
     if check_regression and rank == 0:
-        assert (median + 3.0 * mad) > golden_data["reference_speed"], "Speed regression detected"
-        assert max_memory < 1.05 * golden_data["reference_memory"], "Memory use regression detected"
-        assert abs(cast(float, final_loss) - golden_data["reference_loss"]) < 1e-3, "Loss regression detected"
-
+        assert median + 3.0 * mad > golden_data["reference_speed"], (
+            f"Speed regression detected: " f"{median + 3.0 * mad} vs.  {golden_data['reference_speed']}"
+        )
+        assert max_memory < 1.05 * golden_data["reference_memory"], (
+            f"Memory use regression detected: " f"{max_memory} vs. {1.05* golden_data['reference_memory']}"
+        )
+        assert abs(cast(float, final_loss) - golden_data["reference_loss"]) < 1e-3, (
+            f"Loss regression detected: " f"{final_loss} vs. {golden_data['reference_loss']}"
+        )
         logging.info("[Regression Test] VALID")
 
 
@@ -145,7 +150,8 @@ def train(
 
     if optim_type == OptimType.oss_sharded_ddp:
         optimizer = OSS(params=model.parameters(), optim=OPTIM, lr=1e-4, momentum=0.9)
-        model = ShardedDDP(model, optimizer)
+        # Single node run typically, no need for reduce buckets
+        model = ShardedDDP(model, optimizer, reduce_buffer_size=0)
     else:
         device_ids = None if args.cpu else [rank]
         model = DDP(model, device_ids=device_ids, find_unused_parameters=False)  # type: ignore
@@ -297,23 +303,7 @@ if __name__ == "__main__":
     BACKEND = "nccl" if (not args.gloo or not torch.cuda.is_available()) and not args.cpu else "gloo"
 
     # Download dataset once for all processes
-    dataset, tentatives = None, 0
-    while dataset is None and tentatives < 5:
-        try:
-            dataset = MNIST(transform=None, download=True, root=TEMPDIR)
-        except (RuntimeError, EOFError) as e:
-            if isinstance(e, RuntimeError):
-                # Corrupted data, erase and restart
-                shutil.rmtree(TEMPDIR + "/MNIST")
-
-            logging.warning("Failed loading dataset: %s " % e)
-            tentatives += 1
-
-    if dataset is None:
-        logging.error("Could not download MNIST dataset")
-        exit(-1)
-    else:
-        logging.info("Dataset downloaded")
+    setup_cached_mnist()
 
     # Benchmark the different configurations, via multiple processes
     if args.optim_type == OptimType.vanilla or args.optim_type == OptimType.everyone:

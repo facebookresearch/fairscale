@@ -433,7 +433,7 @@ def run_test_pipe(rank, world_size, filename, filename_rpc, skip_dist_init=False
     worker_map = {i: f"Test{i}" for i in range(torch.distributed.get_world_size())}
 
     if pipe_world_size == 2:
-        print(f"actually doing pipe stuff now")
+        print("actually doing pipe stuff now")
         assert torch.equal(saved_weight_0, model[0].weight.data)
         assert torch.equal(saved_weight_2, model[2].weight.data)
         pipe_model = MultiProcessPipe(
@@ -496,7 +496,7 @@ def run_test_pipe(rank, world_size, filename, filename_rpc, skip_dist_init=False
             dump_opt_params(optimizer)
             optimizer.step()
 
-            print(f"calling check_weights on master")
+            print("calling check_weights on master")
             check_weights(model, reference, "pipe", index=2)
             print(f"waiting for barrier on master, pid={os.getpid()}")
         else:
@@ -511,11 +511,11 @@ def run_test_pipe(rank, world_size, filename, filename_rpc, skip_dist_init=False
             if failed:
                 raise RuntimeError("failed somehow")
             dump_opt_params(optimizer)
-            print(f"calling step on slave")
+            print("calling step on slave")
             optimizer.step()
-            print(f"calling check_weights on slave")
+            print("calling check_weights on slave")
             check_weights(model, reference, "pipe", index=0)
-            print(f"waiting for barrier on slave")
+            print("waiting for barrier on slave")
 
         pipe_model.zero_grad()
         torch.distributed.barrier()

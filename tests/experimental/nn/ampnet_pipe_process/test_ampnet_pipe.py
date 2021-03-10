@@ -17,13 +17,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 from torch import nn
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader, Dataset
 
-from experimental.nn.ampnet_pipe.pipe import AMPnetPipe
-from fairscale.utils.testing import get_worker_map, torch_spawn
+from fairscale.experimental.nn.ampnet_pipe.pipe import AMPnetPipe
+from fairscale.utils.testing import get_worker_map, torch_spawn, torch_version
+
+# Current on CI, there appears to be a bug with torch 1.8
+# See:
+# https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1892/workflows/8f658bf4-8052-4084-bb3e-4cc2c445c8aa/jobs/10080/parallel-runs/0/steps/0-112
+# So we skip this file in that case until it is fixed.
+if torch_version() >= (1, 8, 0):
+    pytestmark = pytest.mark.skip
 
 
 class MySGD(Optimizer):
@@ -60,6 +68,27 @@ class MySGD(Optimizer):
         return loss
 
 
+class AMPnetDelegate(object):
+    def __init__(self, vocab_size=100, iteration_per_batch=1000):
+        self.iteration_per_batch = iteration_per_batch
+        self.vocab_size = vocab_size
+
+    def transform_input(self, cur_batch):
+        return cur_batch["input"]
+
+    def transform_target(self, cur_batch):
+        return cur_batch["target"]
+
+    def log_loss(self, cur_batch, loss, count):
+        pass
+
+    def transform_output_before_loss(self, output_tensor):
+        return output_tensor
+
+    def check_and_save_weights(self, num_gradients):
+        pass
+
+
 class FakeDataset(Dataset):
     def __init__(
         self, input_dim=10, output_dim=10, total_samples=100,
@@ -88,7 +117,8 @@ def async_event_loop_interleave_simple():
     fake_dataloader = DataLoader(fake_dataset, batch_size=4, shuffle=True, num_workers=0)
     loss = nn.MSELoss()
     opt = MySGD(model.parameters(), lr=0.01)
-    pipe.interleave(fake_dataloader, loss, opt, 0)
+    transform_and_log = AMPnetDelegate()
+    pipe.interleave(fake_dataloader, loss, opt, transform_and_log)
 
 
 @torch_spawn([4])
@@ -99,4 +129,5 @@ def async_event_loop_interleave_hard():
     fake_dataloader = DataLoader(fake_dataset, batch_size=4, shuffle=True, num_workers=0)
     loss = nn.MSELoss()
     opt = MySGD(model.parameters(), lr=0.01)
-    pipe.interleave(fake_dataloader, loss, opt, 0)
+    transform_and_log = AMPnetDelegate()
+    pipe.interleave(fake_dataloader, loss, opt, transform_and_log)

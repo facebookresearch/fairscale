@@ -21,11 +21,11 @@ def _batchify(data, batch_size):
     return data
 
 
-def _get_total_batch_size(benchmark_config):
-    return benchmark_config["seq_len"] * benchmark_config["batch_size"]
+def _get_total_batch_size(benchmark_config, model_specs):
+    return model_specs["seq_len"] * benchmark_config["batch_size"]
 
 
-def get_real_dataloaders(args, benchmark_config):
+def get_real_dataloaders(args, benchmark_config, model_specs):
     """Return real dataloaders for training, testing and validation."""
 
     url = "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip"
@@ -44,24 +44,24 @@ def get_real_dataloaders(args, benchmark_config):
     test_dataset = data_process(iter(io.open(test_filepath, encoding="utf8")))
 
     def batchify(data):
-        batch_size = args.batch_size
+        batch_size = benchmark_config["batch_size"]
         return _batchify(data, batch_size)
 
-    total_batch_size = _get_total_batch_size(benchmark_config)
+    total_batch_size = _get_total_batch_size(benchmark_config, model_specs)
     train_dataloader = DataLoader(train_dataset, batch_size=total_batch_size, collate_fn=batchify)
     valid_dataloader = DataLoader(valid_dataset, batch_size=total_batch_size, collate_fn=batchify)
     test_dataloader = DataLoader(test_dataset, batch_size=total_batch_size, collate_fn=batchify)
     return len(vocab.stoi), train_dataloader, valid_dataloader, test_dataloader
 
 
-def get_synthetic_dataloaders(args, benchmark_config):
+def get_synthetic_dataloaders(args, benchmark_config, model_specs):
     """Return synthetic dataloaders for training, testing and validation."""
 
     def batchify(data):
         batch_size = args.batch_size
         return _batchify(data, batch_size)
 
-    total_batch_size = total_batch_size = _get_total_batch_size(benchmark_config)
+    total_batch_size = total_batch_size = _get_total_batch_size(benchmark_config, model_specs)
     # vocab_size is 10000 and length of the real data is 2049990.
     lm_dataset = torch.randint(1, 10000, (2049990,))
 

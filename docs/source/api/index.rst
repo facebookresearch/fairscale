@@ -9,3 +9,6 @@ API Reference
    optim/grad_scaler
    nn/pipe
    nn/sharded_ddp
+   nn/fsdp
+   nn/fsdp_tips
+   nn/misc/checkpoint_activations

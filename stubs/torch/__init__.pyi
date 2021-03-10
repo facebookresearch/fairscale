@@ -28,6 +28,7 @@ from . import cuda as cuda
 from . import optim as optim
 from . import nn as nn
 from . import testing as testing
+from . import utils as utils
 
 #MODIFIED BY TORCHGPIPE
 from . import backends
@@ -84,6 +85,7 @@ class Size(tuple):
 class Storage:
     def size(self) -> _int: ...
     def element_size(self) -> _int: ...
+    def resize_(self, int) -> None: ...
 #END
 
 # See https://github.com/python/mypy/issues/4146 for why these workarounds
@@ -1913,6 +1915,7 @@ def set_default_tensor_type(type) -> None: ...  # ick, what a bad legacy API
 def set_default_dtype(d : _dtype) -> None: ...
 def manager_path() -> str: ...
 def compiled_with_cxx11_abi() -> _bool: ...
+def is_autocast_enabled() -> _bool: ...
 
 # The return value of this function depends on the value of `as_tuple`,
 # (similar to `unique`, `lu`, etc.); as such, it is not

@@ -9,10 +9,12 @@
 
 """ Test utility classes from containers.py. """
 
+from collections import OrderedDict
 import random
 
 import pytest
 import torch
+import torch.nn as nn
 
 from fairscale.utils.containers import (
     apply_to_tensors,
@@ -44,6 +46,9 @@ def test_apply_to_tensors(devices):
     data.append({"key1": get_a_tensor(), "key2": {1: get_a_tensor()}, "key3": 3})
     data.insert(0, set(["x", get_a_tensor(), get_a_tensor()]))
     data.append(([1], get_a_tensor(), (1), [get_a_tensor()], set((1, 2))))
+    od = OrderedDict()
+    od["k"] = "value"
+    data.append(od)
 
     total = 0
 
@@ -52,8 +57,10 @@ def test_apply_to_tensors(devices):
         total += t.numel()
         return t
 
-    apply_to_tensors(fn, data)
+    new_data = apply_to_tensors(fn, data)
     assert total == expected, f"{total} vs. {expected}"
+    for i, v in enumerate(data):
+        assert type(new_data[i]) == type(v), f"expected type {type(v)} got {type(new_data[i])}"
 
 
 def test_pack_unpack():
@@ -123,3 +130,20 @@ def test_split_unpack():
     with pytest.raises(AssertionError):
         # assert the content of the second arg should be sane.
         recon = unpack_non_tensors(tensors, {"is_tensor": [], "objects": []})
+
+
+def test_packed_sequence():
+    """Test to ensure RNN packed sequences are modified correctly."""
+    rnn = nn.RNN(5, 5)
+
+    x = torch.rand((5, 1, 5), dtype=torch.float)
+    seq_length = torch.tensor([4], dtype=torch.int)
+
+    def fill_fn(x):
+        x.fill_(0)
+
+    x = nn.utils.rnn.pack_padded_sequence(x, seq_length)
+    x, h = rnn(x)
+    x = apply_to_tensors(fill_fn, x)
+    x, _ = nn.utils.rnn.pad_packed_sequence(x)
+    assert torch.sum(x) == 0

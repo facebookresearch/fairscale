@@ -58,7 +58,7 @@ class AdaScale(Optimizer):
     work with it. In other words, AdaScale is intended to be a complete wrapper of an
     torch Optimizer.
 
-    Note that, AdaScale does _not_ help increase per-GPU batch size.
+    Note that, AdaScale does *not* help increase per-GPU batch size.
 
     There are several ways to integrate AdaScale with your training loop.
     We show two examples below.
@@ -122,6 +122,9 @@ class AdaScale(Optimizer):
         smoothing (float):
             Smoothing factor for moving average.
             If None, it defaults to ``max(1 - (world_size * num_gradients_to_accumulate)/1000, 0)``.
+            Note, for very high scale training, higher smoothing value might be needed,
+            esp at the begining of the training. Therefore, if your scale is close to or larger
+            than 1000, try experimenting with smoothing value > 0 if the final accuracy is poor.
         num_gradients_to_accumulate (int):
             Number of passes that we accumulate gradients locally
             between each optimizer step. This can be changed during
@@ -158,6 +161,11 @@ class AdaScale(Optimizer):
         self.param_groups = self._optimizer.param_groups
 
         self.set_num_gradients_to_accumulate(num_gradients_to_accumulate, update_smoothing=True)
+
+        # The previous function call sets smoothing to its default value.
+        # Override that here if smoothing was passed as an argument.
+        if smoothing is not None:
+            self._smoothing = smoothing
 
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
@@ -587,6 +595,13 @@ class AdaScale(Optimizer):
             # When effective world size is large enough, smoothing is probably
             # not needed, so the smoothing factor is 0.
             self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
+
+    def __getattr__(self, name: str) -> Any:
+        """Forward missing attributes to wrapped optimizer."""
+        try:
+            return super().__getattr__(name)  # defer to Optimizer logic
+        except AttributeError:
+            return getattr(self._optimizer, name)  # fallback to wrapped optim
 
 
 class AdaScaleWrapper(AdaScale):

@@ -7,12 +7,10 @@ import gc
 import logging
 import math
 import operator
-import pprint
 import time
 
 from datasets.wikitext2_data import get_real_dataloaders as get_real_wikitext2_dataloaders
 from datasets.wikitext2_data import get_synthetic_dataloaders as get_synthetic_wikitext2_dataloaders
-from golden_configs import lm_wikitext2
 from models import transformer_lm
 import numpy as np
 import torch
@@ -22,11 +20,11 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
+from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
-from fairscale.nn.model_parallel.initialize import get_data_parallel_group, get_pipeline_parallel_group
+from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import LazyModule, MultiProcessPipe
-from fairscale.optim.oss import OSS
 from fairscale.utils.testing import dist_init, get_worker_map
 
 MPI_PORT = 29500
@@ -40,19 +38,16 @@ def init_random_seed(seed: int):
     np.random.seed(seed)
 
 
-def get_model_and_optimizer(args, device, config):
+def get_model_and_optimizer(args, device, benchmark_config, model_config):
     """Return instantiated model and optimizer function."""
 
     if args.model_name == "lm":
-        model = get_lm_model(args, device, config)
+        model = get_lm_model(args, device, model_config)
 
-    lr = config["lr"]
+    lr = benchmark_config["lr"]
 
     def make_adam(params):
-        if args.ddp_zero:
-            return OSS(params=params, optim=Adam, group=get_data_parallel_group(), lr=lr)
-        else:
-            return Adam(params, lr=lr)
+        return Adam(params, lr=lr)
 
     optimizer = make_adam
     return model, optimizer
@@ -97,66 +92,6 @@ def get_tensors_by_size_bucket():
     return size_buckets
 
 
-def dump_size_buckets(size_buckets, prefix=""):
-
-    total = 0
-    for key, value in size_buckets.items():
-        this = reduce(operator.mul, key) * value
-        total += this
-        print(prefix + f"{key} : {value}, {this}")
-
-    print(prefix + f"total = {total}")
-
-
-last_size_buckets = None
-once = True
-
-
-def safe_rank():
-    try:
-        return torch.distributed.get_rank()
-    except AssertionError:
-        return 0
-
-
-def check_size_buckets():
-    global last_size_buckets
-    global once
-    size_buckets = get_tensors_by_size_bucket()
-    if last_size_buckets is not None:
-        if size_buckets != last_size_buckets:
-            print(f"difference is oustanding tensors: {safe-rank()}")
-            dump_size_buckets(last_size_buckets, "old: ")
-            dump_size_buckets(size_buckets, "new: ")
-        if once:
-            print(f"dumping buckets for: {safe_rank()}")
-            dump_size_buckets(last_size_buckets, "old: ")
-            dump_size_buckets(size_buckets, "new: ")
-            once = False
-    else:
-        print(f"size buckets none on {safe_rank()}")
-    last_size_buckets = size_buckets
-
-
-def dump_cuda_tensors():
-    print(f"dumping cuda tensors...")
-
-    for obj in gc.get_objects():
-        if not isinstance(obj, torch.Tensor):
-            continue
-        if obj.device.type == "cuda":
-            size_buckets[(*obj.size(),) + (obj.element_size(),)] += 1
-
-    print(f"outstanding cuda tensors:")
-    total = 0
-    for key, value in size_buckets.items():
-        this = reduce(operator.mul, key) * value
-        total += this
-        print(f"{key} : {value}, {this}")
-    print(f"total size = {total}")
-    pprint.pprint(torch.cuda.memory_stats())
-
-
 def log_number_of_parameters(model):
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
@@ -165,15 +100,15 @@ def log_number_of_parameters(model):
         if torch.cuda.is_available():
             total = total.cuda()
         torch.distributed.all_reduce(total, group=model.group)
-        logging.info(
+        logging.debug(
             f"training model, #params = {num_params}, group: {model.group.rank()}, grank:"
             f" {torch.distributed.get_rank()}, sizes {model.group.size()}"
         )
         torch.distributed.barrier()
         if model.group.rank() == 0:
-            logging.info(f"total #prams = {total.item()}")
+            logging.debug(f"total #prams = {total.item()}")
     else:
-        logging.info(f"training model, #params = {num_params}")
+        logging.debug(f"training model, #params = {num_params}")
 
 
 def get_device(model, index):
@@ -201,10 +136,10 @@ def get_fake_dataloader(lm_dataloader_len, args):
     return FakeDataset()
 
 
-def train(model_config, model, benchmark_config, args):
+def train(model_config, model, benchmark_config, model_specs, args):
     lm_dataloader, _, _ = model_config["data"]
     criterion = benchmark_config["criterion"]
-    vocab_size = benchmark_config["vocab_size"]
+    vocab_size = model_specs["vocab_size"]
     optimizer = model_config["optimizer"]
 
     model.train()
@@ -217,17 +152,10 @@ def train(model_config, model, benchmark_config, args):
 
     pipe_group = model.group if hasattr(model, "group") else None
 
-    if args.ddp_zero:
-        model = DDP(
-            model,
-            device_ids=[torch.cuda.current_device()],
-            process_group=get_data_parallel_group(),
-            find_unused_parameters=False,
-        )
-
     # TODO(anj-s): Avoid sending fake data to all replicas except the first and last one.
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if pipe_group and pipe_group.rank() != 0 and pipe_group.rank() != (pipe_group.size() - 1):
-        lm_dataloader, _, _ = get_synthetic_dataloaders(args, benchmark_config)
+        lm_dataloader, _, _ = get_synthetic_dataloaders(args, device, benchmark_config, model_specs)
 
     total_tokens = 0
     total_tokens_per_log_interval = 0
@@ -254,7 +182,7 @@ def train(model_config, model, benchmark_config, args):
 
         optimizer.zero_grad()
         try:
-            if (pipe_group is None or pipe_group.rank() == 0) and not args.ddp_zero:
+            if pipe_group is None or pipe_group.rank() == 0:
                 tmp = source.to(get_device(model, 0))
                 output = model(tmp)
             else:
@@ -267,21 +195,14 @@ def train(model_config, model, benchmark_config, args):
             output = output.to(target.device)
 
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
-            if args.ddp_zero:
-                ddp_group = get_data_parallel_group()
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM, group=ddp_group)
-                loss /= ddp_group.size()
             loss.backward()
             del target
         else:
-            if args.ddp_zero:
-                model.module.back_helper(output)
-            else:
-                model.back_helper(output)
+            model.back_helper(output)
 
         del output
 
-        torch.nn.utils.clip_grad_value_(model.parameters(), benchmark_config["clip_value"])
+        torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
         optimizer.step()
 
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
@@ -292,7 +213,7 @@ def train(model_config, model, benchmark_config, args):
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
                 if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
-                    print(
+                    logging.debug(
                         "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
                             i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
                         )
@@ -341,7 +262,9 @@ def get_number_of_words(data):
 
 
 def verify_peak_memory(rank, golden_config, std_dev):
-    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]))
+    logging.debug(
+        "Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"])
+    )
     current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
     golden_ref = golden_config["peak_mem_usage"][rank]
     if not current_device_usage < golden_ref * std_dev:
@@ -358,7 +281,7 @@ def verify_lm_run(wps, golden_config, args):
     if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
         # Assert that words per second is within 3 standard deviations of the average
         # of five golden runs
-        print("Throughput(wps) is {:.2f}.".format(wps))
+        logging.info("Throughput(wps) is {:.2f}.".format(wps))
         if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
             raise RuntimeError(
                 "Throughput(wps):{:.2f} is below the golden threshold of an "
@@ -374,22 +297,22 @@ def verify_lm_run(wps, golden_config, args):
             verify_peak_memory(i, golden_config, 1.1)
 
 
-def benchmark_language_model(model_config, model, benchmark_config, args):
+def benchmark_language_model(model_config, model, benchmark_config, model_specs, args):
     golden_config = get_golden_config(args.model_name, args)
     epoch = benchmark_config["epochs"]
     start_time = time.time()
     if dist.get_rank() == dist.get_world_size() - 1:
-        print("-" * 110)
-        print("| start of epoch {:1d}".format(epoch))
-        print("-" * 110)
-    wps, loss = train(model_config, model, benchmark_config, args)
+        logging.debug("-" * 110)
+        logging.debug("| start of epoch {:1d}".format(epoch))
+        logging.debug("-" * 110)
+    wps, loss = train(model_config, model, benchmark_config, model_specs, args)
     elapsed_time = time.time() - start_time
     if dist.get_rank() == dist.get_world_size() - 1:
-        print("-" * 110)
-        print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
-        print("-" * 110)
-        print("Throughput(wps) is {:.2f}.".format(wps))
-    print(
+        logging.debug("-" * 110)
+        logging.debug("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
+        logging.debug("-" * 110)
+        logging.debug("Throughput(wps) is {:.2f}.".format(wps))
+    logging.debug(
         "Peak allocated bytes on cuda:{}: {:1d}".format(
             dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]
         )
@@ -400,17 +323,6 @@ def benchmark_language_model(model_config, model, benchmark_config, args):
             verify_lm_run(wps, golden_config, args)
         else:
             raise RuntimeError("Unrecognized args.model_name " % args.model_name)
-
-
-def generate_balance_weighted(num_devices, num_layers, fraction=0.5):
-    balance = []
-    layers_assigned = 0
-    average_count = num_layers / num_devices
-    last_layers = int(average_count * fraction)
-
-    balance = generate_balance(num_devices - 1, num_layers - last_layers)
-    balance.append(last_layers)
-    return balance
 
 
 def generate_balance(num_devices, num_layers):
@@ -427,28 +339,28 @@ def generate_balance(num_devices, num_layers):
     return balance
 
 
-def get_synthetic_dataloaders(args, benchmark_config):
+def get_synthetic_dataloaders(args, device, benchmark_config, model_specs):
     """Returns dataloader for synthetic data."""
 
     if args.model_name == "lm":
-        return get_synthetic_wikitext2_dataloaders(args, benchmark_config)
+        return get_synthetic_wikitext2_dataloaders(args, benchmark_config, model_specs)
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def get_real_dataloaders(args, device, benchmark_config):
+def get_real_dataloaders(args, device, benchmark_config, model_specs):
     """Returns dataloaders for real data."""
 
     if args.model_name == "lm":
-        data = get_real_wikitext2_dataloaders(args, benchmark_config)
+        data = get_real_wikitext2_dataloaders(args, benchmark_config, model_specs)
         ntokens, train_dataloader, valid_dataloader, test_dataloader = data
-        benchmark_config["vocab_size"] = ntokens
+        model_specs["vocab_size"] = ntokens
         return train_dataloader, valid_dataloader, test_dataloader
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def create_model_config(args, benchmark_config=None):
+def create_model_config(args, benchmark_config=None, model_specs=None):
     """Return a dict with the given model, dataset and optimizer."""
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -458,8 +370,8 @@ def create_model_config(args, benchmark_config=None):
     else:
         dataloader_fn = get_real_dataloaders
 
-    data = dataloader_fn(args, device, benchmark_config)
-    model, optimizer = get_model_and_optimizer(args, device, benchmark_config)
+    data = dataloader_fn(args, device, benchmark_config, model_specs)
+    model, optimizer = get_model_and_optimizer(args, device, benchmark_config, model_specs)
     return {
         "model": model,
         "optimizer": optimizer,
@@ -472,6 +384,15 @@ def create_benchmark_config(model_name):
 
     if model_name == "lm":
         return lm_wikitext2.get_benchmark_config()
+    else:
+        raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
+
+
+def get_model_specs(model_name):
+    """Return a dict with configurations required for configuring `model_name` model."""
+
+    if model_name == "lm":
+        return lm_wikitext2.get_model_config()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
@@ -496,7 +417,8 @@ def benchmark_single_process(args):
     init_random_seed(0)
 
     benchmark_config = create_benchmark_config(args.model_name)
-    model_config = create_model_config(args, benchmark_config=benchmark_config)
+    model_specs = get_model_specs(args.model_name)
+    model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
     model = model_config["model"]
 
     balance = generate_balance(min(num_devices, 4), len(model))
@@ -505,15 +427,16 @@ def benchmark_single_process(args):
     del model_config["model"]
 
     if args.dry_run:
-        train(model_config, pipe_model, benchmark_config, args)
+        train(model_config, pipe_model, benchmark_config, model_specs, args)
     else:
-        benchmark_language_model(model_config, pipe_model, benchmark_config, args)
+        benchmark_language_model(model_config, pipe_model, benchmark_config, model_specs, args)
 
 
 def run_mp_worker(args, available_workers):
 
     benchmark_config = create_benchmark_config(args.model_name)
-    model_config = create_model_config(args, benchmark_config=benchmark_config)
+    model_specs = get_model_specs(args.model_name)
+    model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
     model = model_config["model"]
 
     balance = generate_balance(get_pipeline_parallel_group().size(), len(model))
@@ -528,14 +451,11 @@ def run_mp_worker(args, available_workers):
     )
     if torch.cuda.is_available():
         pipe_model = pipe_model.cuda()
-    if args.all_at_once and pipe_model.pipeline:
-        print(f"running all at once")
-        pipe_model.pipeline.all_at_once = True
 
     if args.dry_run:
-        train(model_config, pipe_model, benchmark_config, args)
+        train(model_config, pipe_model, benchmark_config, model_specs, args)
     else:
-        benchmark_language_model(model_config, pipe_model, benchmark_config, args)
+        benchmark_language_model(model_config, pipe_model, benchmark_config, model_specs, args)
 
 
 def run_worker(rank, world_size, args):
@@ -582,15 +502,13 @@ parser.add_argument("--multiprocess", action="store_true", help="Runs single pro
 parser.add_argument("--host", "-o", type=str, default="localhost", help="hostname")
 parser.add_argument("--chunks", type=int, default=1, help="number of microbatches per batch")
 parser.add_argument("--batch-size", type=int, default=8, help="size of a batch")
-parser.add_argument("--all-at-once", action="store_true", default=False, help="do backward pass on whole batch at once")
-parser.add_argument("--max-batch", type=int, default=4, help="Max number of batches")
-parser.add_argument("--ddp-zero", action="store_true", default=False, help="enable ddp")
-parser.add_argument(
-    "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
-)
 parser.add_argument(
     "--checkpoint", default="never", choices=["always", "except_last", "never"], help="Checkpointing strategy for pipe"
 )
+parser.add_argument(
+    "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
+)
+parser.add_argument("--max-batch", type=int, default=4, help="Max number of batches")
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
@@ -599,16 +517,16 @@ parser.add_argument(
     default="lm",
     help="Language Model(LM) used to benchmark nn.pipe.",
 )
+parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
 
 if __name__ == "__main__":
     args = parser.parse_args()
-
-    # TODO(anj-s): Remove print statements and introduce logging levels.
+    logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
 
     if not args.multiprocess:
-        print(f"Running single process benchmark with args: {args}")
+        logging.info(f"Running single process benchmark with args: {args}")
         benchmark_single_process(args)
     else:
         world_size = max(torch.cuda.device_count(), 1)
-        print(f"Running multiprocess benchmark with args: {args}")
+        logging.info(f"Running multiprocess benchmark with args: {args}")
         mp.spawn(benchmark_multiprocess, args=(world_size, args), nprocs=world_size, join=True)
