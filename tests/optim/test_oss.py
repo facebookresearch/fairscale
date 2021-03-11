@@ -443,6 +443,11 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
 
     # Load the optimizer state dict
     optimizer.load_state_dict(optimizer_state_dict)
+
+    # Check that the states are not None, but {}
+    for state in optimizer.state.values():
+        for _, _ in state.items():
+            pass
     dist.destroy_process_group()
 
 
@@ -792,7 +797,7 @@ def test_state_dict_distributed():
     )
 
 
-def run_ddp_parity(rank, world_size, backend, temp_file_name):
+def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph):
     url = "file://" + temp_file_name
     dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
 
@@ -910,16 +915,18 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             check_step()
 
     for opt in [torch.optim.Adam, torch.optim.SGD]:
-        check_optimizer_equivalence(opt, change_train_graph=False)
-        check_optimizer_equivalence(opt, change_train_graph=True)
+        check_optimizer_equivalence(opt, change_train_graph=change_train_graph)
 
     dist.destroy_process_group()
 
 
 @skip_if_no_cuda
 @skip_if_single_gpu
-def test_ddp_parity():
+@pytest.mark.parametrize("change_train_graph", [True, False])
+@pytest.mark.parametrize("backend", [dist.Backend.NCCL, dist.Backend.GLOO])
+def test_ddp_parity(change_train_graph: bool, backend: dist.Backend):
     temp_file_name = tempfile.mkstemp()[1]
     world_size = torch.cuda.device_count()
-    backend = dist.Backend.NCCL
-    mp.spawn(run_ddp_parity, args=(world_size, backend, temp_file_name), nprocs=world_size, join=True)
+    mp.spawn(
+        run_ddp_parity, args=(world_size, backend, temp_file_name, change_train_graph), nprocs=world_size, join=True
+    )

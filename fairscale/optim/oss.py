@@ -94,6 +94,7 @@ class OSS(Optimizer):
 
         self.group = group if group is not None else dist.group.WORLD
         self.world_size = dist.get_world_size(self.group)
+        self.backend = dist.get_backend(self.group)
         self.rank = dist.get_rank(self.group)
         self.global_rank = self.get_global_rank(self.group, self.rank)
         self._local_to_global_rank = [self.get_global_rank(self.group, i) for i in range(self.world_size)]
@@ -546,6 +547,12 @@ class OSS(Optimizer):
     def _broadcast_params(self) -> None:
         """Helper function to broadcast all the parameters from a given device"""
 
+        # if NCCL broadcasts will be done in an independent stream
+        # make sure that prior compute work is complete
+        if torch.device("cuda").type == self._default_device.type:
+            for device in self.per_device_params.keys():
+                torch.cuda.synchronize(device=device)
+
         work_handles = []  # Work handles are consumed within this scope, no callback
 
         for device in self.buckets.keys():
@@ -558,7 +565,10 @@ class OSS(Optimizer):
                     )
 
         # Only check on the last handle, they're all inlined on the same CUDA stream
-        _ = list(filter(lambda x: x.wait(), work_handles))
+        if work_handles and self.backend == dist.Backend.NCCL:
+            work_handles[-1].wait()
+        else:
+            _ = list(filter(lambda x: x.wait(), work_handles))
 
     def _setup_flat_buffers(self) -> None:
         """Make all params which are on the same device and tied to the same rank views of a single buffer.
