@@ -400,7 +400,7 @@ class OSS(Optimizer):
                 # Populate the sharded optimizer state on the fly,
                 # remove the params that this rank does not own
                 if self.param_to_rank[param] != self.rank:
-                    state_dict["state"][key] = None
+                    state_dict["state"][key] = {}
                 else:
                     self.optim.state[param] = recursive_copy_to_device(value, non_blocking=True, device=param.device)
             else:
