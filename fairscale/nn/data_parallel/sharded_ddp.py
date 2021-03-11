@@ -165,6 +165,9 @@ class ShardedDataParallel(nn.Module):
                 self.buffer_max_size / 2 ** 20, model_size / 2 ** 20
             )
         )
+        if dist.get_world_size(self.process_group) == 1:
+            self.buffer_max_size = 0
+            logging.info("Training is not really distributed, single rank. Deactivating buckets")
         self.use_buckets = self.buffer_max_size > 0
 
         self.buckets: Dict[torch.device, List[Bucket]] = {}
