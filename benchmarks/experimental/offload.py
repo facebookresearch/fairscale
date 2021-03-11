@@ -188,7 +188,11 @@ def train(model_config, model, benchmark_config, model_specs, args):
 
         target = target.to("cuda")
         output = output.to(target.device)
+
         loss = criterion(output.view(-1, vocab_size), target.view(-1))
+        print(f"\n\n loss at lm {loss.grad_fn}")
+        loss.retain_grad()
+        loss.requires_grad = True
         loss.backward()
 
         torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
@@ -400,10 +404,10 @@ parser.add_argument(
 parser.add_argument(
     "--model_name", default="lm", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
 )
-parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
+parser.add_argument("--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--use_fp16", action="store_true", default=False)
-parser.add_argument("--checkpoint_activation", action="store_true", default=False)
-parser.add_argument("--use_profiler", action="store_true", default=False)
+parser.add_argument("--checkpoint_activation", action="store_true", default=True)
+parser.add_argument("--use_profiler", action="store_true", default=True)
 
 
 if __name__ == "__main__":
