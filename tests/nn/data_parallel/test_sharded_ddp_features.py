@@ -21,11 +21,11 @@ from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
 from fairscale.utils.testing import (
     GPT2,
+    SGDWithPausingCompute,
     available_devices,
     check_same_models_across_ranks,
     skip_if_less_than_four_gpu,
     skip_if_no_cuda,
-    skip_if_py38,
     skip_if_single_gpu,
 )
 
@@ -46,7 +46,15 @@ class _DoubleInput(torch.nn.Module):
 
 
 def run_one_step(
-    rank, world_size, backend, device, temp_file_name, broadcast_buffers, grad_accumulation, reduce_buffer_size,
+    rank,
+    world_size,
+    backend,
+    device,
+    temp_file_name,
+    broadcast_buffers,
+    grad_accumulation,
+    reduce_buffer_size,
+    optimizer_type,
 ):
     dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
     if device == torch.device("cuda"):
@@ -62,7 +70,11 @@ def run_one_step(
 
     next(model.parameters()).requires_grad = False  # Test non-trainable parameters
 
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+    optimizer_settings = {"lr": 1e-3, "momentum": 0.99}
+    if optimizer_type == SGDWithPausingCompute:
+        optimizer_settings["rank"] = rank
+
+    optimizer = OSS(params=model.parameters(), optim=optimizer_type, **optimizer_settings)
     ddp_model = ShardedDataParallel(
         model, optimizer, broadcast_buffers=broadcast_buffers, reduce_buffer_size=reduce_buffer_size
     )
@@ -85,6 +97,11 @@ def run_one_step(
     # The models should stay the same in between the ranks
     for _ in range(5):
         _ = optimizer.step(closure=closure)
+
+        # For a sync of all the streams
+        if device.type == torch.device("cuda").type:
+            torch.cuda.synchronize(device=device)
+
         # when running on cpu/gloo the "nodes" are not really different
         same_params = device == torch.device("cpu") or not grad_accumulation
         check_same_models_across_ranks(
@@ -94,7 +111,7 @@ def run_one_step(
     dist.destroy_process_group()
 
 
-def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size):
+def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size, optimizer_type):
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(
         run_one_step,
@@ -109,21 +126,33 @@ def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, 
 @pytest.mark.parametrize("broadcast_buffers", [True, False])
 @pytest.mark.parametrize("grad_accumulation", [True, False])
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
-def test_step_gpu(broadcast_buffers, grad_accumulation, reduce_buffer_size):
+@pytest.mark.parametrize("optimizer_type", [torch.optim.SGD, SGDWithPausingCompute])
+@pytest.mark.parametrize(
+    "setup",
+    [
+        [dist.Backend.NCCL, torch.device("cuda")],
+        [dist.Backend.GLOO, torch.device("cpu")],
+        [dist.Backend.GLOO, torch.device("cuda")],
+    ],
+)
+def test_step(broadcast_buffers, grad_accumulation, reduce_buffer_size, optimizer_type, setup):
     world_size = 2
-    run_test(
-        dist.Backend.NCCL, torch.device("cuda"), world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size
-    )
+    temp_file_name = tempfile.mkstemp()[1]
 
-
-@skip_if_py38
-@pytest.mark.parametrize("broadcast_buffers", [True, False])
-@pytest.mark.parametrize("grad_accumulation", [True, False])
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
-def test_step_cpu(broadcast_buffers, grad_accumulation, reduce_buffer_size):
-    world_size = 2
-    run_test(
-        dist.Backend.GLOO, torch.device("cpu"), world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size
+    mp.spawn(
+        run_one_step,
+        args=(
+            world_size,
+            setup[0],
+            setup[1],
+            temp_file_name,
+            broadcast_buffers,
+            grad_accumulation,
+            reduce_buffer_size,
+            optimizer_type,
+        ),
+        nprocs=world_size,
+        join=True,
     )
 
 
