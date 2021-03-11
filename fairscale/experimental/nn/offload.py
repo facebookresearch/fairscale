@@ -202,6 +202,7 @@ class ActivationCheckpointing(torch.autograd.Function):
     @staticmethod
     @conditional_amp_bwd_decorator
     def backward(ctx, *grad_outputs):  # type: ignore
+        print("\n\n IN BACKWARD PASS")
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
         inputs = ctx.inputs
@@ -441,8 +442,8 @@ class OffloadModel(nn.Module):
             inp.requires_grad = True
             set_at_least_once = True
 
-        if not set_at_least_once:
-            raise RuntimeError("We need at least one of the inputs to require grads.")
+        # if not set_at_least_once:
+        #     raise RuntimeError("We need at least one of the inputs to require grads.")
 
         if self._checkpoint_activation:
             return ActivationCheckpointing.apply(*inputs, self)
