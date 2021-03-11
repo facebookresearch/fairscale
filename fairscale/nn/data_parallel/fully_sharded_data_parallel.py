@@ -34,6 +34,13 @@ class TrainingState(Enum):
     Simple enum to indicate what state FSDP is in. Used for asserting
     to make sure APIs are called in the correct state.
 
+    ..note::
+
+        BACKWARD_PRE and BACKWARD_POST states are used to ensure we
+        receives backward hooks in the correct order. It is used to catch
+        unexpected order of hooks being called (likely due to our
+        hook registration logic or autograd engine logic changes).
+
     TODO (Min): It would be nice to capture the stepping state as well.
         Maybe we can use the model.zero_grad() call, but not sure if it
         is called if optim.zero_grad() is used instead.
@@ -45,7 +52,8 @@ class TrainingState(Enum):
 
     IDLE = auto()
     FORWARD = auto()
-    BACKWARD = auto()
+    BACKWARD_PRE = auto()
+    BACKWARD_POST = auto()
     SUMMON_FULL_PARAMS = auto()
 
 
@@ -581,7 +589,7 @@ class FullyShardedDataParallel(nn.Module):
             # Set the state so that we assert when trying to go into
             # forward/backward.
             self.training_state = TrainingState.SUMMON_FULL_PARAMS
-            full_tensors = self._rebuild_full_params(full_precision=True)
+            full_tensors = self._rebuild_full_params(force_full_precision=True)
             assert full_tensors is not None
             with contextlib.ExitStack() as stack:
                 if self.flatten_parameters and self.module.is_flattened:
@@ -835,7 +843,18 @@ class FullyShardedDataParallel(nn.Module):
             pre_backward_hook_has_run[0] = True
 
             # Start of a backward pass.
-            self.training_state = TrainingState.BACKWARD
+            if self.rank == 0 and self.world_size > 1:
+                print(
+                    "XXX start bwd",
+                    self.training_state,
+                    self._is_root,
+                    self.world_size,
+                    len(unused),
+                    unused[0].shape,
+                    unused[0].sum().item(),
+                )
+            self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
+            self.training_state = TrainingState.BACKWARD_PRE
 
             # All-gather full parameters.
             if self.reshard_after_forward:
@@ -858,6 +877,8 @@ class FullyShardedDataParallel(nn.Module):
 
     def _register_post_backward_hooks(self) -> None:
         """Register backward hooks to reshard params and reduce-scatter grads."""
+        if self.rank == 0 and self.world_size > 1:
+            print("XXX", "_register_post_backward_hooks", self._is_root)
         if not torch.is_grad_enabled():
             return  # don't register grad hooks if grad isn't enabled
         if self._is_root:
@@ -868,10 +889,17 @@ class FullyShardedDataParallel(nn.Module):
         for p in self.params:
             if p.requires_grad:
                 if hasattr(p, "_shard_bwd_hook"):
+                    if self.rank == 0:
+                        print("skip adding")
+                    continue
+                    if self.rank == 0 and self.world_size > 1:
+                        print("XXX removing", p._shard_bwd_hook[0], p._shard_bwd_hook[1])
                     p._shard_bwd_hook[1].remove()  # remove existing handle
-                p_tmp = p.expand_as(p)
-                grad_acc = p_tmp.grad_fn.next_functions[0][0]
+                p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
+                grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
                 handle = grad_acc.register_hook(functools.partial(self._post_backward_hook, p))
+                if self.rank == 0 and self.world_size > 1:
+                    print("XXX adding", grad_acc, handle)
                 p._shard_bwd_hook = (grad_acc, handle)
 
     @torch.no_grad()
@@ -895,7 +923,12 @@ class FullyShardedDataParallel(nn.Module):
         alignment is created by :func:`_shard_parameters_`, which ensures that
         the local optimizer only sees the relevant parameter shard.
         """
-        self.assert_state(TrainingState.BACKWARD)
+        if self.rank == 0 and self.world_size > 1:
+            print("XXX", "_post_backward_hook", self._is_root, unused[1][0].shape, unused[1][0].sum().item())
+        # First hook callback will see PRE state. If we have multiple params,
+        # then subsequent hook callbacks will see POST state.
+        self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
+        self.training_state = TrainingState.BACKWARD_POST
         if param.grad is None:
             return
         if param.grad.requires_grad:
@@ -966,7 +999,8 @@ class FullyShardedDataParallel(nn.Module):
         """Hook to call on each param after the reduce-scatter."""
         assert torch.cuda.current_stream() == self._streams["post_backward"]
         assert param.grad is not None
-        self.assert_state(TrainingState.BACKWARD)
+        print("checking1")
+        self.assert_state(TrainingState.BACKWARD_POST)
         param.grad.data = reduced_grad
         # Cast grad to param's dtype (typically FP32). Note: we do this
         # before the move_grads_to_cpu step so that this entire hook remains
@@ -992,7 +1026,8 @@ class FullyShardedDataParallel(nn.Module):
         params.
         """
         assert self._is_root
-        self.assert_state(TrainingState.BACKWARD)
+        print("checking2")
+        self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         if not self._post_backward_callback_queued:
             self._post_backward_callback_queued = True
             Variable._execution_engine.queue_callback(self._wait_for_post_backward)
@@ -1001,7 +1036,18 @@ class FullyShardedDataParallel(nn.Module):
     def _wait_for_post_backward(self) -> None:
         """Wait for post-backward to finish. Only called on root instance."""
         assert self._is_root
-        self.assert_state(TrainingState.BACKWARD)
+        print("checking3", self.training_state, self._has_params)
+        if self._has_params:
+            self.assert_state(TrainingState.BACKWARD_POST)
+        else:
+            self.assert_state(TrainingState.BACKWARD_PRE)
+        # Remove all post_backward hooks.
+        for p in self.params:
+            if p.requires_grad:
+                if hasattr(p, "_shard_bwd_hook"):
+                    assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
+                    p._shard_bwd_hook[1].remove()
+                    delattr(p, "_shard_bwd_hook")
         if self._require_backward_grad_sync:
             # Flush any unreduced buckets in the post_backward stream.
             with torch.cuda.stream(self._streams["post_backward"]):
@@ -1014,76 +1060,97 @@ class FullyShardedDataParallel(nn.Module):
         # A backward pass is done, update root and nested FSDP's flags.
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
-                m.assert_state(TrainingState.BACKWARD)
+                print("checking4", m.training_state, m._has_params)
+                if m._has_params:
+                    m.assert_state(TrainingState.BACKWARD_POST)
+                else:
+                    m.assert_state(TrainingState.BACKWARD_PRE)
                 m.training_state = TrainingState.IDLE
 
     @torch.no_grad()
-    def _rebuild_full_params(self, full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
         Args:
-            full_precision (bool, Optional): by default params will be gathered
-                in ``compute_dtype`` (e.g., FP16), unless *full_precision* is
+            force_full_precision (bool, Optional): by default params will be gathered
+                in ``compute_dtype`` (e.g., FP16), unless *force_full_precision* is
                 ``True``, in which case they will be gathered in full precision
-                (e.g., FP32), possibly in fresh storage.
+                (e.g., FP32), possibly in fresh storage. The parameter that's being
+                rebuilt will end up in full precision as well.
 
         Returns:
             A list of tuples, where the first element is the full-sized param
             and the second element is a bool indicating if it's safe for the
             caller to free the full-sized param. This will be ``None`` if
-            ``full_precision=False`` and the full params are already gathered.
+            ``force_full_precision=False`` and the full params are already gathered.
         """
+        if self.rank == 0:
+            print("XXX _rebuild_full_params")
         output_tensors: List[Tuple[torch.Tensor, bool]] = []
 
         def update_p_data(custom_output_tensor: Optional[torch.Tensor] = None) -> None:
+            """
+            Helper function to update p.data pointer.
+
+            Args:
+                custom_output_tensor (torch.Tensor, Optional): if not None, this
+                tensor contains the data we just gathered.
+            """
             if custom_output_tensor is not None:
                 assert p._is_sharded
                 p.data = custom_output_tensor
                 output_tensors.append((p.data, True))
+                if self.rank == 0 and not self._is_root:
+                    print("update_p_data", id(p), id(p.data.storage()), id(p._full_param_padded.storage()))
             elif not p._is_sharded:
-                if self.mixed_precision and not full_precision:
+                if self.mixed_precision and not force_full_precision:
                     p.data = p._fp16_shard
                     output_tensors.append((p.data, True))
                 else:
                     # Here p.data == p._fp32_shard, so it's not safe to free.
                     output_tensors.append((p.data, False))
             else:
+                if self.rank == 0:
+                    print("use full param padded")
                 p.data = p._full_param_padded
                 output_tensors.append((p.data, True))
             # Trim any padding and reshape to match original size.
             p.data = p.data[: p._orig_size.numel()].view(p._orig_size)
 
         # Early exit if we already have full params and don't need full precision.
-        if self.has_full_params and not full_precision:
+        if self.has_full_params and not force_full_precision:
             for p in self.params:
                 update_p_data()
+            if self.rank == 0:
+                print("early exit")
             return output_tensors
 
         self.has_full_params = True
 
         with torch.cuda.stream(self._streams["all_gather"]):
-            if self.mixed_precision and not full_precision:
+            if self.mixed_precision and not force_full_precision:
                 self._cast_fp32_param_shards_to_fp16()
 
             for p in self.params:
                 if not p._is_sharded:  # e.g., when world_size == 1
                     update_p_data()
                 else:
-                    # If self.cpu_offload and full_precision, we need to cast
+                    # If self.cpu_offload and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
                     p_data = p.data.to(p._full_param_padded.device)
 
                     p_size = p._full_param_padded.size()
                     assert p_size.numel() % self.world_size == 0
-                    if not self.mixed_precision or not full_precision:
+                    if self.mixed_precision and force_full_precision:
+                        # Allocate fresh tensor in full precision since we are in
+                        # mixed precision and full precision rebuild is asked.
+                        output_tensor = p_data.new_zeros(p_size)
+                    else:
                         if p._full_param_padded.storage().size() != p_size.numel():
                             # Allocate based on full size from all shards.
                             alloc_storage_(p._full_param_padded, size=p_size)
                         output_tensor = p._full_param_padded
-                    else:
-                        # Allocate fresh tensor in full precision.
-                        output_tensor = p_data.new_zeros(p_size)
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     chunks = list(output_tensor.chunk(self.world_size))
@@ -1092,7 +1159,7 @@ class FullyShardedDataParallel(nn.Module):
                     # Set p.data = output_tensor (with padding trimmed)
                     update_p_data(output_tensor)
 
-                    if self.mixed_precision and not full_precision:
+                    if self.mixed_precision and not force_full_precision:
                         self._free_fp16_param_shard([p])
         torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
         return output_tensors
@@ -1124,6 +1191,8 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
         """Free up storage for full parameters."""
+        if self.rank == 0 and self.world_size > 1:
+            print("XXX _free_full_params", self._is_root)
         if params is None:
             params = self.params
         self.has_full_params = False
@@ -1180,11 +1249,19 @@ class FullyShardedDataParallel(nn.Module):
                 p._fp16_shard.record_stream(current_stream)
                 free_storage_(p._fp16_shard)
 
-    def assert_state(self, state: TrainingState) -> None:
+    def assert_state(self, state: Union[TrainingState, List[TrainingState]]) -> None:
         """Assert we are in the given state."""
-        assert (
-            self.training_state == state
-        ), f"expected to be in state {state} but current state is {self.training_state}"
+        # Since assert can be turned off and this error checking
+        # is really important, we use explicit error checking
+        # and raise a ValueError if needed.
+        if isinstance(state, TrainingState):
+            state = [state]
+        if self.training_state not in state:
+            msg = f"expected to be in states {state} but current state " f"is {self.training_state}"
+            # In case we are failing in the context of autograd hook, asserting
+            # may not generate useful msg. So, let's print it to be sure.
+            print(msg)
+            raise ValueError(msg)
 
 
 @torch.no_grad()
