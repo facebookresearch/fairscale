@@ -549,7 +549,7 @@ class OSS(Optimizer):
 
         # if NCCL broadcasts will be done in an independent stream
         # make sure that prior compute work is complete
-        if self.backend == dist.Backend.NCCL:
+        if torch.device("cuda").type == self._default_device.type:
             for device in self.per_device_params.keys():
                 torch.cuda.synchronize(device=device)
 

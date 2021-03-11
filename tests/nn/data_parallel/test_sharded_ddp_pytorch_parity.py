@@ -25,7 +25,6 @@ from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.utils.testing import (
     GPT2,
-    SGDWithPausingCompute,
     available_devices,
     check_same_model_params,
     check_same_models_across_ranks,
@@ -109,7 +108,7 @@ def run_ddp_parity(
         # properly reassigned when/if this changes
         next(model.parameters()).requires_grad = False
 
-        sharded_optimizer = OSS(params=model.parameters(), optim=SGDWithPausingCompute, lr=1e-4, momentum=0.99)
+        sharded_optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-4, momentum=0.99)
         sharded_ddp_model = ShardedDataParallel(
             module=model,
             sharded_optimizer=sharded_optimizer,
@@ -119,7 +118,7 @@ def run_ddp_parity(
         )
 
         ddp_model_single = copy.deepcopy(model)
-        ddp_optimizer = SGDWithPausingCompute(ddp_model_single.parameters(), lr=1e-4, momentum=0.99)
+        ddp_optimizer = torch.optim.SGD(ddp_model_single.parameters(), lr=1e-4, momentum=0.99)
         ddp_model = DDP(ddp_model_single, device_ids=[rank], broadcast_buffers=True, find_unused_parameters=True)
 
         if fp16_reduction:
@@ -216,7 +215,6 @@ def test_ddp_parity(reduce_buffer_size, grad_accumulation, change_train_graph, f
             grad_accumulation,
             change_train_graph,
             fp16_reduction,
-            stream_sync,
         ),
         nprocs=world_size,
         join=True,

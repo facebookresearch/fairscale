@@ -551,11 +551,24 @@ class DummyProcessGroup:
 
 
 class SGDWithPausingCompute(torch.optim.SGD):
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore
+        self.rank = kwargs["rank"]
+        del kwargs["rank"]
+
+        super().__init__(*args, **kwargs)
+
     def step(self, closure: Optional[Any] = None) -> Any:
         loss = super().step(closure=closure)
 
-        # Add a long cuda wait on the default compute stream
         # This is used to make sure that OSS and ShardedDDP enforce a proper stream synchronization
-        torch.cuda._sleep(1000000)
+        # - Add a long cuda wait on a compute stream, non blocking from the CPU perspective
+        with torch.cuda.stream(torch.cuda.Stream()):
+            torch.cuda._sleep(100000000)
+
+            # - optionally change the params on a per rank basis
+            with torch.no_grad():
+                for param_group in self.param_groups:
+                    for param in param_group["params"]:
+                        param *= 1.0 + self.rank / 10.0
 
         return loss
