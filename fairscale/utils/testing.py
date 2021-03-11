@@ -548,3 +548,14 @@ class DummyProcessGroup:
 
     def size(self) -> int:
         return self._size
+
+
+class SGDWithPausingCompute(torch.optim.SGD):
+    def step(self, closure: Optional[Any] = None) -> Any:
+        loss = super().step(closure=closure)
+
+        # Add a long cuda wait on the default compute stream
+        # This is used to make sure that OSS and ShardedDDP enforce a proper stream synchronization
+        torch.cuda._sleep(1000000)
+
+        return loss

@@ -23,6 +23,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
 from fairscale.utils.testing import (
+    SGDWithPausingCompute,
     check_same_model_params,
     skip_if_no_cuda,
     skip_if_py39_no_cuda,
@@ -909,7 +910,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             sharded_optimizer.load_state_dict(sharded_optim_state_dict)
             check_step()
 
-    for opt in [torch.optim.Adam, torch.optim.SGD]:
+    for opt in [torch.optim.Adam, torch.optim.SGD, SGDWithPausingCompute]:
         check_optimizer_equivalence(opt, change_train_graph=False)
         check_optimizer_equivalence(opt, change_train_graph=True)
 
