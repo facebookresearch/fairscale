@@ -443,6 +443,11 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
 
     # Load the optimizer state dict
     optimizer.load_state_dict(optimizer_state_dict)
+
+    # Check that the states are not None, but {}
+    for state in optimizer.state.values():
+        for _, _ in state.items():
+            pass
     dist.destroy_process_group()
 
 
