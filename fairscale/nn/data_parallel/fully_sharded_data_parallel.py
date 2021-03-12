@@ -886,7 +886,7 @@ class FullyShardedDataParallel(nn.Module):
         Due to multiple-pass forward, this function can be called on
         the same parameter multiple times in a single forward pass. If we register
         the hook multiple time, we end up getting called multiple times. We
-        could try to get a new hook every time and delete the previou one
+        could try to get a new hook every time and delete the previous one
         registered. However, due to *unknown reason* (I have debugged it for
         a long time!), in mixed precision mode, we get two different ``grad_acc``
         objects below during different calls of this function (in the same
