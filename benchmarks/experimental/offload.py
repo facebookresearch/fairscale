@@ -125,10 +125,10 @@ def train_seq(model_config, benchmark_config, model_specs, args):
         for batch_inputs, batch_outputs in dataloader:
             batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
             start = time.time_ns()
-            with _get_profiler_context() as prof:
+            with _get_profiler_context(args.use_profiler) as prof:
                 optimizer.zero_grad()
                 inputs = batch_inputs.reshape(-1, model_specs["inputs"] * model_specs["inputs"])
-                with _get_profiler_record_context("model_training"):
+                with _get_profiler_record_context("model_training", args.use_profiler):
                     with _get_fp16_context(use_fp16=args.use_fp16):
                         output = model(inputs)
                         print(f"output grad_fn {output.grad_fn}")
@@ -189,16 +189,18 @@ def train(model_config, model, benchmark_config, model_specs, args):
         if i > 0:
             total_tokens += source.numel()
 
-        optimizer.zero_grad()
-        output = model(source)
-        print(f"lm: output grad_fn {output.grad_fn}")
-        loss = criterion(output.view(-1, vocab_size), target.view(-1))
-        # loss = criterion(output, sample_target)
-        loss.backward()
-
-        torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
-        optimizer.step()
-        
+        with _get_profiler_context(args.use_profiler) as prof:
+            optimizer.zero_grad()
+            with _get_profiler_record_context("FW pass", args.use_profiler):
+                output = model(source)
+            with _get_profiler_record_context("Loss", args.use_profiler):
+                loss = criterion(output.view(-1, vocab_size), target.view(-1))
+            with _get_profiler_record_context("BW pass", args.use_profiler):
+                loss.backward()
+            torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
+            with _get_profiler_record_context("Opt step", args.use_profiler):
+                optimizer.step()
+            
         total_loss += loss.item()
         log_interval = 1
         total_tokens_per_log_interval += source.numel()
@@ -213,6 +215,8 @@ def train(model_config, model, benchmark_config, model_specs, args):
             total_tokens_per_log_interval = 0
             total_loss = 0
             start_time = time.time()
+        prof.export_chrome_trace("/tmp/offload_prof")
+    
     if epoch_start_time != 0:
         wps = total_tokens / (time.time() - epoch_start_time)
     else:
@@ -407,7 +411,7 @@ parser.add_argument(
 )
 parser.add_argument("--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--use_fp16", action="store_true", default=False)
-parser.add_argument("--checkpoint_activation", action="store_true", default=False)
+parser.add_argument("--checkpoint_activation", action="store_true", default=True)
 parser.add_argument("--use_profiler", action="store_true", default=False)
 
 

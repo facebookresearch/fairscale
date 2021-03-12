@@ -51,6 +51,8 @@ def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
     )
 
     for m in modules:
+        for p in m.parameters():
+            p.data = p.data.pin_memory()
         # Number of parameters in the current shard
         current_shard_params = sum(p.numel() for sm in splits[current_shard] for p in sm.parameters())
 
@@ -91,9 +93,12 @@ class ModelShard(nn.Module):
         self.offload_device = offload_device
 
         self.model_shard.to(offload_device)
-        self.cuda_stream = torch.cuda.Stream(
+        self._cpu_to_gpu_stream = torch.cuda.Stream(
             device=self.device
-        )  # needed to make sure load/offload really run in parallel with compute
+        ) 
+        self._gpu_to_cpu_stream = torch.cuda.Stream(
+            device=self.device
+        ) 
 
     def forward(self, *inputs):  # type: ignore
         return self.model_shard(*inputs) if isinstance(inputs, tuple) else self.model_shard(inputs)
@@ -112,20 +117,20 @@ class ModelShard(nn.Module):
         self.model_shard.to(device=self.device, non_blocking=True)
 
     def forward_load(self, non_blocking: bool = True) -> None:
-        with torch.cuda.stream(self.cuda_stream):
+        with torch.cuda.stream(self._cpu_to_gpu_stream):
             # Restore all the parameter buffers
             self.model_shard.to(device=self.device, non_blocking=non_blocking)
 
     def backward_load(self, non_blocking: bool = True) -> None:
-        with torch.cuda.stream(self.cuda_stream):
+        with torch.cuda.stream(self._cpu_to_gpu_stream):
             self.model_shard.to(self.device, non_blocking=non_blocking)
 
     def forward_drop(self, non_blocking: bool = True) -> None:
-        with torch.cuda.stream(self.cuda_stream):
+        with torch.cuda.stream(self._gpu_to_cpu_stream):
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
     def backward_drop(self, non_blocking: bool = True) -> None:
-        with torch.cuda.stream(self.cuda_stream):
+        with torch.cuda.stream(self._gpu_to_cpu_stream):
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
 
@@ -150,7 +155,7 @@ class ActivationCheckpointing(torch.autograd.Function):
 
     @staticmethod
     @conditional_amp_fwd_decorator  # type: ignore
-    def forward(ctx: Any, inputs: Any, model_instance: Any) -> Any:
+    def forward(ctx: Any, inputs: Any, dummy_input: Any,  model_instance: Any) -> Any:
         inputs = inputs if isinstance(inputs, tuple) else (inputs,)
 
         ctx.inputs = inputs
@@ -165,7 +170,7 @@ class ActivationCheckpointing(torch.autograd.Function):
         # Enumerate through layer shards and apply activations from the previous shard.
         for index, layer_shard in enumerate(model_instance.model_slices):
             # Bring in the current activations onto the device.
-            model_instance._activations[index] = tuple([a.cuda() for a in list(model_instance._activations[index])])
+            # model_instance._activations[index] = tuple([a for a in list(model_instance._activations[index])])
             # Bring in the current layer shard onto the device.
             layer_shard.forward_load()
             # Apply the FP and store the activations on the CPU.
@@ -189,10 +194,11 @@ class ActivationCheckpointing(torch.autograd.Function):
             if index == len(model_instance.model_slices) - 1:
                 model_instance._activations.append(output)
             else:
-                model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
+                model_instance._activations.append(tuple([a for a in list(output)]))
             # Move the layer shard back to the CPU.
             layer_shard.forward_drop()
 
+        # TODO(anj-s): Move activations to CPU after pinning memory.
         # TODO(anj-s): Check device of the result to make sure the outputs and targets match device.
         result = model_instance._activations[-1]
         for r in result:
@@ -202,7 +208,6 @@ class ActivationCheckpointing(torch.autograd.Function):
     @staticmethod
     @conditional_amp_bwd_decorator
     def backward(ctx, *grad_outputs):  # type: ignore
-        print("\n\n IN BACKWARD PASS")
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
         inputs = ctx.inputs
@@ -213,17 +218,9 @@ class ActivationCheckpointing(torch.autograd.Function):
 
         all_grads = [grad_outputs]
 
-        final_index = len(model_instance._activations) - 1
-
         for model_shard, activation in zip(
             reversed(model_instance.model_slices), reversed(model_instance._activations[:-1])
         ):
-            # Move the activation to the device.
-            activation = tuple([a.cuda() for a in list(activation)])
-            # One of the inputs to the FW pass must require grad.
-            for a in activation:
-                a.requires_grad = True
-
             # Move the model shard to the device.
             model_shard.backward_load()
             # Store the BW pass state.
@@ -233,6 +230,7 @@ class ActivationCheckpointing(torch.autograd.Function):
             activation = torch.utils.checkpoint.detach_variable(activation)
             # Get the last gradient calculation.
             final_grads = all_grads[-1]
+
             if isinstance(activation, torch.Tensor):
                 activation = (activation,)
             if isinstance(final_grads, torch.Tensor):
@@ -254,6 +252,8 @@ class ActivationCheckpointing(torch.autograd.Function):
 
                 # Since we need a grad value of a non leaf element we need to set these properties.
                 for a in chunked_activation:
+                    if a.dtype == torch.long:
+                        continue
                     a.requires_grad = True
                     a.retain_grad()
 
@@ -264,13 +264,16 @@ class ActivationCheckpointing(torch.autograd.Function):
                 # Set the states back to what it was at the start of this function.
                 torch.set_rng_state(bwd_rng_state)
                 torch.autograd.backward(outputs, chunked_grad)
-                chunked_grad_list += [a.grad for a in chunked_activation]
-
-            # Append the list of grads to the all_grads list and this should be on the CPU.
-            all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))  # type: ignore
-            # Move activation back to the CPU.
+                chunked_grad = []
+                for a in chunked_activation:
+                    if not a.grad is None:
+                        chunked_grad.append(a.grad)
+                if not None in chunked_grad:
+                    chunked_grad_list += chunked_grad
+            if chunked_grad_list:
+                # Append the list of grads to the all_grads list and this should be on the CPU.
+                all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))  # type: ignore
             # TODO(anj-s): Why does moving activations to CPU cause the .grad property to be None?
-            activation = tuple([a.cpu() for a in list(activation)])
             # Move the shard back to the CPU.
             model_shard.backward_drop()
         detached_inputs = model_instance._activations[0]
@@ -433,20 +436,9 @@ class OffloadModel(nn.Module):
         self._num_microbatches = num_microbatches
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
-        # At least one of the inputs needs to have `requires_grad` set.
-        # TODO(anj-s): Should we require users to set this or should we set it here?
-        set_at_least_once = False
-        for inp in inputs:
-            if inp.dtype == torch.long:
-                continue
-            inp.requires_grad = True
-            set_at_least_once = True
-
-        # if not set_at_least_once:
-        #     raise RuntimeError("We need at least one of the inputs to require grads.")
-
+        dummy_input = torch.tensor([], requires_grad=True)
         if self._checkpoint_activation:
-            return ActivationCheckpointing.apply(*inputs, self)
+            return ActivationCheckpointing.apply(*inputs, dummy_input, self)
 
         self._activations = []
         for index in range(-1, len(self.model_slices)):
