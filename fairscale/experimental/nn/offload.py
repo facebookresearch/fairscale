@@ -93,12 +93,8 @@ class ModelShard(nn.Module):
         self.offload_device = offload_device
 
         self.model_shard.to(offload_device)
-        self._cpu_to_gpu_stream = torch.cuda.Stream(
-            device=self.device
-        ) 
-        self._gpu_to_cpu_stream = torch.cuda.Stream(
-            device=self.device
-        ) 
+        self._cpu_to_gpu_stream = torch.cuda.Stream(device=self.device)
+        self._gpu_to_cpu_stream = torch.cuda.Stream(device=self.device)
 
     def forward(self, *inputs):  # type: ignore
         return self.model_shard(*inputs) if isinstance(inputs, tuple) else self.model_shard(inputs)
@@ -155,7 +151,7 @@ class ActivationCheckpointing(torch.autograd.Function):
 
     @staticmethod
     @conditional_amp_fwd_decorator  # type: ignore
-    def forward(ctx: Any, inputs: Any, dummy_input: Any,  model_instance: Any) -> Any:
+    def forward(ctx: Any, inputs: Any, dummy_input: Any, model_instance: Any) -> Any:
         inputs = inputs if isinstance(inputs, tuple) else (inputs,)
 
         ctx.inputs = inputs
@@ -264,12 +260,12 @@ class ActivationCheckpointing(torch.autograd.Function):
                 # Set the states back to what it was at the start of this function.
                 torch.set_rng_state(bwd_rng_state)
                 torch.autograd.backward(outputs, chunked_grad)
-                chunked_grad = []
+                intermediate_grads = []
                 for a in chunked_activation:
-                    if not a.grad is None:
-                        chunked_grad.append(a.grad)
-                if not None in chunked_grad:
-                    chunked_grad_list += chunked_grad
+                    if a.grad is not None:
+                        intermediate_grads.append(a.grad)
+                if None not in intermediate_grads:
+                    chunked_grad_list += intermediate_grads
             if chunked_grad_list:
                 # Append the list of grads to the all_grads list and this should be on the CPU.
                 all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))  # type: ignore

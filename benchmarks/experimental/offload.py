@@ -200,7 +200,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
             torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
             with _get_profiler_record_context("Opt step", args.use_profiler):
                 optimizer.step()
-            
+
         total_loss += loss.item()
         log_interval = 1
         total_tokens_per_log_interval += source.numel()
@@ -216,7 +216,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
             total_loss = 0
             start_time = time.time()
         prof.export_chrome_trace("/tmp/offload_prof")
-    
+
     if epoch_start_time != 0:
         wps = total_tokens / (time.time() - epoch_start_time)
     else:
@@ -402,14 +402,21 @@ def run_benchmark(args):
 
 
 parser = argparse.ArgumentParser(description="benchmark")
-parser.add_argument("--dry_run", default=True, action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
-    "--debug", action="store_true", default=True,  help="Print debugging statements which is more verbose than the default."
+    "--dry_run", default=True, action="store_true", help="Run a sample training run without regression testing."
+)
+parser.add_argument(
+    "--debug",
+    action="store_true",
+    default=True,
+    help="Print debugging statements which is more verbose than the default.",
 )
 parser.add_argument(
     "--model_name", default="lm", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
 )
-parser.add_argument("--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks.")
+parser.add_argument(
+    "--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks."
+)
 parser.add_argument("--use_fp16", action="store_true", default=False)
 parser.add_argument("--checkpoint_activation", action="store_true", default=True)
 parser.add_argument("--use_profiler", action="store_true", default=False)
