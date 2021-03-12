@@ -32,6 +32,7 @@ cpu_py39: &cpu_py39
 gpu: &gpu
   environment:
     CUDA_VERSION: "10.1"
+    CUDA_HOME: /usr/local/cuda-10.1
   machine:
     image: ubuntu-1604-cuda-10.1:201909-23
   resource_class: gpu.large
@@ -39,6 +40,7 @@ gpu: &gpu
 gpu_cu111: &gpu_cu111
   environment:
     CUDA_VERSION: "11.1"
+    CUDA_HOME: /usr/local/cuda-11.1
   machine:
     image: ubuntu-1604-cuda-11.1:202012-01
   resource_class: gpu.large
@@ -110,7 +112,7 @@ install_dep_180: &install_dep_180
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.8 && exit 0; fi
         # start installing
-        pip install --progress-bar off torch==1.8.0+cu111 torchvision==0.9.0+cu111 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off torch==1.8.0+cu101 torchvision==0.9.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -118,28 +120,13 @@ install_dep_180: &install_dep_180
         python -m torch.utils.collect_env
         wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
-install_repo_cpu: &install_repo_cpu
+install_repo: &install_repo
   - run:
       name: Install Repository
       command: |
         pip install .
         # Test import.
         python -c 'import sys; sys.path = sys.path[1:]; import fairscale'
-
-install_repo_gpu: &install_repo_gpu
-  - run:
-      name: Install Repository
-      command: |
-        export CUDA_HOME=/usr/local/cuda-10.1
-        pip install -e .
-
-install_repo_gpu_cu111: &install_repo_gpu_cu111
-  - run:
-      name: Install Repository
-      command: |
-        export CUDA_HOME=/usr/local/cuda-11.1
-        pip install -e .
-
 
 run_isort: &run_isort
    - run:
@@ -291,7 +278,7 @@ jobs:
             - ~/venv
           key: cache-key-cpu-py37-180-1-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo_cpu
+      - <<: *install_repo
 
       - <<: *run_isort
       - <<: *run_black
@@ -325,7 +312,7 @@ jobs:
             - ~/venv
           key: cache-key-cpu-py38-180-1-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo_cpu
+      - <<: *install_repo
 
       - <<: *run_isort
       - <<: *run_black
@@ -364,7 +351,7 @@ jobs:
             - ~/venv
           key: cache-key-cpu-py39-180-4-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo_cpu
+      - <<: *install_repo
 
       - <<: *run_isort
       - <<: *run_black
@@ -409,7 +396,7 @@ jobs:
             - ~/venv
           key: cache-key-gpu-160-101-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo_gpu
+      - <<: *install_repo
 
       - run_unittests_from_list:
           test_list_file: <<parameters.test_list_file>>
@@ -449,7 +436,7 @@ jobs:
             - ~/venv
           key: cache-key-gpu-171-110-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo_gpu_cu111
+      - <<: *install_repo
 
       - run_unittests_from_list:
           test_list_file: <<parameters.test_list_file>>
@@ -463,7 +450,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu111
+    <<: *gpu
 
     working_directory: ~/fairscale
 
@@ -473,23 +460,23 @@ jobs:
       - run: nvidia-smi
 
       # Run this to make sure we use python3 from the system.
-      - run: pyenv global 3.8.6
+      - run: pyenv global 3.7.0
 
       - <<: *setup_venv
 
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-gpu-180-111-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-gpu-180-101-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_180
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-gpu-180-111-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-gpu-180-101-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo_gpu_cu111
+      - <<: *install_repo
 
       - run_unittests_from_list:
           test_list_file: <<parameters.test_list_file>>
@@ -498,56 +485,7 @@ jobs:
           path: test-results
 
   benchmarks_1:
-    <<: *gpu_cu111
-
-    working_directory: ~/fairscale
-
-    steps:
-      - checkout
-
-      - run: nvidia-smi
-
-      # Run this to make sure we use python3 from the system.
-      - run: pyenv global 3.8.6
-
-      - <<: *setup_venv
-
-      # Cache the venv directory that contains dependencies
-      - restore_cache:
-          keys:
-            - cache-key-benchmarks-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-
-      # Cache the MNIST directory that contains benchmark data
-      - restore_cache:
-          keys:
-            - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
-
-      - <<: *install_dep_180
-
-      - save_cache:
-          paths:
-            - ~/venv
-          key: cache-key-benchmarks-180-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-
-      - <<: *install_repo_gpu_cu111
-
-      - <<: *run_pipe_benchmark
-
-      - <<: *run_mp_pipe_benchmark
-
-      - <<: *run_oss_amp
-
-      - <<: *run_oss_for_each
-
-      - <<: *run_oss_gloo
-
-      - save_cache:
-          paths:
-            - /tmp/MNIST
-          key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
-
-  benchmarks_2:
-    <<: *gpu_cu111
+    <<: *gpu
 
     working_directory: ~/fairscale
 
@@ -567,7 +505,59 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-benchmarks-180-101-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      # Cache the MNIST directory that contains benchmark data
+      - restore_cache:
+          keys:
+            - cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
+
+      - <<: *install_dep_180
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-benchmarks-180-101-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+
+      - <<: *install_repo
+
+      - <<: *run_pipe_benchmark
+
+      - <<: *run_mp_pipe_benchmark
+
+      - <<: *run_oss_amp
+
+      - <<: *run_oss_for_each
+
+      - <<: *run_oss_gloo
+
+      - save_cache:
+          paths:
+            - /tmp/MNIST
+          key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
+
+  benchmarks_2:
+    <<: *gpu
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+
+      - run: nvidia-smi
+
+      - run: pyenv uninstall -f 3.7.0
+
+      - run: pyenv install 3.7.0
+
+      - run: pyenv global 3.7.0
+
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-benchmarks-180-101-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
 
       # Cache the MNIST directory that contains benchmark data
@@ -580,9 +570,9 @@ jobs:
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-benchmarks-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-benchmarks-180-101-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_repo_gpu_cu111
+      - <<: *install_repo
 
       - <<: *run_oss_benchmark
 
