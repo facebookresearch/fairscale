@@ -843,16 +843,6 @@ class FullyShardedDataParallel(nn.Module):
             pre_backward_hook_has_run[0] = True
 
             # Start of a backward pass.
-            if self.rank == 0 and self.world_size > 1:
-                print(
-                    "XXX start bwd",
-                    self.training_state,
-                    self._is_root,
-                    self.world_size,
-                    len(unused),
-                    unused[0].shape,
-                    unused[0].sum().item(),
-                )
             self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
             self.training_state = TrainingState.BACKWARD_PRE
 
@@ -881,12 +871,12 @@ class FullyShardedDataParallel(nn.Module):
 
         This is called during forward pass. The goal is to attach a hook
         on each of the parameter's gradient generating function (``grad_acc``
-        below) so that the hook is called when all gradients for that
+        below) so that the hook is called *after* all gradients for that
         param are computed.
 
         Goals:
 
-        1. We want the hook to fire once and only once when all gradients
+        1. We want the hook to fire once and only once *after* all gradients
         are accumulated for a param.
         2. If it fires more than once, we end up incorrectly shard the grad
         multiple times. (could lead to dimension too small)
@@ -894,7 +884,7 @@ class FullyShardedDataParallel(nn.Module):
         unsharded. (could lead to dimension too large)
 
         Due to multiple-pass forward, this function can be called on
-        the same parameter multiple times in one forward pass. If we register
+        the same parameter multiple times in a single forward pass. If we register
         the hook multiple time, we end up getting called multiple times. We
         could try to get a new hook every time and delete the previou one
         registered. However, due to *unknown reason* (I have debugged it for
@@ -910,8 +900,6 @@ class FullyShardedDataParallel(nn.Module):
         backward pass. Otherwise, the next forward pass will not register
         a new hook, which is needed for a new forward pass.
         """
-        if self.rank == 0 and self.world_size > 1:
-            print("XXX", "_register_post_backward_hooks", self._is_root)
         if not torch.is_grad_enabled():
             return  # don't register grad hooks if grad isn't enabled
         if self._is_root:
@@ -922,17 +910,12 @@ class FullyShardedDataParallel(nn.Module):
         for p in self.params:
             if p.requires_grad:
                 if hasattr(p, "_shard_bwd_hook"):
-                    if self.rank == 0:
-                        print("skip adding")
                     continue
-                    if self.rank == 0 and self.world_size > 1:
-                        print("XXX removing", p._shard_bwd_hook[0], p._shard_bwd_hook[1])
-                    p._shard_bwd_hook[1].remove()  # remove existing handle
+                # Register a hook on the first call, empirically, autograd
+                # fires it at the end for this param, which makes sense.
                 p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
                 grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
                 handle = grad_acc.register_hook(functools.partial(self._post_backward_hook, p))
-                if self.rank == 0 and self.world_size > 1:
-                    print("XXX adding", grad_acc, handle)
                 p._shard_bwd_hook = (grad_acc, handle)
 
     @torch.no_grad()
@@ -956,8 +939,6 @@ class FullyShardedDataParallel(nn.Module):
         alignment is created by :func:`_shard_parameters_`, which ensures that
         the local optimizer only sees the relevant parameter shard.
         """
-        if self.rank == 0 and self.world_size > 1:
-            print("XXX", "_post_backward_hook", self._is_root, unused[1][0].shape, unused[1][0].sum().item())
         # First hook callback will see PRE state. If we have multiple params,
         # then subsequent hook callbacks will see POST state.
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
@@ -1032,7 +1013,6 @@ class FullyShardedDataParallel(nn.Module):
         """Hook to call on each param after the reduce-scatter."""
         assert torch.cuda.current_stream() == self._streams["post_backward"]
         assert param.grad is not None
-        print("checking1")
         self.assert_state(TrainingState.BACKWARD_POST)
         param.grad.data = reduced_grad
         # Cast grad to param's dtype (typically FP32). Note: we do this
@@ -1059,7 +1039,6 @@ class FullyShardedDataParallel(nn.Module):
         params.
         """
         assert self._is_root
-        print("checking2")
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         if not self._post_backward_callback_queued:
             self._post_backward_callback_queued = True
@@ -1069,13 +1048,12 @@ class FullyShardedDataParallel(nn.Module):
     def _wait_for_post_backward(self) -> None:
         """Wait for post-backward to finish. Only called on root instance."""
         assert self._is_root
-        print("checking3", self.training_state, self._has_params)
         if self._has_params:
             self.assert_state(TrainingState.BACKWARD_POST)
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
 
-        def _remove_shard_bwd_hook(fsdp_module):
+        def _remove_shard_bwd_hook(fsdp_module: FullyShardedDataParallel) -> None:
             """Helper used below on all fsdp modules."""
             for p in fsdp_module.params:
                 if p.requires_grad:
@@ -1097,7 +1075,6 @@ class FullyShardedDataParallel(nn.Module):
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)
-                print("checking4", m.training_state, m._has_params)
                 if m._has_params:
                     m.assert_state(TrainingState.BACKWARD_POST)
                 else:
@@ -1122,8 +1099,6 @@ class FullyShardedDataParallel(nn.Module):
             caller to free the full-sized param. This will be ``None`` if
             ``force_full_precision=False`` and the full params are already gathered.
         """
-        if self.rank == 0:
-            print("XXX _rebuild_full_params")
         output_tensors: List[Tuple[torch.Tensor, bool]] = []
 
         def update_p_data(custom_output_tensor: Optional[torch.Tensor] = None) -> None:
@@ -1138,8 +1113,6 @@ class FullyShardedDataParallel(nn.Module):
                 assert p._is_sharded
                 p.data = custom_output_tensor
                 output_tensors.append((p.data, True))
-                if self.rank == 0 and not self._is_root:
-                    print("update_p_data", id(p), id(p.data.storage()), id(p._full_param_padded.storage()))
             elif not p._is_sharded:
                 if self.mixed_precision and not force_full_precision:
                     p.data = p._fp16_shard
@@ -1148,8 +1121,6 @@ class FullyShardedDataParallel(nn.Module):
                     # Here p.data == p._fp32_shard, so it's not safe to free.
                     output_tensors.append((p.data, False))
             else:
-                if self.rank == 0:
-                    print("use full param padded")
                 p.data = p._full_param_padded
                 output_tensors.append((p.data, True))
             # Trim any padding and reshape to match original size.
@@ -1159,8 +1130,6 @@ class FullyShardedDataParallel(nn.Module):
         if self.has_full_params and not force_full_precision:
             for p in self.params:
                 update_p_data()
-            if self.rank == 0:
-                print("early exit")
             return output_tensors
 
         self.has_full_params = True
@@ -1228,8 +1197,6 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
         """Free up storage for full parameters."""
-        if self.rank == 0 and self.world_size > 1:
-            print("XXX _free_full_params", self._is_root)
         if params is None:
             params = self.params
         self.has_full_params = False
