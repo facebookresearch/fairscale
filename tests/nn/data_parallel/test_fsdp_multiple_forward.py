@@ -14,7 +14,7 @@ import tempfile
 import pytest
 import torch
 import torch.multiprocessing as mp
-from torch.nn import Linear, Module, Sequential
+from torch.nn import Linear, Module
 from torch.optim import SGD
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
@@ -31,7 +31,7 @@ def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
     class Model(Module):
         def __init__(self):
             super().__init__()
-            self.inner = Sequential(FSDP(Linear(4, 4), **fsdp_config),)
+            self.inner = FSDP(Linear(4, 4), **fsdp_config)
             self.outer = Linear(4, 5)
 
         def forward(self, x):
@@ -43,7 +43,7 @@ def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
     model = FSDP(Model(), **fsdp_config).cuda()
     optim = SGD(model.parameters(), lr=0.1)
 
-    for _ in range(1):
+    for _ in range(3):
         in_data = torch.rand(64, 4).cuda()
         in_data.requires_grad = True
         out = model(in_data)

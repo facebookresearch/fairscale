@@ -876,7 +876,40 @@ class FullyShardedDataParallel(nn.Module):
         return outputs
 
     def _register_post_backward_hooks(self) -> None:
-        """Register backward hooks to reshard params and reduce-scatter grads."""
+        """
+        Register backward hooks to reshard params and reduce-scatter grads.
+
+        This is called during forward pass. The goal is to attach a hook
+        on each of the parameter's gradient generating function (``grad_acc``
+        below) so that the hook is called when all gradients for that
+        param are computed.
+
+        Goals:
+
+        1. We want the hook to fire once and only once when all gradients
+        are accumulated for a param.
+        2. If it fires more than once, we end up incorrectly shard the grad
+        multiple times. (could lead to dimension too small)
+        3. If it fires once but too early or doesn't fire, we leave gradients
+        unsharded. (could lead to dimension too large)
+
+        Due to multiple-pass forward, this function can be called on
+        the same parameter multiple times in one forward pass. If we register
+        the hook multiple time, we end up getting called multiple times. We
+        could try to get a new hook every time and delete the previou one
+        registered. However, due to *unknown reason* (I have debugged it for
+        a long time!), in mixed precision mode, we get two different ``grad_acc``
+        objects below during different calls of this function (in the same
+        forward pass). If we keep the last one, the hook end up firing too
+        early. In full precision mode, we luckily get the *same* ``grad_acc``
+        object, so deleting and re-registering still ensured the hook fire
+        once after all gradients are generated.
+
+        Empirically, keep the first hook register per forward pass seems to
+        work the best. We do need to remove the hook at the end of the
+        backward pass. Otherwise, the next forward pass will not register
+        a new hook, which is needed for a new forward pass.
+        """
         if self.rank == 0 and self.world_size > 1:
             print("XXX", "_register_post_backward_hooks", self._is_root)
         if not torch.is_grad_enabled():
@@ -1041,13 +1074,16 @@ class FullyShardedDataParallel(nn.Module):
             self.assert_state(TrainingState.BACKWARD_POST)
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
-        # Remove all post_backward hooks.
-        for p in self.params:
-            if p.requires_grad:
-                if hasattr(p, "_shard_bwd_hook"):
-                    assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
-                    p._shard_bwd_hook[1].remove()
-                    delattr(p, "_shard_bwd_hook")
+
+        def _remove_shard_bwd_hook(fsdp_module):
+            """Helper used below on all fsdp modules."""
+            for p in fsdp_module.params:
+                if p.requires_grad:
+                    if hasattr(p, "_shard_bwd_hook"):
+                        assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
+                        p._shard_bwd_hook[1].remove()
+                        delattr(p, "_shard_bwd_hook")
+
         if self._require_backward_grad_sync:
             # Flush any unreduced buckets in the post_backward stream.
             with torch.cuda.stream(self._streams["post_backward"]):
@@ -1060,6 +1096,7 @@ class FullyShardedDataParallel(nn.Module):
         # A backward pass is done, update root and nested FSDP's flags.
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
+                _remove_shard_bwd_hook(m)
                 print("checking4", m.training_state, m._has_params)
                 if m._has_params:
                     m.assert_state(TrainingState.BACKWARD_POST)
