@@ -76,7 +76,7 @@ def run_ddp_parity(
     torch.manual_seed(rank)
     np.random.seed(rank)
     NUMBER_BATCHS = 5
-    BATCH_SIZE = 8
+    BATCH_SIZE = 2
 
     def check_parity(amp: bool, manual_reduction: bool):
 
@@ -173,6 +173,13 @@ def run_ddp_parity(
 
             check_same_model_params(sharded_ddp_model, ddp_model, f"Rank: {rank} - Step {i} broke")
 
+            if clip_grad_norm:
+                oss_total_norm = sharded_optimizer.clip_grad_norm(0.3, norm_type=2.0)
+                total_norm = torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), 0.3, norm_type=2.0)  # type: ignore
+                assert torch.allclose(
+                    oss_total_norm, total_norm
+                ), f"torch and fairscale should return the same grad norm\n {oss_total_norm} vs {total_norm}"
+
             # Flip the trainability of the first parameter back and forth
             if i == 0 and change_train_graph:
                 next(sharded_ddp_model.parameters()).requires_grad = not next(
@@ -180,13 +187,6 @@ def run_ddp_parity(
                 ).requires_grad
                 next(ddp_model.parameters()).requires_grad = not next(ddp_model.parameters()).requires_grad
                 check_same_model_params(sharded_ddp_model, ddp_model, f"Rank: {rank} - Trainability refresh {i} broke")
-
-                if clip_grad_norm:
-                    oss_total_norm = sharded_optimizer.clip_grad_norm(0.3, norm_type=2.0)
-                    total_norm = torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), 0.3, norm_type=2.0)  # type: ignore
-                    assert torch.allclose(
-                        oss_total_norm, total_norm
-                    ), "torch and fairscale should return the same grad norm"
 
     # Test all combinations: AMP, Accumulate, Change train graph, reduce buckets
     amp_tests = [False]
