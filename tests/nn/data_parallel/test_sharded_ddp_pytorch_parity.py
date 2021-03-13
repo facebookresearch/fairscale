@@ -59,7 +59,15 @@ class _DoubleInput(torch.nn.Module):
 
 
 def run_ddp_parity(
-    rank, world_size, backend, temp_file_name, reduce_buffer_size, grad_accumulation, change_train_graph, fp16_reduction
+    rank,
+    world_size,
+    backend,
+    temp_file_name,
+    reduce_buffer_size,
+    grad_accumulation,
+    change_train_graph,
+    fp16_reduction,
+    clip_grad_norm,
 ):
     dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
 
@@ -173,6 +181,13 @@ def run_ddp_parity(
                 next(ddp_model.parameters()).requires_grad = not next(ddp_model.parameters()).requires_grad
                 check_same_model_params(sharded_ddp_model, ddp_model, f"Rank: {rank} - Trainability refresh {i} broke")
 
+                if clip_grad_norm:
+                    oss_total_norm = sharded_optimizer.clip_grad_norm(0.3, norm_type=2.0)
+                    total_norm = torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), 0.3, norm_type=2.0)  # type: ignore
+                    assert torch.allclose(
+                        oss_total_norm, total_norm
+                    ), "torch and fairscale should return the same grad norm"
+
     # Test all combinations: AMP, Accumulate, Change train graph, reduce buckets
     amp_tests = [False]
     if hasattr(torch.cuda.amp, "autocast"):
@@ -202,7 +217,8 @@ def run_ddp_parity(
 @pytest.mark.parametrize("grad_accumulation", [True, False])
 @pytest.mark.parametrize("change_train_graph", [True, False])
 @pytest.mark.parametrize("fp16_reduction", _test_fp16_reduction)
-def test_ddp_parity(reduce_buffer_size, grad_accumulation, change_train_graph, fp16_reduction):
+@pytest.mark.parametrize("clip_grad_norm", [True, False])
+def test_ddp_parity(reduce_buffer_size, grad_accumulation, change_train_graph, fp16_reduction, clip_grad_norm):
     world_size = torch.cuda.device_count()
     backend = dist.Backend.NCCL
     mp.spawn(
@@ -215,6 +231,7 @@ def test_ddp_parity(reduce_buffer_size, grad_accumulation, change_train_graph, f
             grad_accumulation,
             change_train_graph,
             fp16_reduction,
+            clip_grad_norm,
         ),
         nprocs=world_size,
         join=True,
