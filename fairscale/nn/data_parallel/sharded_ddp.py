@@ -462,9 +462,9 @@ class ShardedDataParallel(nn.Module):
                         bucket.buffer.mul_(self.world_size_scaling)
 
                         def cleanup() -> None:
-                            # Clear the reduced buffer
+                            # Clear the reduced buffers
                             # so that they don't interfere with clip grad norm
-                            if dst_rank != self.global_rank:
+                            if bucket.destination != self.global_rank:
                                 bucket.buffer.fill_(0.0)
 
                         # Reduce the bucket
@@ -620,12 +620,18 @@ class ShardedDataParallel(nn.Module):
                     bucket.buffer.mul_(self.world_size_scaling)
 
                     # Reduce the bucket
+                    def cleanup() -> None:
+                        # Clear the reduced buffers
+                        # so that they don't interfere with clip grad norm
+                        if bucket.destination != self.global_rank:
+                            bucket.buffer.fill_(0.0)
+
                     self._work_handles.append(
                         Workhandle(
                             handle=dist.reduce(
                                 tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
                             ),
-                            callback=None,
+                            callback=cleanup,
                         )
                     )
                     bucket.sent = True
