@@ -59,9 +59,6 @@ class ShardedDataParallel(nn.Module):
             (default: True) Check whether the parameters trainability (`requires_grad`) has changed and update both ShardedDDP
             and OSS automatically if this is the case. If set to False, `refresh_trainable()` needs to be called anytime
             a parameter is frozen or unfrozen.
-        reduce_fp16 (bool):
-            cast the grads to fp16 before reducing. Not needed if the model is already fp16, but will probably improve performance
-            for multi node jobs using PyTorch AMP. The effect is similar to DDP's fp16_compress_hook_ and will also save some memory.
 
     .. _fp16_compress_hook: https://pytorch.org/docs/1.8.0/ddp_comm_hooks.html?highlight=fp16#torch.distributed.algorithms.ddp_comm_hooks.default_hooks.fp16_compress_hook
 
@@ -81,6 +78,10 @@ class ShardedDataParallel(nn.Module):
                 compatible with PytorchAMP.
 
     .. warning:
+        Pytorch AMP support is limited to two cases: either the whole model supports fp16, and the reduce buffers can be used, or some parts of the
+        model do not support fp16 and in that case reduce buffer size should be set to 0.
+
+    .. warning:
         If `auto_refresh_trainable` is set to `True` (this is the default) then any trainability change in the model graph will be handled
         automatically.
         If `auto_refresh_trainable` is set to `False`, ShardedDDP will not refresh its assumptions with respect to trainable parameters
@@ -98,7 +99,6 @@ class ShardedDataParallel(nn.Module):
         sync_models_at_startup: bool = True,
         reduce_buffer_size: int = 2 ** 23,
         auto_refresh_trainable: bool = True,
-        reduce_fp16: bool = False,
     ):
         super().__init__()
 
@@ -106,12 +106,6 @@ class ShardedDataParallel(nn.Module):
         self.sharded_optimizers = [sharded_optimizer] if not isinstance(sharded_optimizer, list) else sharded_optimizer
         self.enable_broadcast_buffers = broadcast_buffers
         self.auto_refresh_trainable = auto_refresh_trainable
-        self.reduce_fp16 = reduce_fp16
-        if reduce_buffer_size > 0 and reduce_fp16:
-            self.reduce_fp16 = False
-            logging.warning(
-                "fp16 gradient reduction is not compatible with reduction buffers, which are requested. fp16 grad reduction is deactivated."
-            )
 
         # Handle a no_sync() context which prevents the gradient synchronization,
         # accumulate in place
@@ -194,6 +188,9 @@ class ShardedDataParallel(nn.Module):
 
         # Optionally check whether the trainable parameters have changed
         if self.auto_refresh_trainable:
+            # Re-establish the buckets if:
+            # - there are new trainable or untrainable parameters
+            # - we're under an autocast context and the grads will be fp16
             trainable_mask = list(map(_trainable, self._all_params))
             if trainable_mask != self._reference_trainable_mask:
                 logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")
@@ -262,7 +259,7 @@ class ShardedDataParallel(nn.Module):
         """ If the module trainability has changed, update all the assumptions """
 
         # Make sure that this is not done while gradients are waiting to be reduced (if no_sync context for instance)
-        assert not functools.reduce(
+        assert self.should_accumulate_grads or not functools.reduce(
             lambda x, y: x or y, self._grad_to_be_reduced, False
         ), "Grads waiting to be reduced: {}".format(self._grad_to_be_reduced)
 
@@ -300,8 +297,8 @@ class ShardedDataParallel(nn.Module):
         # Trigger all the current BW hooks
         _ = map(lambda x: x(), self._grad_accs)
 
-        # Make sure that all the futures are consumed
-        self._consume_work_handles()
+        # Make sure that the buckets are flushed and all the futures are consumed
+        self._flush_reduce_calls()
 
     @torch.no_grad()
     def sync_buffers(self, blocking: bool = False) -> None:
@@ -413,22 +410,16 @@ class ShardedDataParallel(nn.Module):
                     self._grad_to_be_reduced[index] = False
                     param.grad.mul_(self.world_size_scaling)
 
-                    if self.reduce_fp16:
-                        param.grad.data = param.grad.data.half()
-
                     # Future work includes clearing up the buffer if possible
                     def cleanup() -> None:
                         if dst_rank != self.global_rank:
                             param.grad = None
-                        else:
-                            assert param.grad is not None
-                            param.grad.data = param.grad.data.to(dtype=param.dtype)
 
                     # Async reduce for this buffer, log the future
                     self._work_handles.append(
                         Workhandle(
                             handle=dist.reduce(
-                                tensor=param.grad.data,
+                                tensor=param.grad,
                                 dst=self._local_to_global_rank[dst_rank],
                                 group=self.process_group,
                                 async_op=True,

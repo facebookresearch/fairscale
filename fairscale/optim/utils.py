@@ -120,5 +120,6 @@ def calc_grad_norm(parameters: List[torch.nn.Parameter], p: float) -> torch.Tens
     if p == inf:
         local_norm = max(par.grad.detach().abs().max() for par in parameters)  # type: ignore
     else:
-        local_norm = torch.norm(torch.stack([torch.norm(par.grad.detach(), p) for par in parameters]), p)  # type: ignore
+        # Compute the norm in full precision no matter what
+        local_norm = torch.norm(torch.stack([torch.norm(par.grad.detach(), p, dtype=torch.float32) for par in parameters]), p).to(dtype=parameters[0].dtype)  # type: ignore
     return local_norm
