@@ -169,7 +169,7 @@ class ActivationCheckpointing(torch.autograd.Function):
             layer_shard.forward_load()
             # Bring in the current activations onto the device.
             model_instance._activations[index] = tuple([a.cuda() for a in list(model_instance._activations[index])])
-            
+
             # Apply the FP and store the activations on the CPU.
             inputs = model_instance._activations[index]
 
@@ -194,7 +194,6 @@ class ActivationCheckpointing(torch.autograd.Function):
                 model_instance._activations.append(output)
             else:
                 model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
-            
 
         # TODO(anj-s): Move activations to CPU after pinning memory.
         # TODO(anj-s): Check device of the result to make sure the outputs and targets match device.
