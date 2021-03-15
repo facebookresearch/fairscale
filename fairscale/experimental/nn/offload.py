@@ -165,10 +165,11 @@ class ActivationCheckpointing(torch.autograd.Function):
         model_instance._activations = [inputs]
         # Enumerate through layer shards and apply activations from the previous shard.
         for index, layer_shard in enumerate(model_instance.model_slices):
-            # Bring in the current activations onto the device.
-            # model_instance._activations[index] = tuple([a for a in list(model_instance._activations[index])])
             # Bring in the current layer shard onto the device.
             layer_shard.forward_load()
+            # Bring in the current activations onto the device.
+            model_instance._activations[index] = tuple([a.cuda() for a in list(model_instance._activations[index])])
+            
             # Apply the FP and store the activations on the CPU.
             inputs = model_instance._activations[index]
 
@@ -185,14 +186,15 @@ class ActivationCheckpointing(torch.autograd.Function):
                 output = tuple(output_list)
 
             output = output if isinstance(output, tuple) else (output,)
+            # Move the layer shard back to the CPU.
+            layer_shard.forward_drop()
             # The last instance will lose the gradient function if we move it to the CPU.
             # This is because all grad function are present on the device that ran the FW pass.
             if index == len(model_instance.model_slices) - 1:
                 model_instance._activations.append(output)
             else:
-                model_instance._activations.append(tuple([a for a in list(output)]))
-            # Move the layer shard back to the CPU.
-            layer_shard.forward_drop()
+                model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
+            
 
         # TODO(anj-s): Move activations to CPU after pinning memory.
         # TODO(anj-s): Check device of the result to make sure the outputs and targets match device.

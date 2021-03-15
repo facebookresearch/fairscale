@@ -193,10 +193,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
         if pipe_group is None or pipe_group.rank() == pipe_group.size() - 1:
             target = target.to(get_device(model, -1))
             output = output.to(target.device)
-
-            print(f"\n\n output.grad_fn {output.grad_fn}")
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
-            print(f"\n\n loss.grad_fn {loss.grad_fn}")
             loss.backward()
             del target
         else:
