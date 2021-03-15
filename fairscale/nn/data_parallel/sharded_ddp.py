@@ -78,10 +78,6 @@ class ShardedDataParallel(nn.Module):
                 compatible with PytorchAMP.
 
     .. warning:
-        Pytorch AMP support is limited to two cases: either the whole model supports fp16, and the reduce buffers can be used, or some parts of the
-        model do not support fp16 and in that case reduce buffer size should be set to 0.
-
-    .. warning:
         If `auto_refresh_trainable` is set to `True` (this is the default) then any trainability change in the model graph will be handled
         automatically.
         If `auto_refresh_trainable` is set to `False`, ShardedDDP will not refresh its assumptions with respect to trainable parameters
@@ -188,9 +184,6 @@ class ShardedDataParallel(nn.Module):
 
         # Optionally check whether the trainable parameters have changed
         if self.auto_refresh_trainable:
-            # Re-establish the buckets if:
-            # - there are new trainable or untrainable parameters
-            # - we're under an autocast context and the grads will be fp16
             trainable_mask = list(map(_trainable, self._all_params))
             if trainable_mask != self._reference_trainable_mask:
                 logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")

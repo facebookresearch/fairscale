@@ -183,7 +183,7 @@ def run_ddp_parity(
                 check_same_model_params(sharded_ddp_model, ddp_model, f"Rank: {rank} - Trainability refresh {i} broke")
 
     # Test all combinations: AMP, Accumulate, Change train graph, reduce buckets
-    manual_reductions = [False]  # [True, False] if not grad_accumulation and not change_train_graph else [False]
+    manual_reductions = [True, False] if not grad_accumulation and not change_train_graph else [False]
     for manual_reduction in manual_reductions:
         print(
             f"{rank}: Checking configuration: accumulate {grad_accumulation}"
