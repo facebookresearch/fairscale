@@ -152,7 +152,6 @@ def train_seq(model_config, benchmark_config, model_specs, args):
 def train(model_config, model, benchmark_config, model_specs, args):
     device = torch.device("cuda")
     torch.cuda.set_device(0)
-    torch.manual_seed(5)
 
     lm_dataloader, _, _ = model_config["data"]
     criterion = benchmark_config["criterion"]

@@ -28,7 +28,7 @@ class Offload_Transformer:
             "batch_size": 8,
             "criterion": nn.CrossEntropyLoss(),
             "checkpoint_activation": True,
-            "num_microbatches": 4,
+            "num_microbatches": 1,
             "slices": 3,
         }
 
