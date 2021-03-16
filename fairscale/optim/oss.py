@@ -220,6 +220,12 @@ class OSS(Optimizer):
         # Sync oss param_groups attributes in case they've been updated by a scheduler.
         OSS._sync_param_groups(self.param_groups, self.optim.param_groups)
 
+        # Catch a possible change of devices in between OSS construction and step()
+        if self._default_device.type != self.param_groups[0]["params"][0].device.type:
+            logging.info("OSS detected that the parameter changed devices, re-allocating buffers")
+            self._clear_cache()
+            self.refresh_trainable()
+
         # Run the optimizer step on this shard only:
         if closure is not None:
             loss = self.optim.step(closure=closure, **kwargs)  # type: ignore
@@ -591,3 +597,9 @@ class OSS(Optimizer):
                 else:
                     # This rank has an empty shard, that's fine
                     self.buckets[device].append(torch.zeros(0, device=device))
+
+        # Clear the buffer keys which are not in use anymore (could be that the devices changed)
+        devices_in_use = list(self.per_device_params.keys())
+        devices_to_pop = list(filter(lambda x: x not in devices_in_use, self.buckets.keys()))
+        for d in devices_to_pop:
+            self.buckets.pop(d)

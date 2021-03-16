@@ -154,6 +154,18 @@ class TestSingleRank(unittest.TestCase):
         assert kwarg == [5]
         assert x == torch.tensor([0.9], device=DEVICE)
 
+    @skip_if_no_cuda
+    def test_device_change(self):
+        x = torch.nn.Linear(1, 1).to("cpu")
+        o = optim.OSS(x.parameters(), torch.optim.SGD, lr=0.1)
+
+        # Move the model to device after OSS was constructed
+        x.to(DEVICE)
+        x(torch.zeros((1), device=DEVICE)).backward()
+
+        # Check that OSS detects that the device changed
+        o.step()
+
     def test_step_with_extra_inner_key(self):
         class SGDWithNewKey(torch.optim.SGD):
             # Dummy optimizer which adds a new key to the param groups
