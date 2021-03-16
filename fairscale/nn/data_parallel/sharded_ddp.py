@@ -409,7 +409,8 @@ class ShardedDataParallel(nn.Module):
                         if dst_rank != self.global_rank:
                             param.grad = None
 
-                    torch.cuda.synchronize()
+                    if self.backend == dist.Backend.NCCL:
+                        torch.cuda.synchronize()
 
                     # Async reduce for this buffer, log the future
                     self._work_handles.append(
@@ -447,7 +448,9 @@ class ShardedDataParallel(nn.Module):
                     if bucket.full():
                         # Normalize the bucket in one go
                         bucket.buffer.mul_(self.world_size_scaling)
-                        torch.cuda.synchronize()
+
+                        if self.backend == dist.Backend.NCCL:
+                            torch.cuda.synchronize()
 
                         def cleanup() -> None:
                             # Clear the reduced buffers
@@ -619,7 +622,9 @@ class ShardedDataParallel(nn.Module):
                         if bucket.destination != self.global_rank:
                             bucket.buffer.fill_(0.0)
 
-                    torch.cuda.synchronize()
+                    if self.backend == dist.Backend.NCCL:
+                        torch.cuda.synchronize()
+
                     self._work_handles.append(
                         Workhandle(
                             handle=dist.reduce(

@@ -175,7 +175,7 @@ def run_ddp_parity(
                     oss_total_norm = sharded_optimizer.clip_grad_norm(0.3, norm_type=2.0)
                     print(rank, total_norm, oss_total_norm, flush=True)
                     assert torch.allclose(
-                        oss_total_norm, total_norm, atol=1e-3 if amp else 1e-8
+                        oss_total_norm, total_norm, atol=1e-2 if amp else 1e-8
                     ), f"torch and fairscale should return the same grad norm\n {oss_total_norm} vs {total_norm}"
                 else:
                     print(rank, "NaN grad norm in DDP", flush=True)
