@@ -30,3 +30,4 @@ tests/nn/pipe/test_phony.py
 tests/nn/pipe/test_deferred_batch_norm.py
 tests/nn/pipe/test_dependency.py
 tests/nn/pipe/test_stream.py
+tests/experimental/nn/test_multiprocess_pipe.py
