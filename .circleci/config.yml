@@ -269,14 +269,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py37-180-1-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-cpu-py37-180-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_171
+      - <<: *install_dep_180
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py37-180-1-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-py37-180-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -304,13 +304,13 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py38-180-1-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-      - <<: *install_dep_171
+            - cache-key-cpu-py38-180-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+      - <<: *install_dep_180
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py38-180-1-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-py38-180-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
