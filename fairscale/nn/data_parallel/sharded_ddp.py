@@ -163,6 +163,7 @@ class ShardedDataParallel(nn.Module):
 
         # - setup backward hooks which will be called by Torch's autograd in due time
         self._grad_accs: List[Callable] = []
+        self._grad_hooks: List[Any] = []
 
         # passing a handle to torch.nn.SyncBatchNorm layer
         self._passing_sync_batchnorm_handle(self.module)
@@ -408,6 +409,8 @@ class ShardedDataParallel(nn.Module):
                         if dst_rank != self.global_rank:
                             param.grad = None
 
+                    torch.cuda.synchronize()
+
                     # Async reduce for this buffer, log the future
                     self._work_handles.append(
                         Workhandle(
@@ -444,6 +447,7 @@ class ShardedDataParallel(nn.Module):
                     if bucket.full():
                         # Normalize the bucket in one go
                         bucket.buffer.mul_(self.world_size_scaling)
+                        torch.cuda.synchronize()
 
                         def cleanup() -> None:
                             # Clear the reduced buffers
@@ -475,6 +479,10 @@ class ShardedDataParallel(nn.Module):
         Attach a reduce function to each grad-requiring parameter.
         This makes the gradient reduction automatic whenever there's a backward pass
         """
+
+        # Empty the possible previous hooks
+        while len(self._grad_hooks) > 0:
+            self._grad_hooks.pop().remove()
 
         # Go through the parameters, attach the hook
         self._grad_accs = []
@@ -611,6 +619,7 @@ class ShardedDataParallel(nn.Module):
                         if bucket.destination != self.global_rank:
                             bucket.buffer.fill_(0.0)
 
+                    torch.cuda.synchronize()
                     self._work_handles.append(
                         Workhandle(
                             handle=dist.reduce(

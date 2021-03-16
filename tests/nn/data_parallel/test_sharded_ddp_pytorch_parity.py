@@ -87,13 +87,16 @@ def run_ddp_parity(
             model.zero_grad()
 
             def step():
+                inputs = copy.deepcopy(input_tensor)
                 if scaler is not None:
                     with torch.cuda.amp.autocast():
-                        loss = model(input_tensor).abs().sum()
+                        loss = model(inputs).abs().mean()
                         scaler.scale(loss).backward()
                 else:
-                    loss = model(input_tensor).abs().sum()
+                    loss = model(inputs).abs().mean()
                     loss.backward()
+
+                del inputs
 
             with model.no_sync() if should_accumulate else suppress():
                 for _ in range(accumulate_steps - 1):
@@ -170,9 +173,12 @@ def run_ddp_parity(
                 total_norm = torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), 0.3, norm_type=2.0)  # type: ignore
                 if not torch.isnan(total_norm):
                     oss_total_norm = sharded_optimizer.clip_grad_norm(0.3, norm_type=2.0)
+                    print(rank, total_norm, oss_total_norm, flush=True)
                     assert torch.allclose(
-                        oss_total_norm, total_norm, atol=1e-2 if amp else 1e-8
+                        oss_total_norm, total_norm, atol=1e-3 if amp else 1e-8
                     ), f"torch and fairscale should return the same grad norm\n {oss_total_norm} vs {total_norm}"
+                else:
+                    print(rank, "NaN grad norm in DDP", flush=True)
 
             # Flip the trainability of the first parameter back and forth
             if i == 0 and change_train_graph:
