@@ -8,6 +8,7 @@ import copy
 from enum import Enum, auto
 import functools
 from math import inf
+import traceback
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
@@ -1264,7 +1265,10 @@ class FullyShardedDataParallel(nn.Module):
             msg = f"expected to be in states {state} but current state " f"is {self.training_state}"
             # In case we are failing in the context of autograd hook, asserting
             # may not generate useful msg. So, let's print it to be sure.
-            print(msg)
+            if self.rank == 0:
+                print(self)
+                print(msg)
+                traceback.print_stack()
             raise ValueError(msg)
 
 
