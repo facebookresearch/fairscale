@@ -160,6 +160,11 @@ class ShardedDataParallel(nn.Module):
         # - setup buckets and tensor views
         model_size = sum([p.numel() for p in self.module.parameters()])
         self.buffer_max_size = min(reduce_buffer_size, model_size)
+
+        if dist.get_world_size(self.process_group) == 1:
+            self.buffer_max_size = 0
+            logging.info("Training is not really distributed, single rank. Deactivating buckets")
+
         logging.info(
             "ShardedDDP bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
                 self.buffer_max_size / 2 ** 20, model_size / 2 ** 20

@@ -408,9 +408,9 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
 
 @skip_if_no_cuda
 @skip_if_single_gpu
-def test_gpt2():
-    # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
-    world_size = 2
+@pytest.mark.parametrize("world_size", [1, 2])
+def test_gpt2(world_size):
+    # Check that having trainable unused params is fine
     backend = "gloo"
     temp_file_name = tempfile.mkstemp()[1]
     device = "cuda"
