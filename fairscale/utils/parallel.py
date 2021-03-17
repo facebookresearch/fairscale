@@ -45,7 +45,7 @@ def validate_process_group(device: torch.device, process_group: ProcessGroup) ->
         )
 
 
-def enable_pytorch_sync_bn(module: torch.nn.Module):
+def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
     """Call _specify_ddp_gpu_num for all pytorch SyncBN layers so that it
        is happily running even without DDP. E.g. this is used by FSDP.
     """
@@ -54,4 +54,4 @@ def enable_pytorch_sync_bn(module: torch.nn.Module):
             # Number "1" below meant to be the number of GPUs for each DDP worker.
             # (i.e. "device_ids" in DDP. As far as I see, the value is not actually
             # used, but this call needs to be made to avoid an exception.
-            layer._specify_ddp_gpu_num(1)
+            layer._specify_ddp_gpu_num(1)  # type: ignore

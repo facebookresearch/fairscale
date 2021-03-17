@@ -15,7 +15,7 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from torch.nn import Conv2d, BatchNorm2d, Module, SyncBatchNorm
+from torch.nn import BatchNorm2d, Conv2d, Module, SyncBatchNorm
 from torch.optim import SGD
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
@@ -33,10 +33,15 @@ def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
         def __init__(self):
             super().__init__()
             # TODO (Min): for now, we just test pytorch sync_bn here.
-            self.conv = Conv2d(2, 2, (1,1))
+            self.conv = Conv2d(2, 2, (1, 1))
             # Put BN in is own FP32, unflatten, single GPU group.
             # Note, SyncBN can still have a group size > 1.
-            self.bn = FSDP(BatchNorm2d(2), mixed_precision=False, process_group=dist.new_group(ranks=[rank]), flatten_parameters=False)
+            self.bn = FSDP(
+                BatchNorm2d(2),
+                mixed_precision=False,
+                process_group=dist.new_group(ranks=[rank]),
+                flatten_parameters=False,
+            )
 
         def forward(self, x):
             x = self.conv(x)
