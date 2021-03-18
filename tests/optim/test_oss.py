@@ -535,17 +535,10 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
     dist.destroy_process_group()
 
 
-# TODO(blefaudeux) Fix for torch v1.8.0
-@pytest.mark.skipif(torch.__version__.split("+")[0].split(".") == ["1", "8", "0"], reason="disabled for torch 1.8.0")
 @skip_if_single_gpu
 def test_reproducibility():
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
-
-    if torch.cuda.is_available() and torch.cuda.device_count() < world_size:
-        # Bail out if not enough devices
-        return
-
     reference_rank = 0
 
     mp.spawn(
