@@ -536,10 +536,10 @@ class AdaScale(Optimizer):
             self._state[name] = np.append(self._state[name], val)
             assert self._state[name].shape == (len(self._optimizer.param_groups),)
 
-    def zero_grad(self, set_to_none: Optional[bool] = False) -> None:
+    def zero_grad(self) -> None:
         """Proxy function to optimizer, because some training loops need this."""
         assert self._local_grad_sqr is None, "Don't zero_grad in backward"
-        return self._optimizer.zero_grad(set_to_none)
+        return self._optimizer.zero_grad()
 
     def state_dict(self) -> Dict:
         """ Proxy function to optimizer, checkpointing needs this.
