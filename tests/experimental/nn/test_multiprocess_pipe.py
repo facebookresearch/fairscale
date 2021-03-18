@@ -35,18 +35,29 @@ pytestmark = pytest.mark.skipif(torch_version() < (1, 8, 0), reason="require tor
 
 
 def rpc_worker(rank, world_size, init_file, func, *args):
-    # Workaround for https://github.com/pytorch/pytorch/issues/53844
-    if torch_version() == (1, 8, 0):
-        options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file, _transports=["ibv", "uv"])
+    # Workaround for https://github.com/pytorch/pytorch/issues/54266
+    if not torch.cuda.is_available():
+        options = rpc.ProcessGroupRpcBackendOptions(init_method="file://" + init_file)
+        rpc.init_rpc(
+            "worker" + str(rank),
+            rank=rank,
+            world_size=world_size,
+            backend=rpc.BackendType.PROCESS_GROUP,
+            rpc_backend_options=options,
+        )
     else:
-        options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
-    rpc.init_rpc(
-        "worker" + str(rank),
-        rank=rank,
-        world_size=world_size,
-        backend=rpc.BackendType.TENSORPIPE,
-        rpc_backend_options=options,
-    )
+        # Workaround for https://github.com/pytorch/pytorch/issues/53844
+        if torch_version() == (1, 8, 0):
+            options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file, _transports=["ibv", "uv"])
+        else:
+            options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
+        rpc.init_rpc(
+            "worker" + str(rank),
+            rank=rank,
+            world_size=world_size,
+            backend=rpc.BackendType.TENSORPIPE,
+            rpc_backend_options=options,
+        )
     if rank == 0:
         func(*args)
     rpc.shutdown()
