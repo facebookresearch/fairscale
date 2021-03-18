@@ -33,9 +33,12 @@ def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
         def __init__(self):
             super().__init__()
             # TODO (Min): for now, we just test pytorch sync_bn here.
+            #             this will grow into regnet; testing apex sync_bn, etc.
             self.conv = Conv2d(2, 2, (1, 1))
-            # Put BN in is own FP32, unflatten, single GPU group.
-            # Note, SyncBN can still have a group size > 1.
+            # Put BN in is own FP32, unflatten, single GPU group FSDP.
+            # Note, SyncBNs still have a group size == world_size.
+            # The input and output for BN are still FP16. See ``keep_batchnorm_fp32``
+            # here: https://nvidia.github.io/apex/amp.html
             self.bn = FSDP(
                 BatchNorm2d(2),
                 mixed_precision=False,
