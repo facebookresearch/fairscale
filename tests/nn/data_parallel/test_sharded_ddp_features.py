@@ -86,7 +86,7 @@ def run_one_step(
 
     # Optim loop
     def closure():
-        optimizer.zero_grad()
+        ddp_model.zero_grad()
 
         with ddp_model.no_sync() if grad_accumulation else suppress():
             input_tensor = torch.rand((64, 2)).to(device)
@@ -170,7 +170,7 @@ def run_test_two_inputs(rank, world_size, backend, device, temp_file_name, reduc
 
     # Optim loop
     def closure():
-        optimizer.zero_grad()
+        ddp_model.zero_grad()
         input_tensor = torch.rand((64, 2)).to(device)
         loss = ddp_model(input_tensor, input_tensor).abs().sum()
         loss.backward()

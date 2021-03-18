@@ -174,7 +174,7 @@ class ShardedDataParallel(nn.Module):
 
         self.buckets: Dict[torch.device, Dict[int, GradBucket]] = {}
         self._should_bucket_grad: List[bool] = []
-        self._bucket_list: Optional[List[GradBucket]] = None
+        self._bucket_list: List[GradBucket] = []
 
         # - setup backward hooks which will be called by Torch's autograd in due time
         self._grad_accs: List[Callable] = []
@@ -345,6 +345,9 @@ class ShardedDataParallel(nn.Module):
             elif trainable_param.grad is not None:
                 trainable_param.grad.zero_()
 
+        for bucket in self._bucket_list:
+            bucket.zero()
+
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
         try:
@@ -368,8 +371,6 @@ class ShardedDataParallel(nn.Module):
         self._bucket_flush_callback_set = False
 
         if self.use_buckets:
-            assert self._bucket_list is not None
-
             for bucket in self._bucket_list:
                 bucket.reset_checked_in()
 
@@ -583,23 +584,22 @@ class ShardedDataParallel(nn.Module):
                 work_handle.callback()
 
     def _flush_reduce_calls(self) -> None:
-        if self._bucket_list is not None:
-            for bucket in self._bucket_list:
-                if not bucket.sent:
-                    assert bucket.buffer is not None
+        for bucket in self._bucket_list:
+            if not bucket.sent:
+                assert bucket.buffer is not None
 
-                    # Normalize the bucket in one go
-                    bucket.buffer.mul_(self.world_size_scaling)
+                # Normalize the bucket in one go
+                bucket.buffer.mul_(self.world_size_scaling)
 
-                    # Reduce the bucket
-                    self._work_handles.append(
-                        Workhandle(
-                            handle=dist.reduce(
-                                tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
-                            ),
-                            callback=None,
-                        )
+                # Reduce the bucket
+                self._work_handles.append(
+                    Workhandle(
+                        handle=dist.reduce(
+                            tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                        ),
+                        callback=None,
                     )
-                    bucket.sent = True
+                )
+                bucket.sent = True
 
         self._consume_work_handles()
