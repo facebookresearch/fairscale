@@ -13,13 +13,12 @@ import contextlib
 import functools
 from itertools import chain
 import logging
-from typing import Any, Callable, Deque, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Deque, Dict, Generator, List, Optional, Union
 
 import torch
 from torch import nn
 from torch.autograd import Variable
 import torch.distributed as dist
-from torch.nn import Parameter
 
 from fairscale.optim import OSS
 from fairscale.optim.utils import Bucket, Workhandle
@@ -367,32 +366,14 @@ class ShardedDataParallel(nn.Module):
         self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
         self._bucket_flush_callback_set = False
 
-        # Do not reset the buckets
         if self.use_buckets:
             assert self._bucket_list is not None
 
             for bucket in self._bucket_list:
-                assert (
-                    self.accumulate_grads_flipped or not self.training or self.should_accumulate_grads or bucket.sent
-                ), (
-                    "A bucket failed to be sent, cannot continue as results would be wrong. "
-                    + "You can trye de-activating ShardedDDP buckets -set `reduce_buffer_size` to 0-"
-                    + "Please submit a GitHub issue, this should not happen"
-                )
-
                 bucket.reset()
 
         if not self.should_accumulate_grads:
             self.accumulate_grads_flipped = False
-
-    def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
-        """ Look up where this parameter belongs to """
-        for optim in self.sharded_optimizers:
-            if param in optim.param_to_rank.keys():
-                return optim, optim.param_to_rank[param]
-
-        assert False, "This parameter is not present in an optimizer, this should not happen"
-        return (None, -1)
 
     def _get_reduce_fn(self, index: int, param: torch.Tensor, dst_rank: int) -> Callable:
         """
