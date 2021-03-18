@@ -9,17 +9,17 @@
 
 """ Test FSDP with regnet-like model. """
 
+import random
 import tempfile
 
 import pytest
 import torch
-import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn import BatchNorm2d, Conv2d, Module, SyncBatchNorm
 from torch.optim import SGD
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.nn.data_parallel import TrainingState
+from fairscale.nn.data_parallel import TrainingState, auto_wrap_bn
 from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, torch_version
 
 
@@ -35,16 +35,7 @@ def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
             # TODO (Min): for now, we just test pytorch sync_bn here.
             #             this will grow into regnet; testing apex sync_bn, etc.
             self.conv = Conv2d(2, 2, (1, 1))
-            # Put BN in is own FP32, unflatten, single GPU group FSDP.
-            # Note, SyncBNs still have a group size == world_size.
-            # The input and output for BN are still FP16. See ``keep_batchnorm_fp32``
-            # here: https://nvidia.github.io/apex/amp.html
-            self.bn = FSDP(
-                BatchNorm2d(2),
-                mixed_precision=False,
-                process_group=dist.new_group(ranks=[rank]),
-                flatten_parameters=False,
-            )
+            self.bn = BatchNorm2d(2)
 
         def forward(self, x):
             x = self.conv(x)
@@ -54,7 +45,16 @@ def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
     # TODO (Min): check DDP equivalency.
 
     model = Model()
-    model = SyncBatchNorm.convert_sync_batchnorm(model)
+    # Note, different rank may wrap in different order due to different random
+    # seeds. But results should be the same.
+    if random.randint(0, 1) == 0:
+        print("auto_wrap_bn, then convert_sync_batchnorm")
+        model = auto_wrap_bn(model)
+        model = SyncBatchNorm.convert_sync_batchnorm(model)
+    else:
+        print("convert_sync_batchnorm, then auto_wrap_bn")
+        model = SyncBatchNorm.convert_sync_batchnorm(model)
+        model = auto_wrap_bn(model)
     model = FSDP(model, **fsdp_config).cuda()
     optim = SGD(model.parameters(), lr=0.1)
 
