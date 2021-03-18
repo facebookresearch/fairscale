@@ -31,6 +31,9 @@ else:
     DEVICES = [CPU_DEVICES]
 
 
+pytestmark = pytest.mark.skipif(torch_version() < [1, 8, 0], reason="require torch version >= 1.8.0")  # type: ignore
+
+
 def rpc_worker(rank, world_size, init_file, func, *args):
     # Workaround for https://github.com/pytorch/pytorch/issues/53844
     if torch_version() == (1, 8, 0):
