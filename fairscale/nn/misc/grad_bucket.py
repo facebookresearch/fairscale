@@ -125,8 +125,9 @@ class GradBucket:
 
         # Copy the current grad value, if any
         if param.grad is not None:
+            # keep param.grad in place
             self.buffer[self._fill : fill_next].copy_(param.grad.data.flatten())
-
-        # The gradient becomes a view of the underlying buffer
-        param.grad = self.buffer[self._fill : fill_next].view_as(param.data)
+            param.grad.data = self.buffer[self._fill : fill_next].view_as(param.data)
+        else:
+            param.grad = self.buffer[self._fill : fill_next].view_as(param.data)
         self._fill = fill_next

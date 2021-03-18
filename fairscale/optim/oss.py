@@ -107,6 +107,14 @@ class OSS(Optimizer):
         # (partition and optimizer for the shard)
         self.refresh_trainable()
 
+    def zero_grad(self, set_to_none: Optional[bool] = False) -> None:
+        logging.warning(
+            "If used in conjunction with ShardedDDP and with reduce buckets"
+            + " .zero_grad() could fail on param.grad.detach_(), due to gradients being tensor views."
+            + " Please call model.zero_grad() instead"
+        )
+        super().zero_grad(set_to_none=set_to_none)
+
     # Partition helpers
     def partition_parameters(self) -> List[List[dict]]:
         """Partitions parameters across distributed data parallel ranks.
