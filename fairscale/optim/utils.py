@@ -6,16 +6,10 @@
 import collections
 import io
 from math import inf
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List
 
 import torch
 import torch.distributed as dist
-
-
-class Workhandle:
-    def __init__(self, handle: Any, callback: Optional[Callable]) -> None:
-        self.handle = handle
-        self.callback = callback
 
 
 # Credits:  classy_vision/generic/distributed_util.py

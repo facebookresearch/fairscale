@@ -200,6 +200,18 @@ class GradBucket(Bucket):
             self._is_collapsed = False
 
     @torch.no_grad()
+    def scale_and_reduce(self, scale: float, group: Any) -> torch.futures.Future:
+        assert self.buffer is not None, "Cannot send a collapsed bucket, please rebuild"
+
+        self.buffer.mul_(scale)
+        torch.cuda.synchronize()
+        self.sent = True
+
+        return torch.distributed.reduce(
+            tensor=self.buffer, dst=self.destination, group=group, async_op=True,
+        ).get_future()
+
+    @torch.no_grad()
     def shrink(self) -> None:
         """
         Shrink the buffer to the size of the parameter gradients currently checked in, release the extra memory

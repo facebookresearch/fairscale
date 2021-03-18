@@ -8,12 +8,11 @@ A nn.Module wrapper to go with a Sharded Optimizer in order to handle targeted g
 reduction automatically.
 """
 
-from collections import deque
 import contextlib
 import functools
 from itertools import chain
 import logging
-from typing import Any, Callable, Deque, Dict, Generator, List, Optional, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Union
 
 import torch
 from torch import nn
@@ -22,7 +21,6 @@ import torch.distributed as dist
 
 from fairscale.nn.misc import GradBucket
 from fairscale.optim import OSS
-from fairscale.optim.utils import Workhandle
 
 
 def _trainable(param: torch.Tensor) -> bool:
@@ -107,11 +105,6 @@ class ShardedDataParallel(nn.Module):
         self.enable_broadcast_buffers = broadcast_buffers
         self.auto_refresh_trainable = auto_refresh_trainable
         self.reduce_fp16 = reduce_fp16
-        if reduce_buffer_size > 0 and reduce_fp16:
-            self.reduce_fp16 = False
-            logging.warning(
-                "fp16 gradient reduction is not compatible with reduction buffers, which are requested. fp16 grad reduction is deactivated."
-            )
 
         # Handle a no_sync() context which prevents the gradient synchronization,
         # accumulate in place
@@ -120,7 +113,9 @@ class ShardedDataParallel(nn.Module):
 
         # Communication related attributes
         self.process_group = process_group if process_group is not None else dist.group.WORLD
-        self.backend = dist.get_backend(self.process_group)
+        assert (
+            dist.get_backend(self.process_group) == dist.Backend.NCCL
+        ), "SharedDDP requires a backend with torch.futures support, for now NCCL is the only option"
         self.world_size_scaling = 1.0 / dist.get_world_size(self.process_group)  # > 0
         self.reference_global_rank = OSS.get_global_rank(self.process_group, 0)  # picking rank 0 as the reference
         self.rank = dist.get_rank(self.process_group)
@@ -154,6 +149,7 @@ class ShardedDataParallel(nn.Module):
         )
         self._trainable_params: List[torch.Tensor] = []
         self._grad_to_be_reduced: List[bool] = []
+        self._grad_fp16: List[Any] = []
         self._trainable_param_to_rank: Dict[torch.Tensor, int] = {}
         self._reference_trainable_mask = list(map(_trainable, self._all_params))
 
@@ -179,6 +175,7 @@ class ShardedDataParallel(nn.Module):
         # - setup backward hooks which will be called by Torch's autograd in due time
         self._grad_accs: List[Callable] = []
         self._manual_reduce: List[Callable] = []
+        self._grad_hooks: List[Any] = []
 
         # passing a handle to torch.nn.SyncBatchNorm layer
         self._passing_sync_batchnorm_handle(self.module)
@@ -187,7 +184,7 @@ class ShardedDataParallel(nn.Module):
         if sync_models_at_startup:
             self._sync_params_and_buffers()
 
-        self._work_handles: Deque[Workhandle] = deque()
+        self._futures: List[torch.futures.Future] = []
         self._bucket_flush_callback_set = False
 
         self.refresh_trainable()
@@ -200,11 +197,7 @@ class ShardedDataParallel(nn.Module):
 
         # Optionally check whether the trainable parameters have changed
         if self.auto_refresh_trainable:
-            trainable_mask = list(map(_trainable, self._all_params))
-            if trainable_mask != self._reference_trainable_mask:
-                logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")
-                self.refresh_trainable()
-                self._reference_trainable_mask = trainable_mask
+            self._auto_update_train_graph()
 
         if self.enable_broadcast_buffers:
             # NCCL communications are on a different stream, needs to be blocking
@@ -267,13 +260,14 @@ class ShardedDataParallel(nn.Module):
         """ If the module trainability has changed, update all the assumptions """
 
         # Make sure that this is not done while gradients are waiting to be reduced (if no_sync context for instance)
-        assert not functools.reduce(
+        assert self.should_accumulate_grads or not functools.reduce(
             lambda x, y: x or y, self._grad_to_be_reduced, False
         ), "Grads waiting to be reduced: {}".format(self._grad_to_be_reduced)
 
         self._trainable_params = list(filter(lambda x: x.requires_grad, self._all_params))
         self._trainable_params.sort(key=lambda x: x.numel())
         self._grad_to_be_reduced = [True for _ in self._trainable_params]
+        self._grad_fp16 = [None for _ in self._trainable_params]
 
         self._trainable_param_to_rank = {}
         for optim in self.sharded_optimizers:
@@ -288,7 +282,7 @@ class ShardedDataParallel(nn.Module):
                     for param in filter(lambda x: x.requires_grad, device_params):
                         self._trainable_param_to_rank[param] = optim.param_to_rank[param]
 
-        self._setup_bucket_strategy()
+        self._setup_buckets()
         self._setup_backward_hooks()
 
     def reduce(self) -> None:
@@ -306,8 +300,8 @@ class ShardedDataParallel(nn.Module):
         self._bucket_flush_callback_set = True  # no need to flush in the end, we own the callback execution
         _ = list(map(lambda x: x(), self._manual_reduce))
 
-        # Make sure that all the futures are consumed
-        self._consume_work_handles()
+        # Make sure that the buckets are flushed and all the futures are consumed
+        self._flush_reduce_calls()
 
     @torch.no_grad()
     def sync_buffers(self, blocking: bool = False) -> None:
@@ -318,18 +312,15 @@ class ShardedDataParallel(nn.Module):
             blocking (bool): wait for the operation to conclude.
         """
 
-        work_handles = []
+        futures = []
 
         for buffer in self.module.buffers(recurse=True):
-            work_handles.append(
-                dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True)
+            futures.append(
+                dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True).get_future()
             )
 
-        if blocking and work_handles:
-            if self.backend != dist.Backend.NCCL:
-                _ = list(filter(lambda x: x.wait(), work_handles))
-            else:
-                work_handles[-1].wait()
+        if blocking and futures:
+            torch.futures.collect_all(futures).wait()
 
     def zero_grad(self, set_to_none: bool = False) -> None:
         r"""Sets gradients of all model parameters to zero. See similar function
@@ -339,6 +330,9 @@ class ShardedDataParallel(nn.Module):
             set_to_none (bool): instead of setting to zero, set the grads to None.
                 See :meth:`torch.optim.Optimizer.zero_grad` for details.
         """
+
+        if self.auto_refresh_trainable:
+            self._auto_update_train_graph()
 
         for index, trainable_param in enumerate(self._all_params):
             if set_to_none and not self._should_bucket_grad[index]:
@@ -373,6 +367,7 @@ class ShardedDataParallel(nn.Module):
 
         if self.use_buckets:
             for bucket in self._bucket_list:
+                bucket.rebuild()
                 bucket.reset_checked_in()
 
         if not self.should_accumulate_grads:
@@ -400,34 +395,33 @@ class ShardedDataParallel(nn.Module):
 
                     # Make sure that this is not fired twice
                     self._grad_to_be_reduced[index] = False
+
                     param.grad.mul_(self.world_size_scaling)
-
                     if self.reduce_fp16:
-                        param.grad.data = param.grad.data.half()
-
-                    # Future work includes clearing up the buffer if possible
-                    def cleanup() -> None:
+                        self._grad_fp16[index] = param.grad.half()
                         if dst_rank != self.global_rank:
                             param.grad = None
-                        else:
-                            assert param.grad is not None
-                            param.grad.data = param.grad.data.to(dtype=param.dtype)
+
+                    # Future work includes clearing up the buffer if possible
+                    def cleanup(fut: torch.futures.Future) -> None:
+                        if dst_rank != self.global_rank:
+                            fut.wait()
+                            param.grad = None
+                            self._grad_fp16[index] = None
+                        elif self.reduce_fp16:
+                            param.grad = self._grad_fp16[index].float()
 
                     # Async reduce for this buffer, log the future
-                    self._work_handles.append(
-                        Workhandle(
-                            handle=dist.reduce(
-                                tensor=param.grad.data,
-                                dst=self._local_to_global_rank[dst_rank],
-                                group=self.process_group,
-                                async_op=True,
-                            ),
-                            callback=cleanup,
+                    self._futures.append(
+                        dist.reduce(
+                            tensor=self._grad_fp16[index] if self.reduce_fp16 else param.grad,
+                            dst=self._local_to_global_rank[dst_rank],
+                            group=self.process_group,
+                            async_op=True,
                         )
+                        .get_future()
+                        .then(cleanup)
                     )
-
-                    # Opportunistically try to empty the queue, free memory
-                    self._try_consume_work_handle()
 
         else:
 
@@ -444,31 +438,14 @@ class ShardedDataParallel(nn.Module):
 
                     # Make sure that this is not fired twice
                     self._grad_to_be_reduced[index] = False
+
                     bucket = self.buckets[param.device][dst_rank]
                     bucket.params_checked_in += 1
 
                     if bucket.all_checked_in:
-                        assert bucket.buffer is not None
-
-                        # Normalize the bucket in one go
-                        bucket.buffer.mul_(self.world_size_scaling)
-
-                        # Reduce the bucket
-                        bucket.sent = True
-                        self._work_handles.append(
-                            Workhandle(
-                                handle=dist.reduce(
-                                    tensor=bucket.buffer,
-                                    dst=bucket.destination,
-                                    group=self.process_group,
-                                    async_op=True,
-                                ),
-                                callback=None,
-                            )
+                        self._futures.append(
+                            bucket.scale_and_reduce(self.world_size_scaling, self.process_group).then(bucket.callback)
                         )
-
-                    # Opportunistically try to empty the queue
-                    self._try_consume_work_handle()
 
         return reduce
 
@@ -477,6 +454,10 @@ class ShardedDataParallel(nn.Module):
         Attach a reduce function to each grad-requiring parameter.
         This makes the gradient reduction automatic whenever there's a backward pass
         """
+
+        # Empty the possible previous hooks
+        while len(self._grad_hooks) > 0:
+            self._grad_hooks.pop().remove()
 
         # Go through the parameters, attach the hook
         self._grad_accs = []
@@ -503,18 +484,14 @@ class ShardedDataParallel(nn.Module):
         Sync the complete model states in between the ranks
         """
 
-        work_handles = []
+        futures = []
 
         for t in self.module.state_dict().values():
-            work_handles.append(
-                dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
+            futures.append(
+                dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True).get_future()
             )
 
-        # gloo does not guarantee inlining like NCCL, wait for all requests
-        if self.backend != dist.Backend.NCCL:
-            _ = list(filter(lambda x: x.wait(), work_handles))
-        elif work_handles:
-            work_handles[-1].wait()
+        torch.futures.collect_all(futures).wait()
 
     def _passing_sync_batchnorm_handle(self, module: nn.Module) -> None:
         """
@@ -528,7 +505,8 @@ class ShardedDataParallel(nn.Module):
                 # SyncBatchNorm only supports DDP with single-process single-device anyway'
                 layer._specify_ddp_gpu_num(1)  # type: ignore
 
-    def _setup_bucket_strategy(self) -> None:
+    @torch.no_grad()
+    def _setup_buckets(self) -> None:
         """Devise a bucketing strategy on a per-rank ownership level.
         These buckets will not be sharded, since the gradients would be re-allocated during the backward in that case.
         This method can be a slow for big models, but it it not typically called often (not for every forward for instance)
@@ -550,61 +528,58 @@ class ShardedDataParallel(nn.Module):
             if param.device not in self.buckets.keys():
                 self.buckets[param.device] = {}
 
-            if dst_rank not in self.buckets[param.device].keys():
+            if dst_rank not in self.buckets[device].keys():
                 self.buckets[param.device][dst_rank] = GradBucket(
-                    self.buffer_max_size,
+                    size=self.buffer_max_size,
                     dtype=param.dtype,
-                    device=param.device,
+                    device=device,
                     destination=self._local_to_global_rank[dst_rank],
                 )
 
             # Criteria to decide whether this parameter is to be bucketed or not:
             # - enough room in the bucket
             if self.buckets[device][dst_rank].can_add_grad_view(param):
-                self.buckets[device][dst_rank].add_grad(param)
                 self._should_bucket_grad[i] = True
+                self.buckets[device][dst_rank].add_grad(param)
 
         self._bucket_list = list(chain(*[self.buckets[device].values() for device in self.buckets.keys()]))
 
-        # Resize the buckets to remove lost space in the end
+        # Post fix:
         for bucket in self._bucket_list:
+            # - resize the buckets to remove lost space in the end
             bucket.shrink()
 
-    def _consume_work_handles(self) -> None:
+            # - store the callback which releases the bucket
+            def cleanup(fut: torch.futures.Future) -> None:
+                if bucket.destination != self.global_rank:
+                    fut.wait()
+                    # bucket.collapse()
+
+            bucket.callback = cleanup
+
+    def _consume_futures(self) -> None:
         """Consume all the futures which are tied to this optimizer's buckets.
-            We start from the first/older ones, since they are the most likely to be ready and non-blocking
-            """
-
-        while len(self._work_handles) > 0:
-            work_handle = self._work_handles.popleft()
-            work_handle.handle.wait()
-            if work_handle.callback is not None:
-                work_handle.callback()
-
-    def _try_consume_work_handle(self) -> None:
-        """Try to consume the oldest future. This is non blocking, if not ready we'll pass"""
-        while len(self._work_handles) > 0 and self._work_handles[0].handle.is_completed():
-            work_handle = self._work_handles.popleft()
-            if work_handle.callback is not None:
-                work_handle.callback()
+        """
+        torch.futures.collect_all(self._futures).wait()
+        self._futures.clear()
 
     def _flush_reduce_calls(self) -> None:
-        for bucket in self._bucket_list:
-            if not bucket.sent:
-                assert bucket.buffer is not None
-
-                # Normalize the bucket in one go
-                bucket.buffer.mul_(self.world_size_scaling)
-
-                # Reduce the bucket
-                self._work_handles.append(
-                    Workhandle(
-                        handle=dist.reduce(
-                            tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
-                        ),
-                        callback=None,
+        if self._bucket_list is not None:
+            for bucket in self._bucket_list:
+                if not bucket.sent:
+                    self._futures.append(
+                        bucket.scale_and_reduce(self.world_size_scaling, self.process_group).then(bucket.callback)
                     )
-                )
-                bucket.sent = True
 
-        self._consume_work_handles()
+                    bucket.sent = True
+
+        torch.cuda.synchronize()
+        self._consume_futures()
+
+    def _auto_update_train_graph(self) -> None:
+        trainable_mask = list(map(_trainable, self._all_params))
+        if trainable_mask != self._reference_trainable_mask:
+            logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")
+
+            self.refresh_trainable()
+            self._reference_trainable_mask = trainable_mask

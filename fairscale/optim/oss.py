@@ -253,6 +253,7 @@ class OSS(Optimizer):
         max_norm: Union[float, int],
         norm_type: Union[float, int] = 2.0,
         filter_params_fn: Callable[[Any], Any] = None,
+        skip_nan_grads: bool = False,
     ) -> torch.Tensor:
         """
         Clip all gradients at this point in time. The norm is computed over all gradients together, as if they were
@@ -261,6 +262,7 @@ class OSS(Optimizer):
         Arguments:
             max_norm (float or int): max norm of the gradients
             norm_type (float or int): type of the used p-norm. Can be ``'inf'`` for infinity norm.
+            skip_nan_grads (bool): auto-skip scaling if some grads are NaNs (which can happen with Pytorch AMP, in that case the model update is skipped)
 
         Returns:
             Total norm of the parameters (viewed as a single vector).
@@ -300,10 +302,20 @@ class OSS(Optimizer):
             total_norm = total_norm ** (1.0 / norm_type)
 
         clip_coef = torch.tensor(max_norm, dtype=total_norm.dtype, device=total_norm.device) / (total_norm + 1e-6)
+
+        if skip_nan_grads and torch.isnan(clip_coef):
+            return total_norm
+
+        assert not torch.isnan(clip_coef), (
+            "Clipping grads with a NaN, cannot be right.\n"
+            + f"Local norm: {local_norm.item()}. Total norm: {total_norm.item()}"
+        )
+
         if clip_coef < 1:
-            for device, device_params in self.per_device_params.items():
-                for p in filter(lambda x: x.grad is not None, device_params[self.rank]):
-                    p.grad.detach().mul_(clip_coef.to(device))  # type: ignore
+            with torch.no_grad():
+                for device, device_params in self.per_device_params.items():
+                    for p in filter(lambda x: x.grad is not None, device_params[self.rank]):
+                        p.grad.mul_(clip_coef.to(device))  # type: ignore
 
         return total_norm
 

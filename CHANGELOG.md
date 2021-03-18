@@ -13,10 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Experimental: Add spectrain support ([#372](https://github.com/facebookresearch/fairscale/issues/372))
 - FSDP: enabled pytorch SyncBN (no asserting) ([#527](https://github.com/facebookresearch/fairscale/issues/527))
 - FSDP: added auto\_wrap\_bn utility function ([#531](https://github.com/facebookresearch/fairscale/pull/531))
+- ShardedDDP: torch Futures support, unfortunately meaning that Gloo is not supported anymore [TBD]
 
 ### Fixed
 - OSS: fix a compatibily problem with lightning wrt optimizer state dict ([#510](https://github.com/facebookresearch/fairscale/issues/510))
 - FSDP: fixed a bug when part of autograd graph is traversed multiple times in mixed precision mode ([#513](https://github.com/facebookresearch/fairscale/pull/513))
+- ShardedDDP: fix a memory leak ([#532](https://github.com/facebookresearch/fairscale/pull/532))
 
 ## [0.3.1] - 2021-03-09
 ### Added

@@ -29,14 +29,15 @@ from fairscale.utils.testing import check_same_model_params, skip_if_no_cuda, sk
 Check that ShardedDDP gets the same results as DDP in a variety of scenarii
 """
 
-_test_fp16_reduction = [False]
-
-if hasattr(dist, "algorithms.ddp_com_hooks.default_hooks"):
-    _test_fp16_reduction.append(True)
 
 _test_amp = [False]
 if hasattr(torch.cuda.amp, "autocast"):
     _test_amp.append(True)
+
+_test_fp16_reduction = [False]
+
+if hasattr(dist, "algorithms.ddp_com_hooks.default_hooks"):
+    _test_fp16_reduction.append(True)
 
 
 def _get_mlp():
@@ -46,7 +47,6 @@ def _get_mlp():
 def run_ddp_parity(
     rank,
     world_size,
-    backend,
     temp_file_name,
     reduce_buffer_size,
     grad_accumulation,
@@ -56,14 +56,16 @@ def run_ddp_parity(
     amp,
     manual_reduction,
 ):
-    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(
+        init_method="file://" + temp_file_name, backend=dist.Backend.NCCL, rank=rank, world_size=world_size
+    )
 
     device = torch.device("cuda")
     torch.cuda.set_device(rank)
     torch.manual_seed(rank)
     np.random.seed(rank)
     NUMBER_BATCHS = 5
-    BATCH_SIZE = 8
+    BATCH_SIZE = 2
 
     # Test all combinations: AMP, Accumulate, Change train graph, reduce buckets
     print(
@@ -213,12 +215,10 @@ def test_ddp_parity(
         pytest.skip("Skipping changing model and grad accumulation combination, makes little sense")
 
     world_size = torch.cuda.device_count()
-    backend = dist.Backend.NCCL
     mp.spawn(
         run_ddp_parity,
         args=(
             world_size,
-            backend,
             tempfile.mkstemp()[1],
             reduce_buffer_size,
             grad_accumulation,
@@ -233,8 +233,10 @@ def test_ddp_parity(
     )
 
 
-def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_buffer_size):
-    dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
+def run_ddp_parity_two_optim(rank, world_size, temp_file_name, reduce_buffer_size):
+    dist.init_process_group(
+        init_method="file://" + temp_file_name, backend=dist.Backend.NCCL, rank=rank, world_size=world_size
+    )
     device = torch.device("cuda")
     torch.cuda.set_device(rank)
     torch.manual_seed(rank)
@@ -273,8 +275,7 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_b
         input_tensor = torch.rand((64, 2)).to(device)
 
         # Run DDP
-        ddp_optimizer.zero_grad()
-        ddp_optimizer_2.zero_grad()
+        ddp_model.zero_grad()
         ddp_loss = ddp_model(input_tensor).abs().sum()
         ddp_loss.backward()
         ddp_optimizer.step()
@@ -282,8 +283,7 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_b
         torch.cuda.synchronize(device)
 
         # Run Sharded
-        sharded_optimizer.zero_grad()
-        sharded_optimizer_2.zero_grad()
+        sharded_ddp_model.zero_grad()
         sharded_loss = sharded_ddp_model(input_tensor).abs().sum()
         sharded_loss.backward()
         sharded_optimizer.step()
@@ -302,10 +302,9 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_b
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 def test_ddp_parity_two_optim(reduce_buffer_size):
     world_size = 2
-    backend = dist.Backend.NCCL
     mp.spawn(
         run_ddp_parity_two_optim,
-        args=(world_size, backend, tempfile.mkstemp()[1], reduce_buffer_size),
+        args=(world_size, tempfile.mkstemp()[1], reduce_buffer_size),
         nprocs=world_size,
         join=True,
     )
