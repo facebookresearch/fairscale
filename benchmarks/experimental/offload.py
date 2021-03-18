@@ -125,12 +125,13 @@ def train_seq(model_config, benchmark_config, model_specs, args):
         for batch_inputs, batch_outputs in dataloader:
             batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
             start = time.time_ns()
-            with _get_profiler_context() as prof:
+            with _get_profiler_context(args.use_profiler) as prof:
                 optimizer.zero_grad()
                 inputs = batch_inputs.reshape(-1, model_specs["inputs"] * model_specs["inputs"])
-                with _get_profiler_record_context("model_training"):
+                with _get_profiler_record_context("model_training", args.use_profiler):
                     with _get_fp16_context(use_fp16=args.use_fp16):
                         output = model(inputs)
+                        print(f"output grad_fn {output.grad_fn}")
                         loss = criterion(output, target=batch_outputs)
                         loss.backward()
                     optimizer.step()
@@ -149,6 +150,9 @@ def train_seq(model_config, benchmark_config, model_specs, args):
 
 
 def train(model_config, model, benchmark_config, model_specs, args):
+    device = torch.device("cuda")
+    torch.cuda.set_device(0)
+
     lm_dataloader, _, _ = model_config["data"]
     criterion = benchmark_config["criterion"]
     vocab_size = model_specs["vocab_size"]
@@ -179,20 +183,22 @@ def train(model_config, model, benchmark_config, model_specs, args):
             epoch_start_time = time.time()
 
         source, target = get_batch(batch)
+        source, target = source.cuda(), target.cuda()
 
         if i > 0:
             total_tokens += source.numel()
 
-        optimizer.zero_grad()
-        output = model(source)
-
-        target = target.to("cuda")
-        output = output.to(target.device)
-        loss = criterion(output.view(-1, vocab_size), target.view(-1))
-        loss.backward()
-
-        torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
-        optimizer.step()
+        with _get_profiler_context(args.use_profiler) as prof:
+            optimizer.zero_grad()
+            with _get_profiler_record_context("FW pass", args.use_profiler):
+                output = model(source)
+            with _get_profiler_record_context("Loss", args.use_profiler):
+                loss = criterion(output.view(-1, vocab_size), target.view(-1))
+            with _get_profiler_record_context("BW pass", args.use_profiler):
+                loss.backward()
+            torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
+            with _get_profiler_record_context("Opt step", args.use_profiler):
+                optimizer.step()
 
         total_loss += loss.item()
         log_interval = 1
@@ -208,6 +214,8 @@ def train(model_config, model, benchmark_config, model_specs, args):
             total_tokens_per_log_interval = 0
             total_loss = 0
             start_time = time.time()
+        prof.export_chrome_trace("/tmp/offload_prof")
+
     if epoch_start_time != 0:
         wps = total_tokens / (time.time() - epoch_start_time)
     else:
@@ -379,7 +387,7 @@ def run_benchmark(args):
         model = model_config["model"]
 
         if args.dry_run:
-            train(model_config, model, benchmark_config, args)
+            train(model_config, model, benchmark_config, model_specs, args)
         else:
             benchmark_language_model(model_config, model, benchmark_config, model_specs, args)
     elif args.model_name == "seq":
@@ -393,16 +401,23 @@ def run_benchmark(args):
 
 
 parser = argparse.ArgumentParser(description="benchmark")
-parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
-    "--debug", action="store_true", help="Print debugging statements which is more verbose than the default."
+    "--dry_run", default=True, action="store_true", help="Run a sample training run without regression testing."
+)
+parser.add_argument(
+    "--debug",
+    action="store_true",
+    default=True,
+    help="Print debugging statements which is more verbose than the default.",
 )
 parser.add_argument(
     "--model_name", default="lm", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
 )
-parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
+parser.add_argument(
+    "--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks."
+)
 parser.add_argument("--use_fp16", action="store_true", default=False)
-parser.add_argument("--checkpoint_activation", action="store_true", default=False)
+parser.add_argument("--checkpoint_activation", action="store_true", default=True)
 parser.add_argument("--use_profiler", action="store_true", default=False)
 
 

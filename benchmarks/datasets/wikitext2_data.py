@@ -58,7 +58,7 @@ def get_synthetic_dataloaders(args, benchmark_config, model_specs):
     """Return synthetic dataloaders for training, testing and validation."""
 
     def batchify(data):
-        batch_size = args.batch_size
+        batch_size = benchmark_config["batch_size"]
         return _batchify(data, batch_size)
 
     total_batch_size = total_batch_size = _get_total_batch_size(benchmark_config, model_specs)
