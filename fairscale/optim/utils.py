@@ -79,32 +79,6 @@ def broadcast_object(
     return obj
 
 
-class Bucket:
-    """
-    Helper class to simplify the handling of broadcast or reduce buckets
-    """
-
-    def __init__(self, buffer: torch.Tensor) -> None:
-        # The actual flat tensor
-        self.buffer = buffer
-        self.max_size = buffer.numel()
-
-        # Current status for this buffer
-        self.fill = 0
-        self.params_checked_in = 0
-        self.max_params_checked_in = 0  # atttribute present for convenience purposes
-        self.destination = -1
-        self.sent = True
-
-    def reset(self) -> None:
-        self.params_checked_in = 0
-        self.sent = False
-
-    def full(self) -> bool:
-        """ is the bucket full ? """
-        return self.max_params_checked_in == self.params_checked_in
-
-
 def calc_grad_norm(parameters: List[torch.nn.Parameter], p: float) -> torch.Tensor:
     r"""Calculate gradient norm of an iterable of parameters.
     Returns:
