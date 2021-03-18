@@ -127,10 +127,7 @@ def forward_multi(devices):
         y = pipe(x).remote().cpu().to_here()
     else:
         y = pipe(x).to_here()
-    if devices == CPU_DEVICES:
-        expected_sum = torch.tensor(5.0615)
-    else:
-        expected_sum = torch.tensor(5.783)
+    expected_sum = torch.tensor(5.0615)
     assert y.shape == torch.Size([8, 4])
     assert y.requires_grad is True
     assert torch.allclose(y.sum(), expected_sum), f"{y.sum()} != {expected_sum}"
