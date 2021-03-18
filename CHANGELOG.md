@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Experimental: Add spectrain support ([#372](https://github.com/facebookresearch/fairscale/issues/372))
-- FSDP: enabling pytorch SyncBN (no asserting) ([#527](https://github.com/facebookresearch/fairscale/issues/527))
+- FSDP: enabled pytorch SyncBN (no asserting) ([#527](https://github.com/facebookresearch/fairscale/issues/527))
+- FSDP: added auto\_wrap\_bn utility function ([#531](https://github.com/facebookresearch/fairscale/pull/531))
 
 ### Fixed
 - OSS: fix a compatibily problem with lightning wrt optimizer state dict ([#510](https://github.com/facebookresearch/fairscale/issues/510))
