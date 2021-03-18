@@ -19,6 +19,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 
 from fairscale.experimental.nn.multiprocess_pipe import DistributedLoss, MultiProcessPipe
+from fairscale.utils.testing import torch_version
 
 BOUNCE_TENSORS = True
 
@@ -31,7 +32,11 @@ else:
 
 
 def rpc_worker(rank, world_size, init_file, func, *args):
-    options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
+    # Workaround for https://github.com/pytorch/pytorch/issues/53844
+    if torch_version() == (1, 8, 0):
+        options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file, _transports=["ibv", "uv"])
+    else:
+        options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
     rpc.init_rpc(
         "worker" + str(rank),
         rank=rank,
