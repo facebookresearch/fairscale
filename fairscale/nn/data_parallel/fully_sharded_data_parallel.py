@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.optim.utils import calc_grad_norm
 from fairscale.utils.containers import apply_to_tensors
-from fairscale.utils.parallel import chunk_and_pad, validate_process_group
+from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
 
@@ -186,6 +186,7 @@ class FullyShardedDataParallel(nn.Module):
 
         compute_device = torch.device("cuda") if self.cpu_offload else next(module.parameters()).device
         validate_process_group(compute_device, self.process_group)
+        enable_pytorch_sync_bn(module)
 
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to

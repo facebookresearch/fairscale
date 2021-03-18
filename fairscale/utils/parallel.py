@@ -43,3 +43,15 @@ def validate_process_group(device: torch.device, process_group: ProcessGroup) ->
             f"found {torch.cat(output).sum()} devices in process group but "
             f"world_size={world_size}. Check torch.cuda.set_device is called properly"
         )
+
+
+def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
+    """Call _specify_ddp_gpu_num for all pytorch SyncBN layers so that it
+       is happily running even without DDP. E.g. this is used by FSDP.
+    """
+    for layer in module.modules():
+        if isinstance(layer, torch.nn.modules.SyncBatchNorm):
+            # Number "1" below meant to be the number of GPUs for each DDP worker.
+            # (i.e. "device_ids" in DDP. As far as I see, the value is not actually
+            # used, but this call needs to be made to avoid an exception.
+            layer._specify_ddp_gpu_num(1)  # type: ignore
