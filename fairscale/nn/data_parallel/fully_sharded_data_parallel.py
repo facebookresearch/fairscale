@@ -7,7 +7,6 @@ import contextlib
 import copy
 from enum import Enum, auto
 import functools
-from collections import defaultdict
 from math import inf
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
@@ -364,7 +363,7 @@ class FullyShardedDataParallel(nn.Module):
             free_storage_(orig_data)
 
     def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
-        """Return the local shard of a given full tensor."""
+        """Return the local shard of a full tensor."""
         # Shard using torch.chunk to match all-gather/reduce-scatter.
         chunks = list(torch.flatten(tensor).chunk(self.world_size))
         while len(chunks) < self.world_size:
@@ -1397,20 +1396,49 @@ class FullyShardedDataParallel(nn.Module):
                         raise KeyError(f'lost {local_param_index} from rank {rank}')
 
         # Concatenate everything
-        for pg0 in sd0['param_groups']:
+        for pg_id, pg0 in enumerate(sd0['param_groups']):
+            n_params = 1
             for param_id in pg0["params"]:
+                assert param_id == 0
+
                 # This attempts to undo the work of shard_parameters.
                 # It might be assuming self.flatten_parameters=True
+
                 for k,v in sd0['state'][param_id].items():
                     def maybe_unpad(v, num_pad): return v[:-num_pad] if num_pad > 0 else v
                     v_unpad = [maybe_unpad(t, np) for t,np in zip(v, all_num_padded)]
                     flat_buffer = torch.cat(v_unpad)
-                    flat_buffer = list(self.module.get_param_views(flat_buffer))
-                    sd0['state'][param_id][k] = flat_buffer
+                    flat_buffer = self.module.get_param_views(flat_buffer)
+                    for i, entry in enumerate(flat_buffer):
+                        if i not in sd0['state']:
+                            sd0['state'][i] = {}
+                        sd0['state'][i][k] = entry
+                    n_params += i
+            sd0['param_groups'][pg_id]['params'] = list(range(n_params))
+
         # Make sure that the parameters are sorted in the state, as expected for a pytorch dict
         sd0["state"] = dict(sorted(sd0["state"].items()))
-
         return sd0
+
+    def get_shard_from_optim_state_dict(self, full_optim_state_dict) -> Dict:
+        sd = full_optim_state_dict
+        if self.flatten_parameters:
+            sd = self.flatten_optim_state_dict(sd)
+        for id, s in sd['state'].items():
+            for k,v in s:
+                tensor, _ = self._get_shard(v)
+                sd['state'][id][k] = tensor
+
+        return sd
+
+
+    def flatten_optim_state_dict(self, sd) -> Dict:
+        return sd
+
+
+
+
+
 
 
 @torch.no_grad()
@@ -1457,6 +1485,7 @@ def alloc_storage_(data: torch.Tensor, size: torch.Size) -> None:
         return
     assert data.storage().size() == 0
     data.storage().resize_(size.numel())
+
 
 def _post_state_dict_hook(
     module: nn.Module, state_dict: "OrderedDict[str, torch.Tensor]", prefix: str, *args: Any

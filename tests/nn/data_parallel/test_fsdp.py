@@ -276,19 +276,30 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         fsdp_optim.step()
         fsdp.consolidate_optim_state_dict(fsdp_optim, recipient_rank=0)
 
-        if rank == 0:
-            assert fsdp._all_optimizer_states
-            torch.save(fsdp._all_optimizer_states, f'all_optim_states_world_size_{fsdp.world_size}.pt')
-            fsdp_state_dict = fsdp.optim_state_dict()
-            torch.save(fsdp_state_dict, f'fsdp_consolidated_{fsdp.world_size}.pt')
-            unwrapped_model = TransformerWithSharedParams(group).cuda()
-            optim_unwrapped = torch.optim.SGD(unwrapped_model.parameters(), lr=0.01, momentum=0.9)
-            output = unwrapped_model(src_ids, tgt_ids)
-            loss = unwrapped_model.get_loss((src_ids, tgt_ids), output)
-            unwrapped_model.run_backward(loss)
-            optim_unwrapped.step()
-            #assert objects_are_equal(fsdp_state_dict, optim_unwrapped.state_dict(), raise_exception=True)
-            #optim_unwrapped.load_state_dict(fsdp_state_dict)
+        if rank > 0 or fsdp.world_size == 1:
+            return
+
+        unwrapped_model = TransformerWithSharedParams(group).cuda()
+        n_pars = len(list(unwrapped_model.parameters()))
+        assert fsdp._all_optimizer_states
+        torch.save(fsdp._all_optimizer_states, f'all_optim_states_world_size_{fsdp.world_size}.pt')
+        sd = fsdp.optim_state_dict()
+        torch.save(sd, f'fsdp_consolidated_{fsdp.world_size}.pt')
+
+        st = sd['state']
+        assert len(sd['state']) == n_pars, f'{len(st)} != {n_pars}'
+
+        assert torch.is_tensor(sd['state'][21]['momentum_buffer'])
+        def assert_equal(a,b):
+            assert a == b, f'{a} != {b}'
+
+        assert_equal(len(sd['param_groups'][0]['params']), len(sd['state']))
+
+        optim_unwrapped = torch.optim.SGD(unwrapped_model.parameters(), lr=0.01, momentum=0.9)
+        output = unwrapped_model(src_ids, tgt_ids)
+        loss = unwrapped_model.get_loss((src_ids, tgt_ids), output)
+        unwrapped_model.run_backward(loss)
+        optim_unwrapped.step()
 
 
     def test_delayed_optim_step(self):
