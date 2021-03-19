@@ -55,7 +55,7 @@ def test_collapse():
         bucket.shrink()
         bucket.collapse()
 
-        assert bucket.buffer is None
+        assert bucket.buffer.numel() == 0
         assert param.grad is None
         bucket.rebuild()
 

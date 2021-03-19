@@ -811,7 +811,7 @@ def test_state_dict_distributed():
     )
 
 
-def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph):
+def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph, broadcast_fp16):
     url = "file://" + temp_file_name
     dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
 
@@ -938,9 +938,13 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph
 @skip_if_single_gpu
 @pytest.mark.parametrize("change_train_graph", [True, False])
 @pytest.mark.parametrize("backend", [dist.Backend.NCCL, dist.Backend.GLOO])
-def test_ddp_parity(change_train_graph: bool, backend: dist.Backend):
+@pytest.mark.parametrize("broadcast_fp16", [False, True])
+def test_ddp_parity(change_train_graph: bool, backend: dist.Backend, broadcast_fp16: bool):
     temp_file_name = tempfile.mkstemp()[1]
     world_size = torch.cuda.device_count()
     mp.spawn(
-        run_ddp_parity, args=(world_size, backend, temp_file_name, change_train_graph), nprocs=world_size, join=True
+        run_ddp_parity,
+        args=(world_size, backend, temp_file_name, change_train_graph, broadcast_fp16),
+        nprocs=world_size,
+        join=True,
     )
