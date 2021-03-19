@@ -177,6 +177,7 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
+        self._all_optimizer_states: List[Dict[str, Any]] = []  # Optional consolidated optimizer state
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
@@ -1267,6 +1268,124 @@ class FullyShardedDataParallel(nn.Module):
             print(msg)
             raise ValueError(msg)
 
+    # Optim State dict interfaces
+    def consolidate_optim_state_dict(self, optim, recipient_rank: int = 0) -> None:
+        """Update the consolidated state_dict list, one per rank.
+
+        Arguments:
+            recipient_rank (int): on which rank to materialize the full state dict.
+            -1 is a special value, which means that all ranks should have the state
+
+        .. warning: This needs to be called on all replicas"""
+
+        # Sync lr and other attributes in case its been updated
+        from fairscale.optim import OSS
+        from fairscale.optim.utils import recursive_copy_to_device, broadcast_object
+        _default_device = torch.device('cuda')
+
+        # OSS._sync_param_groups(self.param_groups, optim.param_groups)
+
+        # Pull the sharded state from all the other replicas
+        # Store all the states in order, rank by rank
+        #print("Pulling the sharded optimizer state from all replicas")
+
+        self._all_optimizer_states = []
+        should_collect_state = self.rank == recipient_rank or recipient_rank == -1
+        should_send_state = (self.rank != recipient_rank and recipient_rank != -1) or recipient_rank == -1
+        print(f'rank: {self.rank}, should_collect: {should_collect_state}, should_send {should_send_state}')
+
+        for rank in range(self.world_size):
+            if rank == self.rank:
+                if should_collect_state:
+                    print(f"{rank} Saving self state")
+                    self._all_optimizer_states.append(
+                        recursive_copy_to_device(optim.state_dict(), non_blocking=True, device=torch.device("cpu"))
+                    )
+
+                # Sync with other replicas
+                state_to_share = (
+                    optim.state_dict()
+                    if should_send_state
+                    else torch.tensor([0], dtype=torch.uint8, device=_default_device)
+                )
+                broadcast_object(
+                    state_to_share, src_rank=self.rank, group=self.process_group, dist_device=_default_device,
+                )
+            else:
+                # Fetch the optim state from the other replicas
+                replica_state = broadcast_object(
+                    torch.tensor([0], dtype=torch.uint8, device=_default_device),
+                    src_rank=rank,
+                    group=self.process_group,
+                    dist_device=_default_device,
+                )
+
+                if should_collect_state:
+                    self._all_optimizer_states.append(
+                        recursive_copy_to_device(replica_state, non_blocking=True, device=torch.device("cpu"))
+                    )
+
+                    print(f"State from rank {rank} received: {self._all_optimizer_states[-1]}")
+
+    def optim_state_dict(self, all_ranks: bool = False) -> Dict[str, Any]:
+        """Return the last known global optimizer state. The returned state is compatible with Pytorch, in that the
+        sharded properties are not exposed.
+
+
+        Arguments:
+            all_ranks (bool): materialize the state on all ranks. In that case, `.state_dict()` needs to be called on
+            all ranks
+
+        Returns:
+            a dict with two entries
+                * state - a dict holding current optimization state. Its content
+                    differs between optimizer classes.
+
+                * param_groups - a dict containing all parameter groups
+
+        .. warning:
+            Returning the global state is limited to the replica which was responsible for the consolidation,
+            if `all_ranks` was not set to `True`. In that case, the state may also not be up to date,
+            depending on when `consolidate_state_dict` was last called.
+        """
+
+        if not all_ranks and len(self._all_optimizer_states) == 0:
+            raise RuntimeError(
+                "Optimizer state has not been consolidated on this rank. \
+                Please call `consolidate_state_dict()` on all ranks beforehand if you meant to save the global state"
+            )
+
+        if all_ranks:
+            # Consolidate the state on every rank
+            self.consolidate_state_dict(recipient_rank=-1)
+
+        # Unify the shard states and the state that pytorch would expect, given the model.
+
+        state_dict = self._all_optimizer_states[0]
+
+        #for c in state
+        from collections import defaultdict
+        #state_dict_state = defaultdict(defaultdict()
+        if self.world_size == 1: return state_dict
+
+        # - go through the per-shard states
+
+        for rank, s in enumerate(self._all_optimizer_states[1:]):
+            # -- match the local indexing and the global partition, update the corresponding saved state globally
+            for local_pg in s["param_groups"]:
+
+                for local_param_index in local_pg["params"]:
+                    # Update the state, if any
+                    if local_param_index in s["state"].keys():
+                        #global_id = self.param_to_index[local_index_to_param_id[local_param_index]]
+                        # This next line is way wrong!
+                        state_dict["state"] = s["state"][local_param_index]
+
+        # Make sure that the parameters are sorted in the state, as expected for a pytorch dict
+        state_dict["state"] = dict(sorted(state_dict["state"].items()))
+
+        return state_dict
+
 
 @torch.no_grad()
 def cast_inputs_to_fp16(*args: Any, **kwargs: Any) -> Tuple[Any, Any]:
@@ -1312,7 +1431,6 @@ def alloc_storage_(data: torch.Tensor, size: torch.Size) -> None:
         return
     assert data.storage().size() == 0
     data.storage().resize_(size.numel())
-
 
 def _post_state_dict_hook(
     module: nn.Module, state_dict: "OrderedDict[str, torch.Tensor]", prefix: str, *args: Any

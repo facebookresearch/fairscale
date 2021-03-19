@@ -44,7 +44,7 @@ class DistributedTest(unittest.TestCase):
             raise unittest.SkipTest("distributed tests require 2+ GPUs, skipping")
 
     @staticmethod
-    def _train_for_several_steps(model, num_steps, autocast, lr=0.01, norm_type=None):
+    def _train_for_several_steps(model, num_steps, autocast, lr=0.01, norm_type=None, save_optim=False):
         model_device = next(model.parameters()).device
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
@@ -253,6 +253,42 @@ class TestComparisonToPyTorchDDP(DistributedTest):
                 self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False
             )
             spawn_and_init(test_fn)
+
+    def test_consolidate_optimizer(self):
+        config = {"mixed_precision": True}
+        test_fn = functools.partial(
+            self._test_consolidated_optimizer, config,
+        )
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_consolidated_optimizer(self,  config, rank, group):
+        """FSDP.optim_state_dict() should return something very similar to optimizer.state_dict()"""
+        # Establish reference behavior.
+        fsdp = self.get_wrapped_model(group, cuda_first=False, config=config)
+        fsdp_optim = torch.optim.SGD(fsdp.parameters(), lr=0.01, momentum=0.9)
+        fsdp_optim.zero_grad()
+
+        src_ids, tgt_ids = fsdp.module.get_input(torch.device("cuda"))
+        output = fsdp(src_ids, tgt_ids)
+        loss = fsdp.module.get_loss((src_ids, tgt_ids), output).to('cuda')
+        fsdp.module.run_backward(loss)
+        fsdp_optim.step()
+        fsdp.consolidate_optim_state_dict(fsdp_optim, recipient_rank=0)
+
+        if rank == 0:
+            assert fsdp._all_optimizer_states
+            torch.save(fsdp._all_optimizer_states, f'all_optim_states_world_size_{fsdp.world_size}.pt')
+            fsdp_state_dict = fsdp.optim_state_dict()
+            unwrapped_model = TransformerWithSharedParams(group).cuda()
+            optim_unwrapped = torch.optim.SGD(unwrapped_model.parameters(), lr=0.01, momentum=0.9)
+            output = unwrapped_model(src_ids, tgt_ids)
+            loss = unwrapped_model.get_loss((src_ids, tgt_ids), output)
+            unwrapped_model.run_backward(loss)
+            optim_unwrapped.step()
+            #assert objects_are_equal(fsdp_state_dict, optim_unwrapped.state_dict(), raise_exception=True)
+            #optim_unwrapped.load_state_dict(fsdp_state_dict)
+
 
     def test_delayed_optim_step(self):
         # We use a model with a long CUDA delay right before the optimizer step.

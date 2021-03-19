@@ -318,7 +318,7 @@ class OSS(Optimizer):
 
         self._all_states = []
         should_collect_state = self.rank == recipient_rank or recipient_rank == -1
-        should_send_state = (self.rank != recipient_rank and recipient_rank != -1) or recipient_rank == -1
+        should_send_state = (self.rank != recipient_rank) or recipient_rank == -1
 
         for rank in range(self.world_size):
             if rank == self.rank:
@@ -351,7 +351,7 @@ class OSS(Optimizer):
                         recursive_copy_to_device(replica_state, non_blocking=True, device=torch.device("cpu"))
                     )
 
-                logging.debug("State from rank %s received", rank)
+                print(f"State from rank {rank} received: ")
 
     def local_state_dict(self) -> dict:
         """ .. deprecated:: 0.1.5
