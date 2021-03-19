@@ -1298,19 +1298,19 @@ class FullyShardedDataParallel(nn.Module):
         should_send_state = (self.rank != recipient_rank and recipient_rank != -1) or recipient_rank == -1
         print(f'rank: {self.rank}, should_collect: {should_collect_state}, should_send {should_send_state}')
 
-
-
         for rank in range(self.world_size):
             if rank == self.rank:
+                sd = optim.state_dict()
+                sd['num_padded'] = self.num_padded  # Communicate between ranks
                 if should_collect_state:
-                    print(f"{rank} Saving self state")
+                    print(f"{rank} Saving self state keys {list(sd.keys())}")
                     self._all_optimizer_states.append(
-                        recursive_copy_to_device(optim.state_dict(), non_blocking=True, device=torch.device("cpu"))
+                        recursive_copy_to_device(sd, non_blocking=True, device=torch.device("cpu"))
                     )
 
                 # Sync with other replicas
                 state_to_share = (
-                    optim.state_dict()
+                    sd
                     if should_send_state
                     else torch.tensor([0], dtype=torch.uint8, device=_default_device)
                 )
@@ -1354,6 +1354,8 @@ class FullyShardedDataParallel(nn.Module):
             if `all_ranks` was not set to `True`. In that case, the state may also not be up to date,
             depending on when `consolidate_state_dict` was last called.
         """
+        if not self.flatten_parameters:
+            raise NotImplementedError('optim state dict requires flatten_parameters=True')
 
         if not all_ranks and len(self._all_optimizer_states) == 0:
             raise RuntimeError(
@@ -1368,10 +1370,9 @@ class FullyShardedDataParallel(nn.Module):
         # Unify the shard states and the state that pytorch would expect, given the model.
 
         sd0 = self._all_optimizer_states[0]
-
-        #for c in state
-        from collections import defaultdict
-        #state_dict_state = defaultdict(defaultdict()
+        assert 'num_padded' in sd0
+        all_num_padded = [s.pop('num_padded')[0] for s in self._all_optimizer_states]
+        assert all_num_padded[0] == 0, f'this code assumes rank 0 param not padded {all_num_padded[0]}'
         if self.world_size == 1: return sd0
 
         # - go through the per-shard states
@@ -1379,19 +1380,20 @@ class FullyShardedDataParallel(nn.Module):
         #new = sd0.copy()
         for pg0 in sd0['param_groups']:
             for param_id in pg0["params"]:
+                # BUG if rank 0's param is padded
                 sd0['state'][param_id] = {k: [v] for k,v in sd0['state'][param_id].items()} # so we can append
 
         for rank, s in enumerate(self._all_optimizer_states[1:]):
-            # -- match the local indexing and the global partition, update the corresponding saved state globally
             for local_pg in s["param_groups"]:
                 for local_param_index in local_pg["params"]:
                     # Update the state, if any
                     if local_param_index in s["state"].keys():
-                        #global_id = self.param_to_index[local_index_to_param_id[local_param_index]]
                         for k in s['state'][local_param_index]:
                             new_entry = s['state'][local_param_index][k]
                             sd0['state'][local_param_index][k].append(new_entry)
                     else:
+
+                        # OSS does not raise in this case, maybe we shouldn't either
                         raise KeyError(f'lost {local_param_index} from rank {rank}')
 
         # Concatenate everything
@@ -1399,12 +1401,12 @@ class FullyShardedDataParallel(nn.Module):
             for param_id in pg0["params"]:
                 # This attempts to undo the work of shard_parameters.
                 # It might be assuming self.flatten_parameters=True
-                #stuff = sd0['state'][param_id]
-                #assert isinstance(sd0['state'][param_id], list), f'{param_id}, {stuff}'
-                #print(f'{stuff[0]}')
                 for k,v in sd0['state'][param_id].items():
-                    sd0['state'][param_id][k] = torch.cat(v)
-
+                    def maybe_unpad(v, num_pad): return v[:-num_pad] if num_pad > 0 else v
+                    v_unpad = [maybe_unpad(t, np) for t,np in zip(v, all_num_padded)]
+                    flat_buffer = torch.cat(v_unpad)
+                    flat_buffer = list(self.module.get_param_views(flat_buffer))
+                    sd0['state'][param_id][k] = flat_buffer
         # Make sure that the parameters are sorted in the state, as expected for a pytorch dict
         sd0["state"] = dict(sorted(sd0["state"].items()))
 
