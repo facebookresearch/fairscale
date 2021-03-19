@@ -16,6 +16,7 @@ class GradBucket:
     def __init__(self, size: int, dtype: torch.dtype, device: torch.device, destination: int) -> None:
         self._max_size = size
         self._params: List[torch.Tensor] = []
+        self._param_ids: List[int] = []
         self._fill = 0
         self._is_collapsed = False
 
@@ -39,9 +40,9 @@ class GradBucket:
         return len(self._params) == self.params_checked_in
 
     def can_add_grad_view(self, param: torch.Tensor) -> bool:
-        """ Is there enough room in the bucket to add this parameter gradient ?
+        """ Is there enough room in the bucket to add this parameter gradient, and is this param not already checked in ?
         """
-        return self._fill + param.numel() < self._max_size
+        return self._fill + param.numel() < self._max_size and id(param) not in self._param_ids
 
     def to(  # type: ignore
         self,
@@ -70,11 +71,15 @@ class GradBucket:
         """
         Add a new parameter gradient to the bucket. Param.grad becomes a view of this bucket buffer
         """
+
+        assert id(param) not in self._param_ids, "The same gradients cannot be checked in twice"
+
         if param.grad is None:
             param.grad = torch.zeros_like(param)
 
         self._add_grad_as_view(param)
         self._params.append(param)
+        self._param_ids.append(id(param))
 
     @torch.no_grad()
     def collapse(self) -> None:

@@ -484,7 +484,7 @@ def test_collect_shards():
     )
 
 
-def run_test_reproducibility(rank, world_size, tempfile_name):
+def run_test_reproducibility(rank, world_size, tempfile_name, broadcast_fp16):
     dist_init(rank, world_size, tempfile_name)
     device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
     torch.cuda.set_device(rank)
@@ -501,7 +501,7 @@ def run_test_reproducibility(rank, world_size, tempfile_name):
     loss_fn = torch.nn.L1Loss()
     loss_fn.to(device)
 
-    optimizer = optim.OSS(model.parameters(), optim=torch.optim.RMSprop, lr=0.1)
+    optimizer = optim.OSS(model.parameters(), optim=torch.optim.RMSprop, lr=0.1, broadcast_fp16=broadcast_fp16)
 
     def closure():
         optimizer.zero_grad()
@@ -534,12 +534,13 @@ def run_test_reproducibility(rank, world_size, tempfile_name):
 
 
 @skip_if_single_gpu
-def test_reproducibility():
+@pytest.mark.parametrize("broadcast_fp16", [False, True])
+def test_reproducibility(broadcast_fp16: bool):
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(
-        run_test_reproducibility, args=(world_size, temp_file_name), nprocs=world_size, join=True,
+        run_test_reproducibility, args=(world_size, temp_file_name, broadcast_fp16), nprocs=world_size, join=True,
     )
 
 
@@ -810,7 +811,7 @@ def test_state_dict_distributed():
     )
 
 
-def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph):
+def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph, broadcast_fp16):
     url = "file://" + temp_file_name
     dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
 
@@ -937,9 +938,13 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph
 @skip_if_single_gpu
 @pytest.mark.parametrize("change_train_graph", [True, False])
 @pytest.mark.parametrize("backend", [dist.Backend.NCCL, dist.Backend.GLOO])
-def test_ddp_parity(change_train_graph: bool, backend: dist.Backend):
+@pytest.mark.parametrize("broadcast_fp16", [False, True])
+def test_ddp_parity(change_train_graph: bool, backend: dist.Backend, broadcast_fp16: bool):
     temp_file_name = tempfile.mkstemp()[1]
     world_size = torch.cuda.device_count()
     mp.spawn(
-        run_ddp_parity, args=(world_size, backend, temp_file_name, change_train_graph), nprocs=world_size, join=True
+        run_ddp_parity,
+        args=(world_size, backend, temp_file_name, change_train_graph, broadcast_fp16),
+        nprocs=world_size,
+        join=True,
     )
