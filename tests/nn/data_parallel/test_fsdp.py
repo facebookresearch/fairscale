@@ -30,6 +30,9 @@ from fairscale.utils.testing import (
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
+def _make_optimizer_groups(model):
+    return [{'params': model.output_proj.parameters()},
+            {'params': model.transformer.parameters(), 'lr': 1e-3}]
 
 
 class DistributedTest(unittest.TestCase):
@@ -48,7 +51,7 @@ class DistributedTest(unittest.TestCase):
         model_device = next(model.parameters()).device
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
-        optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+        optim = torch.optim.SGD(_make_optimizer_groups(model), lr=lr, momentum=0.9)
         for _ in range(num_steps):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
