@@ -149,7 +149,12 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
         tp_options = {"init_method": url_rpc}
         # Workaround for bug in torch v1.8.0. Should be fixed in v1.8.1
         if torch_version() == (1, 8, 0):
-            tp_options["_transports"] = ["uv"]  # type: ignore
+            if torch.cuda.is_available():
+                # Workaround for https://github.com/pytorch/pytorch/issues/53844
+                tp_options["_transports"] = ["ibv", "uv"]  # type: ignore
+            else:
+                # Workaround for https://github.com/pytorch/pytorch/issues/54266
+                tp_options["_channels"] = ["mpt_uv", "basic", "cuda_ipc", "cuda_gdr", "cuda_xth", "cuda_basic"]  # type: ignore
 
         rpc.init_rpc(
             f"Test{rank}",
