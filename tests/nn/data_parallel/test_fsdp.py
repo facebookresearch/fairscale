@@ -18,6 +18,7 @@ from torch import nn
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
 from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
+from fairscale.optim import AdaScale
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,
@@ -48,7 +49,7 @@ class DistributedTest(unittest.TestCase):
         model_device = next(model.parameters()).device
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
-        optim = torch.optim.SGD(_make_optimizer_groups(model), lr=lr, momentum=0.9)
+        optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
         for _ in range(num_steps):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
@@ -210,11 +211,6 @@ keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters"]
 CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
 
 
-def _make_optimizer_groups(model):
-    return [{'params': model.module.output_proj.parameters()},
-            {'params': model.module.transformer.parameters(), 'lr': 1e-3}]
-
-
 def rename_test(testcase_func, param_num, param):
     return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
 
@@ -260,11 +256,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             )
             spawn_and_init(test_fn)
 
-    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    @parameterized.expand(
+        [[functools.partial(torch.optim.SGD, momentum=0.9)], [torch.optim.SGD], [torch.optim.Adam], [AdaScale]],
+        name_func=rename_test)
     def test_consolidate_optimizer(self, optim_fn):
         config = {"mixed_precision": True}
         test_fn = functools.partial(
-            self._test_consolidated_optimizer, config,
+            self._test_consolidated_optimizer, config, optim_fn=optim_fn
         )
         spawn_and_init(test_fn)
 
@@ -273,13 +271,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         """FSDP.optim_state_dict() should return something very similar to optimizer.state_dict()"""
         # Establish reference behavior.
         fsdp = self.get_wrapped_model(group, cuda_first=False, config=config)
-
-
-
-        if lr_groups:
-            fsdp_optim = optim_fn(_make_optimizer_groups(model), lr=0.01, momentum=0.9)
-        else:
-            fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01, momentum=0.9)
+        fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01,)
         fsdp_optim.zero_grad()
 
         src_ids, tgt_ids = fsdp.module.get_input(torch.device("cuda"))
