@@ -30,9 +30,10 @@ if torch.cuda.is_available():
 else:
     DEVICES = [CPU_DEVICES]
 
-
-pytestmark = pytest.mark.skipif(torch_version() < (1, 8, 0), reason="require torch version >= 1.8.0")
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="https://github.com/pytorch/pytorch/issues/54266")
+# cuda test is because of https://github.com/pytorch/pytorch/issues/54266
+pytestmark = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch_version() < (1, 8, 0), reason="requires torch version >= 1.8.0 and cuda"
+)
 
 
 def rpc_worker(rank, world_size, init_file, func, *args):
