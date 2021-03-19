@@ -42,7 +42,7 @@ def rpc_worker(rank, world_size, init_file, func, *args):
             # Workaround for https://github.com/pytorch/pytorch/issues/54266
             options = rpc.TensorPipeRpcBackendOptions(
                 init_method="file://" + init_file,
-                _transports=["mpt_uv", "basic", "cuda_ipc", "cuda_gdr", "cuda_xth", "cuda_basic"],
+                _channels=["mpt_uv", "basic", "cuda_ipc", "cuda_gdr", "cuda_xth", "cuda_basic"],
             )
     else:
         options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
