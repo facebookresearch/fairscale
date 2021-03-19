@@ -280,6 +280,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             assert fsdp._all_optimizer_states
             torch.save(fsdp._all_optimizer_states, f'all_optim_states_world_size_{fsdp.world_size}.pt')
             fsdp_state_dict = fsdp.optim_state_dict()
+            torch.save(fsdp_state_dict, f'fsdp_consolidated_{fsdp.world_size}.pt')
             unwrapped_model = TransformerWithSharedParams(group).cuda()
             optim_unwrapped = torch.optim.SGD(unwrapped_model.parameters(), lr=0.01, momentum=0.9)
             output = unwrapped_model(src_ids, tgt_ids)
@@ -422,6 +423,15 @@ class TestParamInit(DistributedTest):
         new_output = model(*input)
 
         assert not objects_are_equal(ref_output, new_output), "new_output did not reflect change to param after init"
+
+
+    def test_named_params_ordering(self):
+        """Test assumption of consolidate_optimizer_state_dict"""
+        group = DummyProcessGroup(0, 1)
+        model = TransformerWithSharedParams(group)
+        named_pars = [p for n,p in model.named_parameters()]
+        for i, p in enumerate(model.parameters()):
+            assert p.shape == named_pars[i].shape
 
 
 class TestSerialization(DistributedTest):

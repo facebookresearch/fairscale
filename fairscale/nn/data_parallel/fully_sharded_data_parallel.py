@@ -7,6 +7,7 @@ import contextlib
 import copy
 from enum import Enum, auto
 import functools
+from collections import defaultdict
 from math import inf
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
@@ -340,6 +341,7 @@ class FullyShardedDataParallel(nn.Module):
         allocate less memory for optimizer state, avoiding redundancy across
         data parallel workers.
         """
+        self.num_padded = []
         for p in self.params:
             assert not hasattr(p, "_is_sharded")
             assert p.is_floating_point()
@@ -351,15 +353,17 @@ class FullyShardedDataParallel(nn.Module):
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
+                self.num_padded.append(0)
                 continue
             p._is_sharded = True
 
             # Replace p.data with the relevant shard.
             orig_data = p.data
-            p.data = self._get_shard(p.data)
+            p.data, num_padded = self._get_shard(p.data)
+            self.num_padded.append(num_padded)
             free_storage_(orig_data)
 
-    def _get_shard(self, tensor: torch.Tensor) -> torch.Tensor:
+    def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
         """Return the local shard of a given full tensor."""
         # Shard using torch.chunk to match all-gather/reduce-scatter.
         chunks = list(torch.flatten(tensor).chunk(self.world_size))
@@ -373,7 +377,7 @@ class FullyShardedDataParallel(nn.Module):
         shard = chunks[self.rank].clone()
         if num_to_pad > 0:
             shard = F.pad(shard, [0, num_to_pad])
-        return shard
+        return shard, num_to_pad
 
     def extra_repr(self) -> str:
         return (
@@ -609,7 +613,7 @@ class FullyShardedDataParallel(nn.Module):
                         if not volatile:
                             # Copy any changes made to the full params back into
                             # the corresponding local shards.
-                            local_shard = self._get_shard(full_tensor)
+                            local_shard, _ = self._get_shard(full_tensor)
                             p._fp32_shard.copy_(local_shard.view_as(p._fp32_shard))
                         if safe_to_free:
                             free_storage_(full_tensor)
@@ -1294,6 +1298,8 @@ class FullyShardedDataParallel(nn.Module):
         should_send_state = (self.rank != recipient_rank and recipient_rank != -1) or recipient_rank == -1
         print(f'rank: {self.rank}, should_collect: {should_collect_state}, should_send {should_send_state}')
 
+
+
         for rank in range(self.world_size):
             if rank == self.rank:
                 if should_collect_state:
@@ -1361,30 +1367,48 @@ class FullyShardedDataParallel(nn.Module):
 
         # Unify the shard states and the state that pytorch would expect, given the model.
 
-        state_dict = self._all_optimizer_states[0]
+        sd0 = self._all_optimizer_states[0]
 
         #for c in state
         from collections import defaultdict
         #state_dict_state = defaultdict(defaultdict()
-        if self.world_size == 1: return state_dict
+        if self.world_size == 1: return sd0
 
         # - go through the per-shard states
+        assert len(sd0['param_groups']) == 1, 'not yet supported'
+        #new = sd0.copy()
+        for pg0 in sd0['param_groups']:
+            for param_id in pg0["params"]:
+                sd0['state'][param_id] = {k: [v] for k,v in sd0['state'][param_id].items()} # so we can append
 
         for rank, s in enumerate(self._all_optimizer_states[1:]):
             # -- match the local indexing and the global partition, update the corresponding saved state globally
             for local_pg in s["param_groups"]:
-
                 for local_param_index in local_pg["params"]:
                     # Update the state, if any
                     if local_param_index in s["state"].keys():
                         #global_id = self.param_to_index[local_index_to_param_id[local_param_index]]
-                        # This next line is way wrong!
-                        state_dict["state"] = s["state"][local_param_index]
+                        for k in s['state'][local_param_index]:
+                            new_entry = s['state'][local_param_index][k]
+                            sd0['state'][local_param_index][k].append(new_entry)
+                    else:
+                        raise KeyError(f'lost {local_param_index} from rank {rank}')
+
+        # Concatenate everything
+        for pg0 in sd0['param_groups']:
+            for param_id in pg0["params"]:
+                # This attempts to undo the work of shard_parameters.
+                # It might be assuming self.flatten_parameters=True
+                #stuff = sd0['state'][param_id]
+                #assert isinstance(sd0['state'][param_id], list), f'{param_id}, {stuff}'
+                #print(f'{stuff[0]}')
+                for k,v in sd0['state'][param_id].items():
+                    sd0['state'][param_id][k] = torch.cat(v)
 
         # Make sure that the parameters are sorted in the state, as expected for a pytorch dict
-        state_dict["state"] = dict(sorted(state_dict["state"].items()))
+        sd0["state"] = dict(sorted(sd0["state"].items()))
 
-        return state_dict
+        return sd0
 
 
 @torch.no_grad()

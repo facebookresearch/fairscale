@@ -122,15 +122,16 @@ class FlattenParamsWrapper(nn.Module):
         # register the views as plain attributes
         self._unflatten_params_as_views()
 
-    def _get_param_views(self, flat_param: Tensor) -> Generator:
-        return (t.view(s) for (t, s) in zip(flat_param.split(self._param_numels), self._param_shapes))
+    def get_param_views(self, flat_param: Tensor) -> Generator:
+        splat = flat_param.split(self._param_numels)
+        return (t.view(s) for (t, s) in zip(splat, self._param_shapes))
 
     def _unflatten_params(self, flat_param: Optional[Tensor] = None) -> None:
         assert self.is_flattened or flat_param is not None
         self.is_flattened = False
         flat_param = flat_param if flat_param is not None else self.flat_param
 
-        ps = self._get_param_views(flat_param)
+        ps = self.get_param_views(flat_param)
         for (m, n), p in zip(self._param_infos, ps):
             if hasattr(m, n):
                 delattr(m, n)
@@ -144,7 +145,7 @@ class FlattenParamsWrapper(nn.Module):
 
     def _unflatten_params_as_views(self) -> None:
         assert self.is_flattened
-        ps = self._get_param_views(self.flat_param)
+        ps = self.get_param_views(self.flat_param)
         for (m, n), p in zip(self._param_infos, ps):
             setattr(m, n, p)  # This will set as plain attr
         for (m, n, shared_m, shared_n) in self._shared_param_infos:
