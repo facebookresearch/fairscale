@@ -48,7 +48,7 @@ class DistributedTest(unittest.TestCase):
         model_device = next(model.parameters()).device
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
-        optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+        optim = torch.optim.SGD(_make_optimizer_groups(model), lr=lr, momentum=0.9)
         for _ in range(num_steps):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
@@ -210,6 +210,11 @@ keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters"]
 CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
 
 
+def _make_optimizer_groups(model):
+    return [{'params': model.module.output_proj.parameters()},
+            {'params': model.module.transformer.parameters(), 'lr': 1e-3}]
+
+
 def rename_test(testcase_func, param_num, param):
     return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
 
@@ -245,6 +250,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         )
         spawn_and_init(test_fn)
 
+
     def test_cpu_offload_and_cuda_grads_breaks(self):
         # If grads are on gpu, but model and optimizer are on cpu, backward breaks.
         config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": False}
@@ -254,7 +260,8 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             )
             spawn_and_init(test_fn)
 
-    def test_consolidate_optimizer(self):
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_consolidate_optimizer(self, optim_fn):
         config = {"mixed_precision": True}
         test_fn = functools.partial(
             self._test_consolidated_optimizer, config,
@@ -262,11 +269,17 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_consolidated_optimizer(self,  config, rank, group):
+    def _test_consolidated_optimizer(self,  config, rank, group, lr_groups=False, optim_fn=torch.optim.SGD):
         """FSDP.optim_state_dict() should return something very similar to optimizer.state_dict()"""
         # Establish reference behavior.
         fsdp = self.get_wrapped_model(group, cuda_first=False, config=config)
-        fsdp_optim = torch.optim.SGD(fsdp.parameters(), lr=0.01, momentum=0.9)
+
+
+
+        if lr_groups:
+            fsdp_optim = optim_fn(_make_optimizer_groups(model), lr=0.01, momentum=0.9)
+        else:
+            fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01, momentum=0.9)
         fsdp_optim.zero_grad()
 
         src_ids, tgt_ids = fsdp.module.get_input(torch.device("cuda"))
