@@ -1424,8 +1424,10 @@ class FullyShardedDataParallel(nn.Module):
         sd = full_optim_state_dict
         if self.flatten_parameters:
             sd = self.flatten_optim_state_dict(sd)
+            assert len(sd['state']) == 1
+            assert len(sd['param_groups'][0]['params']) == 1
         for id, s in sd['state'].items():
-            for k,v in s:
+            for k,v in s.items():
                 tensor, _ = self._get_shard(v)
                 sd['state'][id][k] = tensor
 
@@ -1433,6 +1435,22 @@ class FullyShardedDataParallel(nn.Module):
 
 
     def flatten_optim_state_dict(self, sd) -> Dict:
+        from collections import defaultdict
+
+        flat_params = defaultdict(list)
+
+        for _, buffers in sd['state'].items():
+            for k, p in buffers.items():
+                flat_params[k].append(p.reshape(-1))
+        state = {0: {}}
+        for k,v in flat_params.items():
+            state[0][k] = torch.cat(v)
+
+            assert state[0][k].dim() == 1, state[0][k].dim()
+        sd['state'] = state
+        for pg_id, _ in enumerate(sd['param_groups']):
+            sd['param_groups'][pg_id]['params'] = list(range(1))
+
         return sd
 
 

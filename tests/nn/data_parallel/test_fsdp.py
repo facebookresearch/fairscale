@@ -295,6 +295,10 @@ class TestComparisonToPyTorchDDP(DistributedTest):
 
         assert_equal(len(sd['param_groups'][0]['params']), len(sd['state']))
 
+        shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
+        from fairscale.optim.utils import recursive_copy_to_device
+        assert objects_are_equal(shard_sd, recursive_copy_to_device(fsdp_optim.state_dict(), non_blocking=False, device='cpu'))
+
         optim_unwrapped = torch.optim.SGD(unwrapped_model.parameters(), lr=0.01, momentum=0.9)
         output = unwrapped_model(src_ids, tgt_ids)
         loss = unwrapped_model.get_loss((src_ids, tgt_ids), output)
