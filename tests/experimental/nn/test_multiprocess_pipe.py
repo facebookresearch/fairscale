@@ -32,6 +32,7 @@ else:
 
 
 pytestmark = pytest.mark.skipif(torch_version() < (1, 8, 0), reason="require torch version >= 1.8.0")
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="https://github.com/pytorch/pytorch/issues/54266")
 
 
 def rpc_worker(rank, world_size, init_file, func, *args):
