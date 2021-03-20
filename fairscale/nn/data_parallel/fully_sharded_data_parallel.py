@@ -279,7 +279,6 @@ class FullyShardedDataParallel(nn.Module):
                     module._reset_lazy_init()
         return return_value
 
-    @torch.no_grad()
     def _cast_buffers(
         self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None, memo: Optional[Set] = None
     ) -> None:
