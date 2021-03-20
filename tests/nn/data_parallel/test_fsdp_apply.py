@@ -22,18 +22,18 @@ from .test_fsdp import (
 class TestApply(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_weight_init(self, config):
-        model_init_fn = functools.partial(apply_custom_weight_init, TransformerWithSharedParams)
+        model_init_fn = functools.partial(model_init_and_apply_custom_weight_init, TransformerWithSharedParams)
         test_fn = functools.partial(self._test_identical_outputs, model_init_fn, config, lr=0.01)
         spawn_and_init(test_fn)
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_nested_wrapped_weight_init(self, config):
-        model_init_fn = functools.partial(apply_custom_weight_init, NestedWrappedModule)
+        model_init_fn = functools.partial(model_init_and_apply_custom_weight_init, NestedWrappedModule)
         test_fn = functools.partial(self._test_identical_outputs, model_init_fn, config, lr=0.01)
         spawn_and_init(test_fn)
 
 
-def apply_custom_weight_init(model_init_fn, *args, **kwargs):
+def model_init_and_apply_custom_weight_init(model_init_fn, *args, **kwargs):
     model = model_init_fn(*args, **kwargs)
     model.apply(init_bert_params_)
     return model

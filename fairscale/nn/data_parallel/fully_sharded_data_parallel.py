@@ -259,7 +259,8 @@ class FullyShardedDataParallel(nn.Module):
         parameters of a model.
 
         Compared to ``torch.nn.Module.apply``, this version additionally gathers
-        the full parameters before applying ``fn``.
+        the full parameters before applying ``fn``. It should not be called from
+        within another ``summon_full_params`` context.
 
         Args:
             fn (nn.Module): function to be applied to each submodule
@@ -268,6 +269,7 @@ class FullyShardedDataParallel(nn.Module):
             Module: self
         """
         is_uninitialized = self._is_root is None
+        self.assert_state(TrainingState.IDLE)
         with self.summon_full_params(recurse=False):
             return_value = super().apply(fn)
         # summon_full_params will call _lazy_init, which sets _is_root. However,
