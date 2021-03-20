@@ -442,9 +442,6 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
 
     # Update the optimizer state on the reference rank
     optimizer.consolidate_state_dict(recipient_rank=reference_rank)
-    # if rank == reference_rank:
-    #     #types = [type(x) for x in optimizer._all_states]
-    #     #assert all(isinstance(s, dict) for s in optimizer._all_states), types
 
     # Fetch the state on the reference rank
     # - check that it has the correct size

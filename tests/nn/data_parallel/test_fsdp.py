@@ -12,6 +12,7 @@ from typing import Dict
 import unittest
 from unittest import mock
 
+from fairseq.optim.cpu_adam import CPUAdam
 from parameterized import parameterized
 import torch
 from torch import nn
@@ -19,6 +20,7 @@ from torch import nn
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
 from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
 from fairscale.optim import AdaScale
+from fairscale.optim.utils import recursive_copy_to_device
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,
@@ -28,15 +30,14 @@ from fairscale.utils.testing import (
     spawn_for_all_world_sizes,
     torch_version,
 )
-from fairscale.optim.utils import recursive_copy_to_device
-from fairseq.optim.cpu_adam import CPUAdam
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
 
 
 def assert_equal(a, b):
-    assert a == b, f'{a} != {b}'
+    assert a == b, f"{a} != {b}"
+
 
 class DistributedTest(unittest.TestCase):
     def setUp(self):
@@ -251,7 +252,6 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         )
         spawn_and_init(test_fn)
 
-
     def test_cpu_offload_and_cuda_grads_breaks(self):
         # If grads are on gpu, but model and optimizer are on cpu, backward breaks.
         config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": False}
@@ -262,18 +262,16 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             spawn_and_init(test_fn)
 
     @parameterized.expand(
-        [[functools.partial(torch.optim.SGD, momentum=0.9)],
-         [torch.optim.SGD], [torch.optim.Adam], [CPUAdam]],
-        name_func=rename_test)
+        [[functools.partial(torch.optim.SGD, momentum=0.9)], [torch.optim.SGD], [torch.optim.Adam], [CPUAdam]],
+        name_func=rename_test,
+    )
     def test_consolidate_optimizer(self, optim_fn):
         config = {"mixed_precision": True}
-        test_fn = functools.partial(
-            self._test_consolidated_optimizer, config, optim_fn=optim_fn
-        )
+        test_fn = functools.partial(self._test_consolidated_optimizer, config, optim_fn=optim_fn)
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_consolidated_optimizer(self,  config, rank, group, lr_groups=False, optim_fn=torch.optim.SGD):
+    def _test_consolidated_optimizer(self, config, rank, group, lr_groups=False, optim_fn=torch.optim.SGD):
         """FSDP.optim_state_dict() should return something very similar to optimizer.state_dict()"""
         # Establish reference behavior.
         fsdp = self.get_wrapped_model(group, cuda_first=False, config=config)
@@ -281,25 +279,22 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         try:
             fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01,)
             optim_unwrapped = optim_fn(unwrapped_model.parameters(), lr=0.01)
-        except TypeError: # AdaScale
+        except TypeError:  # AdaScale
             fsdp_optim = optim_fn(fsdp.parameters())
             optim_unwrapped = optim_fn(unwrapped_model.parameters())
-
 
         fsdp_optim.zero_grad()
         optim_unwrapped.zero_grad()
 
         src_ids, tgt_ids = fsdp.module.get_input(torch.device("cuda"))
         output = fsdp(src_ids, tgt_ids)
-        loss = fsdp.module.get_loss((src_ids, tgt_ids), output).to('cuda')
+        loss = fsdp.module.get_loss((src_ids, tgt_ids), output).to("cuda")
         fsdp.module.run_backward(loss)
         fsdp_optim.step()
         fsdp.consolidate_optim_state_dict(fsdp_optim, recipient_rank=0)
 
         if rank > 0 or fsdp.world_size == 1:
             return
-
-
 
         output = unwrapped_model(src_ids, tgt_ids)
         loss = unwrapped_model.get_loss((src_ids, tgt_ids), output)
@@ -309,17 +304,17 @@ class TestComparisonToPyTorchDDP(DistributedTest):
 
         n_pars = len(list(unwrapped_model.parameters()))
         assert len(fsdp._all_optimizer_states) == fsdp.world_size
-        torch.save(fsdp._all_optimizer_states, f'all_optim_states_world_size_{fsdp.world_size}.pt')
+        torch.save(fsdp._all_optimizer_states, f"all_optim_states_world_size_{fsdp.world_size}.pt")
         sd = fsdp.gather_full_optim_state_dict()
-        torch.save(sd, f'fsdp_consolidated_{fsdp.world_size}.pt')
+        torch.save(sd, f"fsdp_consolidated_{fsdp.world_size}.pt")
 
-        assert_equal(len(sd['state']), len(unwrapped_sd['state']))
-        assert_equal(len(sd['param_groups'][0]['params']), len(unwrapped_sd['param_groups'][0]['params']))
+        assert_equal(len(sd["state"]), len(unwrapped_sd["state"]))
+        assert_equal(len(sd["param_groups"][0]["params"]), len(unwrapped_sd["param_groups"][0]["params"]))
 
         shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
-        assert objects_are_equal(shard_sd, recursive_copy_to_device(fsdp_optim.state_dict(), non_blocking=False, device='cpu'))
-
-
+        assert objects_are_equal(
+            shard_sd, recursive_copy_to_device(fsdp_optim.state_dict(), non_blocking=False, device="cpu")
+        )
 
     def test_delayed_optim_step(self):
         # We use a model with a long CUDA delay right before the optimizer step.
@@ -454,12 +449,11 @@ class TestParamInit(DistributedTest):
 
         assert not objects_are_equal(ref_output, new_output), "new_output did not reflect change to param after init"
 
-
     def test_named_params_ordering(self):
         """Test assumption of consolidate_optimizer_state_dict"""
         group = DummyProcessGroup(0, 1)
         model = TransformerWithSharedParams(group)
-        named_pars = [p for n,p in model.named_parameters()]
+        named_pars = [p for n, p in model.named_parameters()]
         for i, p in enumerate(model.parameters()):
             assert p.shape == named_pars[i].shape
 
