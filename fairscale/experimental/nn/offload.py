@@ -190,6 +190,7 @@ class ActivationCheckpointing(torch.autograd.Function):
                 model_instance._activations.append(output)
             else:
                 model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
+            print(f"model_instance._activations device {[a.device for a in model_instance._activations[-1]]}")
             # Move the layer shard back to the CPU.
             layer_shard.forward_drop()
 

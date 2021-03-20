@@ -212,6 +212,9 @@ def train(model_config, model, benchmark_config, model_specs, args):
             total_tokens_per_log_interval = 0
             total_loss = 0
             start_time = time.time()
+        if args.use_profiler:
+            prof.export_chrome_trace("/tmp/offload_prof")
+
     if epoch_start_time != 0:
         wps = total_tokens / (time.time() - epoch_start_time)
     else:
