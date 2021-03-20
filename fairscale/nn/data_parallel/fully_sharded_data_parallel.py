@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections import defaultdict
 import contextlib
 import copy
 from enum import Enum, auto
@@ -21,7 +22,7 @@ import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
-from fairscale.optim.utils import calc_grad_norm
+from fairscale.optim.utils import broadcast_object, calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
@@ -179,7 +180,6 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
-        self._all_optimizer_states: List[Dict[str, Any]] = []  # Optional consolidated optimizer state
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
@@ -1280,7 +1280,9 @@ class FullyShardedDataParallel(nn.Module):
             raise ValueError(msg)
 
     # Optim State dict interfaces
-    def consolidate_optim_state_dict(self, optim, recipient_rank: int = 0) -> None:
+    def consolidate_optim_state_dict(
+        self, optim: torch.optim.Optimizer, recipient_rank: int = 0
+    ) -> List[Dict[str, Any]]:
         """Update the consolidated state_dict list, one per rank.
 
         Arguments:
@@ -1290,29 +1292,24 @@ class FullyShardedDataParallel(nn.Module):
         .. warning: This needs to be called on all replicas"""
 
         # Sync lr and other attributes in case its been updated
-        from fairscale.optim import OSS
-        from fairscale.optim.utils import broadcast_object, recursive_copy_to_device
 
         _default_device = torch.device("cuda")
-
+        # NOTE(SS): we do not support param groups yet, as these seem to break FSDP
         # OSS._sync_param_groups(self.param_groups, optim.param_groups)
 
         # Pull the sharded state from all the other replicas
         # Store all the states in order, rank by rank
-        # print("Pulling the sharded optimizer state from all replicas")
-
-        self._all_optimizer_states = []
         should_collect_state = self.rank == recipient_rank or recipient_rank == -1
         should_send_state = (self.rank != recipient_rank and recipient_rank != -1) or recipient_rank == -1
         print(f"rank: {self.rank}, should_collect: {should_collect_state}, should_send {should_send_state}")
-
+        _all_optimizer_states: List[Dict[str, Any]] = []
         for rank in range(self.world_size):
             if rank == self.rank:
                 sd = optim.state_dict()
                 sd["num_padded"] = self.num_padded  # Communicate between ranks
                 if should_collect_state:
                     print(f"{rank} Saving self state keys {list(sd.keys())}")
-                    self._all_optimizer_states.append(
+                    _all_optimizer_states.append(
                         recursive_copy_to_device(sd, non_blocking=True, device=torch.device("cpu"))
                     )
 
@@ -1333,20 +1330,20 @@ class FullyShardedDataParallel(nn.Module):
                 )
 
                 if should_collect_state:
-                    self._all_optimizer_states.append(
+                    _all_optimizer_states.append(
                         recursive_copy_to_device(replica_state, non_blocking=True, device=torch.device("cpu"))
                     )
 
-                    print(f"State from rank {rank} received: {self._all_optimizer_states[-1]}")
+                    print(f"State from rank {rank} received: {_all_optimizer_states[-1]}")
+        return _all_optimizer_states
 
-    def gather_full_optim_state_dict(self, all_ranks: bool = False) -> Dict[str, Any]:
+    def gather_full_optim_state_dict(self, optim: torch.optim.Optimizer, recipient_rank: int = 0) -> Dict[str, Any]:
         """Return the last known global optimizer state. The returned state is compatible with Pytorch, in that the
         sharded properties are not exposed.
 
 
         Arguments:
             all_ranks (bool): materialize the state on all ranks. In that case, `.state_dict()` needs to be called on
-            all ranks
 
         Returns:
             a dict with two entries
@@ -1363,35 +1360,22 @@ class FullyShardedDataParallel(nn.Module):
         if not self.flatten_parameters:
             raise NotImplementedError("optim state dict requires flatten_parameters=True")
 
-        if not all_ranks and len(self._all_optimizer_states) == 0:
-            raise RuntimeError(
-                "Optimizer state has not been consolidated on this rank. \
-                Please call `consolidate_state_dict()` on all ranks beforehand if you meant to save the global state"
-            )
+        _all_optimizer_states: List[Dict] = self.consolidate_optim_state_dict(optim, recipient_rank=recipient_rank)
 
-        if all_ranks:
-            # Consolidate the state on every rank
-            self.consolidate_state_dict(recipient_rank=-1)
-
-        # Unify the shard states by concatenating tensors and otherwise assuming rank zero is correct.
-        sd0 = self._all_optimizer_states[0]
+        # Unify the shard states by concatenating tensors and unflattening params
+        sd0 = _all_optimizer_states[0]
         assert "num_padded" in sd0
-        all_num_padded = [s.pop("num_padded")[0] for s in self._all_optimizer_states]
+        all_num_padded = [s.pop("num_padded")[0] for s in _all_optimizer_states]
         assert all_num_padded[0] == 0, f"this code assumes rank 0 param not padded {all_num_padded[0]}"
-
-        # - go through the per-shard states
         assert len(sd0["param_groups"]) == 1, "not yet supported"
-
-        if len(sd0["state"]) == 0:
-            # This is a stateless optimizer, like vanilla SGD.
-            sd0["param_groups"][0]["params"] = [0]
-            return sd0
 
         for pg0 in sd0["param_groups"]:
             for param_id in pg0["params"]:
-                sd0["state"][param_id] = {k: [v] for k, v in sd0["state"][param_id].items()}  # so we can append
-        other_states = self._all_optimizer_states[1:] if self.world_size > 1 else []
-        for rank, s in enumerate(self._all_optimizer_states[1:]):
+                if param_id in sd0["state"]:
+                    sd0["state"][param_id] = {k: [v] for k, v in sd0["state"][param_id].items()}  # so we can append
+
+        other_states = _all_optimizer_states[1:] if self.world_size > 1 else []
+        for rank, s in enumerate(other_states):
             for local_pg in s["param_groups"]:
                 for local_param_index in local_pg["params"]:
                     # Update the state, if any
@@ -1399,45 +1383,43 @@ class FullyShardedDataParallel(nn.Module):
                         for k in s["state"][local_param_index]:
                             new_entry = s["state"][local_param_index][k]
                             sd0["state"][local_param_index][k].append(new_entry)
-                    else:
-
-                        # OSS does not raise in this case, maybe we shouldn't either
-                        raise KeyError(f"lost {local_param_index} from rank {rank}")
 
         # Concatenate everything
         for pg_id, pg0 in enumerate(sd0["param_groups"]):
             n_params = 0
             for param_id in pg0["params"]:
+                if param_id not in sd0["state"]:
+                    continue
                 assert param_id == 0
-
                 # This attempts to undo the work of shard_parameters.
-                # It might be assuming self.flatten_parameters=True
-                constant_state = self.extract_constant_state(sd0, param_id)
-
+                # It assumes self.flatten_parameters=True
+                constant_state = self._extract_constant_state(sd0, param_id)
                 for k, v in sd0["state"][param_id].items():
                     assert isinstance(v, list), f"expected list, got {v}"
                     if k in constant_state:
                         continue
 
-                    def maybe_unpad(v, num_pad):
-                        return v[:-num_pad] if num_pad > 0 else v
-
-                    v_unpad = [maybe_unpad(t, np) for t, np in zip(v, all_num_padded)]
+                    v_unpad = [t[:-np] if np > 0 else t for t, np in zip(v, all_num_padded)]
                     flat_buffer = torch.cat(v_unpad)
                     flat_buffer = self.module.get_param_views(flat_buffer)
                     for i, entry in enumerate(flat_buffer):
                         if i not in sd0["state"]:
                             sd0["state"][i] = {}
                         sd0["state"][i][k] = entry
-                        sd0["state"][i].update(constant_state.copy())
+                        sd0["state"][i].update(constant_state)
                     n_params = max(i, n_params)
-            sd0["param_groups"][pg_id]["params"] = list(range(n_params + 1))
+
+            if n_params > 0:
+                sd0["param_groups"][pg_id]["params"] = list(range(n_params + 1))
+            else:
+                sd0["param_groups"][pg_id]["params"] = list(range(len(self.module._param_infos)))
 
         # Make sure that the parameters are sorted in the state, as expected for a pytorch dict
         sd0["state"] = dict(sorted(sd0["state"].items()))
         return sd0
 
-    def extract_constant_state(self, sd0, param_id):
+    @staticmethod
+    def _extract_constant_state(sd0: Dict, param_id: int) -> Dict[str, Any]:
         constant_state = {}  # This state is like step in Adam, not a tensor so we dont unpad or cat it.
         for k, v in sd0["state"][param_id].items():
             if torch.is_tensor(v[0]):
@@ -1445,31 +1427,28 @@ class FullyShardedDataParallel(nn.Module):
             elif len(set(v)) == 1:
                 constant_state[k] = v[0]
             else:
-                raise ValueError(f"Dont know how to expand optimizer param {k} with value {v}")
+                raise TypeError(f"Dont know how to expand optimizer param {k} with value {v}")
         return constant_state
 
-    def get_shard_from_optim_state_dict(self, full_optim_state_dict) -> Dict:
-        sd = full_optim_state_dict
-
+    def get_shard_from_optim_state_dict(self, full_optim_state_dict) -> Dict[str, Any]:
         if self.flatten_parameters:
-            sd = self.flatten_optim_state_dict(sd)
-            assert len(sd["state"]) == 1
-            assert len(sd["param_groups"][0]["params"]) == 1
+            full_optim_state_dict = self.flatten_optim_state_dict(full_optim_state_dict)
+            assert len(full_optim_state_dict["state"]) <= 1
+            assert len(full_optim_state_dict["param_groups"][0]["params"]) == 1
 
         # get the portion of dict associated with the shard
-        for id, s in sd["state"].items():
+        for id, s in full_optim_state_dict["state"].items():
             for k, v in s.items():
                 if torch.is_tensor(v):
                     v_shard, _ = self._get_shard(v)
                 else:
                     v_shard = v  # dont partition entries that are not tensors
-                sd["state"][id][k] = v_shard
+                full_optim_state_dict["state"][id][k] = v_shard
 
-        return sd
+        return full_optim_state_dict
 
-    def flatten_optim_state_dict(self, sd) -> Dict:
-        from collections import defaultdict
-
+    @staticmethod
+    def flatten_optim_state_dict(sd: Dict) -> Dict:
         flat_params = defaultdict(list)
         constant_state = {}  # self.extract_constant_state(sd, 0)
         for _, buffers in sd["state"].items():
@@ -1478,15 +1457,17 @@ class FullyShardedDataParallel(nn.Module):
                     flat_params[k].append(p.reshape(-1))
                 else:
                     assert isinstance(p, int)
-                    constant_state[
-                        k
-                    ] = p  # THIS COULD BE WAY WRONG. What if step is different for different params... At least check.
+                    constant_state[k] = p
+                    # TODO(SS): THIS COULD BE WRONG. What if step is different for different params... At least check
 
         state = {0: constant_state}
         for k, v in flat_params.items():
             state[0][k] = torch.cat(v)
             assert state[0][k].dim() == 1, state[0][k].dim()
-        sd["state"] = state
+
+        # Do not put empty state for stateless optimizers
+        sd["state"] = state if state != {0: {}} else {}
+
         for pg_id, _ in enumerate(sd["param_groups"]):
             sd["param_groups"][pg_id]["params"] = list(range(1))
 

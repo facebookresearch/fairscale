@@ -12,15 +12,12 @@ from typing import Dict
 import unittest
 from unittest import mock
 
-from fairseq.optim.cpu_adam import CPUAdam
 from parameterized import parameterized
 import torch
 from torch import nn
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
 from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
-from fairscale.optim import AdaScale
-from fairscale.optim.utils import recursive_copy_to_device
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,
@@ -260,61 +257,6 @@ class TestComparisonToPyTorchDDP(DistributedTest):
                 self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False
             )
             spawn_and_init(test_fn)
-
-    @parameterized.expand(
-        [[functools.partial(torch.optim.SGD, momentum=0.9)], [torch.optim.SGD], [torch.optim.Adam], [CPUAdam]],
-        name_func=rename_test,
-    )
-    def test_consolidate_optimizer(self, optim_fn):
-        config = {"mixed_precision": True}
-        test_fn = functools.partial(self._test_consolidated_optimizer, config, optim_fn=optim_fn)
-        spawn_and_init(test_fn)
-
-    @classmethod
-    def _test_consolidated_optimizer(self, config, rank, group, lr_groups=False, optim_fn=torch.optim.SGD):
-        """FSDP.optim_state_dict() should return something very similar to optimizer.state_dict()"""
-        # Establish reference behavior.
-        fsdp = self.get_wrapped_model(group, cuda_first=False, config=config)
-        unwrapped_model = TransformerWithSharedParams(group).cuda()
-        try:
-            fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01,)
-            optim_unwrapped = optim_fn(unwrapped_model.parameters(), lr=0.01)
-        except TypeError:  # AdaScale
-            fsdp_optim = optim_fn(fsdp.parameters())
-            optim_unwrapped = optim_fn(unwrapped_model.parameters())
-
-        fsdp_optim.zero_grad()
-        optim_unwrapped.zero_grad()
-
-        src_ids, tgt_ids = fsdp.module.get_input(torch.device("cuda"))
-        output = fsdp(src_ids, tgt_ids)
-        loss = fsdp.module.get_loss((src_ids, tgt_ids), output).to("cuda")
-        fsdp.module.run_backward(loss)
-        fsdp_optim.step()
-        fsdp.consolidate_optim_state_dict(fsdp_optim, recipient_rank=0)
-
-        if rank > 0 or fsdp.world_size == 1:
-            return
-
-        output = unwrapped_model(src_ids, tgt_ids)
-        loss = unwrapped_model.get_loss((src_ids, tgt_ids), output)
-        unwrapped_model.run_backward(loss)
-        optim_unwrapped.step()
-        unwrapped_sd = optim_unwrapped.state_dict()
-
-        n_pars = len(list(unwrapped_model.parameters()))
-        assert len(fsdp._all_optimizer_states) == fsdp.world_size
-        torch.save(fsdp._all_optimizer_states, f"all_optim_states_world_size_{fsdp.world_size}.pt")
-        sd = fsdp.gather_full_optim_state_dict()
-        torch.save(sd, f"fsdp_consolidated_{fsdp.world_size}.pt")
-
-        assert_equal(len(sd["state"]), len(unwrapped_sd["state"]))
-        assert_equal(len(sd["param_groups"][0]["params"]), len(unwrapped_sd["param_groups"][0]["params"]))
-
-        shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
-        assert objects_are_equal(
-            shard_sd, recursive_copy_to_device(fsdp_optim.state_dict(), non_blocking=False, device="cpu")
-        )
 
     def test_delayed_optim_step(self):
         # We use a model with a long CUDA delay right before the optimizer step.
