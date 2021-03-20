@@ -77,6 +77,49 @@ class DistributedTest(unittest.TestCase):
             model = FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs), group, **config).cuda()
         return model
 
+    @classmethod
+    def _test_identical_outputs(
+        cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
+    ):
+        if config.get("mixed_precision", False):
+            autocast = True
+            # Force the compute dtype to be torch.float32 so that we get
+            # identical results as PyTorch DDP when using autocast. Note that
+            # this will cause the all-gather to happen in FP32, which is slower
+            # than necessary in most cases.
+            config["compute_dtype"] = torch.float32
+        else:
+            autocast = False
+
+        # Establish reference behavior with PyTorch DDP (+ optionally autocast).
+        model = model_init_fn(group=group, wrapper_config=None).cuda()
+        if ref_ddp_fn is None:
+            model = nn.parallel.DistributedDataParallel(
+                model, device_ids=[rank], output_device=rank, process_group=group
+            )
+        else:
+            model = ref_ddp_fn(model, group)
+        ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
+        ref_state_dict = model.module.state_dict()
+        if config.get("cpu_offload", False):
+            for k in ref_state_dict.keys():
+                ref_state_dict[k] = ref_state_dict[k].cpu()
+
+        # Confirm we get the same behavior using FullyShardedDataParallel.
+        model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
+        if use_cuda:
+            model = model.cuda()
+        else:
+            assert next(model.parameters()).device == torch.device("cpu")
+        shard_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
+        shard_state_dict = model.state_dict()
+
+        try:
+            torch.testing.assert_allclose(ref_loss, shard_loss)
+            assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
+        except (AssertionError, RuntimeError) as e:
+            raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
+
 
 class TestMixedPrecision(DistributedTest):
     def test_all_fp32(self):
@@ -312,49 +355,6 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     @classmethod
     def _dummy_ddp_fn(self, model, group):
         return DummyDDP(model)
-
-    @classmethod
-    def _test_identical_outputs(
-        cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
-    ):
-        if config.get("mixed_precision", False):
-            autocast = True
-            # Force the compute dtype to be torch.float32 so that we get
-            # identical results as PyTorch DDP when using autocast. Note that
-            # this will cause the all-gather to happen in FP32, which is slower
-            # than necessary in most cases.
-            config["compute_dtype"] = torch.float32
-        else:
-            autocast = False
-
-        # Establish reference behavior with PyTorch DDP (+ optionally autocast).
-        model = model_init_fn(group=group, wrapper_config=None).cuda()
-        if ref_ddp_fn is None:
-            model = nn.parallel.DistributedDataParallel(
-                model, device_ids=[rank], output_device=rank, process_group=group
-            )
-        else:
-            model = ref_ddp_fn(model, group)
-        ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
-        ref_state_dict = model.module.state_dict()
-        if config.get("cpu_offload", False):
-            for k in ref_state_dict.keys():
-                ref_state_dict[k] = ref_state_dict[k].cpu()
-
-        # Confirm we get the same behavior using FullyShardedDataParallel.
-        model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
-        if use_cuda:
-            model = model.cuda()
-        else:
-            assert next(model.parameters()).device == torch.device("cpu")
-        shard_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
-        shard_state_dict = model.state_dict()
-
-        try:
-            torch.testing.assert_allclose(ref_loss, shard_loss)
-            assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
-        except (AssertionError, RuntimeError) as e:
-            raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
 
     @parameterized.expand([[1], [inf]], name_func=rename_test)
     def test_clip_norm_transformer(self, norm_type):
