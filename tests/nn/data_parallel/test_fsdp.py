@@ -28,10 +28,15 @@ from fairscale.utils.testing import (
     spawn_for_all_world_sizes,
     torch_version,
 )
+from fairscale.optim.utils import recursive_copy_to_device
+from fairseq.optim.cpu_adam import CPUAdam
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
 
+
+def assert_equal(a, b):
+    assert a == b, f'{a} != {b}'
 
 class DistributedTest(unittest.TestCase):
     def setUp(self):
@@ -257,7 +262,8 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             spawn_and_init(test_fn)
 
     @parameterized.expand(
-        [[functools.partial(torch.optim.SGD, momentum=0.9)], [torch.optim.SGD], [torch.optim.Adam], [AdaScale]],
+        [[functools.partial(torch.optim.SGD, momentum=0.9)],
+         [torch.optim.SGD], [torch.optim.Adam], [CPUAdam]],
         name_func=rename_test)
     def test_consolidate_optimizer(self, optim_fn):
         config = {"mixed_precision": True}
@@ -271,8 +277,17 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         """FSDP.optim_state_dict() should return something very similar to optimizer.state_dict()"""
         # Establish reference behavior.
         fsdp = self.get_wrapped_model(group, cuda_first=False, config=config)
-        fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01,)
+        unwrapped_model = TransformerWithSharedParams(group).cuda()
+        try:
+            fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01,)
+            optim_unwrapped = optim_fn(unwrapped_model.parameters(), lr=0.01)
+        except TypeError: # AdaScale
+            fsdp_optim = optim_fn(fsdp.parameters())
+            optim_unwrapped = optim_fn(unwrapped_model.parameters())
+
+
         fsdp_optim.zero_grad()
+        optim_unwrapped.zero_grad()
 
         src_ids, tgt_ids = fsdp.module.get_input(torch.device("cuda"))
         output = fsdp(src_ids, tgt_ids)
@@ -284,31 +299,26 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         if rank > 0 or fsdp.world_size == 1:
             return
 
-        unwrapped_model = TransformerWithSharedParams(group).cuda()
-        n_pars = len(list(unwrapped_model.parameters()))
-        assert fsdp._all_optimizer_states
-        torch.save(fsdp._all_optimizer_states, f'all_optim_states_world_size_{fsdp.world_size}.pt')
-        sd = fsdp.optim_state_dict()
-        torch.save(sd, f'fsdp_consolidated_{fsdp.world_size}.pt')
 
-        st = sd['state']
-        assert len(sd['state']) == n_pars, f'{len(st)} != {n_pars}'
 
-        assert torch.is_tensor(sd['state'][21]['momentum_buffer'])
-        def assert_equal(a,b):
-            assert a == b, f'{a} != {b}'
-
-        assert_equal(len(sd['param_groups'][0]['params']), len(sd['state']))
-
-        shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
-        from fairscale.optim.utils import recursive_copy_to_device
-        assert objects_are_equal(shard_sd, recursive_copy_to_device(fsdp_optim.state_dict(), non_blocking=False, device='cpu'))
-
-        optim_unwrapped = torch.optim.SGD(unwrapped_model.parameters(), lr=0.01, momentum=0.9)
         output = unwrapped_model(src_ids, tgt_ids)
         loss = unwrapped_model.get_loss((src_ids, tgt_ids), output)
         unwrapped_model.run_backward(loss)
         optim_unwrapped.step()
+        unwrapped_sd = optim_unwrapped.state_dict()
+
+        n_pars = len(list(unwrapped_model.parameters()))
+        assert len(fsdp._all_optimizer_states) == fsdp.world_size
+        torch.save(fsdp._all_optimizer_states, f'all_optim_states_world_size_{fsdp.world_size}.pt')
+        sd = fsdp.gather_full_optim_state_dict()
+        torch.save(sd, f'fsdp_consolidated_{fsdp.world_size}.pt')
+
+        assert_equal(len(sd['state']), len(unwrapped_sd['state']))
+        assert_equal(len(sd['param_groups'][0]['params']), len(unwrapped_sd['param_groups'][0]['params']))
+
+        shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
+        assert objects_are_equal(shard_sd, recursive_copy_to_device(fsdp_optim.state_dict(), non_blocking=False, device='cpu'))
+
 
 
     def test_delayed_optim_step(self):
