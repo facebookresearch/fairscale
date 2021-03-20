@@ -8,6 +8,7 @@ import copy
 from enum import Enum, auto
 import functools
 from math import inf
+import traceback
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import torch
@@ -19,9 +20,10 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
+from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.optim.utils import calc_grad_norm
 from fairscale.utils.containers import apply_to_tensors
-from fairscale.utils.parallel import chunk_and_pad, validate_process_group
+from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
 
@@ -186,6 +188,7 @@ class FullyShardedDataParallel(nn.Module):
 
         compute_device = torch.device("cuda") if self.cpu_offload else next(module.parameters()).device
         validate_process_group(compute_device, self.process_group)
+        enable_pytorch_sync_bn(module)
 
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to
@@ -816,6 +819,8 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.reshard_after_forward:
             self._free_full_params()
+            if self.mixed_precision:
+                self._free_fp16_param_shard()
 
         # Switch to main FP32 param shard. We maintain this invariant throughout
         # the code, i.e., ``p.data == p._fp32_shard`` after each function. This
@@ -1268,7 +1273,10 @@ class FullyShardedDataParallel(nn.Module):
             msg = f"expected to be in states {state} but current state " f"is {self.training_state}"
             # In case we are failing in the context of autograd hook, asserting
             # may not generate useful msg. So, let's print it to be sure.
-            print(msg)
+            if self.rank == 0:
+                print(self)
+                print(msg)
+                traceback.print_stack()
             raise ValueError(msg)
 
     # Optim State dict interfaces
@@ -1554,3 +1562,46 @@ def _pre_load_state_dict_hook(
     state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], prefix: str, *args: Any
 ) -> None:
     replace_by_prefix_(state_dict, prefix, prefix + "_fsdp_wrapped_module.")
+
+
+########################################################################################
+# Below are APIs used together with FSDP, but not directly part of FSDP.
+########################################################################################
+
+
+def auto_wrap_bn(module: nn.Module) -> nn.Module:
+    """
+    Auto wrap all BatchNorm (BN) instances with a safer FSDP, esp. when convert
+    to sync BN is used and the outer FSDP is flattening.
+
+    We put BN in is own full precision, unflatten, single GPU group FSDP.  Note, SyncBNs still have
+    a group size == world_size. The input and output for BN are still FP16 in mixed precision mode.
+    See ``keep_batchnorm_fp32`` here: https://nvidia.github.io/apex/amp.html
+
+    This needs to be done at each rank, like models being wrapped by FSDP at each rank.
+
+    Args:
+        module (nn.Module):
+            The model (or part of the model) in which BN to be pre-wrapped.
+
+    Returns:
+        Processed module, where BNs are wrapped with a special FSDP instance.
+    """
+
+    def wrap_bn_only_policy(module: nn.Module, recurse: bool, unwrapped_params: int) -> bool:
+        is_bn = isinstance(module, torch.nn.modules.batchnorm._BatchNorm)
+        if recurse:
+            return not isinstance(module, tuple(default_auto_wrap_policy.FORCE_LEAF_MODULES))  # type: ignore
+        else:
+            return is_bn and not isinstance(module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES))  # type: ignore
+
+    my_rank = dist.get_rank()
+    fsdp_config = {
+        "wrapper_cls": FullyShardedDataParallel,
+        "process_group": dist.new_group(ranks=[my_rank]),  # No sharding with this single member group.
+        "mixed_precision": False,  # Keep the weights in FP32.
+        "flatten_parameters": False,  # Do not flatten.
+    }
+
+    with enable_wrap(wrap_bn_only_policy, **fsdp_config):
+        return auto_wrap(module)

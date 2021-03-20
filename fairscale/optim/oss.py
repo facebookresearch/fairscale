@@ -15,6 +15,8 @@ import torch.distributed as dist
 from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
+from fairscale.nn.misc import ParamBucket
+
 from .utils import broadcast_object, calc_grad_norm, recursive_copy_to_device
 
 __all__ = ["OSS"]
@@ -52,6 +54,10 @@ class OSS(Optimizer):
             torch.distributed group (default: group.WORLD)
         broadcast_buffer_size (int):
             (deprecated) used to cap the size of the broadcast buffers, not being used anymore.
+        broadcast_fp16 (bool):
+            Compress the model shards in fp16 before sharing them in between ranks.
+            This is safe to use when PyTorch AMP is activated. Without torch AMP this will lead to a slight
+            degradation in terms of accuracy.
 
 
     .. warning: the communication patterns that OSS use depend on the "trainability" graph,
@@ -73,6 +79,7 @@ class OSS(Optimizer):
         optim: Type[Optimizer] = SGD,
         group: Optional[Any] = None,
         broadcast_buffer_size: int = -1,
+        broadcast_fp16: bool = False,
         **default: Any,
     ):
 
@@ -99,7 +106,8 @@ class OSS(Optimizer):
         self.global_rank = self.get_global_rank(self.group, self.rank)
         self._local_to_global_rank = [self.get_global_rank(self.group, i) for i in range(self.world_size)]
 
-        self.buckets: Dict[torch.device, List[torch.Tensor]] = {}
+        self.broadcast_fp16 = broadcast_fp16
+        self.buckets: Dict[torch.device, Dict[int, ParamBucket]] = {}
         self._all_states: List[Dict[str, Any]] = []  # Optional consolidated optimizer state
         self._default_device = torch.device("cpu")
 
@@ -542,20 +550,31 @@ class OSS(Optimizer):
 
         work_handles = []  # Work handles are consumed within this scope, no callback
 
-        for device in self.buckets.keys():
-            for src_rank, bucket in enumerate(self.buckets[device]):
-                if bucket.numel() > 0:
-                    work_handles.append(
-                        dist.broadcast(
-                            tensor=bucket, src=self._local_to_global_rank[src_rank], group=self.group, async_op=True
-                        )
-                    )
+        # Populate the fp16 shards
+        if self.broadcast_fp16:
+            for device in self.buckets.keys():
+                for dst_rank, bucket in self.buckets[device].items():
+                    bucket.to(dtype=torch.float16, device=device, non_blocking=True, keep_param_alignment=False)
 
-        # Only check on the last handle, they're all inlined on the same CUDA stream
-        if work_handles and self.backend == dist.Backend.NCCL:
-            work_handles[-1].wait()
-        else:
-            _ = list(filter(lambda x: x.wait(), work_handles))
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+        # Exchange all the shards with the other ranks
+        for device in self.buckets.keys():
+            for dst_rank, bucket in self.buckets[device].items():
+                work_handles.append(
+                    dist.broadcast(
+                        tensor=bucket.buffer, src=self._local_to_global_rank[dst_rank], group=self.group, async_op=True,
+                    )
+                )
+
+        _ = list(filter(lambda x: x.wait(), work_handles))
+
+        # Populate back the fp32 shards
+        if self.broadcast_fp16:
+            for device in self.buckets.keys():
+                for dst_rank in self.buckets[device].keys():
+                    bucket.to(dtype=torch.float32, device=device, non_blocking=True, keep_param_alignment=True)
 
     def _setup_flat_buffers(self) -> None:
         """Make all params which are on the same device and tied to the same rank views of a single buffer.
@@ -567,7 +586,7 @@ class OSS(Optimizer):
             # Only wipe the existing buckets if there are none
             # (could be that this is called twice, when trainability changes)
             if device not in self.buckets.keys():
-                self.buckets[device] = []
+                self.buckets[device] = {}
 
             # Make parameters a view of the bucket
             for dst_rank, params in enumerate(per_rank_params):
@@ -580,23 +599,12 @@ class OSS(Optimizer):
                     # Merge all the trainable params in a single bucket
                     trainable_params = list(filter(lambda x: x.requires_grad, params))
                     buffer_size = sum(map(lambda x: x.numel(), trainable_params))
-                    bucket = torch.empty(buffer_size, dtype=params[0].dtype, device=device)
-                    offset = 0
+                    bucket = ParamBucket(size=buffer_size, dtype=params[0].dtype, device=device)
 
                     for param in trainable_params:
-                        offset_next = offset + param.numel()
-                        bucket[offset:offset_next].copy_(param.data.flatten())
-                        param.data = bucket[offset:offset_next].view_as(param.data)
-                        offset = offset_next
+                        bucket.add_param(param)
 
-                    # Either replace the existing bucket, or create it
-                    if len(self.buckets[device]) == dst_rank:
-                        self.buckets[device].append(bucket)
-                    else:
-                        self.buckets[device][dst_rank] = bucket
-                else:
-                    # This rank has an empty shard, that's fine
-                    self.buckets[device].append(torch.zeros(0, device=device))
+                    self.buckets[device][dst_rank] = bucket
 
         # Clear the buffer keys which are not in use anymore (could be that the devices changed)
         devices_in_use = list(self.per_device_params.keys())

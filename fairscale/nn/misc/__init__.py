@@ -5,3 +5,4 @@
 
 from .checkpoint_activations import checkpoint_wrapper
 from .flatten_params_wrapper import FlattenParamsWrapper
+from .param_bucket import GradBucket, ParamBucket
