@@ -9,7 +9,7 @@ from enum import Enum, auto
 import functools
 from math import inf
 import traceback
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Set, Tuple, Union
 
 import torch
 from torch.autograd import Variable
@@ -280,16 +280,39 @@ class FullyShardedDataParallel(nn.Module):
         return return_value
 
     @torch.no_grad()
-    def _all_buffers_to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> None:
-        """Move all buffers to the specified device and dtype, recursively."""
+    def _cast_buffers(
+        self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None, memo: Optional[Set] = None
+    ) -> None:
+        """Move all buffers to the given *device* and *dtype*.
+
+        If *device* or *dtype* are not given, then they will default to
+        ``self.compute_device`` and ``self.buffer_dtype``, respectively. In the
+        case of nested FSDP instances, we will respect the child instance's
+        ``compute_device`` and ``buffer_dtype`` configuration.
+
+        Args:
+            device (torch.device, Optional):
+                device to cast buffers to (defaults to compute_device)
+            dtype (torch.dtype, Optional):
+                dtype to cast buffers to (defaults to buffer_dtype)
+            memo (Set, Optional):
+                set of modules that have already been processed
+        """
+        if memo is None:
+            memo = set()
         for module in self.modules():
-            for name, buf in module.named_buffers(recurse=False):
-                if buf is None:
-                    continue
-                buf = buf.to(device=device)
-                if torch.is_floating_point(buf):
-                    buf = buf.to(dtype=dtype)
-                setattr(module, name, buf)
+            if module is not self and isinstance(module, FullyShardedDataParallel):
+                # Allow any child FSDP instances to handle their own buffers.
+                module._cast_buffers(device=device, dtype=dtype, memo=memo)
+            elif module not in memo:
+                memo.add(module)
+                for name, buf in module.named_buffers(recurse=False):
+                    if buf is None:
+                        continue
+                    buf = buf.to(device=device or self.compute_device)
+                    if torch.is_floating_point(buf):
+                        buf = buf.to(dtype=dtype or self.buffer_dtype)
+                    setattr(module, name, buf)
 
     @property
     def params_with_grad(self) -> List[Parameter]:
@@ -492,7 +515,7 @@ class FullyShardedDataParallel(nn.Module):
         self._lazy_init()
         if self.mixed_precision:
             # Buffers dtype stays consistent with parameters.
-            self._all_buffers_to(dtype=torch.float32)
+            self._cast_buffers(dtype=torch.float32)
 
         if self._return_full_state_dict:
             if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
@@ -512,8 +535,8 @@ class FullyShardedDataParallel(nn.Module):
                 state_dict[k] = state_dict[k].cpu()
 
         if self.mixed_precision:
-            # In case we are in mixed precision, restore buffers back to fp16.
-            self._all_buffers_to(dtype=self.buffer_dtype)
+            # In case we are in mixed precision, restore buffers back to buffer_dtype.
+            self._cast_buffers()
         return state_dict
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
@@ -695,12 +718,9 @@ class FullyShardedDataParallel(nn.Module):
             self._setup_streams()
 
         if self._is_root:
-            # Buffers stay on GPU, and don't get sharded. Since _all_buffers_to
+            # Buffers stay on GPU, and don't get sharded. Since _cast_buffers
             # applies recursively, we only call this from the root instance.
-            if self.cpu_offload:
-                self._all_buffers_to(device=self.compute_device, dtype=self.buffer_dtype)
-            else:
-                self._all_buffers_to(dtype=self.buffer_dtype)
+            self._cast_buffers()
 
             # Don't free the full params for the outer-most (root) instance,
             # since those params will be needed immediately after for the
