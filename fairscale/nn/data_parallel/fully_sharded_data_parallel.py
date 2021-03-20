@@ -150,6 +150,11 @@ class FullyShardedDataParallel(nn.Module):
             based on world_size, so the max shard size is roughly
             ``bucket_cap_mb / world_size``. Values <= 0 disable bucketing.
             Default: 25.
+        compute_device (torch.device, Optional):
+            device for computation. If not given and module params are on a CUDA
+            device, the param's device will be used. If not given and module
+            params are on CPU, then the current CUDA device (as indicated by
+            ``torch.cuda.current_device()`` will be used.
     """
 
     def __init__(
@@ -165,6 +170,7 @@ class FullyShardedDataParallel(nn.Module):
         buffer_dtype: Optional[torch.dtype] = None,
         move_grads_to_cpu: Optional[bool] = None,
         bucket_cap_mb: int = 25,
+        compute_device: Optional[torch.device] = None,
     ):
         super().__init__()
         self.process_group = process_group or dist.new_group()
@@ -179,14 +185,21 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
+        self.compute_device = compute_device
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
         if self.cpu_offload and not self.mixed_precision:
             raise ValueError("cpu_offload requires mixed_precision=True")
 
-        compute_device = torch.device("cuda") if self.cpu_offload else next(module.parameters()).device
-        validate_process_group(compute_device, self.process_group)
+        if self.compute_device is None:
+            # Try to infer CUDA device from module parameters.
+            self.compute_device = next(module.parameters()).device
+            if self.compute_device.type != "cuda":
+                # Fall back to current CUDA device.
+                self.compute_device = torch.device("cuda")
+
+        validate_process_group(self.compute_device, self.process_group)
         enable_pytorch_sync_bn(module)
 
         # Only handle params which are not already sharded. This enables
@@ -386,7 +399,10 @@ class FullyShardedDataParallel(nn.Module):
             f"flatten_parameters={self.flatten_parameters}, "
             f"cpu_offload={self.cpu_offload}, "
             f"compute_dtype={self.compute_dtype}, "
-            f"move_grads_to_cpu={self.move_grads_to_cpu}"
+            f"buffer_dtype={self.buffer_dtype}, "
+            f"move_grads_to_cpu={self.move_grads_to_cpu}, "
+            f"bucket_cap_mb={self.bucket_cap_mb}, "
+            f"compute_device={self.compute_device}"
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -572,7 +588,7 @@ class FullyShardedDataParallel(nn.Module):
             recurse (bool, Optional): recursively summon all params for nested
                 FSDP instances (default: True)
             volatile (bool, Optional): if ``True``, modifications to params are
-                not guaranteed persist after the context manager exists;
+                not guaranteed to persist after the context manager exists;
                 enabling this can be slightly more efficient (default: False)
         """
         if recurse:
@@ -643,7 +659,7 @@ class FullyShardedDataParallel(nn.Module):
             self._setup_streams()
 
         if self.cpu_offload:  # Buffers stay on GPU, and don't get sharded
-            self._all_buffers_to(device=torch.device("cuda"), dtype=self.buffer_dtype)
+            self._all_buffers_to(device=self.compute_device, dtype=self.buffer_dtype)
         else:
             self._all_buffers_to(dtype=self.buffer_dtype)
 
@@ -684,10 +700,6 @@ class FullyShardedDataParallel(nn.Module):
         if hasattr(p, "_fp32_shard"):
             return
 
-        # Compute device defaults to CUDA when *cpu_offload* is enabled, or the
-        # param's current device otherwise (could be CPU).
-        compute_device = torch.device("cuda") if self.cpu_offload else p.device
-
         # A single shard of the parameters in full precision.
         p._fp32_shard = p.data
 
@@ -707,7 +719,7 @@ class FullyShardedDataParallel(nn.Module):
             # the computation in the forward/backward pass. We resize the
             # storage to size 0 at init (here) and re-materialize (by copying
             # from _fp32_shard) as needed.
-            p._fp16_shard = torch.zeros_like(p._fp32_shard, device=compute_device, dtype=self.compute_dtype)
+            p._fp16_shard = torch.zeros_like(p._fp32_shard, device=self.compute_device, dtype=self.compute_dtype)
             free_storage_(p._fp16_shard)
         else:
             p._fp16_shard = None  # use _fp32_shard
@@ -720,7 +732,7 @@ class FullyShardedDataParallel(nn.Module):
         # relevant computation.
         if p._is_sharded:
             p._full_param_padded = torch.zeros(
-                p.data.numel() * self.world_size, device=compute_device, dtype=self.compute_dtype
+                p.data.numel() * self.world_size, device=self.compute_device, dtype=self.compute_dtype
             )
             free_storage_(p._full_param_padded)
 
