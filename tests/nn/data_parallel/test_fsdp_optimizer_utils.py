@@ -6,7 +6,11 @@ import torch
 from fairscale.optim.utils import recursive_copy_to_device
 from fairscale.utils.testing import objects_are_equal
 
-from .test_fsdp import DistributedTest, TransformerWithSharedParams, assert_equal, rename_test, spawn_and_init
+from .test_fsdp import DistributedTest, DummyProcessGroup, TransformerWithSharedParams, rename_test, spawn_and_init
+
+
+def assert_equal(a, b):
+    assert a == b, f"{a} != {b}"
 
 
 class TestOptimizerUtils(DistributedTest):
@@ -62,7 +66,6 @@ class TestOptimizerUtils(DistributedTest):
 
         assert_equal(len(sd["state"]), len(unwrapped_sd["state"]))
         assert_equal(len(sd["param_groups"][0]["params"]), len(unwrapped_sd["param_groups"][0]["params"]))
-
         shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
 
         original_shard_sd = fsdp_optim.state_dict()
@@ -70,3 +73,11 @@ class TestOptimizerUtils(DistributedTest):
         assert objects_are_equal(
             shard_sd, recursive_copy_to_device(original_shard_sd, non_blocking=False, device="cpu")
         )
+
+    def test_named_params_ordering(self):
+        """Test assumption of consolidate_optimizer_state_dict"""
+        group = DummyProcessGroup(0, 1)
+        model = TransformerWithSharedParams(group)
+        named_pars = [p for n, p in model.named_parameters()]
+        for i, p in enumerate(model.parameters()):
+            assert p.shape == named_pars[i].shape

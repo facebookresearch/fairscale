@@ -32,10 +32,6 @@ from fairscale.utils.testing import (
 # All helper functions called by spawn must be either @classmethod, @staticmethod
 
 
-def assert_equal(a, b):
-    assert a == b, f"{a} != {b}"
-
-
 class DistributedTest(unittest.TestCase):
     def setUp(self):
         if torch_version() < (1, 6, 0):
@@ -48,7 +44,7 @@ class DistributedTest(unittest.TestCase):
             raise unittest.SkipTest("distributed tests require 2+ GPUs, skipping")
 
     @staticmethod
-    def _train_for_several_steps(model, num_steps, autocast, lr=0.01, norm_type=None, save_optim=False):
+    def _train_for_several_steps(model, num_steps, autocast, lr=0.01, norm_type=None):
         model_device = next(model.parameters()).device
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
@@ -390,14 +386,6 @@ class TestParamInit(DistributedTest):
         new_output = model(*input)
 
         assert not objects_are_equal(ref_output, new_output), "new_output did not reflect change to param after init"
-
-    def test_named_params_ordering(self):
-        """Test assumption of consolidate_optimizer_state_dict"""
-        group = DummyProcessGroup(0, 1)
-        model = TransformerWithSharedParams(group)
-        named_pars = [p for n, p in model.named_parameters()]
-        for i, p in enumerate(model.parameters()):
-            assert p.shape == named_pars[i].shape
 
 
 class TestSerialization(DistributedTest):
