@@ -2,6 +2,7 @@ import functools
 
 from parameterized import parameterized
 import torch
+from torch.optim import SGD, Adadelta, Adam  # noqa
 
 from fairscale.nn import FullyShardedDataParallel
 from fairscale.optim.utils import recursive_copy_to_device
@@ -30,12 +31,7 @@ def assert_equal(a, b):
 
 class TestOptimizerUtils(DistributedTest):
     @parameterized.expand(
-        [
-            [functools.partial(torch.optim.SGD, momentum=0.9), False],
-            [torch.optim.SGD, False],
-            [torch.optim.Adam, False],
-            [torch.optim.Adadelta, True],
-        ],
+        [[functools.partial(SGD, momentum=0.9), False], [SGD, False], [Adam, False], [Adadelta, True]],
         name_func=rename_test,
     )
     def test_consolidate_optimizer(self, optim_fn, transformer):
