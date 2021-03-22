@@ -1400,9 +1400,13 @@ class FullyShardedDataParallel(nn.Module):
             raise ValueError("You must call consolidate_optim_state_dict before gather_full_optim_state_dict")
 
         # Unify the shard states by concatenating tensors and unflattening params
-        world_pad_info: List[List[int]] = [s.pop("num_padded") for s in self._all_optimizer_states]
+        world_pad_info: List[List[List[int]]] = [s.pop("num_padded") for s in self._all_optimizer_states]
+        instance_list: List[nn.Module] = self._fsdp_instances
+        assert all(len(s) == len(instance_list) for s in world_pad_info)
+        assert all(len(s[0]) == 1 for s in world_pad_info)
 
         param_groups = copy.deepcopy(self._all_optimizer_states[0]["param_groups"])
+        assert len(param_groups) == 1
 
         # combined_state refers to tensor values in sd[state][param_id].
         # Here we just aggregate them into a list inside the dictionary from a list of dictionaries.
@@ -1418,7 +1422,7 @@ class FullyShardedDataParallel(nn.Module):
         self._all_optimizer_states = []
 
         new_state_dict = {"state": {}, "param_groups": param_groups}
-        instance_list = self._fsdp_instances
+
         numels_per_instance = [sum(m._param_numels) for m in instance_list]  # type: ignore
 
         # loop over parameters in state.
@@ -1426,51 +1430,38 @@ class FullyShardedDataParallel(nn.Module):
         # shape with FlattenParamsWrapper.get_views
         # get_views multiple tensors, each of which is a new parameter with a new "global" id.
 
-        local_to_global_param_id: Dict[int, List[int]] = {}
         # local ids are in the current state, global_ids will be in returned state.
-
-        next_global_param_id = 0  # gets incremented
-        for pg_id, param_group in enumerate(param_groups):
-            for local_id in param_group["params"]:
-                local_to_global_param_id[local_id] = []
-                if local_id not in combined_state:
+        local_to_global_param_id: Dict[int, List[int]] = {}
+        next_global_id = 0  # gets incremented
+        for local_id in combined_state:
+            local_to_global_param_id[local_id] = []
+            # undo the work of shard_parameters
+            for k, v in combined_state[local_id].items():
+                if k in constant_state[local_id]:
                     continue
-                # undo the work of shard_parameters
-                for k, v in combined_state[local_id].items():
-                    if k in constant_state[local_id]:
-                        continue
-                    assert isinstance(v, list), f"expected list, got {k}:{v} for {local_id} at rank {self.rank}"
-                    assert all(len(s[local_id]) == 1 for s in world_pad_info)  # because of flatten_parameters
-                    pad_info = [s[local_id][0] for s in world_pad_info]
-                    assert len(pad_info) == self.world_size == len(v), f"{len(pad_info), self.world_size, len(v)}"
+                assert isinstance(v, list), f"got {k}: {v} for {local_id} at rank {self.rank}"
+                pad_info = [s[local_id][0] for s in world_pad_info]
+                v_unpad = [t[:-np] if np > 0 else t for t, np in zip(v, pad_info)]
+                flat_buffer = torch.cat(v_unpad)
+                assert numels_per_instance[local_id] == flat_buffer.numel()
+                param_views: Generator = instance_list[local_id].get_param_views(flat_buffer)  # type: ignore
+                for i, param_view in enumerate(param_views):
+                    if i == len(local_to_global_param_id[local_id]):  # make a new ID
+                        local_to_global_param_id[local_id].append(next_global_id)
+                        next_global_id += 1
+                    global_id = local_to_global_param_id[local_id][i]
+                    if global_id not in new_state_dict["state"]:
+                        new_state_dict["state"][global_id] = copy.deepcopy(constant_state[local_id])
 
-                    v_unpad = [t[:-np] if np > 0 else t for t, np in zip(v, pad_info)]
-                    flat_buffer = torch.cat(v_unpad)
-                    assert (
-                        numels_per_instance[local_id] == flat_buffer.shape[0] == flat_buffer.numel()
-                    ), f"{numels_per_instance[local_id]} {flat_buffer.shape[0]}, {flat_buffer.numel()}"
-                    param_views: Generator = instance_list[local_id].get_param_views(flat_buffer)
-                    for i, param_view in enumerate(param_views):
-                        if i == len(local_to_global_param_id[local_id]):
-                            # We have not seen this global param before, and make a new ID
-                            local_to_global_param_id[local_id].append(next_global_param_id)
-                            next_global_param_id += 1
-                        global_id = local_to_global_param_id[local_id][i]
-                        if global_id not in new_state_dict["state"]:
-                            new_state_dict["state"][global_id] = copy.deepcopy(constant_state[local_id])
-                        assert k not in new_state_dict["state"][global_id], f"already added {k} to new[{global_id}]"
-                        new_state_dict["state"][global_id][k] = param_view
+                    assert k not in new_state_dict["state"][global_id], f"already added {k} to new[{global_id}]"
+                    new_state_dict["state"][global_id][k] = param_view
 
-            if next_global_param_id == 0:  # stateless optimizer
-                num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
-                new_state_dict["param_groups"][pg_id]["params"] = list(range(num_params))
-            else:
-                new_state_dict["param_groups"][pg_id]["params"] = list(range(next_global_param_id))
+        num_params = next_global_id or sum([len(m._param_numels) for m in instance_list])  # type: ignore
+        new_state_dict["param_groups"][0]["params"] = list(range(num_params))
 
-        global_to_local_id = {}
-        for old_pid, global_ids in local_to_global_param_id.items():
-            for new_id in global_ids:
-                global_to_local_id[new_id] = old_pid
+        global_to_local_id = {
+            new_id: old_pid for old_pid, global_ids in local_to_global_param_id.items() for new_id in global_ids
+        }
 
         new_state_dict["param_id_map"] = global_to_local_id
         # Make sure that the parameters are sorted in the state, as expected for a pytorch dict
