@@ -21,7 +21,7 @@ import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
-from fairscale.optim.utils import broadcast_object, calc_grad_norm, recursive_copy_to_device
+from fairscale.optim.utils import calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
@@ -436,6 +436,7 @@ class FullyShardedDataParallel(nn.Module):
             p.data, num_padded = self._get_shard(p.data)
             self.num_padded.append(num_padded)
             free_storage_(orig_data)
+        assert len(self.num_padded) == len(self.params)
 
     def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
         """Return the local shard of a full tensor."""
@@ -1354,53 +1355,33 @@ class FullyShardedDataParallel(nn.Module):
 
     # Optim State dict functions
 
-    def consolidate_optim_state_dict(self, optim: torch.optim.Optimizer, recipient_rank: int = 0) -> None:
-        """Update the consolidated state_dict list, one per rank.
+    def consolidate_optim_state_dict(self, optim: torch.optim.Optimizer, recipient_rank: Optional[int] = None) -> None:
+        """Update the consolidated state_dict list, one per rank. The result is at self._all_optimizer_states
 
-        Arguments:
+        Args:
             recipient_rank (int): on which rank to materialize the full state dict.
-            -1 is a special value, which means that all ranks should have the state
+            None is a special value, which means that all ranks should have the state
 
         .. warning: This needs to be called on all replicas"""
-        _default_device = torch.device("cuda")
+        self._lazy_init()
         # NOTE(SS): we do not support param groups yet, as they seem to break FSDP
-
         # Pull the sharded state from all the other replicas
         # Store all the states in order, rank by rank
-        should_collect_state = self.rank == recipient_rank or recipient_rank == -1
-        should_send_state = (self.rank != recipient_rank and recipient_rank != -1) or recipient_rank == -1
-        _all_optimizer_states: List[Dict[str, Any]] = []
+        should_collect_state = recipient_rank is None or (self.rank == recipient_rank)
+        all_states: List[Dict[str, Any]] = []
         for rank in range(self.world_size):
             if rank == self.rank:
                 sd = optim.state_dict()
-                sd["num_padded"] = [m.num_padded for m in self.modules() if isinstance(m, FullyShardedDataParallel)]
-                if should_collect_state:
-                    _all_optimizer_states.append(
-                        recursive_copy_to_device(sd, non_blocking=True, device=torch.device("cpu"))
-                    )
-
-                # Sync with other replicas
-                state_to_share = (
-                    sd if should_send_state else torch.tensor([0], dtype=torch.uint8, device=_default_device)
-                )
-                broadcast_object(
-                    state_to_share, src_rank=self.rank, group=self.process_group, dist_device=_default_device,
-                )
+                sd["num_padded"] = [m.num_padded for m in self._fsdp_instances]
             else:
-                # Fetch the optim state from the other replicas
-                replica_state = broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=_default_device),
-                    src_rank=rank,
-                    group=self.process_group,
-                    dist_device=_default_device,
-                )
+                sd = None  # type: ignore
+            obj_lst = [sd]
+            torch.distributed.broadcast_object_list(obj_lst, src=rank, group=self.process_group)
+            if should_collect_state:
+                assert isinstance(obj_lst[0], dict), f"{rank}, {self.rank} {all_states}"
+                all_states.append(recursive_copy_to_device(obj_lst[0], non_blocking=False, device=torch.device("cpu")))
 
-                if should_collect_state:
-                    _all_optimizer_states.append(
-                        recursive_copy_to_device(replica_state, non_blocking=True, device=torch.device("cpu"))
-                    )
-
-        self._all_optimizer_states = _all_optimizer_states
+        self._all_optimizer_states = all_states
 
     def gather_full_optim_state_dict(self) -> Dict[str, Any]:
         """Return the last known global optimizer state. The returned state is compatible with Pytorch, in that the
