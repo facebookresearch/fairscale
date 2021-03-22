@@ -75,19 +75,9 @@ class TestOptimizerUtils(DistributedTest):
         optim_unwrapped.step()
         unwrapped_sd = optim_unwrapped.state_dict()
 
-        n_pars = len(list(unwrapped_model.parameters()))
-
-        # torch.save(fsdp._all_optimizer_states, f"all_optim_states_world_size_{fsdp.world_size}.pt")
-        fsdp.consolidate_optim_state_dict(fsdp_optim, recipient_rank=0)
         # first_key = unwrapped_sd['state'][0].keys()
+        sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=None)
 
-        if rank > 0:
-            return
-
-        sd = fsdp.gather_full_optim_state_dict()
-        # optim_par = sum(v['square_avg'].numel() for k, v in sd.items())
-        # assert_equal(len(fsdp._all_optimizer_states), fsdp.world_size)
-        torch.save(sd, f"fsdp_consolidated_{fsdp.world_size}.pt")
         assert_equal(len(sd["state"]), len(unwrapped_sd["state"]))
         assert_equal(len(sd["param_groups"][0]["params"]), len(unwrapped_sd["param_groups"][0]["params"]))
         assert_equal(
