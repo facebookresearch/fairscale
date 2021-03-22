@@ -1562,6 +1562,7 @@ class FullyShardedDataParallel(nn.Module):
         new_sd = {"state": new_state, "param_groups": sd["param_groups"]}
 
         for pg_id, _ in enumerate(sd["param_groups"]):
+            # TODO: this list could be huge. Can we avoid materializing?
             new_sd["param_groups"][pg_id]["params"] = list(range(num_local_params))
 
         return new_sd
