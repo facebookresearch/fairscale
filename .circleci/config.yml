@@ -8,7 +8,8 @@
 # Pro tip: download circle ci cli to validate the config locally during development.
 
 version: 2.1
-
+orbs:
+  codecov: codecov/codecov@1.0.2
 # -------------------------------------------------------------------------------------
 # Environments to run the jobs in
 # -------------------------------------------------------------------------------------
@@ -477,6 +478,8 @@ jobs:
           key: cache-key-gpu-180-101-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
+
+      - <<: *run_coverage
 
       - run_unittests_from_list:
           test_list_file: <<parameters.test_list_file>>
