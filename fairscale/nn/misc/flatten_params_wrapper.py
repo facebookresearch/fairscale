@@ -123,8 +123,7 @@ class FlattenParamsWrapper(nn.Module):
         self._unflatten_params_as_views()
 
     def get_param_views(self, flat_param: Tensor) -> Generator:
-        splat = flat_param.split(self._param_numels)
-        return (t.view(s) for (t, s) in zip(splat, self._param_shapes))
+        return (t.view(s) for (t, s) in zip(flat_param.split(self._param_numels), self._param_shapes))
 
     def _unflatten_params(self, flat_param: Optional[Tensor] = None) -> None:
         assert self.is_flattened or flat_param is not None

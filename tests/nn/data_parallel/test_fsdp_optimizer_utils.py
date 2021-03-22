@@ -2,7 +2,7 @@ import functools
 
 from parameterized import parameterized
 import torch
-from torch.optim import SGD, Adadelta, Adam  # noqa
+from torch.optim import SGD, Adadelta, Adam  # type: ignore
 
 from fairscale.nn import FullyShardedDataParallel
 from fairscale.optim.utils import recursive_copy_to_device
