@@ -178,6 +178,7 @@ class ShardedDataParallel(nn.Module):
 
         # - setup backward hooks which will be called by Torch's autograd in due time
         self._grad_accs: List[Callable] = []
+        self._manual_reduce: List[Callable] = []
 
         # passing a handle to torch.nn.SyncBatchNorm layer
         self._passing_sync_batchnorm_handle(self.module)
@@ -202,7 +203,6 @@ class ShardedDataParallel(nn.Module):
             trainable_mask = list(map(_trainable, self._all_params))
             if trainable_mask != self._reference_trainable_mask:
                 logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")
-
                 self.refresh_trainable()
                 self._reference_trainable_mask = trainable_mask
 
@@ -303,10 +303,12 @@ class ShardedDataParallel(nn.Module):
         ), "No grads waiting to be reduced, maybe that this was called twice or there was no BW pass ?"
 
         # Trigger all the current BW hooks
-        _ = map(lambda x: x(), self._grad_accs)
+        self._bucket_flush_callback_set = True  # no need to flush in the end, we own the callback execution
+        _ = list(map(lambda x: x(), self._manual_reduce))
 
         # Make sure that all the futures are consumed
         self._consume_work_handles()
+        torch.cuda.synchronize()
 
     @torch.no_grad()
     def sync_buffers(self, blocking: bool = False) -> None:
@@ -433,6 +435,7 @@ class ShardedDataParallel(nn.Module):
             @torch.no_grad()
             def reduce(*_: Any) -> None:
                 # Skip gradient reduction, do not alter status flags
+
                 if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
                     assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
 
@@ -478,6 +481,7 @@ class ShardedDataParallel(nn.Module):
 
         # Go through the parameters, attach the hook
         self._grad_accs = []
+        self._manual_reduce = []
         for index, param in enumerate(self._trainable_params):
             if param.grad is not None and param.grad.requires_grad:
                 raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
@@ -489,8 +493,10 @@ class ShardedDataParallel(nn.Module):
             grad_acc = p_tmp.grad_fn.next_functions[0][0]
             dst_rank = self._trainable_param_to_rank[param]
 
-            grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank))
-            self._grad_accs.append(grad_acc)  # keep this function in scope
+            reduce_function = self._get_reduce_fn(index, param, dst_rank)
+            grad_acc.register_hook(reduce_function)
+            self._manual_reduce.append(reduce_function)
+            self._grad_accs.append(grad_acc)  # keep this hook in scope
 
     @torch.no_grad()
     def _sync_params_and_buffers(self) -> None:
