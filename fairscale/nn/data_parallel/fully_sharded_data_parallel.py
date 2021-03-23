@@ -21,7 +21,7 @@ import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
-from fairscale.optim.utils import calc_grad_norm, recursive_copy_to_device
+from fairscale.optim.utils import broadcast_object, calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
@@ -1369,17 +1369,17 @@ class FullyShardedDataParallel(nn.Module):
         # Store all the states in order, rank by rank
         should_collect_state = recipient_rank is None or (self.rank == recipient_rank)
         all_states: List[Dict[str, Any]] = []
+        dummy_tensor = torch.tensor([0], dtype=torch.uint8, device=self.compute_device)
         for rank in range(self.world_size):
             if rank == self.rank:
                 sd = optim.state_dict()
                 sd["num_padded"] = [m.num_padded for m in self._fsdp_instances]
             else:
-                sd = None  # type: ignore
-            obj_lst = [sd]
-            torch.distributed.broadcast_object_list(obj_lst, src=rank, group=self.process_group)
+                sd = dummy_tensor  # type: ignore
+            sd = broadcast_object(sd, src_rank=rank, group=self.process_group, dist_device=self.compute_device)  # type: ignore
             if should_collect_state:
-                assert isinstance(obj_lst[0], dict), f"{rank}, {self.rank} {all_states}"
-                all_states.append(recursive_copy_to_device(obj_lst[0], non_blocking=False, device=torch.device("cpu")))
+                assert isinstance(sd, dict), f"{self.rank} received {type(sd)} from {rank}, expected dict"
+                all_states.append(recursive_copy_to_device(sd, non_blocking=False, device=torch.device("cpu")))
 
         return all_states
 

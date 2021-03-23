@@ -1,5 +1,4 @@
 import functools
-import unittest
 
 from parameterized import parameterized
 import torch
@@ -30,9 +29,12 @@ def assert_equal(a, b):
     assert a == b, f"{a} != {b}"
 
 
+from time import time
+
+
 class TestOptimizerUtils(DistributedTest):
     @parameterized.expand(
-        [[functools.partial(SGD, momentum=0.9), True], [SGD, False], [Adam, False],],
+        [[functools.partial(SGD, momentum=0.9), True], [SGD, False], [Adam, False], [Adadelta, True]],
         name_func=rename_test,
     )
     def test_consolidate_optimizer(self, optim_fn, transformer):
@@ -41,7 +43,7 @@ class TestOptimizerUtils(DistributedTest):
             self._test_consolidated_optimizer, config, optim_fn=optim_fn, transformer=transformer
         )
 
-        spawn_and_init(test_fn, world_sizes=[1, min(torch.cuda.device_count(), 4)])
+        spawn_and_init(test_fn, world_sizes=[min(torch.cuda.device_count(), 4)])
 
     @classmethod
     def _test_consolidated_optimizer(self, config, rank, group, optim_fn=torch.optim.SGD, transformer=False):
@@ -78,7 +80,12 @@ class TestOptimizerUtils(DistributedTest):
         unwrapped_sd = optim_unwrapped.state_dict()
 
         # first_key = unwrapped_sd['state'][0].keys()
+        tstart = time()
         sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=0)
+        duration = time() - tstart
+        # Switching from fairscale.optim.utils.broadcast_object to torch.broadcast_object_list will cause this to raise
+        assert duration < fsdp.world_size, f"gather optim state took {duration} seconds, suspect change in _consolidate"
+
         if fsdp.rank > 0:
             return
 
