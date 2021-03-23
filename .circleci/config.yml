@@ -165,12 +165,9 @@ check_test_list: &check_test_list
 # code is not covered without looking at coverage results from each commit.
 # Also, it is a long pole for testing time, which slows down development a lot.
 run_coverage: &run_coverage
-  - run:
-      name: Run Unit Tests With Coverage
-      command: |
-        pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./
-        #Uploading test coverage for Python code
-        bash <(curl -s https://codecov.io/bash) -f coverage.xml -cF Python
+  - codecov/upload:
+      file: './coverage/clover.xml'
+      token: bd5db06b-4cc0-4c0c-aab5-d9ce97d4af91
 
 run_mpi_unittests: &run_mpi_unittests
   - run:
@@ -234,7 +231,7 @@ run_unittests: &run_unittests
        name: Run all unit tests.
        # We run all and not stopping on failure on CPU since docker time is cheaper.
        command: |
-         pytest --junitxml=test-results/junit.xml --verbose --timeout 60
+         pytest --junitxml=test-results/junit.xml --verbose --timeout 60 -cov-report=xml --cov=./
 
 commands:
 
@@ -250,7 +247,7 @@ commands:
            name: Run Unit Tests
            command: |
              if [ ! -f <<parameters.test_list_file>> ]; then exit 1; fi
-             pytest --junitxml=test-results/junit.xml --verbose --timeout 60 `cat <<parameters.test_list_file>>`
+             pytest --junitxml=test-results/junit.xml --verbose --timeout 60 -cov-report=xml --cov=./ `cat <<parameters.test_list_file>>`
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
