@@ -86,32 +86,36 @@ def _combine_state(states: List[Dict]) -> Dict[int, Dict]:
 def _unflatten_optim_state(
     combined_state: Dict[int, Dict], instance_list: List[torch.nn.Module], world_pad_info: List[List[List[int]]],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
-    local_to_global_param_id: Dict[int, List[int]] = {}
+    # local ids are the keys in the current state (combined_state), (usually fewer)
+    # global ids will be the keys in the unflattened state
     next_global_id = 0  # gets incremented
-    unflat_state = {}
     pad_info = {id: [s[id][0] for s in world_pad_info] for id in combined_state}
+    local_ids = [id for id in sorted(combined_state.keys())]
 
     # constant_state refers to entries in sd[state][param_id] that are not tensors, like "step"
     # we check that these are identical across workers and then take the first
     constant_state = [_extract_constant_state(combined_state, id) for id in combined_state]
 
+    # local corresponds to flattened, global corresponds to unflattened
+    num_unflat_params = [len(m._param_numels) for m in instance_list]  # type: ignore
+    global_to_local_id = {}
+    for local_id, num_unflat in enumerate(num_unflat_params):
+        for _ in range(num_unflat):
+            global_to_local_id[next_global_id] = local_id
+            next_global_id += 1
+
     # If the constant state is the same as the combined state,  copy it N times, no unflattening needed.
+    unflat_state = {i: copy.deepcopy(constant_state[0]) for i in range(sum(num_unflat_params))}
     if constant_state[0].keys() == combined_state[0].keys():
-        num_unflat_params = [len(m._param_numels) for m in instance_list]  # type: ignore
-        unflat_state = {i: constant_state[0] for i in range(sum(num_unflat_params))}
-        global_to_local_id = {}
-        for local_id, num_unflat in enumerate(num_unflat_params):
-            for _ in range(num_unflat):
-                global_to_local_id[next_global_id] = local_id
-                next_global_id += 1
         return unflat_state, global_to_local_id
 
+    local_to_global: Dict[int, List] = {i: [] for i in local_ids}
+    for g, l in global_to_local_id.items():
+        local_to_global[l].append(g)
     # loop over parameters in state.
-    # Tensor state will be padded, concatenated, and then restored to their original
-    # shape with FlattenParamsWrapper.get_views
-    # get_views multiple tensors, each of which is a new parameter with a new "global" id.
-    for local_id in combined_state:
-        local_to_global_param_id[local_id] = []
+    # Tensor state will be padded, concatenated, and restored to original shape with FlattenParamsWrapper.get_views
+    # get_views returns multiple tensors, each of which is a new parameter with a new "global" id.
+    for local_id in local_ids:
         # undo the work of shard_parameters
         for k, v in combined_state[local_id].items():
             if k in constant_state[local_id]:
@@ -120,20 +124,9 @@ def _unflatten_optim_state(
             v_unpad = [t[:-np] if np > 0 else t for t, np in zip(v, pad_info[local_id])]
             flat_buffer = torch.cat(v_unpad)
             param_views: Generator = instance_list[local_id].get_param_views(flat_buffer)  # type: ignore
-            for i, param_view in enumerate(param_views):
-                if i == len(local_to_global_param_id[local_id]):  # make a new ID
-                    local_to_global_param_id[local_id].append(next_global_id)
-                    next_global_id += 1
-                global_id = local_to_global_param_id[local_id][i]
-                if global_id not in unflat_state:
-                    unflat_state[global_id] = copy.deepcopy(constant_state[local_id])
-
-                assert k not in unflat_state[global_id], f"already added {k} to new[{global_id}]"
+            for global_id, param_view in zip(sorted(local_to_global[local_id]), param_views):
+                assert k not in unflat_state[global_id], f"already added {k} to {global_id} {local_id}"
                 unflat_state[global_id][k] = param_view
-
-    global_to_local_id = {
-        new_id: old_pid for old_pid, global_ids in local_to_global_param_id.items() for new_id in global_ids
-    }
 
     return unflat_state, global_to_local_id
 
