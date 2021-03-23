@@ -103,6 +103,8 @@ def _unflatten_optim_state(
         for _ in range(num_unflat):
             global_to_local_id[next_global_id] = local_id
             next_global_id += 1
+    if not combined_state:
+        return {}, global_to_local_id
 
     # If the constant state is the same as the combined state,  copy it N times, no unflattening needed.
     unflat_state = {i: copy.deepcopy(constant_state[0]) for i in range(sum(num_unflat_params))}
