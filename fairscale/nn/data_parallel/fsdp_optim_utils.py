@@ -2,14 +2,14 @@
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-"""These files are used by fsdp to help consolidate and shard optimizer states."""
+"""These functions are used by FullyShardedDataParallel to help consolidate and shard optimizer states."""
 import copy
 from typing import Dict, Generator, List, Tuple
 
 import torch
 
 
-# This function helps shard an
+# This function helps shard
 def flatten_optim_state_dict(sd: Dict) -> Dict:
     """Called by FSDP.get_shard_from_optim_state_dict"""
     param_id_map = sd["param_id_map"]
@@ -29,9 +29,7 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
                     new_state[consolidated_pid][buffer_name] = []
                 new_state[consolidated_pid][buffer_name].append(p.reshape(-1))
             else:
-                assert isinstance(p, (float, int)), f"unexpected type {type(p)} in optimizer state[{buffer_name}]"
                 constant_state[buffer_name] = p
-                # TODO(SS): THIS COULD BE WRONG. What if step is different for different params... At least check
 
     for consolidated_pid, state in new_state.items():
         for buffer_name, tensors in state.items():
@@ -45,8 +43,18 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
 
     return new_sd
 
+def check_param_counts_before_sharding(full_optim_state_dict: Dict, n_instances: int) -> None:
+    n_local_params_in_opt = len(set(full_optim_state_dict["param_id_map"].values()))
+    msg = (
+        f"Including itself, this model has {n_instances} nested instances. When the optimizer state was saved "
+        f"there were {n_local_params_in_opt}"
+    )
+    stateless = len(full_optim_state_dict["state"]) == 0
+    assert stateless or (n_instances == n_local_params_in_opt), msg
 
-# All functions help saving the list of optimizer states, one from each rank
+
+
+# All functions below here help saving the list of optimizer states, one from each rank
 # build_unflat_state_dict is the interface used by FSDP
 def _extract_constant_state(combined_state: Dict[int, Dict[str, List]], param_id: int) -> Dict:
     constant_state = {}  # This state is like step in Adam, not a tensor so we dont unpad or cat it.
@@ -61,7 +69,7 @@ def _extract_constant_state(combined_state: Dict[int, Dict[str, List]], param_id
     return constant_state
 
 
-def _combine_tensor_optim_state(states: List[Dict]) -> Dict[int, Dict]:
+def _combine_state(states: List[Dict]) -> Dict[int, Dict]:
     combined_state = states[0]
     for param_id in combined_state:
         combined_state[param_id] = {k: [v] for k, v in combined_state[param_id].items()}
@@ -86,6 +94,17 @@ def _unflatten_optim_state(
     # constant_state refers to entries in sd[state][param_id] that are not tensors, like "step"
     # we check that these are identical across workers and then take the first
     constant_state = [_extract_constant_state(combined_state, id) for id in combined_state]
+
+    # If the constant state is the same as the combined state,  copy it N times, no unflattening needed.
+    if constant_state[0].keys() == combined_state[0].keys():
+        num_unflat_params = [len(m._param_numels) for m in instance_list]  # type: ignore
+        unflat_state = {i: constant_state[0] for i in range(sum(num_unflat_params))}
+        global_to_local_id = {}
+        for local_id, num_unflat in enumerate(num_unflat_params):
+            for _ in range(num_unflat):
+                global_to_local_id[next_global_id] = local_id
+                next_global_id += 1
+        return unflat_state, global_to_local_id
 
     # loop over parameters in state.
     # Tensor state will be padded, concatenated, and then restored to their original
@@ -125,27 +144,14 @@ def build_unflat_state_dict(instance_list: List[torch.nn.Module], world_optim_st
     assert all(len(s[0]) == 1 for s in world_pad_info)
     param_groups = copy.deepcopy(world_optim_states[0]["param_groups"])
     assert len(param_groups) == 1
-    # combined_state refers to tensor values in sd[state][param_id].
-    # Here we just aggregate them into a dictionary of lists (from a list of dictionaries)
-    combined_state = _combine_tensor_optim_state([x["state"] for x in world_optim_states])
-    # cleanup all_optimizer_states_list
+
+    # Aggregate from a list of dictionaries to a dictionary of lists
+    combined_state = _combine_state([x["state"] for x in world_optim_states])
     del world_optim_states
-    new_state_dict = {"state": {}, "param_groups": param_groups}
+
     # local ids are in the current state, global_ids will be in returned state.
     unflat_state, global_to_local_id = _unflatten_optim_state(combined_state, instance_list, world_pad_info)
     num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
-    new_state_dict["param_groups"][0]["params"] = list(range(num_params))
-    new_state_dict["param_id_map"] = global_to_local_id
-    # Make sure that the parameters are sorted in the state, as expected for a pytorch dict
-    new_state_dict["state"] = dict(sorted(unflat_state.items()))
-    return new_state_dict
-
-
-def check_param_counts_before_sharding(full_optim_state_dict: Dict, n_instances: int) -> None:
-    n_local_params_in_opt = len(set(full_optim_state_dict["param_id_map"].values()))
-    msg = (
-        f"Including itself, this model has {n_instances} nested instances. When the optimizer state was saved "
-        f"there were {n_local_params_in_opt}"
-    )
-    stateless = len(full_optim_state_dict["state"]) == 0
-    assert stateless or (n_instances == n_local_params_in_opt), msg
+    return {"state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
+            "param_id_map": global_to_local_id,
+            "param_groups": [{'params': list(range(num_params))}]}

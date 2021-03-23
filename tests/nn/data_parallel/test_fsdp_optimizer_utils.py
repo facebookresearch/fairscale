@@ -22,7 +22,7 @@ def first_tensor_shape(dct):
     for k, v in dct.items():
         if torch.is_tensor(v):
             return v.numel()
-    raise ValueError("found no tensors")
+    return 0
 
 
 def assert_equal(a, b):
