@@ -187,7 +187,7 @@ class FullyShardedDataParallel(nn.Module):
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
 
-        self.num_padded: List[int] = []
+        self.numel_padded_per_param: List[int] = []
         self.compute_device = compute_device
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
@@ -415,7 +415,7 @@ class FullyShardedDataParallel(nn.Module):
         allocate less memory for optimizer state, avoiding redundancy across
         data parallel workers.
         """
-        self.num_padded = []
+        self.numel_padded_per_param = []
         for p in self.params:
             assert not hasattr(p, "_is_sharded")
             assert p.is_floating_point()
@@ -427,16 +427,16 @@ class FullyShardedDataParallel(nn.Module):
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
-                self.num_padded.append(0)
+                self.numel_padded_per_param.append(0)
                 continue
             p._is_sharded = True
 
             # Replace p.data with the relevant shard.
             orig_data = p.data
             p.data, num_padded = self._get_shard(p.data)
-            self.num_padded.append(num_padded)
+            self.numel_padded_per_param.append(num_padded)
             free_storage_(orig_data)
-        assert len(self.num_padded) == len(self.params)
+        assert len(self.numel_padded_per_param) == len(self.params)
 
     def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
         """Return the local shard of a full tensor."""
@@ -1359,8 +1359,13 @@ class FullyShardedDataParallel(nn.Module):
         """Update the consolidated state_dict list, one per rank.
 
         Args:
+
             recipient_rank (int): on which rank to materialize the full state dict.
             None is a special value, which means that all ranks should have the state
+
+        Returns:
+            all_states (list[dict]) the optimizer state from each rank
+
 
         .. warning: This needs to be called on all replicas"""
         self._lazy_init()
@@ -1373,7 +1378,7 @@ class FullyShardedDataParallel(nn.Module):
         for rank in range(self.world_size):
             if rank == self.rank:
                 sd = optim.state_dict()
-                sd["num_padded"] = [m.num_padded for m in self._fsdp_instances]
+                sd["num_padded"] = [m.numel_padded_per_param for m in self._fsdp_instances]
             else:
                 sd = dummy_tensor  # type: ignore
             sd = broadcast_object(sd, src_rank=rank, group=self.process_group, dist_device=self.compute_device)  # type: ignore
@@ -1391,9 +1396,8 @@ class FullyShardedDataParallel(nn.Module):
 
         Returns:
             a dict with two entries
-                * state - a dict holding current optimization state. Its content
-                    differs between optimizer classes.
-                * param_groups - a dict containing all parameter groups
+                * state - a dict holding gathered optimization state, 1 entry per unflat parameter
+                * param_groups - a dict containing the 1 parameter group
 
         """
         if not self.flatten_parameters:

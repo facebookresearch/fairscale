@@ -9,9 +9,9 @@ from typing import Dict, Generator, List, Tuple
 import torch
 
 
-# This function helps shard
+# This function helps shard a full optimizer state dict
 def flatten_optim_state_dict(sd: Dict) -> Dict:
-    """Called by FSDP.get_shard_from_optim_state_dict"""
+    """Shard a full optimizer state dict (called by FSDP.get_shard_from_optim_state_dict)"""
     param_id_map = sd["param_id_map"]
     num_local_params = len(set(param_id_map.values()))
     if sd["state"]:

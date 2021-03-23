@@ -1,4 +1,9 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
 import functools
+from time import time
 
 from parameterized import parameterized
 import torch
@@ -27,9 +32,6 @@ def first_tensor_shape(dct):
 
 def assert_equal(a, b):
     assert a == b, f"{a} != {b}"
-
-
-from time import time
 
 
 class TestOptimizerUtils(DistributedTest):
