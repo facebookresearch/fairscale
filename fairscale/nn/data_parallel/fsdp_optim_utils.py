@@ -43,6 +43,7 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
 
     return new_sd
 
+
 def check_param_counts_before_sharding(full_optim_state_dict: Dict, n_instances: int) -> None:
     n_local_params_in_opt = len(set(full_optim_state_dict["param_id_map"].values()))
     msg = (
@@ -51,7 +52,6 @@ def check_param_counts_before_sharding(full_optim_state_dict: Dict, n_instances:
     )
     stateless = len(full_optim_state_dict["state"]) == 0
     assert stateless or (n_instances == n_local_params_in_opt), msg
-
 
 
 # All functions below here help saving the list of optimizer states, one from each rank
@@ -152,6 +152,8 @@ def build_unflat_state_dict(instance_list: List[torch.nn.Module], world_optim_st
     # local ids are in the current state, global_ids will be in returned state.
     unflat_state, global_to_local_id = _unflatten_optim_state(combined_state, instance_list, world_pad_info)
     num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
-    return {"state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
-            "param_id_map": global_to_local_id,
-            "param_groups": [{'params': list(range(num_params))}]}
+    return {
+        "state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
+        "param_id_map": global_to_local_id,
+        "param_groups": [{"params": list(range(num_params))}],
+    }
