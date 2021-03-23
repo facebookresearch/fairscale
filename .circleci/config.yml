@@ -249,7 +249,9 @@ commands:
            name: Run Unit Tests
            command: |
              if [ ! -f <<parameters.test_list_file>> ]; then exit 1; fi
-             pytest --junitxml=test-results/junit.xml --verbose --timeout 60 `cat <<parameters.test_list_file>>`
+             pytest --junitxml=test-results/junit.xml --verbose --timeout 60 `cat <<parameters.test_list_file>>`  | tee `output_<<parameters.test_list_file>>.txt`
+        - store_artifacts:
+              path: ~/fairscale/tests_output.txt
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
