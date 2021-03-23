@@ -1,4 +1,5 @@
 import functools
+import unittest
 
 from parameterized import parameterized
 import torch
@@ -31,7 +32,7 @@ def assert_equal(a, b):
 
 class TestOptimizerUtils(DistributedTest):
     @parameterized.expand(
-        [[functools.partial(SGD, momentum=0.9), False], [SGD, False], [Adam, False], [Adadelta, True]],
+        [[functools.partial(SGD, momentum=0.9), True], [SGD, False], [Adam, False],],
         name_func=rename_test,
     )
     def test_consolidate_optimizer(self, optim_fn, transformer):
@@ -39,7 +40,8 @@ class TestOptimizerUtils(DistributedTest):
         test_fn = functools.partial(
             self._test_consolidated_optimizer, config, optim_fn=optim_fn, transformer=transformer
         )
-        spawn_and_init(test_fn)
+
+        spawn_and_init(test_fn, world_sizes=[1, min(torch.cuda.device_count(), 4)])
 
     @classmethod
     def _test_consolidated_optimizer(self, config, rank, group, optim_fn=torch.optim.SGD, transformer=False):
@@ -76,7 +78,9 @@ class TestOptimizerUtils(DistributedTest):
         unwrapped_sd = optim_unwrapped.state_dict()
 
         # first_key = unwrapped_sd['state'][0].keys()
-        sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=None)
+        sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=0)
+        if fsdp.rank > 0:
+            return
 
         assert_equal(len(sd["state"]), len(unwrapped_sd["state"]))
         assert_equal(len(sd["param_groups"][0]["params"]), len(unwrapped_sd["param_groups"][0]["params"]))
