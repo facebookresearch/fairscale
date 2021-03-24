@@ -23,7 +23,7 @@ from .test_fsdp import (
 )
 
 
-def first_tensor_shape(dct):
+def first_tensor_numel(dct):
     for k, v in dct.items():
         if torch.is_tensor(v):
             return v.numel()
@@ -62,7 +62,7 @@ class TestOptimizerUtils(DistributedTest):
         try:
             fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01,)
             optim_unwrapped = optim_fn(unwrapped_model.parameters(), lr=0.01)
-        except TypeError:  # AdaScale
+        except TypeError:  # Adadelta
             fsdp_optim = optim_fn(fsdp.parameters())
             optim_unwrapped = optim_fn(unwrapped_model.parameters())
 
@@ -81,7 +81,6 @@ class TestOptimizerUtils(DistributedTest):
         optim_unwrapped.step()
         unwrapped_sd = optim_unwrapped.state_dict()
 
-        # first_key = unwrapped_sd['state'][0].keys()
         tstart = time()
         sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=0)
         duration = time() - tstart
@@ -94,8 +93,8 @@ class TestOptimizerUtils(DistributedTest):
         assert_equal(len(sd["state"]), len(unwrapped_sd["state"]))
         assert_equal(len(sd["param_groups"][0]["params"]), len(unwrapped_sd["param_groups"][0]["params"]))
         assert_equal(
-            sum([first_tensor_shape(v) for k, v in sd["state"].items()]),
-            sum([first_tensor_shape(v) for k, v in unwrapped_sd["state"].items()]),
+            sum([first_tensor_numel(v) for k, v in sd["state"].items()]),
+            sum([first_tensor_numel(v) for k, v in unwrapped_sd["state"].items()]),
         )
 
         shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
@@ -103,15 +102,12 @@ class TestOptimizerUtils(DistributedTest):
         original_shard_sd = fsdp_optim.state_dict()
         assert_equal(len(shard_sd["state"]), len(original_shard_sd["state"]))
         assert_equal(shard_sd.keys(), original_shard_sd.keys())
-        torch.save(shard_sd, f"new_shard_{fsdp.world_size}.pt")
         original_shard_sd = recursive_copy_to_device(original_shard_sd, non_blocking=False, device="cpu")
 
         assert_equal(
-            sum([first_tensor_shape(v) for k, v in shard_sd["state"].items()]),
-            sum([first_tensor_shape(v) for k, v in original_shard_sd["state"].items()]),
+            sum([first_tensor_numel(v) for k, v in shard_sd["state"].items()]),
+            sum([first_tensor_numel(v) for k, v in original_shard_sd["state"].items()]),
         )
-        if shard_sd["state"]:
-            assert objects_are_equal(shard_sd["state"][0], original_shard_sd["state"][0])
         assert objects_are_equal(shard_sd["state"], original_shard_sd["state"])
 
     def test_named_params_ordering(self):
@@ -120,4 +116,4 @@ class TestOptimizerUtils(DistributedTest):
         model = TransformerWithSharedParams(group)
         named_pars = [p for n, p in model.named_parameters()]
         for i, p in enumerate(model.parameters()):
-            assert p.shape == named_pars[i].shape
+            assert objects_are_equal(p, named_pars[i])

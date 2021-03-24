@@ -19,7 +19,6 @@ import torch.nn as nn
 from torch.nn import Parameter
 import torch.nn.functional as F
 
-import fairscale.nn.data_parallel.fsdp_optim_utils as ou
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.optim.utils import broadcast_object, calc_grad_norm, recursive_copy_to_device
@@ -27,6 +26,8 @@ from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
+
+from . import fsdp_optim_utils as ou
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -1407,6 +1408,7 @@ class FullyShardedDataParallel(nn.Module):
             return None
         # Unify the shard states by concatenating tensors and unflattening params
         new_state_dict = ou.build_unflat_state_dict(self._fsdp_instances, world_optim_states)
+        # TODO: check if this code supports nested instances with different world size
         return new_state_dict
 
     @property
@@ -1418,6 +1420,9 @@ class FullyShardedDataParallel(nn.Module):
         """Get the portion of the optimizer state dict associated with the shard"""
         # Assert nesting is the same as it was at save time
         instance_list = self._fsdp_instances
+        assert all(
+            x.world_size == self.world_size for x in instance_list
+        ), "all nested instances must have same world size"
         ou.check_param_counts_before_sharding(full_optim_state_dict, len(instance_list))
         if self.flatten_parameters:
             full_optim_state_dict = ou.flatten_optim_state_dict(full_optim_state_dict)
