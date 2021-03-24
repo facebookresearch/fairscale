@@ -20,7 +20,7 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
         new_state = {}
     constant_state = {}
 
-    # assumes sd sorted
+    # Populate `new_state["state"]`. (Assuming sd is sorted)
     for expanded_pid, buffers in sd["state"].items():
         consolidated_pid = param_id_map[expanded_pid]
         for buffer_name, p in buffers.items():
@@ -31,12 +31,14 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
             else:
                 constant_state[buffer_name] = p
 
+    # Now combine all tensors in each buffer using torch.cat().
     for consolidated_pid, state in new_state.items():
         for buffer_name, tensors in state.items():
             new_state[consolidated_pid][buffer_name] = torch.cat(tensors)
         new_state[consolidated_pid].update(constant_state)
     new_sd = {"state": new_state, "param_groups": sd["param_groups"]}
 
+    # add pointers from the `params` dict.
     for pg_id, _ in enumerate(sd["param_groups"]):
         # TODO: this list could be huge. Can we avoid materializing?
         new_sd["param_groups"][pg_id]["params"] = list(range(num_local_params))
@@ -57,7 +59,7 @@ def check_param_counts_before_sharding(full_optim_state_dict: Dict, n_instances:
 # All functions below here help saving the list of optimizer states, one from each rank
 # build_unflat_state_dict is the interface used by FSDP
 def _extract_constant_state(combined_state: Dict[int, Dict[str, List]], param_id: int) -> Dict:
-    constant_state = {}  # This state is like step in Adam, not a tensor so we dont unpad or cat it.
+    constant_state = {}  # This state is like the `step` count in Adam, not a tensor so we dont unpad or cat it.
     for k, v in combined_state[param_id].items():
 
         if torch.is_tensor(v[0]):
