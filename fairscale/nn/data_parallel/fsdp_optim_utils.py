@@ -18,7 +18,7 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
         new_state: Dict = {local_id: {} for local_id in range(num_local_params)}
     else:
         new_state = {}
-    constant_state = {}
+    non_tensor_state = {}
 
     # Populate `new_state["state"]`. (Assuming sd is sorted)
     for expanded_pid, buffers in sd["state"].items():
@@ -29,13 +29,13 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
                     new_state[consolidated_pid][buffer_name] = []
                 new_state[consolidated_pid][buffer_name].append(p.reshape(-1))
             else:
-                constant_state[buffer_name] = p
+                non_tensor_state[buffer_name] = p
 
     # Now combine all tensors in each buffer using torch.cat().
     for consolidated_pid, state in new_state.items():
         for buffer_name, tensors in state.items():
             new_state[consolidated_pid][buffer_name] = torch.cat(tensors)
-        new_state[consolidated_pid].update(constant_state)
+        new_state[consolidated_pid].update(non_tensor_state)
     new_sd = {"state": new_state, "param_groups": sd["param_groups"]}
 
     # add pointers from the `params` dict.
@@ -58,17 +58,16 @@ def check_param_counts_before_sharding(full_optim_state_dict: Dict, n_instances:
 
 # All functions below here help saving the list of optimizer states, one from each rank
 # build_unflat_state_dict is the interface used by FSDP
-def _extract_constant_state(combined_state: Dict[int, Dict[str, List]], param_id: int) -> Dict:
-    constant_state = {}  # This state is like the `step` count in Adam, not a tensor so we dont unpad or cat it.
+def _extract_non_tensor_state(combined_state: Dict[int, Dict[str, List]], param_id: int) -> Dict:
+    non_tensor_state = {}  # This state is like the `step` count in Adam, not a tensor so we dont unpad or cat it.
     for k, v in combined_state[param_id].items():
-
         if torch.is_tensor(v[0]):
             continue
         elif len(set(v)) == 1:
-            constant_state[k] = v[0]
+            non_tensor_state[k] = v[0]
         else:
-            raise TypeError(f"Dont know how to expand optimizer param {k} with values {v}")
-    return constant_state
+            raise TypeError(f"Dont know how to consolidate optimizer param {k} with values {v}")
+    return non_tensor_state
 
 
 def _combine_state(states: List[Dict]) -> Dict[int, Dict]:
@@ -94,9 +93,9 @@ def _unflatten_optim_state(
     pad_info = {id: [s[id][0] for s in world_pad_info] for id in combined_state}
     local_ids = [id for id in sorted(combined_state.keys())]
 
-    # constant_state refers to entries in sd[state][param_id] that are not tensors, like "step"
+    # non_tensor_state refers to entries in sd[state][param_id] that are not tensors, like "step".
     # we check that these are identical across workers and then take the first
-    constant_state = [_extract_constant_state(combined_state, id) for id in combined_state]
+    non_tensor_state = [_extract_non_tensor_state(combined_state, id) for id in combined_state]
 
     # local corresponds to flattened, global corresponds to unflattened
     num_unflat_params = [len(m._param_numels) for m in instance_list]  # type: ignore
@@ -109,8 +108,8 @@ def _unflatten_optim_state(
         return {}, global_to_local_id
 
     # If the constant state is the same as the combined state,  copy it N times, no unflattening needed.
-    unflat_state = {i: copy.deepcopy(constant_state[0]) for i in range(sum(num_unflat_params))}
-    if constant_state[0].keys() == combined_state[0].keys():
+    unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_unflat_params))}
+    if non_tensor_state[0].keys() == combined_state[0].keys():
         return unflat_state, global_to_local_id
 
     local_to_global: Dict[int, List] = {i: [] for i in local_ids}
@@ -122,7 +121,7 @@ def _unflatten_optim_state(
     for local_id in local_ids:
         # undo the work of shard_parameters
         for k, v in combined_state[local_id].items():
-            if k in constant_state[local_id]:
+            if k in non_tensor_state[local_id]:
                 continue
             assert isinstance(v, list), f"got {k}: {v} for {local_id}"
             v_unpad = [t[:-np] if np > 0 else t for t, np in zip(v, pad_info[local_id])]
@@ -136,6 +135,7 @@ def _unflatten_optim_state(
 
 
 def build_unflat_state_dict(instance_list: List[torch.nn.Module], world_optim_states: List[Dict]) -> Dict:
+    """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts from each rank."""
     world_pad_info: List[List[List[int]]] = [s.pop("num_padded") for s in world_optim_states]
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)

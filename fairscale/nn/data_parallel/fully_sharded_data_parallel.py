@@ -1396,9 +1396,9 @@ class FullyShardedDataParallel(nn.Module):
     ) -> Optional[Dict[str, Any]]:
         """Return the last known global optimizer state. The returned state is compatible with Pytorch, in that the
         sharded properties are not exposed. Multiple parameter groups are not yet supported.
-        
+
         This should be called only on the root FSDP instance.
-        
+
         Different world_size groups in nested FSDP instances is not supported.
         Args:
                     optim (Optimizer): an optimizer instance for this FSDP rank. Its state is
@@ -1428,13 +1428,13 @@ class FullyShardedDataParallel(nn.Module):
 
     def get_shard_from_optim_state_dict(self, full_optim_state_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Get the portion of the optimizer state dict associated with the shard
-        
+
         This can be used to get the right sharded optimizer state to be loaded
         into the sharded optimizer for this FSDP rank.
-        
+
         Args:
             full_optim_state_dict (dict): consolidated optimizer state returned by ``gather_full_optim_state``, or loaded from a checkpoint.
-            
+
         Returns:
             (dict): a shard of the optimizer state.
         """
