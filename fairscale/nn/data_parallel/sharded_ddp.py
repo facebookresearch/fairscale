@@ -308,7 +308,6 @@ class ShardedDataParallel(nn.Module):
 
         # Make sure that all the futures are consumed
         self._consume_work_handles()
-        torch.cuda.synchronize()
 
     @torch.no_grad()
     def sync_buffers(self, blocking: bool = False) -> None:
