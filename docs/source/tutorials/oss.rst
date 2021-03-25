@@ -111,8 +111,10 @@ the only assumption being that each of the ranks lives in its own python process
 to see it in action, you can test it with the following script `here <../../../examples/tutorial_oss.py>`_.
 
 
-Using PyTorch Automatic Mixed Precision is possible, but it requires a shard-aware GradScaler, which is available in
-`fairscale.optim.grad_scaler`. Autocast can be used as is, and the loss will be scaled and handled in the same way.
+Using PyTorch Automatic Mixed Precision is possible, and its actual usage will depend on whether OSS is used with DDP or with ShardedDDP.
+If OSS is used with DDP, then the normal PyTorch GradScaler can be used, nothing needs to be changed. If OSS is used with ShardedDDP (to
+get the gradient sharding), then a very similar flow can be used, but it requires a shard-aware GradScaler, which is available in
+`fairscale.optim.grad_scaler`. In both cases Autocast can be used as is, and the loss will be scaled and handled in the same way.
 See [the original documentation] (https://pytorch.org/docs/stable/notes/amp_examples.html?highlight=automatic%20mixed%20precision)
 for more information.
 
