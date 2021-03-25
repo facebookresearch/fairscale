@@ -149,8 +149,9 @@ def build_unflat_state_dict(instance_list: List[torch.nn.Module], world_optim_st
     # local ids are in the current state, global_ids will be in returned state.
     unflat_state, global_to_local_id = _unflatten_optim_state(combined_state, instance_list, world_pad_info)
     num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
+    param_groups[0]["params"] = list(range(num_params))  # This could be a large list. #TODO: is it essential
     return {
         "state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
         "param_id_map": global_to_local_id,
-        "param_groups": [{"params": list(range(num_params))}],
+        "param_groups": param_groups,
     }

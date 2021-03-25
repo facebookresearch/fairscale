@@ -108,7 +108,7 @@ class TestOptimizerUtils(DistributedTest):
             sum([first_tensor_numel(v) for k, v in shard_sd["state"].items()]),
             sum([first_tensor_numel(v) for k, v in original_shard_sd["state"].items()]),
         )
-        assert objects_are_equal(shard_sd["state"], original_shard_sd["state"])
+        assert objects_are_equal(shard_sd, original_shard_sd)
 
     def test_named_params_ordering(self):
         """Test assumption of consolidate_optimizer_state_dict"""
