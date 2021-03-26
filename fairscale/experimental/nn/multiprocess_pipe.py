@@ -22,7 +22,10 @@ if TYPE_CHECKING:
 else:
     Module = nn.Module
 
-BOUNCE_TENSORS = True
+if torch.__version__.split("+")[0].split(".")[:3] <= ["1", "8", "1"]:
+    BOUNCE_TENSORS = True
+else:
+    BOUNCE_TENSORS = False
 
 
 def _verify_module(module: List[LayerSpec]) -> None:
@@ -53,7 +56,7 @@ class _ToHere(Module):
         if BOUNCE_TENSORS:
             return x_rref.remote().cpu().to_here().to(self.device)
         else:
-            return x_rref.to_here().to(self.device)
+            return x_rref.to_here()
 
 
 def _create_sequential(layer_spec: List[LayerSpec], device: str) -> Module:
@@ -67,7 +70,7 @@ def _rcat(tensors: List) -> Tensor:
 
 
 def _parameter_rrefs(module: rpc.RRef) -> List[rpc.RRef]:
-    return [rpc.RRef(p) for p in module.to_here().parameters()]
+    return [rpc.RRef(p) for p in module.local_value().parameters()]
 
 
 def rloss(loss_func: Callable, input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
