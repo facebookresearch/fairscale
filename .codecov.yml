@@ -6,10 +6,10 @@ coverage:
       default:
         target: 94%
         threshold: 0.1%
-status:
-    project: yes
-    patch: yes
-    changes: no
+  status:
+      project: yes
+      patch: yes
+      changes: no
 parsers:
   gcov:
     branch_detection:
