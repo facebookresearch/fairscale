@@ -160,7 +160,7 @@ check_test_list: &check_test_list
         bash ./tests/ci_test_list_check.sh
 
 
-run_coverage: &run_coverage
+upload_coverage: &upload_coverage
   - codecov/upload:
       file: 'coverage.xml'
       token: $CODECOV_TOKEN
@@ -398,7 +398,7 @@ jobs:
       - store_test_results:
           path: test-results
       
-      - <<: *run_coverage
+      - <<: *upload_coverage
 
   gpu_tests_171:
     parameters:
@@ -440,7 +440,7 @@ jobs:
       - store_test_results:
           path: test-results
       
-      - <<: *run_coverage
+      - <<: *upload_coverage
 
   gpu_tests_180:
     parameters:
@@ -482,7 +482,7 @@ jobs:
       - store_test_results:
           path: test-results
       
-      - <<: *run_coverage
+      - <<: *upload_coverage
 
   benchmarks_1:
     <<: *gpu
