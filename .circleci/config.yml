@@ -163,7 +163,7 @@ check_test_list: &check_test_list
 run_coverage: &run_coverage
   - codecov/upload:
       file: 'coverage.xml'
-      token: bd5db06b-4cc0-4c0c-aab5-d9ce97d4af91
+      token: $CODECOV_TOKEN
 
 run_mpi_unittests: &run_mpi_unittests
   - run:
