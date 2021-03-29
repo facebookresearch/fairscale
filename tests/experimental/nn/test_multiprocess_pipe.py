@@ -21,7 +21,10 @@ import torch.nn as nn
 from fairscale.experimental.nn.multiprocess_pipe import DistributedLoss, MultiProcessPipe
 from fairscale.utils.testing import torch_version
 
-BOUNCE_TENSORS = True
+if torch_version() <= (1, 8, 1):
+    BOUNCE_TENSORS = True
+else:
+    BOUNCE_TENSORS = False
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
 GPU_DEVICES = ["worker0/cuda:0", "worker1/cuda:1"]
@@ -46,6 +49,10 @@ def rpc_worker(rank, world_size, init_file, func, *args):
             )
     else:
         options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
+    if torch_version() > (1, 8, 1):
+        for i in range(world_size):
+            if i != rank:
+                options.set_device_map("worker" + str(i), {rank: i})
     rpc.init_rpc(
         "worker" + str(rank),
         rank=rank,
@@ -124,9 +131,10 @@ def forward_chunks(devices):
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 def forward_multi(devices):
+    device = devices[0].split("/")[1]
     torch.random.manual_seed(3)
     torch.cuda.manual_seed_all(3)
-    x = torch.randn(8, 4)
+    x = torch.randn(8, 4).to(device)
     model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
     pipe = MultiProcessPipe(model, balance=[1, 1], chunks=4, devices=devices[:2])
     if BOUNCE_TENSORS:
@@ -142,9 +150,10 @@ def forward_multi(devices):
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 def backward(devices):
+    device = devices[0].split("/")[1]
     torch.random.manual_seed(3)
     criterion = DistributedLoss(torch.nn.MSELoss)
-    x = torch.randn(8, 4)
+    x = torch.randn(8, 4).to(device)
     model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
     pipe = MultiProcessPipe(model, balance=[1, 1], chunks=4, devices=devices[:2])
     with dist_autograd.context() as context_id:
@@ -158,9 +167,10 @@ def backward(devices):
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 def update(devices):
+    device = devices[0].split("/")[1]
     torch.random.manual_seed(3)
     criterion = DistributedLoss(torch.nn.MSELoss)
-    x = torch.randn(8, 4)
+    x = torch.randn(8, 4).to(device)
     model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
     pipe = MultiProcessPipe(model, balance=[1, 1], chunks=4, devices=devices[:2])
     params = pipe.parameter_rrefs()
