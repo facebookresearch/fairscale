@@ -1517,7 +1517,7 @@ def _pre_load_state_dict_hook(
 ########################################################################################
 
 
-def auto_wrap_bn(module: nn.Module) -> nn.Module:
+def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False) -> nn.Module:
     """
     Auto wrap all BatchNorm (BN) instances with a safer FSDP, esp. when convert
     to sync BN is used and the outer FSDP is flattening.
@@ -1531,6 +1531,9 @@ def auto_wrap_bn(module: nn.Module) -> nn.Module:
     Args:
         module (nn.Module):
             The model (or part of the model) in which BN to be pre-wrapped.
+        single_rank_pg (bool):
+            If true, put BNs in a single-rank process group. Default False.
+            This might be needed for Apex sync BN support. Still under construction.
 
     Returns:
         Processed module, where BNs are wrapped with a special FSDP instance.
@@ -1543,10 +1546,15 @@ def auto_wrap_bn(module: nn.Module) -> nn.Module:
         else:
             return is_bn and not isinstance(module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES))  # type: ignore
 
-    my_rank = dist.get_rank()
+    pg = None
+    if single_rank_pg:
+        # No sharding with this single member group.
+        my_rank = dist.get_rank()
+        pg = dist.new_group(ranks=[my_rank])
+
     fsdp_config = {
         "wrapper_cls": FullyShardedDataParallel,
-        "process_group": dist.new_group(ranks=[my_rank]),  # No sharding with this single member group.
+        "process_group": pg,
         "mixed_precision": False,  # Keep the weights in FP32.
         "flatten_parameters": False,  # Do not flatten.
     }

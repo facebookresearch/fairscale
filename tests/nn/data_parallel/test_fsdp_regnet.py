@@ -16,7 +16,7 @@ import tempfile
 import pytest
 import torch
 import torch.multiprocessing as mp
-from torch.nn import BatchNorm2d, Conv2d, Module, SyncBatchNorm
+from torch.nn import AdaptiveAvgPool2d, BatchNorm2d, Conv2d, Linear, Module, ReLU, Sequential, Sigmoid, SyncBatchNorm
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
@@ -32,18 +32,85 @@ from fairscale.utils.testing import (
     torch_version,
 )
 
+# Const test params.
+#   Reduce iterations to 1 for debugging.
+#   Change world_size to 8 on beefy machines for better test coverage.
+_world_size = 2
+_iterations = 100
 
-class Model(Module):
-    def __init__(self):
+# TODO (Min): test inplace relu in the future.
+_relu_inplace = False
+
+# TODO (Min): test apex BN when available in the future.
+try:
+    import apex
+
+    apex_bn_converter = apex.parallel.convert_syncbn_model
+except ImportError:
+    apex_bn_converter = None
+pytorch_bn_converter = SyncBatchNorm.convert_sync_batchnorm  # type: ignore
+_bn_converter = pytorch_bn_converter
+_single_rank_pg = False
+
+
+class ResBlock(Module):
+    """Conv block in regnet with residual connection."""
+
+    def __init__(self, width_in, width_out):
         super().__init__()
-        # TODO (Min): for now, we just test pytorch sync_bn here.
-        #             this will grow into regnet; testing apex sync_bn, etc.
-        self.conv = Conv2d(2, 2, (1, 1))
-        self.bn = BatchNorm2d(2)
+        self.proj = Conv2d(width_in, width_out, (1, 1), (2, 2), bias=False)
+        self.bn = BatchNorm2d(width_out)
+        self.f = Sequential(
+            Sequential(  # block a
+                Conv2d(width_in, width_out, (1, 1), (1, 1), bias=False), BatchNorm2d(width_out), ReLU(_relu_inplace),
+            ),
+            Sequential(  # block b
+                Conv2d(width_out, width_out, (3, 3), (2, 2), (1, 1), groups=2, bias=False),
+                BatchNorm2d(width_out),
+                ReLU(_relu_inplace),
+            ),
+            Sequential(  # block se
+                AdaptiveAvgPool2d((1, 1)),
+                Sequential(
+                    Conv2d(width_out, 2, (1, 1), (1, 1), bias=False),
+                    ReLU(_relu_inplace),
+                    Conv2d(2, width_out, (1, 1), (1, 1), bias=False),
+                    Sigmoid(),
+                ),
+            ),
+            Conv2d(width_out, width_out, (1, 1), (1, 1), bias=False),  # block c
+            BatchNorm2d(width_out),  # final_bn
+        )
+        self.relu = ReLU()
+        self.need_fsdp_wrap = True
 
     def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
+        x = self.bn(self.proj(x)) + self.f(x)
+        return self.relu(x)
+
+
+class Model(Module):
+    """SSL model with trunk and head."""
+
+    def __init__(self):
+        super().__init__()
+        # trunk
+        self.trunk = Sequential()
+        self.trunk.need_fsdp_wrap = True  # Set a flag for later wrapping.
+        stem = Sequential(Conv2d(2, 4, (3, 3), (2, 2), (1, 1), bias=False), BatchNorm2d(4), ReLU(_relu_inplace),)
+        any_stage_block1_0 = ResBlock(4, 8)
+        self.trunk.add_module("stem", stem)
+        self.trunk.add_module("any_stage_block1", Sequential(any_stage_block1_0))
+
+        # head
+        self.head = Sequential(
+            Sequential(Linear(16, 16), ReLU(), Linear(16, 8),),  # projection_head
+            Linear(8, 15, bias=False),  # prototypes0
+        )
+
+    def forward(self, x):
+        x = self.trunk(x).reshape(-1)
+        x = self.head(x)
         return x
 
 
@@ -67,8 +134,9 @@ def ddp_ref():
     state_before = model.state_dict()
 
     # Get reference inputs per rank.
-    world_size = 2
-    iterations = 100
+    world_size = _world_size
+    iterations = _iterations
+    print(f"Getting DDP reference for world_size {world_size} and iterations {iterations}")
     inputs = [[]] * world_size
     for rank in range(world_size):
         for i in range(iterations):
@@ -150,19 +218,22 @@ def _test_func(
 
     if ddp:
         model = SyncBatchNorm.convert_sync_batchnorm(model)
-        model = DDP(model, device_ids=[rank])
+        model = DDP(model, device_ids=[rank], broadcast_buffers=True)
     else:
         # Note, different rank may wrap in different order due to different random
         # seeds. But results should be the same.
         if random.randint(0, 1) == 0:
             print("auto_wrap_bn, then convert_sync_batchnorm")
-            model = auto_wrap_bn(model)
-            model = SyncBatchNorm.convert_sync_batchnorm(model)
+            model = auto_wrap_bn(model, _single_rank_pg)
+            model = _bn_converter(model)
         else:
             print("convert_sync_batchnorm, then auto_wrap_bn")
-            model = SyncBatchNorm.convert_sync_batchnorm(model)
-            model = auto_wrap_bn(model)
+            model = _bn_converter(model)
+            model = auto_wrap_bn(model, _single_rank_pg)
         model = FSDP(model, **fsdp_config).cuda()
+        # Print the model for verification.
+        if rank == 0:
+            print(model)
     optim = SGD(model.parameters(), lr=0.1)
 
     for in_data in inputs[rank]:
@@ -215,7 +286,7 @@ def test1(temp_files, ddp_ref, precision, flatten):
     fsdp_config["mixed_precision"] = precision == "mixed"
     fsdp_config["flatten_parameters"] = flatten == "flatten"
 
-    world_size = 2
+    world_size = _world_size
     mp.spawn(
         _test_func,
         args=(world_size, fsdp_config, None, temp_files[0], temp_files[1], state_before, inputs, None, state_after),

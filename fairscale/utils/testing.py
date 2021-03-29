@@ -445,7 +445,7 @@ def objects_are_equal(a: Any, b: Any, raise_exception: bool = False, dict_key: O
                     # Add dict key to the assertion error.
                     msg = e.args[0]
                     new_msg = f"For dict key '{dict_key}': {msg}"
-                    raise AssertionError(new_msg)
+                    raise AssertionError(new_msg) from None
                 else:
                     raise e
             else:
