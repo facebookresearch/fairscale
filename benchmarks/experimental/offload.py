@@ -49,7 +49,7 @@ def get_model_and_optimizer(args, device, benchmark_config, model_specs):
         optimizer = torch.optim.SGD
 
     model = OffloadModel(
-        model_cpu=model,
+        model=model,
         device=torch.device("cuda"),
         offload_device=torch.device("cpu"),
         num_slices=benchmark_config["slices"],
