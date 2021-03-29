@@ -8,7 +8,8 @@
 # Pro tip: download circle ci cli to validate the config locally during development.
 
 version: 2.1
-
+orbs:
+  codecov: codecov/codecov@1.0.2
 # -------------------------------------------------------------------------------------
 # Environments to run the jobs in
 # -------------------------------------------------------------------------------------
@@ -159,17 +160,10 @@ check_test_list: &check_test_list
         bash ./tests/ci_test_list_check.sh
 
 
-# TODO (Min): figure out how to do coverage nightly or on-demand. Doing it
-# on every commit seems like an overkill since we can easily figure out which
-# code is not covered without looking at coverage results from each commit.
-# Also, it is a long pole for testing time, which slows down development a lot.
-run_coverage: &run_coverage
-  - run:
-      name: Run Unit Tests With Coverage
-      command: |
-        pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./
-        #Uploading test coverage for Python code
-        bash <(curl -s https://codecov.io/bash) -f coverage.xml -cF Python
+upload_coverage: &upload_coverage
+  - codecov/upload:
+      file: 'coverage.xml'
+      token: $CODECOV_TOKEN
 
 run_mpi_unittests: &run_mpi_unittests
   - run:
@@ -233,7 +227,7 @@ run_unittests: &run_unittests
        name: Run all unit tests.
        # We run all and not stopping on failure on CPU since docker time is cheaper.
        command: |
-         pytest --junitxml=test-results/junit.xml --verbose --timeout 60
+         pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./
 
 commands:
 
@@ -249,7 +243,7 @@ commands:
            name: Run Unit Tests
            command: |
              if [ ! -f <<parameters.test_list_file>> ]; then exit 1; fi
-             pytest --junitxml=test-results/junit.xml --verbose --timeout 60 `cat <<parameters.test_list_file>>`
+             pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./ `cat <<parameters.test_list_file>>`
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
@@ -399,6 +393,8 @@ jobs:
 
       - store_test_results:
           path: test-results
+      
+      - <<: *upload_coverage
 
   gpu_tests_171:
     parameters:
@@ -439,6 +435,8 @@ jobs:
 
       - store_test_results:
           path: test-results
+      
+      - <<: *upload_coverage
 
   gpu_tests_181:
     parameters:
@@ -479,6 +477,8 @@ jobs:
 
       - store_test_results:
           path: test-results
+      
+      - <<: *upload_coverage
 
   benchmarks_1:
     <<: *gpu
