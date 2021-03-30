@@ -177,8 +177,9 @@ class ShardedDataParallel(nn.Module):
         self._bucket_list: List[GradBucket] = []
 
         # - setup backward hooks which will be called by Torch's autograd in due time
-        self._manual_reduce: List[Callable] = []
+        self._grad_accs: List[Callable] = []
         self._grad_hooks: List[Any] = []
+        self._manual_reduce: List[Callable] = []
 
         # passing a handle to torch.nn.SyncBatchNorm layer
         self._passing_sync_batchnorm_handle(self.module)
@@ -487,6 +488,7 @@ class ShardedDataParallel(nn.Module):
             self._grad_hooks.pop().remove()
 
         # Go through the parameters, attach the hook
+        self._grad_accs = []
         self._manual_reduce = []
         for index, param in enumerate(self._trainable_params):
             if param.grad is not None and param.grad.requires_grad:
@@ -502,6 +504,7 @@ class ShardedDataParallel(nn.Module):
             reduce_function = self._get_reduce_fn(index, param, dst_rank)
 
             self._grad_hooks.append(grad_acc.register_hook(reduce_function))
+            self._grad_accs.append(grad_acc)  # keep this hook in scope
             self._manual_reduce.append(reduce_function)
 
     @torch.no_grad()
