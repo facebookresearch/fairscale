@@ -254,7 +254,7 @@ def run_test_device_change(rank, world_size, backend, device, temp_file_name, re
 @skip_if_single_gpu
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 def test_device_change(reduce_buffer_size):
-    # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
+    # Check that ShardedDDP handles a device change properly
     world_size = 2
     backend = "nccl"
     temp_file_name = tempfile.mkstemp()[1]

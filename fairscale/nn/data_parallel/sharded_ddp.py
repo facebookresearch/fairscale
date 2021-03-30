@@ -177,8 +177,8 @@ class ShardedDataParallel(nn.Module):
         self._bucket_list: List[GradBucket] = []
 
         # - setup backward hooks which will be called by Torch's autograd in due time
-        self._grad_accs: List[Callable] = []
         self._manual_reduce: List[Callable] = []
+        self._grad_hooks: List[Any] = []
 
         # passing a handle to torch.nn.SyncBatchNorm layer
         self._passing_sync_batchnorm_handle(self.module)
@@ -190,21 +190,25 @@ class ShardedDataParallel(nn.Module):
         self._work_handles: Deque[Workhandle] = deque()
         self._bucket_flush_callback_set = False
 
-        self.refresh_trainable()
-
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         """
         Module forward pass, handles any DDP-specific work in the background. Primes the
         backward pass for gradient reduction to the proper ranks.
         """
 
-        # Optionally check whether the trainable parameters have changed
+        # Deferred initialization, or change detection
+        needs_setup = len(self._grad_hooks) == 0
+
         if self.auto_refresh_trainable:
+            # Optionally check whether the trainable parameters have changed
             trainable_mask = list(map(_trainable, self._all_params))
             if trainable_mask != self._reference_trainable_mask:
                 logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")
-                self.refresh_trainable()
+                needs_setup = True
                 self._reference_trainable_mask = trainable_mask
+
+        if needs_setup:
+            self.refresh_trainable()
 
         if self.enable_broadcast_buffers:
             # NCCL communications are on a different stream, needs to be blocking
@@ -478,8 +482,11 @@ class ShardedDataParallel(nn.Module):
         This makes the gradient reduction automatic whenever there's a backward pass
         """
 
+        # Detach possible pre-existing hooks
+        while len(self._grad_hooks) > 0:
+            self._grad_hooks.pop().remove()
+
         # Go through the parameters, attach the hook
-        self._grad_accs = []
         self._manual_reduce = []
         for index, param in enumerate(self._trainable_params):
             if param.grad is not None and param.grad.requires_grad:
@@ -493,9 +500,9 @@ class ShardedDataParallel(nn.Module):
             dst_rank = self._trainable_param_to_rank[param]
 
             reduce_function = self._get_reduce_fn(index, param, dst_rank)
-            grad_acc.register_hook(reduce_function)
+
+            self._grad_hooks.append(grad_acc.register_hook(reduce_function))
             self._manual_reduce.append(reduce_function)
-            self._grad_accs.append(grad_acc)  # keep this hook in scope
 
     @torch.no_grad()
     def _sync_params_and_buffers(self) -> None:
