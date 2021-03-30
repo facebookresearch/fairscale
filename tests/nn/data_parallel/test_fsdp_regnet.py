@@ -52,6 +52,8 @@ from fairscale.utils.testing import (
 _world_size = 2
 _iterations = 5
 
+# Cover different ReLU flavor. This will cause DDP and FSDP models to have
+# different ReLUs since they will different random flags.
 _relu_inplace = True
 if random.randint(0, 1) == 0:
     _relu_inplace = False
@@ -174,6 +176,7 @@ def ddp_ref():
                 args=(
                     world_size,
                     fsdp_config,
+                    None,
                     precision == "mixed",
                     temp_file_name,
                     unused,
@@ -216,6 +219,7 @@ def _test_func(
     rank,
     world_size,
     fsdp_config,
+    fsdp_wrap_bn,
     ddp_mixed_precision,
     tempfile_name,
     unused,
@@ -259,13 +263,15 @@ def _test_func(
         # Note, different rank may wrap in different order due to different random
         # seeds. But results should be the same.
         if random.randint(0, 1) == 0:
-            print("auto_wrap_bn, then convert_sync_batchnorm")
-            model = auto_wrap_bn(model, _single_rank_pg)
+            print(f"auto_wrap_bn {fsdp_wrap_bn}, then convert_sync_batchnorm")
+            if fsdp_wrap_bn:
+                model = auto_wrap_bn(model, _single_rank_pg)
             model = _bn_converter(model)
         else:
-            print("convert_sync_batchnorm, then auto_wrap_bn")
+            print(f"convert_sync_batchnorm, then auto_wrap_bn {fsdp_wrap_bn}")
             model = _bn_converter(model)
-            model = auto_wrap_bn(model, _single_rank_pg)
+            if fsdp_wrap_bn:
+                model = auto_wrap_bn(model, _single_rank_pg)
         model = FSDP(model, **fsdp_config).cuda()
         if fsdp_config["mixed_precision"]:
             scaler = ShardedGradScaler()
@@ -341,10 +347,29 @@ def test1(temp_files, ddp_ref, precision, flatten):
     if fsdp_config["mixed_precision"] and torch_cuda_version() < (11, 0):
         pytest.skip("Only CUDA 11 is supported with AMP equivalency")
 
+    # Wrap BN half of the time in full precision mode.
+    wrap_bn = True
+    if random.randint(0, 1) == 0:
+        wrap_bn = False
+    # Always wrap BN in mixed precision mode.
+    if fsdp_config["mixed_precision"]:
+        wrap_bn = True
+
     world_size = _world_size
     mp.spawn(
         _test_func,
-        args=(world_size, fsdp_config, None, temp_files[0], temp_files[1], state_before, inputs, None, state_after),
+        args=(
+            world_size,
+            fsdp_config,
+            wrap_bn,
+            None,
+            temp_files[0],
+            temp_files[1],
+            state_before,
+            inputs,
+            None,
+            state_after,
+        ),
         nprocs=world_size,
         join=True,
     )
