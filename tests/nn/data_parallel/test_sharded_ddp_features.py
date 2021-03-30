@@ -254,7 +254,7 @@ def run_test_device_change(rank, world_size, backend, device, temp_file_name, re
 @skip_if_single_gpu
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 def test_device_change(reduce_buffer_size):
-    # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
+    # Check that ShardedDDP handles a device change properly
     world_size = 2
     backend = "nccl"
     temp_file_name = tempfile.mkstemp()[1]
@@ -386,9 +386,12 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
     np.random.seed(rank)
     model = GPT2(
         embed_dim=256, num_heads=2, num_layers=12, num_positions=INPUT_DIM * INPUT_DIM, num_vocab=512, num_classes=2
-    ).to(device)
+    )
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(model, optimizer)
+
+    # Move the model to another device post-construction
+    model = model.to(device)
 
     # Optim loop
     def closure():
