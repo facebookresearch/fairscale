@@ -20,9 +20,9 @@ from torch.nn import AdaptiveAvgPool2d, BatchNorm2d, Conv2d, Linear, Module, ReL
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
-from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import TrainingState, auto_wrap_bn
+from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.utils.testing import (
     dist_init,
     objects_are_equal,
