@@ -17,7 +17,18 @@ import pytest
 import torch
 from torch.cuda.amp import GradScaler
 import torch.multiprocessing as mp
-from torch.nn import AdaptiveAvgPool2d, BatchNorm2d, Conv2d, Linear, Module, ReLU, Sequential, Sigmoid, SyncBatchNorm
+from torch.nn import (
+    AdaptiveAvgPool2d,
+    BatchNorm2d,
+    Conv2d,
+    CrossEntropyLoss,
+    Linear,
+    Module,
+    ReLU,
+    Sequential,
+    Sigmoid,
+    SyncBatchNorm,
+)
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
@@ -257,6 +268,7 @@ def _test_func(
         if rank == 0:
             print(model)
     optim = SGD(model.parameters(), lr=0.1)
+    loss_func = CrossEntropyLoss()
 
     for in_data in inputs[rank]:
         in_data = in_data.cuda()
@@ -268,8 +280,8 @@ def _test_func(
             context = torch.cuda.amp.autocast(enabled=True)
         with context:
             out = model(in_data)
-            # TODO (Min): need a real loss.
-            loss = out.sum()
+            fake_label = torch.zeros(1, dtype=torch.long).cuda()
+            loss = loss_func(out.unsqueeze(0), fake_label)
         scaler.scale(loss).backward()
         scaler.step(optim)
         scaler.update()
