@@ -42,6 +42,7 @@ from fairscale.utils.testing import (
     skip_if_single_gpu,
     state_dict_norm,
     teardown,
+    torch_cuda_version,
     torch_version,
 )
 
@@ -219,7 +220,6 @@ def _test_func(
     rank_0_output,
     state_after,
 ):
-    torch.manual_seed(rank)
     result = dist_init(rank, world_size, tempfile_name, unused)
     assert result, "Dist init failed"
 
@@ -333,6 +333,9 @@ def test1(temp_files, ddp_ref, precision, flatten):
     fsdp_config = {}
     fsdp_config["mixed_precision"] = precision == "mixed"
     fsdp_config["flatten_parameters"] = flatten == "flatten"
+
+    if fsdp_config["mixed_precision"] and torch_cuda_version() < (11, 0):
+        pytest.skip("Only CUDA 11 is supported with AMP equivalency")
 
     world_size = _world_size
     mp.spawn(
