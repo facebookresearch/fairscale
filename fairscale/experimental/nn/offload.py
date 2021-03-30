@@ -368,7 +368,7 @@ class OffloadModel(nn.Module):
         # `apply` calls the `forward` function of the `ActivationCheckpointing` class
         # and the `forward` function calls `inputs` on the first model shard.
         # Please see https://pytorch.org/docs/stable/autograd.html#function for more details.
-    
+
         # We need the second param to be a dummy input to enable the
         # backward pass to be triggered for integer inputs.
         return ActivationCheckpointing.apply(*inputs, torch.tensor([], requires_grad=True), self)
