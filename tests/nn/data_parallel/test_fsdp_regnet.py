@@ -20,6 +20,7 @@ from torch.nn import AdaptiveAvgPool2d, BatchNorm2d, Conv2d, Linear, Module, ReL
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
+from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import TrainingState, auto_wrap_bn
 from fairscale.utils.testing import (
@@ -240,6 +241,7 @@ def _test_func(
         if rank == 0:
             print(model)
     optim = SGD(model.parameters(), lr=0.1)
+    scaler = ShardedGradScaler()
 
     for in_data in inputs[rank]:
         in_data = in_data.cuda()
@@ -251,10 +253,11 @@ def _test_func(
             context = torch.cuda.amp.autocast(enabled=True)
         with context:
             out = model(in_data)
-            # TODO (Min): this loss is causing nan after ~10 iters, need a real loss and grad scaler.
+            # TODO (Min): this loss is causing nan after ~10 iters, need a real loss.
             loss = out.sum()
-        loss.backward()
-        optim.step()
+        scaler.scale(loss).backward()
+        scaler.step(optim)
+        scaler.update()
         optim.zero_grad()
 
     if ddp:
