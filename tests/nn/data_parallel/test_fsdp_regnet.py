@@ -270,10 +270,12 @@ def _test_func(
         for k, v in fsdp_state.items():
             fsdp_state[k] = v.cpu()
         # Enable for debugging.
-        if False and rank==0:
+        if False and rank == 0:
+
             def dump(d):
                 for k, v in d.items():
                     print(k, v)
+
             dump(state_after)
             dump(fsdp_state)
         assert objects_are_equal(state_after, fsdp_state, raise_exception=True)
