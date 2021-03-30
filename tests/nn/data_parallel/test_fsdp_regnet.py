@@ -15,6 +15,7 @@ import tempfile
 
 import pytest
 import torch
+from torch.cuda.amp import GradScaler
 import torch.multiprocessing as mp
 from torch.nn import AdaptiveAvgPool2d, BatchNorm2d, Conv2d, Linear, Module, ReLU, Sequential, Sigmoid, SyncBatchNorm
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -222,9 +223,22 @@ def _test_func(
     model.load_state_dict(state_before)
     model = model.cuda()
 
+    class DummyScaler:
+        def scale(self, loss):
+            return loss
+
+        def step(self, optim):
+            optim.step()
+
+        def update(self):
+            pass
+
+    scaler = DummyScaler()
     if ddp:
         model = SyncBatchNorm.convert_sync_batchnorm(model)
         model = DDP(model, device_ids=[rank], broadcast_buffers=True)
+        if ddp_mixed_precision:
+            scaler = GradScaler()
     else:
         # Note, different rank may wrap in different order due to different random
         # seeds. But results should be the same.
@@ -237,11 +251,12 @@ def _test_func(
             model = _bn_converter(model)
             model = auto_wrap_bn(model, _single_rank_pg)
         model = FSDP(model, **fsdp_config).cuda()
+        if fsdp_config["mixed_precision"]:
+            scaler = ShardedGradScaler()
         # Print the model for verification.
         if rank == 0:
             print(model)
     optim = SGD(model.parameters(), lr=0.1)
-    scaler = ShardedGradScaler()
 
     for in_data in inputs[rank]:
         in_data = in_data.cuda()
@@ -253,7 +268,7 @@ def _test_func(
             context = torch.cuda.amp.autocast(enabled=True)
         with context:
             out = model(in_data)
-            # TODO (Min): this loss is causing nan after ~10 iters, need a real loss.
+            # TODO (Min): need a real loss.
             loss = out.sum()
         scaler.scale(loss).backward()
         scaler.step(optim)
