@@ -247,7 +247,7 @@ def _test_func(
         if ddp and ddp_mixed_precision:
             in_data = in_data.half()
             context = torch.cuda.amp.autocast(enabled=True)
-        if not ddp and fsdp_config["mixed_precision"] == True:
+        if not ddp and fsdp_config["mixed_precision"]:
             context = torch.cuda.amp.autocast(enabled=True)
         with context:
             out = model(in_data)
