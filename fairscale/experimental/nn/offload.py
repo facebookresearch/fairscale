@@ -326,10 +326,10 @@ class OffloadModel(nn.Module):
             raise TypeError("`device` argument to `OffloadModel` cannot be None.")
 
         if not isinstance(model, nn.Sequential):
-            raise TypeError("Module must be nn.Sequential to be partitioned by OffloadModel.")
+            raise TypeError("`model` argument to `OffloadModel` must be of type `nn.Sequential`.")
 
         if not torch.cuda.is_available():
-            raise TypeError("CUDA must be available as one of the compute devices for OffloadModel.")
+            raise TypeError("CUDA must be available as one of the compute devices for `OffloadModel`.")
 
         self.device = device
         self.offload_device = offload_device
