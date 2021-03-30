@@ -319,8 +319,11 @@ class OffloadModel(nn.Module):
         num_microbatches: int = 1,
     ):
         super().__init__()
-        assert model
-        assert device
+        if not model:
+            raise TypeError("`model` argument to `OffloadModel` cannot be None.")
+
+        if not device:
+            raise TypeError("`device` argument to `OffloadModel` cannot be None.")
 
         if not isinstance(model, nn.Sequential):
             raise TypeError("Module must be nn.Sequential to be partitioned by OffloadModel.")
