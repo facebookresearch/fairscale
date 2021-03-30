@@ -365,6 +365,10 @@ class OffloadModel(nn.Module):
         self._num_microbatches = num_microbatches
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
-        # We need the send param to be a dummy input to enable the
+        # `apply` calls the `forward` function of the `ActivationCheckpointing` class
+        # and the `forward` function calls `inputs` on the first model shard.
+        # Please see https://pytorch.org/docs/stable/autograd.html#function for more details.
+    
+        # We need the second param to be a dummy input to enable the
         # backward pass to be triggered for integer inputs.
         return ActivationCheckpointing.apply(*inputs, torch.tensor([], requires_grad=True), self)
