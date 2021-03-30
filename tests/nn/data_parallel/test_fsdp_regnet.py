@@ -219,6 +219,7 @@ def _test_func(
     rank_0_output,
     state_after,
 ):
+    torch.manual_seed(rank)
     result = dist_init(rank, world_size, tempfile_name, unused)
     assert result, "Dist init failed"
 
