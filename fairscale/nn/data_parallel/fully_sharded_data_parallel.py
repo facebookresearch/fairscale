@@ -157,6 +157,9 @@ class FullyShardedDataParallel(nn.Module):
             device, the param's device will be used. If not given and module
             params are on CPU, then the current CUDA device (as indicated by
             ``torch.cuda.current_device()`` will be used.
+        no_broadcast_optim_state: (bool, Optional)
+            do not broadcast this modules optimizer state when ``gather_full_optim_state_dict`` is called
+            Default: False
     """
 
     def __init__(
@@ -173,6 +176,7 @@ class FullyShardedDataParallel(nn.Module):
         move_grads_to_cpu: Optional[bool] = None,
         bucket_cap_mb: int = 25,
         compute_device: Optional[torch.device] = None,
+        no_broadcast_optim_state: Optional[bool] = False,
     ):
         super().__init__()
         self.process_group = process_group or dist.new_group()
@@ -188,6 +192,7 @@ class FullyShardedDataParallel(nn.Module):
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
         self.uncollected_opt_state: Dict[int, Dict] = {}
+        self.no_broadcast_optim_state = no_broadcast_optim_state
 
         self.numel_padded_per_param: List[int] = []
         self.compute_device = compute_device
@@ -821,7 +826,6 @@ class FullyShardedDataParallel(nn.Module):
             return
         # No FullyShardedDataParallel instance wraps this, else _is_root would be set to False.
         self._is_root = True
-        self.dont_collect_opt_state = False
         assert self._queue_wait_for_post_backward_closure is None
         self._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
         # As the root, we now set all children instances to False and
@@ -832,7 +836,7 @@ class FullyShardedDataParallel(nn.Module):
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 assert m._is_root is None
                 m._is_root = False
-                m.dont_collect_opt_state = (
+                m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
                     (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
                 )
                 # When root instance doesn't have params, allow children instances
@@ -1435,7 +1439,7 @@ class FullyShardedDataParallel(nn.Module):
         return [m for m in self.modules() if isinstance(m, FullyShardedDataParallel)]
 
     def _remove_uncollectable_params_from_optim_state_dict(self, osd: Dict) -> Dict:
-        uncollected_ids = [i for i, m in enumerate(self._fsdp_instances) if m.dont_collect_opt_state]
+        uncollected_ids = [i for i, m in enumerate(self._fsdp_instances) if m.no_broadcast_optim_state]
         new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
         if self.rank == 0:
             self.uncollected_opt_state = {k: v for k, v in osd["state"].items() if k in uncollected_ids}
