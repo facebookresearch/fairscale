@@ -197,13 +197,7 @@ run_pipe_benchmark: &run_pipe_benchmark
       command: |
         python benchmarks/pipe.py
 
-run_mp_pipe_benchmark: &run_mp_pipe_benchmark
-  - run:
-      name: Run Multiprocess Pipe Benchmark
-      command: |
-        python benchmarks/pipe.py --multiprocess --lazy-construction
-
-run_oss_benchmark: &run_oss_benchmark
+uun_oss_benchmark: &run_oss_benchmark
   - run:
       name: Run OSS Benchmark
       command: |
@@ -577,8 +571,6 @@ jobs:
       - <<: *install_repo
 
       - <<: *run_pipe_benchmark
-
-      - <<: *run_mp_pipe_benchmark
 
       - <<: *run_oss_amp
 
