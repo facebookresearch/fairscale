@@ -23,7 +23,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
-from fairscale.utils.testing import check_same_model_params, skip_if_no_cuda, skip_if_single_gpu
+from fairscale.utils.testing import check_same_model_params, skip_if_no_cuda, skip_if_single_gpu, torch_version
 
 """
 Check that ShardedDDP gets the same results as DDP in a variety of scenarii
@@ -168,7 +168,10 @@ def run_ddp_parity(
         # NOTE: DDP does not handle parameters trainability being changed after the fact, see
         # https://github.com/pytorch/pytorch/blob/5781aec74ef00284e0262817a649278c2e8072bf/torch/nn/parallel/distributed.py#L471
         if clip_grad_norm and not change_train_graph:
-            total_norm = torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), 0.3, norm_type=2.0)  # type: ignore
+            if torch_version() >= (1, 9, 0):
+                total_norm = torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), 0.3, norm_type=2.0, error_if_nonfinite=False)  # type: ignore
+            else:
+                total_norm = torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), 0.3, norm_type=2.0)  # type: ignore
             if not torch.isnan(total_norm):
                 oss_total_norm = sharded_optimizer.clip_grad_norm(0.3, norm_type=2.0)
                 allclose = torch.allclose(oss_total_norm, total_norm, atol=1e-2 if amp else 1e-8)

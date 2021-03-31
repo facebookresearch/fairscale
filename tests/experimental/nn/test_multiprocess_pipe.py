@@ -130,13 +130,15 @@ def forward_chunks(devices):
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
-def forward_multi(devices):
+@pytest.mark.parametrize("checkpoint", ["never", "always", "except_last"])
+def forward_multi(devices, checkpoint):
     device = devices[0].split("/")[1]
     torch.random.manual_seed(3)
     torch.cuda.manual_seed_all(3)
     x = torch.randn(8, 4).to(device)
+    x.requires_grad = True  # TODO(msb) remove this limitation
     model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
-    pipe = MultiProcessPipe(model, balance=[1, 1], chunks=4, devices=devices[:2])
+    pipe = MultiProcessPipe(model, balance=[1, 1], chunks=4, devices=devices[:2], checkpoint=checkpoint)
     if BOUNCE_TENSORS:
         y = pipe(x).remote().cpu().to_here()
     else:

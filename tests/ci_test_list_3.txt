@@ -1,10 +1,10 @@
+tests/nn/data_parallel/test_fsdp_regnet.py
 tests/nn/data_parallel/test_fsdp_uneven.py
 tests/nn/data_parallel/test_fsdp_grad_scaler.py
 tests/nn/data_parallel/test_fsdp_no_sync.py
 tests/nn/data_parallel/test_fsdp_summon_full_params.py
 tests/nn/data_parallel/test_fsdp_input.py
 tests/nn/data_parallel/test_fsdp_multiple_forward.py
-tests/nn/data_parallel/test_fsdp_regnet.py
 tests/nn/data_parallel/test_fsdp_optimizer_utils.py
 tests/nn/data_parallel/test_sharded_ddp_features.py
 tests/nn/data_parallel/test_sharded_ddp_pytorch_parity.py
@@ -17,12 +17,8 @@ tests/nn/pipe/skip/test_portal.py
 tests/nn/pipe/skip/test_tracker.py
 tests/nn/pipe/skip/test_inspect_skip_layout.py
 tests/nn/pipe/test_checkpoint_ddp.py
-tests/nn/moe/test_moe_layer.py
-tests/nn/moe/test_top2gating.py
 tests/optim/test_single_node_adascale.py
 tests/optim/test_adam.py
 tests/optim/test_oss.py
 tests/optim/test_oss_adascale.py
 tests/optim/test_ddp_adascale.py
-tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
-tests/experimental/nn/test_offload.py
