@@ -32,7 +32,7 @@ def test_single_run():
     device, offload_device = _init()
     model = _get_model()
 
-    offload_model = OffloadModel(model_cpu=model, device=device, offload_device=offload_device, num_slices=2,)
+    offload_model = OffloadModel(model=model, device=device, offload_device=offload_device, num_slices=2,)
     offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
 
     input = torch.ones(2, 2).to(device)
@@ -102,7 +102,7 @@ def _train_offload_model(
 ):
     omodel = copy.deepcopy(model)
     offload_model = OffloadModel(
-        model_cpu=omodel,
+        model=omodel,
         device=device,
         offload_device=offload_device,
         num_slices=2,

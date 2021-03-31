@@ -11,6 +11,7 @@ import torch
 from torch import Tensor
 import torch.distributed.rpc as rpc
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint_sequential
 
 Tensors = Tuple[Tensor, ...]
 TensorOrTensors = Union[Tensor, Tensors]
@@ -21,11 +22,6 @@ if TYPE_CHECKING:
     Module = nn.Module[TensorOrTensors]
 else:
     Module = nn.Module
-
-if torch.__version__.split("+")[0].split(".")[:3] <= ["1", "8", "1"]:
-    BOUNCE_TENSORS = True
-else:
-    BOUNCE_TENSORS = False
 
 
 def _verify_module(module: List[LayerSpec]) -> None:
@@ -53,10 +49,7 @@ class _ToHere(Module):
         self.device = device
 
     def forward(self, x_rref: rpc.RRef) -> Tensor:  # type: ignore
-        if BOUNCE_TENSORS:
-            return x_rref.remote().cpu().to_here().to(self.device)
-        else:
-            return x_rref.to_here()
+        return x_rref.to_here()
 
 
 def _create_sequential(layer_spec: List[LayerSpec], device: str) -> Module:
@@ -69,22 +62,25 @@ def _rcat(tensors: List) -> Tensor:
     return torch.cat([t.local_value() for t in tensors])
 
 
+def _rcheckpoint(rmodule: rpc.RRef, input_rref: rpc.RRef) -> TensorOrTensors:
+    module = rmodule.local_value()
+    input = module[0](input_rref)  # calls _ToHere.forward
+    return checkpoint_sequential(module[1:], 1, input)
+
+
 def _parameter_rrefs(module: rpc.RRef) -> List[rpc.RRef]:
     return [rpc.RRef(p) for p in module.local_value().parameters()]
 
 
-def rloss(loss_func: Callable, input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
-    if BOUNCE_TENSORS:
-        return loss_func(input_rref.remote().cpu().to_here(), target_rref.remote().cpu().to_here())
-    else:
-        return loss_func(input_rref.to_here(), target_rref.to_here())
+def _rloss(loss_func: Callable, input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
+    return loss_func(input_rref.to_here(), target_rref.to_here())
 
 
 def DistributedLoss(loss: nn.Module, *args: Tuple, **kwargs: Dict) -> Callable:
     loss_func = loss(*args, **kwargs)
 
     def dloss(input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
-        return rpc.remote(input_rref.owner(), rloss, args=(loss_func, input_rref, target_rref))
+        return rpc.remote(input_rref.owner(), _rloss, args=(loss_func, input_rref, target_rref))
 
     return dloss
 
@@ -157,10 +153,12 @@ class MultiProcessPipe(Module):
     ) -> None:
         super().__init__()
 
+        if torch.__version__.split(".")[:2] < ["1", "9"]:
+            raise RuntimeError("MultiProcessPipe requires torch >= 1.9.0")
         if type(chunks) is not int or chunks <= 0:
             raise ValueError("number of chunks must be positive integer")
-        if checkpoint not in ["never"]:
-            raise ValueError("checkpoint is not yet implemented")
+        if checkpoint not in ["always", "except_last", "never"]:
+            raise ValueError("checkpoint is not one of 'always', 'except_last', or 'never'")
         if deferred_batch_norm:
             raise ValueError("deferred_batch_norm is not yet implemented")
         if len(balance) != len(devices):
@@ -181,6 +179,9 @@ class MultiProcessPipe(Module):
             workers.append(worker)
             rmodule.append(rlayer)
 
+        # The micro-batch index where the checkpointing stops.
+        self.checkpoint_stop = {"always": chunks, "except_last": chunks - 1, "never": 0}[checkpoint]
+
         self.chunks = chunks
         self.checkpoint = checkpoint
         self.module = module
@@ -189,10 +190,14 @@ class MultiProcessPipe(Module):
 
     def forward(self, x: Tensor) -> rpc.RRef:  # type: ignore
         outputs = []
-        for chunk in x.chunk(self.chunks):
+        for i, chunk in enumerate(x.chunk(self.chunks)):
             output = rpc.RRef(chunk)
-            for rlayer in self.rmodule:
-                output = rlayer.remote().forward(output)
+            if i < self.checkpoint_stop:
+                for rlayer in self.rmodule:
+                    output = rpc.remote(rlayer.owner(), _rcheckpoint, args=(rlayer, output))
+            else:
+                for rlayer in self.rmodule:
+                    output = rlayer.remote().forward(output)
             outputs.append(output)
         return rpc.remote(outputs[0].owner(), _rcat, args=(outputs,))
 
