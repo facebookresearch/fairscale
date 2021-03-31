@@ -103,6 +103,7 @@ class MultiProcessPipe(Module):
     ::
 
         devices = ["worker0/cuda:0", "worker1/cuda:1"]
+        # LayerSpec format: [("name", nn.Module, args, kwargs), ...]
         layer_spec = [("linear", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
         pipe = MultiProcessPipe(layer_spec, balance=[1, 1], chunks=4, devices=devices)
         output = model(input)
