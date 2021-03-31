@@ -20,7 +20,6 @@
 # limitations under the License.
 
 import os
-import tempfile
 
 import pytest
 import torch
@@ -29,7 +28,7 @@ from torch.nn.parameter import Parameter
 
 from fairscale.nn.model_parallel import initialize as mpu
 from fairscale.nn.model_parallel import layers
-from fairscale.utils.testing import dist_init, get_world_sizes, set_random_seed, spawn_for_all_world_sizes, torch_spawn
+from fairscale.utils.testing import dist_init, set_random_seed, spawn_for_all_world_sizes
 
 
 def run_test_parallel_embedding(rank, model_parallel_size, filename, filename_rpc):
@@ -318,35 +317,3 @@ def test_column_parallel():
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" not in os.environ, reason="only works on mpi")
 def test_row_parallel():
     spawn_for_all_world_sizes(run_test_row_parallel_linear)
-
-
-@torch_spawn([2])
-@pytest.mark.skipif("OMPI_COMM_WORLD_RANK" not in os.environ, reason="only works on mpi")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-def mpi_pipe():
-    mpu.destroy_model_parallel()
-    _, tempfile_init = tempfile.mkstemp()
-    _, tempfile_rpc_init = tempfile.mkstemp()
-
-    run_test_pipe(
-        torch.distributed.get_rank(),
-        torch.distributed.get_world_size(),
-        tempfile_init,
-        tempfile_rpc_init,
-        skip_dist_init=True,
-    )
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-def test_pipe_layer():
-    world_sizes = [x for x in get_world_sizes() if x <= torch.cuda.device_count() / 2]
-
-    spawn_for_all_world_sizes(run_test_pipe, args=[False])
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.skip(reason="potential deadlock in nccl with multiple processes using the same gpu")
-def test_eight_pipe_layer():
-    world_sizes = [x for x in get_world_sizes() if x <= torch.cuda.device_count() / 2]
-
-    spawn_for_all_world_sizes(run_test_pipe, [8])

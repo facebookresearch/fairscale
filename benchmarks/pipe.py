@@ -208,7 +208,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
             if i % log_interval == 0 and i > 0:
                 cur_loss = total_loss / log_interval
                 elapsed = time.time() - start_time
-                if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
+                if dist.get_rank() == dist.get_world_size() - 1:
                     logging.debug(
                         "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
                             i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
@@ -224,7 +224,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
         raise RuntimeError(
             "Unable to benchmark on a single batch. Increase the size " " of the dataset and rerun the benchmark."
         )
-    if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
+    if dist.get_rank() == dist.get_world_size() - 1:
         return wps, loss.item()
     else:
         return 0.0, 0.0
@@ -273,8 +273,7 @@ def verify_peak_memory(rank, golden_config, std_dev):
 def verify_lm_run(wps, golden_config, args):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
-    # Verify wps only on the last rank in multiprocess pipe
-    if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
+    if dist.get_rank() == dist.get_world_size() - 1:
         # Assert that words per second is within 3 standard deviations of the average
         # of five golden runs
         logging.info("Throughput(wps) is {:.2f}.".format(wps))
@@ -286,11 +285,8 @@ def verify_lm_run(wps, golden_config, args):
                 )
             )
 
-    if args.multiprocess:
-        verify_peak_memory(dist.get_rank(), golden_config, 1.5)
-    else:
-        for i in range(4):
-            verify_peak_memory(i, golden_config, 1.1)
+    for i in range(4):
+        verify_peak_memory(i, golden_config, 1.1)
 
 
 def benchmark_language_model(model_config, model, benchmark_config, model_specs, args):
@@ -397,7 +393,7 @@ def get_golden_config(model_name, args):
     """Return a dict with the golden data for throughput and memory usage."""
 
     if model_name == "lm":
-        return lm_wikitext2.get_golden_real_stats(args.multiprocess)
+        return lm_wikitext2.get_golden_real_stats()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
