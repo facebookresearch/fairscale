@@ -112,7 +112,7 @@ class Model(Module):
     def __init__(self):
         super().__init__()
         print(f"Using relu inplace: {_relu_inplace}")
-        # trunk
+
         self.trunk = Sequential()
         self.trunk.need_fsdp_wrap = True  # Set a flag for later wrapping.
         stem = Sequential(Conv2d(2, 4, (3, 3), (2, 2), (1, 1), bias=False), BatchNorm2d(4), ReLU(_relu_inplace))
@@ -120,12 +120,11 @@ class Model(Module):
         self.trunk.add_module("stem", stem)
         self.trunk.add_module("any_stage_block1", Sequential(any_stage_block1_0))
 
-        # head
         self.head = Sequential(
             # TODO (Min): FSDP-mixed_precision doesn't compute the same ways as DDP AMP when bias=True.
-            #             so, we use bias=False for now in the projection_head.
-            #             The Conv2d layers above does not used bias in regnet, but even if they use
-            #             bias, FSDP and DDP seem to agree on how it is computed.
+            #     so, we use bias=False for now in the projection_head.
+            #     The Conv2d layers above does not use bias in regnet, but even if they use
+            #     bias, FSDP and DDP seem to agree on how it is computed.
             Sequential(Linear(16, 16, bias=False), ReLU(), Linear(16, 8, bias=False),),  # projection_head
             Linear(8, 15, bias=False),  # prototypes0
         )
@@ -310,7 +309,7 @@ def _test_func(
         # Move tensors to CPU to compare numerics.
         for k, v in fsdp_state.items():
             fsdp_state[k] = v.cpu()
-        # Enable for debugging.
+        # Change False to True to enable this when you want to debug the mismatch.
         if False and rank == 0:
 
             def dump(d):
