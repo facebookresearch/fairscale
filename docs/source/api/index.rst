@@ -7,6 +7,7 @@ API Reference
    optim/adascale
    optim/oss
    optim/grad_scaler
+   nn/multiprocess_pipe
    nn/pipe
    nn/sharded_ddp
    nn/fsdp

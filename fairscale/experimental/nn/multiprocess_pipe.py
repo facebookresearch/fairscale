@@ -97,47 +97,44 @@ def DistributedLoss(loss: nn.Module, *args: Tuple, **kwargs: Dict) -> Callable:
 
 
 class MultiProcessPipe(Module):
-    """Wraps an arbitrary :class:`nn.Sequential <torch.nn.Sequential>` module
-    to train on Pipe_. If the module requires lots of memory, Pipe will be
+    """Paritions a sequential list of modules across multiple workers to train using a
+    MultiProcessPipe_. If the module requires lots of memory, MultiProcessPipe will be
     very efficient.
     ::
 
-        model = nn.Sequential(a, b, c, d)
-        model = Pipe(model, balance=[1, 1, 1, 1], chunks=8)
+        devices = ["worker0/cuda:0", "worker1/cuda:1"]
+        layer_spec = [("linear", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
+        pipe = MultiProcessPipe(layer_spec, balance=[1, 1], chunks=4, devices=devices)
         output = model(input)
 
-    .. _Pipe: https://arxiv.org/abs/1811.06965
+    .. _MultiProcessPipe: https://arxiv.org/abs/1811.06965
 
-    Pipe combines pipeline parallelism with checkpointing to reduce peak
+    MultiProcessPipe combines pipeline parallelism with checkpointing to reduce peak
     memory required to train while minimizing device under-utilization.
 
-    You should determine the balance when defining a :class:`Pipe` module, as
+    You should determine the balance when defining a :class:`MultiProcessPipe` module, as
     balancing will not be done automatically. The module will be partitioned
     into multiple devices according to the given balance. You may rely on
     heuristics to find your own optimal configuration.
 
     Args:
-        module (torch.nn.Sequential):
-            sequential module to be parallelized
-        balance (ints):
-            list of number of layers in each partition
+        module (list of LayerSpec):
+            LayerSpec is a tuple constructed as follows: (name, nn.Module, args, kwargs)
 
     Keyword Args:
-        devices (iterable of devices):
-            devices to use (default: all CUDA devices)
+        balance (ints):
+            list of number of layers in each partition
+        devices (list of devices):
+            rpc devices to use (e.g. ``["worker0/cuda:0", "worker1/cuda:1"]``)
         chunks (int):
             number of micro-batches (default: ``1``)
         checkpoint (str):
             when to enable checkpointing, one of ``'always'``,
             ``'except_last'``, or ``'never'`` (default: ``'except_last'``)
-        deferred_batch_norm (bool):
-            whether to use deferred BatchNorm moving statistics (default:
-            :data:`False`, see :class:`Deferred Batch Normalization <DeferredBatchNorm>` for more
-            details)
 
     Raises:
         TypeError:
-            the module is not a :class:`nn.Sequential <torch.nn.Sequential>`.
+            the module is not a proper LayerSpec.
         ValueError:
             invalid arguments, or wrong balance
         IndexError:
@@ -145,22 +142,14 @@ class MultiProcessPipe(Module):
 
     """
 
-    #: The number of micro-batches.
-    chunks: int = 1
-
-    #: The checkpoint mode to determine when to enable checkpointing. It is one
-    #: of ``'always'``, ``'except_last'``, or ``'never'``.
-    checkpoint: str = "never"
-
     def __init__(
         self,
         module: List[LayerSpec],
         *,
         balance: List[int],
         devices: List[str],
-        chunks: int = chunks,
-        checkpoint: str = checkpoint,
-        deferred_batch_norm: bool = False,
+        chunks: int = 1,
+        checkpoint: str = "never",
     ) -> None:
         super().__init__()
 
@@ -168,12 +157,10 @@ class MultiProcessPipe(Module):
             raise ValueError("number of chunks must be positive integer")
         if checkpoint not in ["always", "except_last", "never"]:
             raise ValueError("checkpoint is not one of 'always', 'except_last', or 'never'")
-        if deferred_batch_norm:
-            raise ValueError("deferred_batch_norm is not yet implemented")
         if len(balance) != len(devices):
-            raise ValueError("balance and devices lists must be the same size")
+            raise IndexError("balance and devices lists must be the same size")
         if len(module) != sum(balance):
-            raise ValueError("number of layers must match aggregate balance")
+            raise IndexError("number of layers must match aggregate balance")
 
         _verify_module(module)
 

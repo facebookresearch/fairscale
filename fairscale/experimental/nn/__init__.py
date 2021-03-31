@@ -5,4 +5,6 @@
 
 from typing import List
 
+from .multiprocess_pipe import MultiProcessPipe
+
 __all__: List[str] = []
