@@ -32,6 +32,7 @@ import logging
 import multiprocessing
 import os
 import random
+import subprocess
 import sys
 import tempfile
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
@@ -113,6 +114,30 @@ def torch_version() -> Tuple[int, ...]:
         logging.warning(f"Pytorch pre-release version {torch.__version__} - assuming intent to test it")
         numbering[2] = "0"
 
+    return tuple(int(n) for n in numbering)
+
+
+_smi_ver = None
+
+
+def torch_cuda_version(compiled: bool = False) -> Tuple[int, ...]:
+    if compiled:
+        numbering = torch.version.cuda.split(".")[:2]
+    else:
+        global _smi_ver
+        if _smi_ver is None:
+
+            def get_smi_ver() -> str:
+                """Get CUDA version from nvidia-smi"""
+                for line in subprocess.check_output("nvidia-smi".split()).decode("utf-8").split("\n"):
+                    if "CUDA Version" in line:
+                        res = line.split()[8]
+                        assert res.startswith("10.") or res.startswith("11."), res
+                        return res
+                assert False
+
+            _smi_ver = get_smi_ver()
+        numbering = _smi_ver.split(".")[:2]
     return tuple(int(n) for n in numbering)
 
 
@@ -445,7 +470,7 @@ def objects_are_equal(a: Any, b: Any, raise_exception: bool = False, dict_key: O
                     # Add dict key to the assertion error.
                     msg = e.args[0]
                     new_msg = f"For dict key '{dict_key}': {msg}"
-                    raise AssertionError(new_msg)
+                    raise AssertionError(new_msg) from None
                 else:
                     raise e
             else:
