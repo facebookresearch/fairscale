@@ -187,7 +187,7 @@ class ActivationCheckpointing(torch.autograd.Function):
                     output = tuple(output_list)
 
             output = output if isinstance(output, tuple) else (output,)
-            with torch.autograd.profiler.record_function("backward_drop_model_and_activations"):
+            with torch.autograd.profiler.record_function("forward_drop_model_and_activations"):
                 # The last instance will lose the gradient function if we move it to the CPU.
                 # This is because all grad function are present on the device that ran the FW pass.
                 # if index == len(model_instance.model_slices) - 1:
@@ -197,7 +197,6 @@ class ActivationCheckpointing(torch.autograd.Function):
                 # Move the layer shard back to the CPU.
                 layer_shard.forward_drop()
 
-        print(f"\n\n activation {model_instance._activations}")
         # TODO(anj-s): Check device of the result to make sure the outputs and targets match device.
         result = model_instance._activations[-1]
         result = [r.cuda() for r in result]
@@ -221,7 +220,7 @@ class ActivationCheckpointing(torch.autograd.Function):
         for model_shard, activation in zip(
             reversed(model_instance.model_slices), reversed(model_instance._activations[:-1])
         ):
-            with torch.autograd.profiler.record_function("backward_load_model_and_activations"):
+            with torch.autograd.profiler.record_function("backward_load_model"):
                 # Bring in the current activations onto the device.
                 # activation = tuple([a.cuda() for a in list(activation)])
                 # Move the model shard to the device.
@@ -261,13 +260,15 @@ class ActivationCheckpointing(torch.autograd.Function):
                     a.requires_grad = True
                     a.retain_grad()
 
-                with torch.enable_grad():
-                    # calculate the output of the last shard wrt to the stored activation at the slice boundary.
-                    outputs = model_shard(*chunked_activation)
+                with torch.autograd.profiler.record_function("forward_pass_with_enable_grad"):
+                    with torch.enable_grad():
+                        # calculate the output of the last shard wrt to the stored activation at the slice boundary.
+                        outputs = model_shard(*chunked_activation)
 
                 # Set the states back to what it was at the start of this function.
                 torch.set_rng_state(bwd_rng_state)
-                torch.autograd.backward(outputs, chunked_grad)
+                with torch.autograd.profiler.record_function("backward_pass"):
+                    torch.autograd.backward(outputs, chunked_grad)
                 intermediate_grads = []
                 for a in chunked_activation:
                     if a.grad is not None:
@@ -278,8 +279,9 @@ class ActivationCheckpointing(torch.autograd.Function):
                 # Append the list of grads to the all_grads list and this should be on the CPU.
                 all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))  # type: ignore
             # TODO(anj-s): Why does moving activations to CPU cause the .grad property to be None?
-            # Move the shard back to the CPU.
-            model_shard.backward_drop()
+            with torch.autograd.profiler.record_function("backward_drop_model"):
+                # Move the shard back to the CPU.
+                model_shard.backward_drop()
         detached_inputs = model_instance._activations[0]
         grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp for inp in detached_inputs)
         return (None, None) + grads
