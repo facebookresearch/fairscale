@@ -173,7 +173,9 @@ class FullyShardedDataParallel(nn.Module):
         move_grads_to_cpu: Optional[bool] = None,
         bucket_cap_mb: int = 25,
         compute_device: Optional[torch.device] = None,
+        gradient_predivide_factor: Optional[int] = 32,
     ):
+        print(f"inside this new FSDP...")
         super().__init__()
         self.process_group = process_group or dist.new_group()
         self.rank = self.process_group.rank()
@@ -187,6 +189,7 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
+        self.gradient_predivide_factor = gradient_predivide_factor
 
         self.numel_padded_per_param: List[int] = []
         self.compute_device = compute_device
@@ -1071,7 +1074,7 @@ class FullyShardedDataParallel(nn.Module):
 
             if self.world_size > 1:
                 # Average grad by world_size for consistency with PyTorch DDP.
-                param.grad.data.div_(self.world_size)
+                param.grad.data.div_(self.gradient_predivide_factor)
 
             callback_fn = functools.partial(self._post_reduction_hook, param)
             if param._is_sharded:
@@ -1098,7 +1101,7 @@ class FullyShardedDataParallel(nn.Module):
         assert torch.cuda.current_stream() == self._streams["post_backward"]
         assert param.grad is not None
         self.assert_state(TrainingState.BACKWARD_POST)
-        param.grad.data = reduced_grad
+        param.grad.data = reduced_grad.div_(self.world_size/self.gradient_predivide_factor)
         # Cast grad to param's dtype (typically FP32). Note: we do this
         # before the move_grads_to_cpu step so that this entire hook remains
         # non-blocking. The downside is a bit more D2H transfer in that case.
