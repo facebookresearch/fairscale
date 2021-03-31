@@ -411,7 +411,7 @@ parser.add_argument(
     help="Print debugging statements which is more verbose than the default.",
 )
 parser.add_argument(
-    "--model_name", default="lm", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
+    "--model_name", default="seq", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
 )
 parser.add_argument(
     "--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks."
