@@ -23,11 +23,6 @@ if TYPE_CHECKING:
 else:
     Module = nn.Module
 
-if torch.__version__.split("+")[0].split(".")[:3] <= ["1", "8", "1"]:
-    BOUNCE_TENSORS = True
-else:
-    BOUNCE_TENSORS = False
-
 
 def _verify_module(module: List[LayerSpec]) -> None:
     if not isinstance(module, List):
@@ -54,10 +49,7 @@ class _ToHere(Module):
         self.device = device
 
     def forward(self, x_rref: rpc.RRef) -> Tensor:  # type: ignore
-        if BOUNCE_TENSORS:
-            return x_rref.remote().cpu().to_here().to(self.device)
-        else:
-            return x_rref.to_here()
+        return x_rref.to_here()
 
 
 def _create_sequential(layer_spec: List[LayerSpec], device: str) -> Module:
@@ -80,18 +72,15 @@ def _parameter_rrefs(module: rpc.RRef) -> List[rpc.RRef]:
     return [rpc.RRef(p) for p in module.local_value().parameters()]
 
 
-def rloss(loss_func: Callable, input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
-    if BOUNCE_TENSORS:
-        return loss_func(input_rref.remote().cpu().to_here(), target_rref.remote().cpu().to_here())
-    else:
-        return loss_func(input_rref.to_here(), target_rref.to_here())
+def _rloss(loss_func: Callable, input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
+    return loss_func(input_rref.to_here(), target_rref.to_here())
 
 
 def DistributedLoss(loss: nn.Module, *args: Tuple, **kwargs: Dict) -> Callable:
     loss_func = loss(*args, **kwargs)
 
     def dloss(input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
-        return rpc.remote(input_rref.owner(), rloss, args=(loss_func, input_rref, target_rref))
+        return rpc.remote(input_rref.owner(), _rloss, args=(loss_func, input_rref, target_rref))
 
     return dloss
 
@@ -164,6 +153,8 @@ class MultiProcessPipe(Module):
     ) -> None:
         super().__init__()
 
+        if torch.__version__.split(".")[:2] < ["1", "9"]:
+            raise RuntimeError("MultiProcessPipe requires torch >= 1.9.0")
         if type(chunks) is not int or chunks <= 0:
             raise ValueError("number of chunks must be positive integer")
         if checkpoint not in ["always", "except_last", "never"]:
