@@ -191,7 +191,7 @@ class ActivationCheckpointing(torch.autograd.Function):
                 # The last instance will lose the gradient function if we move it to the CPU.
                 # This is because all grad function are present on the device that ran the FW pass.
                 # if index == len(model_instance.model_slices) - 1:
-                    # model_instance._activations.append(output)
+                # model_instance._activations.append(output)
                 # else:
                 model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
                 # Move the layer shard back to the CPU.
@@ -223,7 +223,7 @@ class ActivationCheckpointing(torch.autograd.Function):
             with torch.autograd.profiler.record_function("backward_load_model"):
                 # Move the model shard to the device.
                 model_shard.backward_load()
-                
+
             # Store the BW pass state.
             bwd_rng_state = torch.get_rng_state()
 
