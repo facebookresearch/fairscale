@@ -221,8 +221,6 @@ class ActivationCheckpointing(torch.autograd.Function):
             reversed(model_instance.model_slices), reversed(model_instance._activations[:-1])
         ):
             with torch.autograd.profiler.record_function("backward_load_model"):
-                # Bring in the current activations onto the device.
-                # activation = tuple([a.cuda() for a in list(activation)])
                 # Move the model shard to the device.
                 model_shard.backward_load()
                 
