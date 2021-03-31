@@ -190,6 +190,11 @@ run_mpi_unittests: &run_mpi_unittests
       command: |
         mpirun -n 4 python -m pytest -p torch_pg.pytest --only-mpi --junitxml=test-results/junit.xml --verbose tests/nn/moe
 
+run_offload_benchmark: &run_offload_benchmark
+  - run:
+      name: Run Offload Benchmark
+      command: |
+        python benchmarks/experimental/offload.py
 
 run_pipe_benchmark: &run_pipe_benchmark
   - run:
@@ -577,6 +582,8 @@ jobs:
       - <<: *install_repo
 
       - <<: *run_pipe_benchmark
+
+      - <<: *run_offload_benchmark
 
       - <<: *run_mp_pipe_benchmark
 

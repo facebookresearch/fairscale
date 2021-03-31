@@ -120,7 +120,7 @@ def train_seq(model_config, benchmark_config, model_specs, args):
     optimizer = model_config["optimizer"](model.parameters(), lr=benchmark_config["lr"])
     dataloader, _, _ = model_config["data"]
 
-    def train_epoch(args):
+    def train_epoch(args, num_iters):
         model.train()
         for batch_inputs, batch_outputs in dataloader:
             batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
@@ -143,10 +143,13 @@ def train_seq(model_config, benchmark_config, model_specs, args):
                     loss.item(), benchmark_config["batch_size"] / (time.time_ns() - start) * 10 ** 9
                 )
             )
+            num_iters -= 1
+            if num_iters == 0:
+                break
         if args.use_profiler:
             prof.export_chrome_trace("/tmp/offload_prof")
 
-    train_epoch(args)
+    train_epoch(args, num_iters=5)
 
 
 def train(model_config, model, benchmark_config, model_specs, args):
@@ -179,6 +182,10 @@ def train(model_config, model, benchmark_config, model_specs, args):
         return data, target
 
     for i, batch in enumerate(lm_dataloader):
+        # TODO(anj): Make this a flag for both "lm" and "seq" models.
+        if i == 5:
+            break
+
         if i == 1:
             epoch_start_time = time.time()
 
@@ -214,7 +221,8 @@ def train(model_config, model, benchmark_config, model_specs, args):
             total_tokens_per_log_interval = 0
             total_loss = 0
             start_time = time.time()
-        prof.export_chrome_trace("/tmp/offload_prof")
+        if args.use_profiler:
+            prof.export_chrome_trace("/tmp/offload_prof")
 
     if epoch_start_time != 0:
         wps = total_tokens / (time.time() - epoch_start_time)
@@ -402,7 +410,7 @@ def run_benchmark(args):
 
 parser = argparse.ArgumentParser(description="benchmark")
 parser.add_argument(
-    "--dry_run", default=True, action="store_true", help="Run a sample training run without regression testing."
+    "--dry_run", default=False, action="store_true", help="Run a sample training run without regression testing."
 )
 parser.add_argument(
     "--debug",
@@ -411,7 +419,7 @@ parser.add_argument(
     help="Print debugging statements which is more verbose than the default.",
 )
 parser.add_argument(
-    "--model_name", default="seq", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
+    "--model_name", default="lm", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
 )
 parser.add_argument(
     "--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks."
