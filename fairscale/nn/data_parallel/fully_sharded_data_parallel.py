@@ -173,7 +173,6 @@ class FullyShardedDataParallel(nn.Module):
         move_grads_to_cpu: Optional[bool] = None,
         bucket_cap_mb: int = 25,
         compute_device: Optional[torch.device] = None,
-        gradient_predivide_factor: Optional[int] = 32,
     ):
         print(f"inside this new FSDP...")
         super().__init__()
@@ -189,7 +188,7 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
-        self.gradient_predivide_factor = gradient_predivide_factor
+        self.gradient_predivide_factor = self.get_gradient_predivide_factor(self.world_size)
 
         self.numel_padded_per_param: List[int] = []
         self.compute_device = compute_device
@@ -254,6 +253,13 @@ class FullyShardedDataParallel(nn.Module):
         # full params. This defaults to True, but may be set to False if the
         # user explicitly requests the local state dict via local_state_dict().
         self._return_full_state_dict = True
+
+    def get_gradient_predivide_factor(self, world_size: int) -> int:
+        factor = 1
+        while world_size % factor == 0 and world_size / factor > factor:
+            factor = factor * 2
+        print(f"factor = {factor}")
+        return factor
 
     @property
     def module(self) -> nn.Module:
