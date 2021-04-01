@@ -18,23 +18,42 @@ import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
-from fairscale.experimental.nn.multiprocess_pipe import DistributedLoss, MultiProcessPipe
+from fairscale.experimental.nn.multiprocess_pipe import DistributedLoss, DistributedPipeline, PipelineModule, RemoteModuleSequence
 from fairscale.utils.testing import torch_version
+
+if torch_version() <= (1, 8, 1):
+    BOUNCE_TENSORS = True
+else:
+    BOUNCE_TENSORS = False
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
 GPU_DEVICES = ["worker0/cuda:0", "worker1/cuda:1"]
 if torch.cuda.is_available():
-    DEVICES = [CPU_DEVICES, GPU_DEVICES]
+    DEVICES = [GPU_DEVICES] # TODO: Add CPU_DEVICES support
 else:
+    assert False
     DEVICES = [CPU_DEVICES]
 
-pytestmark = pytest.mark.skipif(torch_version() < (1, 9, 0), reason="requires torch version >= 1.9.0")
+pytestmark = pytest.mark.skipif(torch_version() < (1, 8, 0), reason="requires torch version >= 1.8.0")
 
 
 def rpc_worker(rank, world_size, init_file, func, *args):
-    options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
-    for i in range(world_size):
-        options.set_device_map("worker" + str(i), {rank: i})
+    if torch_version() == (1, 8, 0):
+        if torch.cuda.is_available():
+            # Workaround for https://github.com/pytorch/pytorch/issues/53844
+            options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file, _transports=["ibv", "uv"])
+        else:
+            # Workaround for https://github.com/pytorch/pytorch/issues/54266
+            options = rpc.TensorPipeRpcBackendOptions(
+                init_method="file://" + init_file,
+                _channels=["mpt_uv", "basic", "cuda_ipc", "cuda_gdr", "cuda_xth", "cuda_basic"],
+            )
+    else:
+        options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
+    if torch_version() > (1, 8, 1):
+        for i in range(world_size):
+            if i != rank:
+                options.set_device_map("worker" + str(i), {rank: i})
     rpc.init_rpc(
         "worker" + str(rank),
         rank=rank,
@@ -58,32 +77,47 @@ def rpc_test(world_size=1):
 
     return decorator
 
+def create_pipeline(layers, balance, devices, **kwargs):
+    seq = RemoteModuleSequence()
+
+    index = 0
+    for num_layers, device_spec in zip(balance, devices):
+        next_index = index + num_layers
+        for li in range(index, next_index):
+            layers[li].instantiate(*device_spec.split("/"))
+        index = next_index
+
+    seq.add_sequence(layers)
+    seq.feed_model_input(layers[0])
+
+    return DistributedPipeline(seq, **kwargs)
+
 
 @rpc_test()
 @pytest.mark.parametrize("devices", DEVICES)
 def create(devices):
-    model = [("linear", nn.Linear, (4, 4), {})]
-    pipe = MultiProcessPipe(model, balance=[1], chunks=1, devices=devices[:1])
+    model = [PipelineModule(nn.Linear, (4, 4), {})]
+    pipe = create_pipeline(model, balance=[1], chunks=1, devices=devices[:1])
 
 
 @rpc_test()
 def create_multiple_layers():
-    model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
-    pipe = MultiProcessPipe(model, balance=[1, 1], chunks=1, devices=["worker0/cpu", "worker0/cpu"])
+    model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
+    pipe = create_pipeline(model, balance=[1, 1], chunks=1, devices=["worker0/cpu", "worker0/cpu"])
 
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 def create_multiple_workers(devices):
-    model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
-    pipe = MultiProcessPipe(model, balance=[1, 1], chunks=1, devices=devices[:2])
+    model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
+    pipe = create_pipeline(model, balance=[1, 1], chunks=1, devices=devices[:2])
 
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 def parameter_rrefs(devices):
-    model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
-    pipe = MultiProcessPipe(model, balance=[1, 1], chunks=1, devices=devices[:2])
+    model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
+    pipe = create_pipeline(model, balance=[1, 1], chunks=1, devices=devices[:2])
     parameter_rrefs = pipe.parameter_rrefs()
     assert len(parameter_rrefs) == 2
 
@@ -91,11 +125,10 @@ def parameter_rrefs(devices):
 @rpc_test(world_size=1)
 @pytest.mark.parametrize("devices", DEVICES)
 def forward(devices):
-    device = devices[0].split("/")[1]
     yh = torch.tensor([1.0, 0.0])
-    x = torch.tensor([1.0, -1.0]).to(device)
-    model = [("relu", nn.ReLU, (), {})]
-    pipe = MultiProcessPipe(model, balance=[1], chunks=1, devices=devices[:1])
+    x = torch.tensor([1.0, -1.0])
+    model = [PipelineModule(nn.ReLU, (), {})]
+    pipe = create_pipeline(model, balance=[1], chunks=1, devices=devices[:1])
     y = pipe(x).to_here().cpu()
     assert torch.equal(y, yh), f"{y} != {yh}"
 
@@ -103,11 +136,10 @@ def forward(devices):
 @rpc_test(world_size=1)
 @pytest.mark.parametrize("devices", DEVICES)
 def forward_chunks(devices):
-    device = devices[0].split("/")[1]
     yh = torch.tensor([1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0])
-    x = torch.tensor([1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0]).to(device)
-    model = [("relu", nn.ReLU, (), {})]
-    pipe = MultiProcessPipe(model, balance=[1], chunks=4, devices=devices[:1])
+    x = torch.tensor([1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0])
+    model = [PipelineModule(nn.ReLU, (), {})]
+    pipe = create_pipeline(model, balance=[1], chunks=4, devices=devices[:1])
     y = pipe(x).to_here().cpu()
     assert torch.equal(y, yh), f"{y} != {yh}"
 
@@ -121,9 +153,12 @@ def forward_multi(devices, checkpoint):
     torch.cuda.manual_seed_all(3)
     x = torch.randn(8, 4).to(device)
     x.requires_grad = True  # TODO(msb) remove this limitation
-    model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
-    pipe = MultiProcessPipe(model, balance=[1, 1], chunks=4, devices=devices[:2], checkpoint=checkpoint)
-    y = pipe(x).to_here()
+    model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
+    pipe = create_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2], checkpoint=checkpoint)
+    if BOUNCE_TENSORS:
+        y = pipe(x).remote().cpu().to_here()
+    else:
+        y = pipe(x).to_here()
     expected_sum = torch.tensor(5.0615)
     assert y.shape == torch.Size([8, 4])
     assert y.requires_grad is True
@@ -137,8 +172,8 @@ def backward(devices):
     torch.random.manual_seed(3)
     criterion = DistributedLoss(torch.nn.MSELoss)
     x = torch.randn(8, 4).to(device)
-    model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
-    pipe = MultiProcessPipe(model, balance=[1, 1], chunks=4, devices=devices[:2])
+    model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
+    pipe = create_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
     with dist_autograd.context() as context_id:
         y = pipe(x)
         loss = criterion(y, rpc.RRef(x))
@@ -154,8 +189,8 @@ def update(devices):
     torch.random.manual_seed(3)
     criterion = DistributedLoss(torch.nn.MSELoss)
     x = torch.randn(8, 4).to(device)
-    model = [("linear1", nn.Linear, (4, 4), {}), ("relu", nn.ReLU, (), {})]
-    pipe = MultiProcessPipe(model, balance=[1, 1], chunks=4, devices=devices[:2])
+    model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
+    pipe = create_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
     params = pipe.parameter_rrefs()
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []
