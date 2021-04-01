@@ -15,7 +15,7 @@ from torch.autograd.profiler import record_function
 from fairscale.nn.pipe import microbatch
 from fairscale.nn.pipe.checkpoint import Checkpointing
 from fairscale.nn.pipe.microbatch import Batch
-from fairscale.nn.pipe.stream import AbstractStream, new_stream, use_device
+from fairscale.nn.pipe.stream import AbstractStream, new_stream, use_device, current_stream, is_cuda
 from fairscale.nn.pipe.worker import Task, create_workers
 from fairscale.nn.pipe.stream import wait_stream, use_stream
 from fairscale.nn.pipe.dependency import fork, join
@@ -148,18 +148,12 @@ class DistributedPipelineRecord:
     def feed(self, i: int, j: int, input):
         if input.device.type == 'cpu':
             input = input.to(self.device)
-        #input = Log.apply(f"got_rank_{self.rank}, chunk={i} ({j})", input)
-        #if self.rank > 0:
-        #    input = Log.apply(f"rank_{self.rank}_chunk_{i}", input)
-        s0 = torch.cuda.current_stream(input.device)
-        #if self.rank >= 0:
-        #    # TODO: sync with correct stream
-        #    s0.synchronize()
+        cuda_stream = torch.cuda.current_stream(input.device) if input.device.type == 'cuda' else None
 
         with self.ready_cv:
             assert self.tensors[i][j] is None
             input, phony = fork(input)
-            self.batch_events[i][j] = s0.record_event()
+            self.batch_events[i][j] = cuda_stream.record_event() if cuda_stream is not None else None
             self.tensors[i][j] = input
             self.ready_cv.notify_all()
         return phony
@@ -212,7 +206,7 @@ class PartitionHandler:
 
         m = len(dist_record.batches)
 
-        self.stream = torch.cuda.current_stream(self.device)
+        self.stream = current_stream(self.device)
 
         for i in range(m):
             with record_function("feed"):
@@ -256,7 +250,8 @@ class PartitionHandler:
         # Synchronize with the copied input. ([1] in the diagram)
         if dist_record is not None and dist_record.rank >= 0:
             for e in dist_record.batch_events[chunk]:
-                self.stream.wait_event(e)
+                if e is not None and is_cuda(self.stream):
+                    self.stream.wait_event(e)
 
         # Determine whether checkpointing or not.
         checkpoint = chunk < checkpoint_stop
@@ -334,8 +329,9 @@ class PartitionHandler:
             result = microbatch.gather(dist_record.batches)
             assert len(result) == 1
             result = result[0]
-            s0 = torch.cuda.current_stream(result.device)
-            s0.synchronize()
+            s0 = current_stream(result.device)
+            if is_cuda(s0):
+                s0.synchronize()
             return result
 
 

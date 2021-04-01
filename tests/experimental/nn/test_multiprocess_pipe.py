@@ -29,9 +29,8 @@ else:
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
 GPU_DEVICES = ["worker0/cuda:0", "worker1/cuda:1"]
 if torch.cuda.is_available():
-    DEVICES = [GPU_DEVICES] # TODO: Add CPU_DEVICES support
+    DEVICES = [CPU_DEVICES, GPU_DEVICES]
 else:
-    assert False
     DEVICES = [CPU_DEVICES]
 
 pytestmark = pytest.mark.skipif(torch_version() < (1, 8, 0), reason="requires torch version >= 1.8.0")
