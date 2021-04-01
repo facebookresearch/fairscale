@@ -3,22 +3,24 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Iterable, List, Optional, Tuple, Union, cast, Sequence, Type, Dict, Callable
+from threading import Condition
 from types import TracebackType
+from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
+                    Tuple, Type, Union, cast)
 
 import torch
-from threading import Condition
 from torch import Tensor, nn
-from torch.distributed import rpc
 from torch.autograd.profiler import record_function
+from torch.distributed import rpc
 
 from fairscale.nn.pipe import microbatch
 from fairscale.nn.pipe.checkpoint import Checkpointing
-from fairscale.nn.pipe.microbatch import Batch
-from fairscale.nn.pipe.stream import AbstractStream, new_stream, use_device, current_stream, is_cuda
-from fairscale.nn.pipe.worker import Task, create_workers
-from fairscale.nn.pipe.stream import wait_stream, use_stream
 from fairscale.nn.pipe.dependency import fork, join
+from fairscale.nn.pipe.microbatch import Batch
+from fairscale.nn.pipe.stream import (AbstractStream, current_stream, is_cuda,
+                                      new_stream, use_device, use_stream,
+                                      wait_stream)
+from fairscale.nn.pipe.worker import Task, create_workers
 
 Device = Union[torch.device, int, str]
 
@@ -530,4 +532,3 @@ class DistributedPipeline(nn.Module):
                     dist_records[fi].rpc_async().feed(i, fj, b[feed_idx].value)
 
         return result
-
