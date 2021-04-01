@@ -13,15 +13,17 @@ import tempfile
 import pytest
 import torch
 import torch.distributed.autograd as dist_autograd
+from torch.distributed.optim import DistributedOptimizer
 import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
-from torch.distributed.optim import DistributedOptimizer
 
-from fairscale.experimental.nn.multiprocess_pipe import (DistributedLoss,
-                                                         DistributedPipeline,
-                                                         PipelineModule,
-                                                         RemoteModuleSequence)
+from fairscale.experimental.nn.multiprocess_pipe import (
+    DistributedLoss,
+    DistributedPipeline,
+    PipelineModule,
+    RemoteModuleSequence,
+)
 from fairscale.utils.testing import torch_version
 
 if torch_version() <= (1, 8, 1):
