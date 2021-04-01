@@ -81,6 +81,7 @@ def rpc_test(world_size=1):
 
     return decorator
 
+
 def create_pipeline(layers, balance, devices, **kwargs):
     seq = RemoteModuleSequence()
 
