@@ -197,7 +197,7 @@ run_pipe_benchmark: &run_pipe_benchmark
       command: |
         python benchmarks/pipe.py
 
-uun_oss_benchmark: &run_oss_benchmark
+run_oss_benchmark: &run_oss_benchmark
   - run:
       name: Run OSS Benchmark
       command: |
