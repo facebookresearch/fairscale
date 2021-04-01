@@ -174,7 +174,6 @@ class FullyShardedDataParallel(nn.Module):
         bucket_cap_mb: int = 25,
         compute_device: Optional[torch.device] = None,
     ):
-        print(f"inside this new FSDP...")
         super().__init__()
         self.process_group = process_group or dist.new_group()
         self.rank = self.process_group.rank()
@@ -258,7 +257,6 @@ class FullyShardedDataParallel(nn.Module):
         factor = 1
         while world_size % factor == 0 and world_size / factor > factor:
             factor = factor * 2
-        print(f"factor = {factor}")
         return factor
 
     @property
