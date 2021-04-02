@@ -12,4 +12,3 @@ API Reference
    nn/fsdp
    nn/fsdp_tips
    nn/misc/checkpoint_activations
-   experimental/nn/offload
