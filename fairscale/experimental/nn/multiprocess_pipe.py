@@ -13,13 +13,13 @@ from torch.autograd.profiler import record_function
 from torch.distributed import rpc
 
 from fairscale.nn.pipe import microbatch
-from fairscale.nn.pipe.checkpoint import Checkpointing, Tensors, TensorOrTensors
+from fairscale.nn.pipe.checkpoint import Checkpointing, TensorOrTensors, Tensors
 from fairscale.nn.pipe.dependency import fork, join
 from fairscale.nn.pipe.microbatch import Batch
 from fairscale.nn.pipe.stream import (
     AbstractStream,
-    current_stream,
     as_cuda,
+    current_stream,
     is_cuda,
     new_stream,
     use_device,
