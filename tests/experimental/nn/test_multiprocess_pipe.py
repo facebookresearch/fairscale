@@ -18,12 +18,7 @@ import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
-from fairscale.experimental.nn.multiprocess_pipe import (
-    DistributedLoss,
-    DistributedPipeline,
-    PipelineModule,
-    RemoteModuleSequence,
-)
+from fairscale.experimental.nn.multiprocess_pipe import DistributedLoss, PipelineModule, create_sequence_pipeline
 from fairscale.utils.testing import torch_version
 
 if torch_version() <= (1, 8, 1):
@@ -82,47 +77,31 @@ def rpc_test(world_size=1):
     return decorator
 
 
-def create_pipeline(layers, balance, devices, **kwargs):
-    seq = RemoteModuleSequence()
-
-    index = 0
-    for num_layers, device_spec in zip(balance, devices):
-        next_index = index + num_layers
-        for li in range(index, next_index):
-            layers[li].instantiate(*device_spec.split("/"))
-        index = next_index
-
-    seq.add_sequence(layers)
-    seq.feed_model_input(layers[0])
-
-    return DistributedPipeline(seq, **kwargs)
-
-
 @rpc_test()
 @pytest.mark.parametrize("devices", DEVICES)
 def create(devices):
     model = [PipelineModule(nn.Linear, (4, 4), {})]
-    pipe = create_pipeline(model, balance=[1], chunks=1, devices=devices[:1])
+    pipe = create_sequence_pipeline(model, balance=[1], chunks=1, devices=devices[:1])
 
 
 @rpc_test()
 def create_multiple_layers():
     model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
-    pipe = create_pipeline(model, balance=[1, 1], chunks=1, devices=["worker0/cpu", "worker0/cpu"])
+    pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=1, devices=["worker0/cpu", "worker0/cpu"])
 
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 def create_multiple_workers(devices):
     model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
-    pipe = create_pipeline(model, balance=[1, 1], chunks=1, devices=devices[:2])
+    pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=1, devices=devices[:2])
 
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 def parameter_rrefs(devices):
     model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
-    pipe = create_pipeline(model, balance=[1, 1], chunks=1, devices=devices[:2])
+    pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=1, devices=devices[:2])
     parameter_rrefs = pipe.parameter_rrefs()
     assert len(parameter_rrefs) == 2
 
@@ -133,7 +112,7 @@ def forward(devices):
     yh = torch.tensor([1.0, 0.0])
     x = torch.tensor([1.0, -1.0])
     model = [PipelineModule(nn.ReLU, (), {})]
-    pipe = create_pipeline(model, balance=[1], chunks=1, devices=devices[:1])
+    pipe = create_sequence_pipeline(model, balance=[1], chunks=1, devices=devices[:1])
     y = pipe(x).to_here().cpu()
     assert torch.equal(y, yh), f"{y} != {yh}"
 
@@ -144,7 +123,7 @@ def forward_chunks(devices):
     yh = torch.tensor([1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0])
     x = torch.tensor([1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0])
     model = [PipelineModule(nn.ReLU, (), {})]
-    pipe = create_pipeline(model, balance=[1], chunks=4, devices=devices[:1])
+    pipe = create_sequence_pipeline(model, balance=[1], chunks=4, devices=devices[:1])
     y = pipe(x).to_here().cpu()
     assert torch.equal(y, yh), f"{y} != {yh}"
 
@@ -159,7 +138,7 @@ def forward_multi(devices, checkpoint):
     x = torch.randn(8, 4).to(device)
     x.requires_grad = True  # TODO(msb) remove this limitation
     model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
-    pipe = create_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2], checkpoint=checkpoint)
+    pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2], checkpoint=checkpoint)
     if BOUNCE_TENSORS:
         y = pipe(x).remote().cpu().to_here()
     else:
@@ -178,7 +157,7 @@ def backward(devices):
     criterion = DistributedLoss(torch.nn.MSELoss)
     x = torch.randn(8, 4).to(device)
     model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
-    pipe = create_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
+    pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
     with dist_autograd.context() as context_id:
         y = pipe(x)
         loss = criterion(y, rpc.RRef(x))
@@ -195,7 +174,7 @@ def update(devices):
     criterion = DistributedLoss(torch.nn.MSELoss)
     x = torch.randn(8, 4).to(device)
     model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
-    pipe = create_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
+    pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
     params = pipe.parameter_rrefs()
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []

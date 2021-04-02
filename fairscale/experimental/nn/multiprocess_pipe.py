@@ -79,7 +79,7 @@ class PipelineModule(nn.Module):
         return self.module_rref
 
 
-class RemoteModuleSequence(nn.Module):
+class PipelineModulesGraph(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.modules_list: List = []
@@ -89,7 +89,7 @@ class RemoteModuleSequence(nn.Module):
         for i in range(num):
             self.inputs.append(None)
 
-    def _find_or_add(self, module: nn.Module) -> int:
+    def _find_or_add(self, module: PipelineModule) -> int:
         try:
             return self.modules_list.index(module)
         except ValueError:
@@ -97,7 +97,7 @@ class RemoteModuleSequence(nn.Module):
             self.modules_list.append(module)
             return len(self.modules_list) - 1
 
-    def add_sequence(self, modules: List[nn.Module], first_input: Optional[nn.Module] = None) -> None:
+    def add_sequence(self, modules: List[PipelineModule], first_input: Optional[PipelineModule] = None) -> None:
         old_m = len(self.modules_list)
         m = len(modules)
         self._add_new_module(m)
@@ -107,18 +107,18 @@ class RemoteModuleSequence(nn.Module):
         if first_input is not None:
             self.inputs[old_m] = [(self.modules_list.index(first_input), 0)]
 
-    def feed_model_input(self, module: nn.Module, ind: int = 0) -> None:
+    def feed_model_input(self, module: PipelineModule, ind: int = 0) -> None:
         self.inputs[self._find_or_add(module)] = [(-1, ind)]
 
-    def add_multi_input_layer(self, module: nn.Module, inputs: List[nn.Module]) -> None:
+    def add_multi_input_layer(self, module: PipelineModule, inputs: List[PipelineModule]) -> None:
         self.inputs[self._find_or_add(module)] = [(self.modules_list.index(m), 0) for m in inputs]
 
-    def fan_out(self, module: nn.Module, outputs: List[nn.Module]) -> None:
+    def fan_out(self, module: PipelineModule, outputs: List[PipelineModule]) -> None:
         mi = self.modules_list.index(module)
         for i, m in enumerate(outputs):
             self.inputs[self._find_or_add(m)] = [(mi, i)]
 
-    def replicate_output(self, module: nn.Module, outputs: List[nn.Module]) -> None:
+    def replicate_output(self, module: PipelineModule, outputs: List[PipelineModule]) -> None:
         mi = self.modules_list.index(module)
         for m in outputs:
             self.inputs[self._find_or_add(m)] = [(mi, 0)]
@@ -256,7 +256,6 @@ class PartitionHandler:
 
         batch = dist_record.get_batch(chunk)
 
-        # Synchronize with the copied input. ([1] in the diagram)
         if dist_record is not None and dist_record.rank >= 0:
             for e in dist_record.batch_events[chunk]:
                 if e is not None and is_cuda(self.stream):
@@ -293,7 +292,6 @@ class PartitionHandler:
             task = Task(self.stream, compute=compute, finalize=None)
             del compute
 
-        # Compute tasks in parallel. ([2] in the diagram)
         self.in_queue.put(task)
 
         ok, payload = self.out_queue.get()
@@ -306,9 +304,6 @@ class PartitionHandler:
         else:
             task, batch = cast(Tuple[Task, Batch], payload)
 
-            # Finalize tasks. If checkpointing is enabled, here the
-            # recomputation is scheduled at backpropagation. ([4] in the
-            # diagram)
             with use_device(self.device):
                 task.finalize(batch)
 
@@ -357,11 +352,11 @@ def RemoteSequential(rref_list: List[rpc.RRef]) -> MultiInputSequential:
     return MultiInputSequential(*(r.local_value() for r in rref_list))
 
 
-def _split_module(seq: RemoteModuleSequence) -> List[Tuple[List[int], rpc.RRef]]:
-    seq.compute_output_users()
-    module_used = [False] * len(seq.modules_list)
+def _split_module(g: PipelineModulesGraph) -> List[Tuple[List[int], rpc.RRef]]:
+    g.compute_output_users()
+    module_used = [False] * len(g.modules_list)
     partitions = []
-    for i, module in enumerate(seq.modules_list):
+    for i, module in enumerate(g.modules_list):
         if module_used[i]:
             continue
         partition = []
@@ -371,13 +366,13 @@ def _split_module(seq: RemoteModuleSequence) -> List[Tuple[List[int], rpc.RRef]]
             assert not module_used[j]
             module_used[j] = True
             partition.append(j)
-            if len(seq.output_users[j]) != 1:
+            if len(g.output_users[j]) != 1:
                 break
-            if seq.modules_list[j].num_outputs is not None:
+            if g.modules_list[j].num_outputs is not None:
                 break
-            next_j = seq.output_users[j][0][0]
-            next_module = seq.modules_list[next_j]
-            if seq.inputs[next_j] != [(j, 0)]:
+            next_j = g.output_users[j][0][0]
+            next_module = g.modules_list[next_j]
+            if g.inputs[next_j] != [(j, 0)]:
                 break
             if next_module.on != current_module.on:
                 break
@@ -386,12 +381,12 @@ def _split_module(seq: RemoteModuleSequence) -> List[Tuple[List[int], rpc.RRef]]
             current_module = next_module
             j = next_j
         if len(partition) == 1:
-            remote_module = seq.modules_list[partition[0]].get_module_rref()
+            remote_module = g.modules_list[partition[0]].get_module_rref()
         else:
             remote_module = rpc.remote(
-                seq.modules_list[partition[0]].on,
+                g.modules_list[partition[0]].on,
                 RemoteSequential,
-                args=([seq.modules_list[p].get_module_rref() for p in partition],),
+                args=([g.modules_list[p].get_module_rref() for p in partition],),
             )
         partitions.append((partition, remote_module))
 
@@ -406,7 +401,7 @@ MOVING_DENIED = TypeError(
 class DistributedPipeline(nn.Module):
     def __init__(
         self,
-        seq: RemoteModuleSequence,
+        g: PipelineModulesGraph,
         chunks: int = 1,
         checkpoint: str = "except_last",
         deferred_batch_norm: bool = False,
@@ -426,10 +421,10 @@ class DistributedPipeline(nn.Module):
         # if deferred_batch_norm:
         #    module = DeferredBatchNorm.convert_deferred_batch_norm(module, chunks)
 
-        self.partitions = _split_module(seq)
+        self.partitions = _split_module(g)
         self.input_feeds = [
             next((i, fj, feed_idx) for i, (p, m) in enumerate(self.partitions) if p[0] == fi)
-            for fi, fj, feed_idx in seq.model_input_users
+            for fi, fj, feed_idx in g.model_input_users
         ]
 
         self._copy_streams: List[List[AbstractStream]] = []
@@ -443,9 +438,9 @@ class DistributedPipeline(nn.Module):
                 PartitionHandler,
                 args=(
                     m,
-                    seq.modules_list[p[0]].device,
-                    seq.modules_list[p[0]].num_inputs,
-                    seq.modules_list[p[-1]].num_outputs,
+                    g.modules_list[p[0]].device,
+                    g.modules_list[p[0]].num_inputs,
+                    g.modules_list[p[-1]].num_outputs,
                     i,
                     self.chunks,
                     checkpoint_stop,
@@ -453,7 +448,7 @@ class DistributedPipeline(nn.Module):
             )
             for i, (p, m) in enumerate(self.partitions)
         ]
-        self.modules_sequence = seq
+        self.graph = g
 
     # DistributedPipeline should manage the device of each partition.
     # Deny cuda(), cpu(), and to() with device, by TypeError.
@@ -508,7 +503,7 @@ class DistributedPipeline(nn.Module):
         for part_idx in reversed(range(m)):
             rmodel = self.partition_handlers[part_idx].remote()
             users = []
-            for user, input_idx, output_idx in self.modules_sequence.output_users[self.partitions[part_idx][0][-1]]:
+            for user, input_idx, output_idx in self.graph.output_users[self.partitions[part_idx][0][-1]]:
                 user_partition = next(i for i, (p, m) in enumerate(self.partitions) if p[0] == user)
                 assert user_partition > part_idx
                 users.append((dist_records[user_partition], input_idx, output_idx))
@@ -528,3 +523,21 @@ class DistributedPipeline(nn.Module):
                     dist_record.rpc_async().feed(i, fj, b[feed_idx].value)  # type: ignore
 
         return result
+
+
+def create_sequence_pipeline(
+    layers: List[PipelineModule], balance: List[int], devices: List[str], **kwargs: Any
+) -> DistributedPipeline:
+    g = PipelineModulesGraph()
+
+    index = 0
+    for num_layers, device_spec in zip(balance, devices):
+        next_index = index + num_layers
+        for li in range(index, next_index):
+            layers[li].instantiate(*device_spec.split("/"))
+        index = next_index
+
+    g.add_sequence(layers)
+    g.feed_model_input(layers[0])
+
+    return DistributedPipeline(g, **kwargs)
