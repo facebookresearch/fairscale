@@ -53,7 +53,8 @@ def check_param_counts_before_sharding(full_optim_state_dict: Dict, n_instances:
         f"there were {n_local_params_in_opt}"
     )
     stateless = len(full_optim_state_dict["state"]) == 0
-    assert stateless or (n_instances == n_local_params_in_opt), msg
+    if not (stateless or (n_instances == n_local_params_in_opt)):
+        print(msg)
 
 
 # All functions below here help saving the list of optimizer states, one from each rank

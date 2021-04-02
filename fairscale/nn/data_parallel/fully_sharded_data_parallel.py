@@ -1462,14 +1462,11 @@ class FullyShardedDataParallel(nn.Module):
         """
         # Assert nesting is the same as it was at save time
         instance_list = self._fsdp_instances
-        # assert all(
-        #     x.world_size == self.world_size for x in instance_list
-        # ), "all nested instances must have same world size"
         ou.check_param_counts_before_sharding(full_optim_state_dict, len(instance_list))
         ids_not_to_shard = copy.deepcopy(full_optim_state_dict["uncollected_local_ids"])
         if self.flatten_parameters:
             full_optim_state_dict = ou.flatten_optim_state_dict(full_optim_state_dict)
-            assert len(full_optim_state_dict["state"]) in (0, len(instance_list))
+            assert len(full_optim_state_dict["state"]) in (0, len(instance_list)), f'{len(full_optim_state_dict["state"])}, {len(instance_list)}'
 
         # get the portion of dict associated with the shard, in place
         for id, s in full_optim_state_dict["state"].items():
