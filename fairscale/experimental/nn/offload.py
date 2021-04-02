@@ -130,7 +130,7 @@ class ModelShard(nn.Module):
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
 
-class ActivationCheckpointing(torch.autograd.Function):
+class OffloadFunction(torch.autograd.Function):
     """
      This Function enables checkpointing of intermediate activations at
      shard boundaries by overriding the forward and backward pass of the nn.Module.
@@ -278,13 +278,34 @@ class ActivationCheckpointing(torch.autograd.Function):
 
 
 class OffloadModel(nn.Module):
-    """Wrapper used offload parts of a model to the CPU.
+    """Wraps an arbitrary :class:`nn.Sequential <torch.nn.Sequential>` module
+    to train by offloading majority of the model parameters to the CPU.
+    `OffloadModel` is heavily inspired by the _L2L algorithm and _Zero-Offload.
 
-    The model is sharded into chunks and at each iteration, a
-    single chunk is copied from CPU->GPU, FW pass is computed and
-    the chunk is copied back to CPU. This process is repeated for
-    all the chunks. In the BW pass, the same process happens in
-    reverse.
+        # Define the model
+        model = get_model()
+        offload_model = OffloadModel(model, device,
+                                    offload_device=torch.device(“cpu”),
+                                    num_slices=3, 
+                                    checkpoint_activation=True,   
+                                    num_microbatches=5)
+
+        # All other steps remain the same.
+
+    .. _L2L: https://arxiv.org/abs/2002.05645
+    .. _Zero-Offload: https://arxiv.org/abs/2101.06840
+
+    At each step, a layer(or series of layers) are loaded
+    onto the GPU for the forward and backward pass with intermediate
+    activations being copied onto the GPU as required. Once the forward
+    or backward pass is completed for a given shard, it is moved back to
+    the CPU again.
+
+    `OffloadModel` supports activation checkpointing which reduces
+    the memory footprint. You can also increase the number of
+    microbatches which translates to more computation cycles for
+    every shard load. This helps offset the cost of moving the shard
+    from the CPU to GPU and vice versa.
 
     Note: OffloadModel currently only supports nn.Sequential models.
 
@@ -365,10 +386,10 @@ class OffloadModel(nn.Module):
         self._num_microbatches = num_microbatches
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
-        # `apply` calls the `forward` function of the `ActivationCheckpointing` class
+        # `apply` calls the `forward` function of the `OffloadFunction` class
         # and the `forward` function calls `inputs` on the first model shard.
         # Please see https://pytorch.org/docs/stable/autograd.html#function for more details.
 
         # We need the second param to be a dummy input to enable the
         # backward pass to be triggered for integer inputs.
-        return ActivationCheckpointing.apply(*inputs, torch.tensor([], requires_grad=True), self)
+        return OffloadFunction.apply(*inputs, torch.tensor([], requires_grad=True), self)
