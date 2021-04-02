@@ -13,12 +13,13 @@ from torch.autograd.profiler import record_function
 from torch.distributed import rpc
 
 from fairscale.nn.pipe import microbatch
-from fairscale.nn.pipe.checkpoint import Checkpointing
+from fairscale.nn.pipe.checkpoint import Checkpointing, Tensors, TensorOrTensors
 from fairscale.nn.pipe.dependency import fork, join
 from fairscale.nn.pipe.microbatch import Batch
 from fairscale.nn.pipe.stream import (
     AbstractStream,
     current_stream,
+    as_cuda,
     is_cuda,
     new_stream,
     use_device,
@@ -29,8 +30,8 @@ from fairscale.nn.pipe.worker import Task, create_workers
 
 Device = Union[torch.device, int, str]
 
-Tensors = Sequence[Tensor]
-TensorOrTensors = Union[Tensor, Tensors]
+# Tensors = Sequence[Tensor]
+# TensorOrTensors = Union[Tensor, Tensors]
 
 ExcInfo = Tuple[Type[BaseException], BaseException, TracebackType]
 
@@ -58,82 +59,88 @@ def DistributedLoss(loss: nn.Module, *args: Tuple, **kwargs: Dict) -> Callable:
 
 
 class PipelineModule(nn.Module):
-    def __init__(self, module_cls, args, kwargs={}, num_inputs=1, num_outputs=None, worker=None):
+    def __init__(
+        self,
+        module_cls: Callable,
+        args: Tuple,
+        kwargs: Optional[Dict] = None,
+        num_inputs: int = 1,
+        num_outputs: Optional[int] = None,
+        worker: Optional[Tuple[str, str]] = None,
+    ):
         super().__init__()
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
-        self.module_args = (module_cls, args, kwargs)
+        self.module_args = (module_cls, args, kwargs or {})
         if worker is not None:
             self.instantiate(*worker)
 
     @staticmethod
-    def _create_module(module_cls, args, kwargs, device):
-        result = module_cls(*args, **kwargs)
+    def _create_module(module_cls: Callable, args: Tuple, kwargs: Dict, device: str) -> nn.Module:
+        result: nn.Module = module_cls(*args, **kwargs)
         result.to(device)
         return result
 
-    def instantiate(self, on, device):
+    def instantiate(self, on: str, device: str) -> 'PipelineModule':
         self.on = on
         self.device = device
         self.module_rref = rpc.remote(on, PipelineModule._create_module, self.module_args + (device,))
         return self
 
-    def get_module_rref(self):
+    def get_module_rref(self) -> rpc.RRef:
         return self.module_rref
-
-    def forward(self, input):
-        pass
 
 
 class RemoteModuleSequence(nn.Module):
-    def __init__(self, inputs=None):
+    def __init__(self) -> None:
         super().__init__()
-        self.modules = []
-        self.inputs = []
+        self.modules_list: List = []
+        self.inputs: List[Optional[List[Tuple[int, int]]]] = []
 
-    def _add_new_module(self, num=1):
+    def _add_new_module(self, num: int = 1) -> None:
         for i in range(num):
             self.inputs.append(None)
 
-    def _find_or_add(self, module):
+    def _find_or_add(self, module: nn.Module) -> int:
         try:
-            return self.modules.index(module)
+            return self.modules_list.index(module)
         except ValueError:
             self._add_new_module()
-            self.modules.append(module)
-            return len(self.modules) - 1
+            self.modules_list.append(module)
+            return len(self.modules_list) - 1
 
-    def add_sequence(self, modules, first_input=None):
-        old_m = len(self.modules)
+    def add_sequence(self, modules: List[nn.Module], first_input: Optional[nn.Module] = None) -> None:
+        old_m = len(self.modules_list)
         m = len(modules)
         self._add_new_module(m)
-        self.modules.extend(modules)
+        self.modules_list.extend(modules)
         for i in range(old_m + 1, old_m + m):
             self.inputs[i] = [(i - 1, 0)]
         if first_input is not None:
-            self.inputs[old_m] = [(self.modules.index(first_input), 0)]
+            self.inputs[old_m] = [(self.modules_list.index(first_input), 0)]
 
-    def feed_model_input(self, module, ind=0):
+    def feed_model_input(self, module: nn.Module, ind: int = 0) -> None:
         self.inputs[self._find_or_add(module)] = [(-1, ind)]
 
-    def add_multi_input_layer(self, module, inputs):
-        self.inputs[self._find_or_add(module)] = [(self.modules.index(m), 0) for m in inputs]
+    def add_multi_input_layer(self, module: nn.Module, inputs: List[nn.Module]) -> None:
+        self.inputs[self._find_or_add(module)] = [(self.modules_list.index(m), 0) for m in inputs]
 
-    def fan_out(self, module, outputs):
-        mi = self.modules.index(module)
+    def fan_out(self, module: nn.Module, outputs: List[nn.Module]) -> None:
+        mi = self.modules_list.index(module)
         for i, m in enumerate(outputs):
             self.inputs[self._find_or_add(m)] = [(mi, i)]
 
-    def replicate_output(self, module, outputs):
-        mi = self.modules.index(module)
+    def replicate_output(self, module: nn.Module, outputs: List[nn.Module]) -> None:
+        mi = self.modules_list.index(module)
         for m in outputs:
             self.inputs[self._find_or_add(m)] = [(mi, 0)]
 
-    def compute_output_users(self):
-        m = len(self.modules)
-        self.output_users = [[] for _ in range(m)]
+    def compute_output_users(self) -> None:
+        m = len(self.modules_list)
+        self.output_users: List[List[Tuple[int, int, int]]] = [[] for _ in range(m)]
         self.model_input_users = []
         for i, inp in enumerate(self.inputs):
+            assert inp is not None
             for j, inp_item in enumerate(inp):
                 if inp_item[0] >= 0:
                     self.output_users[inp_item[0]].append((i, j, inp_item[1]))
@@ -142,20 +149,19 @@ class RemoteModuleSequence(nn.Module):
 
 
 class DistributedPipelineRecord:
-    ready_cv: Condition
-    batches: List[Batch]
-
-    def __init__(self, device, rank, n, num_input, users):
+    def __init__(
+        self, device: torch.device, rank: int, n: int, num_input: int, users: List[Tuple[rpc.RRef, int, int]]
+    ) -> None:
         self.ready_cv = Condition()
-        self.tensors = [[None] * num_input for _ in range(n)]
-        self.batches = [None] * n
+        self.tensors: List[List[Optional[Tensor]]] = [[None] * num_input for _ in range(n)]
+        self.batches: List[Optional[Batch]] = [None] * n
         self.batch_events = [[None] * num_input for _ in range(n)]
-        self.forwarded_phony = [[[] for j in range(num_input)] for i in range(n)]
+        self.forwarded_phony: List[List[List[rpc.RRef]]] = [[[] for j in range(num_input)] for i in range(n)]
         self.users = users
         self.rank = rank
         self.device = device
 
-    def feed(self, i: int, j: int, input):
+    def feed(self, i: int, j: int, input: Tensor) -> Tensor:
         if input.device.type == "cpu":
             input = input.to(self.device)
         cuda_stream = torch.cuda.current_stream(input.device) if input.device.type == "cuda" else None
@@ -163,22 +169,36 @@ class DistributedPipelineRecord:
         with self.ready_cv:
             assert self.tensors[i][j] is None
             input, phony = fork(input)
-            self.batch_events[i][j] = cuda_stream.record_event() if cuda_stream is not None else None
+            self.batch_events[i][j] = cuda_stream.record_event() if cuda_stream is not None else None  # type: ignore
             self.tensors[i][j] = input
             self.ready_cv.notify_all()
         return phony
 
-    def wait_for(self, chunk: int):
+    def wait_for(self, chunk: int) -> None:
         with self.ready_cv:
             while self.batches[chunk] is None and any(b is None for b in self.tensors[chunk]):
                 self.ready_cv.wait()
             if self.batches[chunk] is None:
-                self.batches[chunk] = Batch(self.tensors[chunk], chunk)
+                tensors = cast(List[Tensor], self.tensors[chunk])
+                self.batches[chunk] = Batch(tuple(tensors), chunk)
+
+    def get_batch(self, chunk: int) -> Batch:
+        batch = self.batches[chunk]
+        assert batch is not None
+        return batch
 
 
 class PartitionHandler:
     def __init__(
-        self, module_rref, device, num_input, num_output, rank, chunks, checkpoint_stop: int, loss_module_rref=None
+        self,
+        module_rref: rpc.RRef,
+        device: str,
+        num_input: int,
+        num_output: int,
+        rank: int,
+        chunks: int,
+        checkpoint_stop: int,
+        loss_module_rref: Optional[rpc.RRef] = None,
     ) -> None:
         self.module = module_rref.local_value()
         self.chunks = chunks
@@ -190,14 +210,14 @@ class PartitionHandler:
         (self.in_queue,), (self.out_queue,) = create_workers([self.device])
         self.loss_module = None if loss_module_rref is None else loss_module_rref.local_value()
 
-    def local_parameter_rrefs(self):
+    def local_parameter_rrefs(self) -> List[rpc.RRef]:
         r"""
         Create one RRef for each parameter in the given local module, and return a
         list of RRefs.
         """
         return [rpc.RRef(p) for p in self.module.parameters()]
 
-    def make_dist_record(self, users):
+    def make_dist_record(self, users: List[Tuple[rpc.RRef, int, int]]) -> DistributedPipelineRecord:
         return DistributedPipelineRecord(self.device, self.rank, self.chunks, self.num_input, users)
 
     def run(self, dist_record: DistributedPipelineRecord) -> None:
@@ -218,7 +238,7 @@ class PartitionHandler:
             self.compute(dist_record, i)
             self.forward_results(i, dist_record)
 
-    def fence(self, dist_record: Optional[DistributedPipelineRecord], chunk,) -> None:
+    def fence(self, dist_record: DistributedPipelineRecord, chunk: int) -> None:
         """Copies micro-batches after computation for the previous
         micro-batches.
         """
@@ -226,15 +246,17 @@ class PartitionHandler:
         # backpropagation by an explicit dependency.
         if chunk != 0 and dist_record.users and dist_record.rank > 1:
             t = []
-            for b, remote_ph_list in zip(dist_record.batches[chunk].tensors, dist_record.forwarded_phony[chunk - 1]):
+            batch = dist_record.batches[chunk]
+            assert batch is not None
+            for b, remote_ph_list in zip(batch.tensors, dist_record.forwarded_phony[chunk - 1]):
                 r = b
                 for remote_ph in remote_ph_list:
                     ph = remote_ph.to_here()
                     r = join(r, ph)
                 t.append(r)
-            dist_record.batches[chunk] = Batch(t, chunk)
+            dist_record.batches[chunk] = Batch(tuple(t), chunk)
 
-    def compute(self, dist_record: Optional[DistributedPipelineRecord], chunk) -> None:
+    def compute(self, dist_record: DistributedPipelineRecord, chunk: int) -> None:
         """Runs tasks with synchronization to copy streams."""
         checkpoint_stop = self.checkpoint_stop
 
@@ -244,7 +266,7 @@ class PartitionHandler:
 
         exc_info: Optional[ExcInfo] = None
 
-        batch = dist_record.batches[chunk]
+        batch = dist_record.get_batch(chunk)
 
         # Synchronize with the copied input. ([1] in the diagram)
         if dist_record is not None and dist_record.rank >= 0:
@@ -256,7 +278,7 @@ class PartitionHandler:
         checkpoint = chunk < checkpoint_stop
         if checkpoint:
 
-            def function(input: TensorOrTensors, chunk_id: int = chunk,) -> TensorOrTensors:
+            def function(input: TensorOrTensors, chunk_id: int = chunk) -> TensorOrTensors:
                 with record_function("chunk%d-rank%d" % (chunk_id, dist_record.rank)):
                     result = self.module(*input)
                     if self.num_output is None:
@@ -270,7 +292,9 @@ class PartitionHandler:
         else:
 
             def compute(
-                batch: Batch = batch, chunk_id: int = chunk, rank=dist_record.rank if dist_record is not None else -1
+                batch: Batch = batch,
+                chunk_id: int = chunk,
+                rank: int = dist_record.rank if dist_record is not None else -1,
             ) -> Batch:
                 with record_function("chunk%d-rank%d" % (chunk_id, dist_record.rank)):
                     result = self.module(*batch.tensors)
@@ -305,15 +329,15 @@ class PartitionHandler:
         if exc_info is not None:
             raise exc_info[0].with_traceback(exc_info[1], exc_info[2])
 
-    def forward_results(self, chunk, dist_record: DistributedPipelineRecord):
+    def forward_results(self, chunk: int, dist_record: DistributedPipelineRecord) -> None:
         with use_stream(self.stream):
             for user, input_idx, output_idx in dist_record.users:
-                v = dist_record.batches[chunk].value[output_idx]
+                v = dist_record.get_batch(chunk).value[output_idx]
                 if BOUNCE_TENSORS:
                     v = v.cpu()
                 dist_record.forwarded_phony[chunk][output_idx].append(user.remote().feed(chunk, input_idx, v))
 
-    def run_pipeline(self, dist_record_ref):
+    def run_pipeline(self, dist_record_ref: rpc.RRef) -> Optional[Tensor]:
         dist_record = dist_record_ref.local_value()
         self.run(dist_record)
 
@@ -323,31 +347,33 @@ class PartitionHandler:
             result = result[0]
             s0 = current_stream(result.device)
             if is_cuda(s0):
-                s0.synchronize()
+                as_cuda(s0).synchronize()
             return result
+
+        return None
 
 
 class MultiInputSequential(nn.Module):
-    def __init__(self, *modules):
+    def __init__(self, *modules: nn.Module) -> None:
         super().__init__()
-        self.modules = modules
+        self.modules_list = modules
 
-    def forward(self, *inputs):
-        input = self.modules[0](*inputs)
-        for module in self.modules[1:]:
+    def forward(self, *inputs: Tuple[Tensor]) -> Tensor:  # type: ignore
+        input = self.modules_list[0](*inputs)
+        for module in self.modules_list[1:]:
             input = module(input)
         return input
 
 
-def RemoteSequential(rref_list):
+def RemoteSequential(rref_list: List[rpc.RRef]) -> MultiInputSequential:
     return MultiInputSequential(*(r.local_value() for r in rref_list))
 
 
-def _split_module(seq: RemoteModuleSequence):
+def _split_module(seq: RemoteModuleSequence) -> List[Tuple[List[int], rpc.RRef]]:
     seq.compute_output_users()
-    module_used = [False] * len(seq.modules)
+    module_used = [False] * len(seq.modules_list)
     partitions = []
-    for i, module in enumerate(seq.modules):
+    for i, module in enumerate(seq.modules_list):
         if module_used[i]:
             continue
         partition = []
@@ -359,10 +385,10 @@ def _split_module(seq: RemoteModuleSequence):
             partition.append(j)
             if len(seq.output_users[j]) != 1:
                 break
-            if seq.modules[j].num_outputs is not None:
+            if seq.modules_list[j].num_outputs is not None:
                 break
             next_j = seq.output_users[j][0][0]
-            next_module = seq.modules[next_j]
+            next_module = seq.modules_list[next_j]
             if seq.inputs[next_j] != [(j, 0)]:
                 break
             if next_module.on != current_module.on:
@@ -372,12 +398,12 @@ def _split_module(seq: RemoteModuleSequence):
             current_module = next_module
             j = next_j
         if len(partition) == 1:
-            remote_module = seq.modules[partition[0]].get_module_rref()
+            remote_module = seq.modules_list[partition[0]].get_module_rref()
         else:
             remote_module = rpc.remote(
-                seq.modules[partition[0]].on,
+                seq.modules_list[partition[0]].on,
                 RemoteSequential,
-                args=([seq.modules[p].get_module_rref() for p in partition],),
+                args=([seq.modules_list[p].get_module_rref() for p in partition],),
             )
         partitions.append((partition, remote_module))
 
@@ -391,7 +417,11 @@ MOVING_DENIED = TypeError(
 
 class DistributedPipeline(nn.Module):
     def __init__(
-        self, seq, chunks: int = 1, checkpoint: str = "except_last", deferred_batch_norm: bool = False,
+        self,
+        seq: RemoteModuleSequence,
+        chunks: int = 1,
+        checkpoint: str = "except_last",
+        deferred_batch_norm: bool = False,
     ) -> None:
         super().__init__()
 
@@ -425,9 +455,9 @@ class DistributedPipeline(nn.Module):
                 PartitionHandler,
                 args=(
                     m,
-                    seq.modules[p[0]].device,
-                    seq.modules[p[0]].num_inputs,
-                    seq.modules[p[-1]].num_outputs,
+                    seq.modules_list[p[0]].device,
+                    seq.modules_list[p[0]].num_inputs,
+                    seq.modules_list[p[-1]].num_outputs,
                     i,
                     self.chunks,
                     checkpoint_stop,
@@ -436,36 +466,6 @@ class DistributedPipeline(nn.Module):
             for i, (p, m) in enumerate(self.partitions)
         ]
         self.modules_sequence = seq
-
-    def __len__(self) -> int:
-        """Counts the length of the underlying sequential module."""
-        return sum(len(p) for p in self.partitions)
-
-    def __getitem__(self, index: int) -> nn.Module:
-        """Gets a layer in the underlying sequential module."""
-        partitions = self.partitions
-        if index < 0:
-            partitions = partitions[::-1]
-
-        for partition in partitions:
-            try:
-                return partition[index]
-            except IndexError:
-                pass
-
-            shift = len(partition)
-
-            if index < 0:
-                index += shift
-            else:
-                index -= shift
-
-        raise IndexError
-
-    def __iter__(self) -> Iterable[nn.Module]:
-        """Iterates over children of the underlying sequential module."""
-        for partition in self.partitions:
-            yield from partition
 
     # DistributedPipeline should manage the device of each partition.
     # Deny cuda(), cpu(), and to() with device, by TypeError.
@@ -496,19 +496,16 @@ class DistributedPipeline(nn.Module):
 
         return super().to(*args, **kwargs)
 
-    def parameter_rrefs(self):
+    def parameter_rrefs(self) -> List[rpc.RRef]:
         remote_params = []
         for p in self.partition_handlers:
             remote_params.extend(p.rpc_sync().local_parameter_rrefs())
         print("params rrefs: ", len(remote_params))
         return remote_params
 
-    def forward(self, *inputs) -> rpc.RRef:  # type: ignore
-        inputs = list(inputs)
+    def forward(self, *inputs: Tensor) -> rpc.RRef:  # type: ignore
         for i, input in enumerate(inputs):
             microbatch.check(input)
-            # if input.device.type == 'cpu':
-            #    inputs[i] = input.to(0)
 
         if not self.partition_handlers:
             # Empty sequential module is not illegal.
@@ -519,7 +516,7 @@ class DistributedPipeline(nn.Module):
         batches_list = [microbatch.scatter(input, self.chunks) for input in inputs]
 
         m = len(self.partition_handlers)
-        dist_records = [None] * (m + 1)
+        dist_records: List[Optional[rpc.RRef]] = [None] * (m + 1)
         for part_idx in reversed(range(m)):
             rmodel = self.partition_handlers[part_idx].remote()
             users = []
@@ -535,9 +532,11 @@ class DistributedPipeline(nn.Module):
         for i, b in enumerate(zip(*batches_list)):
             for fi, fj, feed_idx in self.input_feeds:
                 # TODO: Debug why we need this special handling
-                if dist_records[fi].owner().name == rpc.get_worker_info().name:
-                    dist_records[fi].local_value().feed(i, fj, b[feed_idx].value)
+                dist_record = dist_records[fi]
+                assert dist_record is not None
+                if dist_record.owner().name == rpc.get_worker_info().name:  # type: ignore
+                    dist_record.local_value().feed(i, fj, b[feed_idx].value)
                 else:
-                    dist_records[fi].rpc_async().feed(i, fj, b[feed_idx].value)
+                    dist_record.rpc_async().feed(i, fj, b[feed_idx].value)  # type: ignore
 
         return result
