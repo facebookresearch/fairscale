@@ -81,7 +81,7 @@ class PipelineModule(nn.Module):
         result.to(device)
         return result
 
-    def instantiate(self, on: str, device: str) -> 'PipelineModule':
+    def instantiate(self, on: str, device: str) -> "PipelineModule":
         self.on = on
         self.device = device
         self.module_rref = rpc.remote(on, PipelineModule._create_module, self.module_args + (device,))
