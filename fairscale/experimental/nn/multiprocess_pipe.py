@@ -5,7 +5,7 @@
 
 from threading import Condition
 from types import TracebackType
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Type, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
 
 import torch
 from torch import Tensor, nn
@@ -13,7 +13,7 @@ from torch.autograd.profiler import record_function
 from torch.distributed import rpc
 
 from fairscale.nn.pipe import microbatch
-from fairscale.nn.pipe.checkpoint import Checkpointing, TensorOrTensors, Tensors
+from fairscale.nn.pipe.checkpoint import Checkpointing, TensorOrTensors
 from fairscale.nn.pipe.dependency import fork, join
 from fairscale.nn.pipe.microbatch import Batch
 from fairscale.nn.pipe.stream import (
@@ -21,17 +21,12 @@ from fairscale.nn.pipe.stream import (
     as_cuda,
     current_stream,
     is_cuda,
-    new_stream,
     use_device,
     use_stream,
-    wait_stream,
 )
 from fairscale.nn.pipe.worker import Task, create_workers
 
 Device = Union[torch.device, int, str]
-
-# Tensors = Sequence[Tensor]
-# TensorOrTensors = Union[Tensor, Tensors]
 
 ExcInfo = Tuple[Type[BaseException], BaseException, TracebackType]
 
