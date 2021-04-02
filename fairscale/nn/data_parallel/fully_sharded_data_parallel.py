@@ -158,7 +158,10 @@ class FullyShardedDataParallel(nn.Module):
             params are on CPU, then the current CUDA device (as indicated by
             ``torch.cuda.current_device()`` will be used.
         no_broadcast_optim_state: (bool, Optional)
-            do not broadcast this modules optimizer state when ``gather_full_optim_state_dict`` is called
+            do not broadcast this modules optimizer state when ``gather_full_optim_state_dict`` is called.
+            If you set this true, you are expected to overwrite the relevant state entries of the returned OSD
+                with the proper state at each rank. This is useful for situations, like Mixture Of Experts,
+                    where all but a few parameters can fit on one node.
             Default: False
     """
 
@@ -836,9 +839,6 @@ class FullyShardedDataParallel(nn.Module):
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 assert m._is_root is None
                 m._is_root = False
-                m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
-                    (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
-                )
                 # When root instance doesn't have params, allow children instances
                 # to queue the post_backward hook.
                 #
@@ -849,6 +849,12 @@ class FullyShardedDataParallel(nn.Module):
                     m._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
                 if m.process_group != self.process_group:
                     self.children_share_process_group = False
+
+                # if child instance in its own (smaller) world, that was probably an attempt to avoid OOM.
+                # Therefore gathering this child's optim state will probably avoid OOM, so we won't do it.
+                m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
+                    (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
+                )
 
     def _setup_streams(self) -> None:
         """Create streams to overlap data transfer and computation."""
@@ -1442,6 +1448,7 @@ class FullyShardedDataParallel(nn.Module):
         uncollected_ids = [i for i, m in enumerate(self._fsdp_instances) if m.no_broadcast_optim_state]
         new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
         if self.rank == 0:
+            # Save placeholders for uncollected opt state to keep the same unflat OSD format.
             self.uncollected_opt_state = {k: v for k, v in osd["state"].items() if k in uncollected_ids}
 
         pg = copy.deepcopy(osd["param_groups"])
@@ -1466,7 +1473,10 @@ class FullyShardedDataParallel(nn.Module):
         ids_not_to_shard = copy.deepcopy(full_optim_state_dict["uncollected_local_ids"])
         if self.flatten_parameters:
             full_optim_state_dict = ou.flatten_optim_state_dict(full_optim_state_dict)
-            assert len(full_optim_state_dict["state"]) in (0, len(instance_list)), f'{len(full_optim_state_dict["state"])}, {len(instance_list)}'
+            assert len(full_optim_state_dict["state"]) in (
+                0,
+                len(instance_list),
+            ), f'{len(full_optim_state_dict["state"])}, {len(instance_list)}'
 
         # get the portion of dict associated with the shard, in place
         for id, s in full_optim_state_dict["state"].items():
