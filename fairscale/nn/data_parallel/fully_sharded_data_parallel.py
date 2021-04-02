@@ -160,8 +160,8 @@ class FullyShardedDataParallel(nn.Module):
         no_broadcast_optim_state: (bool, Optional)
             do not broadcast this modules optimizer state when ``gather_full_optim_state_dict`` is called.
             If you set this true, you are expected to overwrite the relevant state entries of the returned OSD
-                with the proper state at each rank. This is useful for situations, like Mixture Of Experts,
-                    where all but a few parameters can fit on one node.
+            with the proper state at each rank. This is useful for situations, like Mixture Of Experts,
+            where all but a few parameters can fit on one node.
             Default: False
     """
 
