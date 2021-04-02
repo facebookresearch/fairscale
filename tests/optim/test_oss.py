@@ -470,6 +470,11 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
     _ = optimizer.step(closure=closure)
     check_same_models_across_ranks(model, dist.group.WORLD, params_should_be_equal=True, check_broadcast_buffers=False)
 
+    # Check that if the model is moved to cpu, the optimizer consolidation still works
+    model.cpu()
+    optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99)
+    optimizer.consolidate_state_dict(recipient_rank=reference_rank)
+
     dist.destroy_process_group()
 
 
