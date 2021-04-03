@@ -269,6 +269,8 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
 
+    if args.model_name == "seq":
+        raise RuntimeError(f"Golden data verification is only supported for the Transformer(lm) model and not {args.model_name}")
     golden_config = get_golden_config(args.model_name, args)
     verify_lm_throughput(wps, golden_config, args)
     verify_peak_memory(golden_config, 1.1)
