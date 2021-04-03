@@ -233,14 +233,14 @@ def train(model_config, model, benchmark_config, model_specs, args):
     return wps, loss.item()
 
 
-def verify_peak_memory(rank, golden_config, std_dev):
-    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]))
-    current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
-    golden_ref = golden_config["peak_mem_usage"][rank]
+def verify_peak_memory(golden_config, std_dev):
+    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
+    current_device_usage = torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]
+    golden_ref = golden_config["peak_mem_usage"]
     if not current_device_usage < golden_ref * std_dev:
         raise RuntimeError(
             "Peak memory usage for cuda device {:d} is {:d} which"
-            "is less than golden reference value of {:d}".format(rank, current_device_usage, golden_ref)
+            "is less than golden reference value of {:d}".format(0, current_device_usage, golden_ref)
         )
 
 
@@ -271,7 +271,7 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
 
     golden_config = get_golden_config(args.model_name, args)
     verify_lm_throughput(wps, golden_config, args)
-    verify_peak_memory(0, golden_config, 1.1)
+    verify_peak_memory(golden_config, 1.1)
 
 
 def get_synthetic_dataloaders(args, device, benchmark_config, model_specs):
