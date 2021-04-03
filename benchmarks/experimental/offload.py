@@ -270,7 +270,9 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
     print("-" * 110)
 
     if args.model_name == "seq":
-        raise RuntimeError(f"Golden data verification is only supported for the Transformer(lm) model and not {args.model_name}")
+        raise RuntimeError(
+            f"Golden data verification is only supported for the Transformer(lm) model and not {args.model_name}"
+        )
     golden_config = get_golden_config(args.model_name, args)
     verify_lm_throughput(wps, golden_config, args)
     verify_peak_memory(golden_config, 1.1)
