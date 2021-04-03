@@ -17,11 +17,11 @@ Consider a training loop as described below:
 
     from fairscale.experimental.nn.offload import OffloadModel
 
-    num_inputs = 
-    num_outputs = 
-    num_hidden = 
-    num_layers = 
-    batch_size = 
+    num_inputs = 8
+    num_outputs = 8
+    num_hidden =  4 
+    num_layers =  2
+    batch_size =  8
 
     transform = ToTensor()
     dataloader = DataLoader(
