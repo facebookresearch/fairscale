@@ -244,27 +244,17 @@ def verify_peak_memory(rank, golden_config, std_dev):
         )
 
 
-def verify_lm_run(wps, golden_config, args):
+def verify_lm_throughput(wps, golden_config, args):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
-    # Verify wps only on the last rank in multiprocess pipe
-    if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
-        # Assert that words per second is within 3 standard deviations of the average
-        # of five golden runs
-        print("Throughput(wps) is {:.2f}.".format(wps))
-        if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
-            raise RuntimeError(
-                "Throughput(wps):{:.2f} is below the golden threshold of an "
-                "average value of {:.2f} and standard dev of {:.2f}.".format(
-                    wps, golden_config["avg_wps"], golden_config["std_dev_wps"]
-                )
+    print("Throughput(wps) is {:.2f}.".format(wps))
+    if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
+        raise RuntimeError(
+            "Throughput(wps):{:.2f} is below the golden threshold of an "
+            "average value of {:.2f} and standard dev of {:.2f}.".format(
+                wps, golden_config["avg_wps"], golden_config["std_dev_wps"]
             )
-
-    if args.multiprocess:
-        verify_peak_memory(dist.get_rank(), golden_config, 1.5)
-    else:
-        for i in range(4):
-            verify_peak_memory(i, golden_config, 1.1)
+        )
 
 
 def benchmark_language_model(model_config, model, benchmark_config, model_specs, args):
@@ -278,9 +268,10 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
     print("-" * 110)
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
-    print("Throughput(wps) is {:.2f}.".format(wps))
-    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
-    # TODO(anj-s): Enable golden config data verification.
+
+    golden_config = get_golden_config(args.model_name, args)
+    verify_lm_throughput(wps, golden_config, args)
+    verify_peak_memory(0, golden_config, 1.1)
 
 
 def get_synthetic_dataloaders(args, device, benchmark_config, model_specs):
@@ -364,7 +355,7 @@ def get_golden_config(model_name, args):
     """Return a dict with the golden data for throughput and memory usage."""
 
     if model_name == "lm":
-        return lm_wikitext2.get_golden_real_stats(False)
+        return lm_wikitext2.get_golden_real_stats()
     else:
         raise RuntimeError(f"Unrecognized args.model_mame {args.model_name}")
 
