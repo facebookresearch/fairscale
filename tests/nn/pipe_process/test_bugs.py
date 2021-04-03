@@ -22,13 +22,13 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from fairscale.nn.pipe import AsyncPipe, MultiProcessPipe
+from fairscale.nn.pipe import AsyncPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+@pytest.mark.parametrize("pipe_class", [AsyncPipe])
 def python_autograd_function(pipe_class):
     # FIXME deadlock with AsyncPipe?
     # A Python autograd function might fail with this error:
@@ -71,7 +71,7 @@ def python_autograd_function(pipe_class):
 
 @torch_spawn([3])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+@pytest.mark.parametrize("pipe_class", [AsyncPipe])
 def exception_no_hang(pipe_class):
     # In v0.0.2, once a failed partition receives a normal message
     # (non-closing) for the next micro-batch, a hang occured. The reason was
@@ -104,7 +104,7 @@ def exception_no_hang(pipe_class):
 
 @torch_spawn([2])
 @pytest.mark.skipif(torch.cuda.device_count() < 2, reason="2 cuda devices required")
-@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+@pytest.mark.parametrize("pipe_class", [AsyncPipe])
 def tuple_wait(cuda_sleep, pipe_class):
     # In v0.0.3, Wait is applied to only the first tensor on a micro-batch.
     # Under this behavior, if checkpointing was disabled, there's a possibility
@@ -157,7 +157,7 @@ def tuple_wait(cuda_sleep, pipe_class):
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+@pytest.mark.parametrize("pipe_class", [AsyncPipe])
 def parallel_randoms(pipe_class):
     class Dropouts(nn.Module):
         def forward(self, x):
