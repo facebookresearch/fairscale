@@ -31,7 +31,7 @@ class Offload_Transformer:
             "num_microbatches": 1,
             "slices": 3,
         }
-    
+
     def get_golden_real_stats():
         return {
             "avg_wps": 192.105,
