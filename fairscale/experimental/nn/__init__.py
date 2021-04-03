@@ -5,4 +5,6 @@
 
 from typing import List
 
+from .offload import OffloadModel
+
 __all__: List[str] = []
