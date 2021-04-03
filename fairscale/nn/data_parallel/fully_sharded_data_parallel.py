@@ -159,7 +159,7 @@ class FullyShardedDataParallel(nn.Module):
             ``torch.cuda.current_device()`` will be used.
         no_broadcast_optim_state: (bool, Optional)
             do not broadcast this modules optimizer state when ``gather_full_optim_state_dict`` is called.
-            If you set this true, you are expected to overwrite the relevant state entries of the returned OSD
+            If you set this true, you are expected to overwrite the relevant state entries of the returned optimizer state dict
             with the proper state at each rank. This is useful for situations, like Mixture Of Experts,
             where all but a few parameters can fit on one node.
             Default: False
@@ -851,7 +851,7 @@ class FullyShardedDataParallel(nn.Module):
                     self.children_share_process_group = False
 
                 # if child instance in its own (smaller) world, that was probably an attempt to avoid OOM.
-                # Therefore gathering this child's optim state will probably avoid OOM, so we won't do it.
+                # Therefore gathering this child's optim state will probably cause OOM, so we won't do it.
                 m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
                     (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
                 )

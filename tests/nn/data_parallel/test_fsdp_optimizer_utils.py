@@ -54,11 +54,11 @@ class TestOptimizerUtils(DistributedTest):
         # Establish reference behavior.
 
         if transformer:
-            fsdp = self.get_wrapped_model(group, config=config).cuda()
             unwrapped_model = TransformerWithSharedParams(group, wrapper_config=config).cuda()
+            fsdp = self.get_wrapped_model(group, config=config).cuda()
         else:
-            fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config)).cuda()
             unwrapped_model = MixtureOfExperts(group, wrapper_config=None).cuda()
+            fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config)).cuda()
 
         try:
             fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01,)
@@ -82,6 +82,11 @@ class TestOptimizerUtils(DistributedTest):
             optim_unwrapped.step()
         unwrapped_sd = optim_unwrapped.state_dict()
 
+        if not transformer:
+            no_broadcast_children = [x for x in fsdp._fsdp_instances if x.no_broadcast_optim_state]
+            assert len(no_broadcast_children) == 1
+            assert fsdp._fsdp_instances[-1].no_broadcast_optim_state
+
         tstart = time()
         sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=0)
         duration = time() - tstart
@@ -89,6 +94,7 @@ class TestOptimizerUtils(DistributedTest):
         assert duration < fsdp.world_size, f"gather optim state took {duration} seconds, suspect change in _consolidate"
 
         if fsdp.rank > 0:
+            assert sd is None
             return
         unflat_state = sd["state"]
         assert "uncollected_local_ids" in sd

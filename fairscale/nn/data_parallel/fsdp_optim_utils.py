@@ -53,8 +53,7 @@ def check_param_counts_before_sharding(full_optim_state_dict: Dict, n_instances:
         f"there were {n_local_params_in_opt}"
     )
     stateless = len(full_optim_state_dict["state"]) == 0
-    if not (stateless or (n_instances == n_local_params_in_opt)):
-        print(msg)
+    assert stateless or (n_instances == n_local_params_in_opt), msg
 
 
 # All functions below here help saving the list of optimizer states, one from each rank
@@ -110,6 +109,7 @@ def _unflatten_optim_state(
 
     # If the constant state is the same as the combined state,  copy it N times, no unflattening needed.
     unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_unflat_params))}
+
     if non_tensor_state[0].keys() == combined_state[0].keys():
         return unflat_state, global_to_local_id
 
@@ -142,6 +142,7 @@ def build_unflat_state_dict(
     world_pad_info: List[List[List[int]]] = [s.pop("num_padded") for s in world_optim_states]
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)
+    # Since there are no tensors in param_groups, deepcopy is fine
     param_groups = copy.deepcopy(world_optim_states[0]["param_groups"])
     assert len(param_groups) == 1
 
@@ -156,16 +157,16 @@ def build_unflat_state_dict(
 
     # local ids are in the current state, global_ids will be in returned state.
     unflat_state, global_to_local_id = _unflatten_optim_state(combined_state, instance_list, world_pad_info)
-    uncollected_global_ids = set()
-    for g, l in global_to_local_id.items():
-        if l in uncollected_opt_state:
-            uncollected_global_ids.add(g)
+    # uncollected_global_ids = set()
+    # for g, l in global_to_local_id.items():
+    #     if l in uncollected_opt_state:
+    #         uncollected_global_ids.add(g)
     num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
     param_groups[0]["params"] = list(range(num_params))
     return {
         "state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
         "param_id_map": global_to_local_id,
         "param_groups": param_groups,
-        "uncollected_global_ids": uncollected_global_ids,
+        # "uncollected_global_ids": uncollected_global_ids,
         "uncollected_local_ids": list(uncollected_opt_state.keys()),
     }
