@@ -510,7 +510,7 @@ class FullyShardedDataParallel(nn.Module):
         self._reset_lazy_init()
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
-    def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
+    def _state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
         """
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
@@ -529,15 +529,15 @@ class FullyShardedDataParallel(nn.Module):
         if self._return_full_state_dict:
             if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
                 with self.summon_full_params(volatile=True):
-                    state_dict = super().state_dict(*args, **kwargs)
+                    state_dict = super(FullyShardedDataParallel, self).state_dict(*args, **kwargs)
             else:
-                state_dict = super().state_dict(*args, **kwargs)
+                state_dict = super(FullyShardedDataParallel, self).state_dict(*args, **kwargs)
         else:
             if self.flatten_parameters:
                 assert isinstance(self.module, FlattenParamsWrapper)
                 state_dict = self.module.flat_state_dict(*args, **kwargs)
             else:
-                state_dict = super().state_dict(*args, **kwargs)
+                state_dict = super(FullyShardedDataParallel, self).state_dict(*args, **kwargs)
 
         if self.cpu_offload:
             for k in state_dict.keys():
@@ -547,6 +547,9 @@ class FullyShardedDataParallel(nn.Module):
             # In case we are in mixed precision, restore buffers back to buffer_dtype.
             self._cast_buffers()
         return state_dict
+
+    def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
+        return self._state_dict(*args, **kwargs)
 
     # TODO (Min): figuring out how to do typing for this overloaded function.
     def local_state_dict(self, *args, **kwargs):  # type: ignore
@@ -560,7 +563,7 @@ class FullyShardedDataParallel(nn.Module):
             for module in self.modules():  # includes self
                 if isinstance(module, FullyShardedDataParallel):
                     stack.enter_context(module._no_return_full_state_dict())
-            return self.state_dict(*args, **kwargs)
+            return self._state_dict(*args, **kwargs)
 
     @contextlib.contextmanager
     def _no_return_full_state_dict(self) -> Generator:
@@ -571,7 +574,7 @@ class FullyShardedDataParallel(nn.Module):
         finally:
             self._return_full_state_dict = backup
 
-    def load_state_dict(
+    def _load_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
         """
@@ -588,6 +591,11 @@ class FullyShardedDataParallel(nn.Module):
             self._lazy_init()
             return self.module.load_state_dict(state_dict, strict)
 
+    def load_state_dict(
+        self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
+    ) -> NamedTuple:
+        return self._load_state_dict(state_dict, strict)
+
     def load_local_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
@@ -597,7 +605,7 @@ class FullyShardedDataParallel(nn.Module):
             for module in self.modules():  # includes self
                 if isinstance(module, FullyShardedDataParallel):
                     stack.enter_context(module._no_return_full_state_dict())
-            output = self.load_state_dict(state_dict, strict)
+            output = self._load_state_dict(state_dict, strict)
         return output
 
     @contextlib.contextmanager
