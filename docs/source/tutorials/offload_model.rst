@@ -70,7 +70,6 @@ of slices that the model should be sharded into. By default activation checkpoin
         inputs = batch_inputs.reshape(-1, num_inputs * num_inputs)
         with torch.cuda.amp.autocast():
             output = model(inputs)
-            print(f"output grad_fn {output.grad_fn}")
             loss = criterion(output, target=batch_outputs)
             loss.backward()
         optimizer.step()
