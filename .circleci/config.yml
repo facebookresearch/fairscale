@@ -579,8 +579,6 @@ jobs:
 
       - <<: *run_offload_benchmark
 
-      - <<: *run_mp_pipe_benchmark
-
       - <<: *run_oss_amp
 
       - <<: *run_oss_for_each
