@@ -199,7 +199,6 @@ class FullyShardedDataParallel(nn.Module):
         self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
 
-
         self.numel_padded_per_param: List[int] = []
         self.compute_device = compute_device
 
