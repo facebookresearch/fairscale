@@ -326,7 +326,7 @@ class OSS(Optimizer):
 
         self._all_states = []
         should_collect_state = self.rank == recipient_rank or recipient_rank == -1
-        should_send_state = (self.rank != recipient_rank and recipient_rank != -1) or recipient_rank == -1
+        should_send_state = self.rank != recipient_rank
 
         # NCCL requires CUDA tensors for all communication primitives
         dist_device = torch.device("cuda") if self.backend == dist.Backend.NCCL else self._default_device
