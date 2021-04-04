@@ -1,4 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
 
 import argparse
 import logging
@@ -203,7 +206,8 @@ class SpectrainSGDMomentum(Optimizer):
     def modify_current_params_using_reference_params(self):
         self.copy_params(self.reference_params, self.cur_params)
 
-    def update_weight_using_future_predictions(self, model_index, num_gpus, forward):
+    # chunk_index and chunks parameters are for unused for spectrain usecase
+    def update_weight_using_future_predictions(self, model_index, num_gpus, chunk_index, chunks, forward):
         if forward:
 
             # In forward pass:
@@ -257,6 +261,226 @@ class SpectrainSGDMomentum(Optimizer):
                     d_p = buf
 
                 p.data.add_(d_p, alpha=-group["lr"])
+        return loss
+
+
+class XpipeAdam(Optimizer):
+    r"""Implements Xpipe approach on top of Adam algorithm.
+    It has been proposed in `Adam: A Method for Stochastic Optimization`_.
+    The implementation of the L2 penalty follows changes proposed in
+    `Decoupled Weight Decay Regularization`_.
+
+    Xpipe details can be found here: https://arxiv.org/abs/1911.04610
+
+    Arguments:
+        params (iterable): iterable of parameters to optimize or dicts defining
+            parameter groups
+        lr (float, optional): learning rate (default: 1e-3)
+        betas (Tuple[float, float], optional): coefficients used for computing
+            running averages of gradient and its square (default: (0.9, 0.999))
+        eps (float, optional): term added to the denominator to improve
+            numerical stability (default: 1e-8)
+        weight_decay (float, optional): weight decay (L2 penalty) (default: 0)
+        amsgrad (boolean, optional): whether to use the AMSGrad variant of this
+            algorithm from the paper `On the Convergence of Adam and Beyond`_
+            (default: False)
+    .. _Adam\: A Method for Stochastic Optimization:
+        https://arxiv.org/abs/1412.6980
+    .. _Decoupled Weight Decay Regularization:
+        https://arxiv.org/abs/1711.05101
+    .. _On the Convergence of Adam and Beyond:
+        https://openreview.net/forum?id=ryQu7f-RZ
+    """
+
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0, amsgrad=False):
+        if not 0.0 <= lr:
+            raise ValueError("Invalid learning rate: {}".format(lr))
+        if not 0.0 <= eps:
+            raise ValueError("Invalid epsilon value: {}".format(eps))
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError("Invalid beta parameter at index 0: {}".format(betas[0]))
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
+        if not 0.0 <= weight_decay:
+            raise ValueError("Invalid weight_decay value: {}".format(weight_decay))
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, amsgrad=amsgrad)
+        params = list(params)
+
+        super(XpipeAdam, self).__init__(params, defaults)
+        self.cur_params, self.master_params = self.prep_param_copies(params)
+        _, self.forward_params = self.prep_param_copies(params)
+        _, self.backward_params = self.prep_param_copies(params)
+        for group in self.param_groups:
+            for p in group["params"]:
+                param_state = self.state[p]
+                param_state["step"] = 0
+                # Exponential moving average of gradient values
+                param_state["exp_avg"] = torch.zeros_like(p.data)
+                # Exponential moving average of squared gradient values
+                param_state["exp_avg_sq"] = torch.zeros_like(p.data)
+
+    def __setstate__(self, state):
+        super(Adam, self).__setstate__(state)
+        for group in self.param_groups:
+            group.setdefault("amsgrad", False)
+
+    def prep_param_copies(self, params):
+        model_params = [param for param in params if param.requires_grad]
+        reference_params = [param.clone().detach() for param in model_params]
+        for param in reference_params:
+            param.requires_grad = True
+        return model_params, reference_params
+
+    def copy_params(self, master_params, model_params):
+        for model, master in zip(model_params, master_params):
+            model.data.copy_(master.data)
+
+    def update_weight_using_future_predictions(
+        self, model_index, num_gpus, current_microbatch_index, microbatches_per_minibatch, forward
+    ):
+
+        if forward:
+
+            # Forward pass overview:
+            # if bell-weather:
+            #   1. read from master copy
+            #   2. predict and modify
+            #   3. flush updates to forward copy
+
+            # else:
+            #   1. read from forward copy
+
+            if current_microbatch_index % microbatches_per_minibatch == 0:
+
+                # read from master copy
+                self.copy_params(self.master_params, self.cur_params)
+
+                microbatch_index = current_microbatch_index + 1
+
+                # predict and modify
+                for group in self.param_groups:
+                    multiplier = group["lr"] * round(
+                        (microbatch_index + num_gpus - model_index / 2 - 2) / microbatch_index
+                    )
+
+                    beta1, beta2 = group["betas"]
+                    eps = group["eps"]
+                    for p in group["params"]:
+                        param_state = self.state[p]
+                        temp1 = param_state["exp_avg"].data / (1 - beta1)
+                        temp2 = ((param_state["exp_avg_sq"].data / (1 - beta2)) + eps).sqrt()
+                        p.data.addcdiv_(temp1, temp2, value=-multiplier)
+
+                # flush updates to forward copy
+                self.copy_params(self.cur_params, self.forward_params)
+
+            else:
+                self.copy_params(self.forward_params, self.cur_params)
+
+        else:
+            # Backward pass overview:
+            # if bell-weather:
+            #   1. read from master copy
+            #   2. predict and modify
+            #   3. flush updates to backward copy
+
+            # else:
+            #   1. read from backward copy
+
+            if current_microbatch_index % microbatches_per_minibatch == 0:
+
+                # read from master copy
+                self.copy_params(self.master_params, self.cur_params)
+
+                microbatch_index = current_microbatch_index + 1
+
+                # predict and modify
+                for group in self.param_groups:
+                    multiplier = group["lr"] * (microbatch_index + model_index // 2 - 1) // microbatch_index
+
+                    beta1, beta2 = group["betas"]
+                    eps = group["eps"]
+                    for p in group["params"]:
+                        param_state = self.state[p]
+                        temp1 = param_state["exp_avg"].data / (1 - beta1)
+                        temp2 = ((param_state["exp_avg_sq"].data / (1 - beta2)) + eps).sqrt()
+                        p.data.addcdiv_(temp1, temp2, value=-multiplier)
+
+                # flush updates to forward copy
+                self.copy_params(self.cur_params, self.backward_params)
+
+            else:
+                self.copy_params(self.backward_params, self.cur_params)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """Performs a single optimization step.
+        Arguments:
+            closure (callable, optional): A closure that reevaluates the model
+                and returns the loss.
+        """
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad.data
+
+                amsgrad = group.get("amsgrad", False)
+
+                p_data = p.data
+
+                state = self.state[p]
+
+                # State initialization
+                if len(state) == 0:
+                    state["step"] = 0
+                    # Exponential moving average of gradient values
+                    state["exp_avg"] = torch.zeros_like(p_data)
+                    # Exponential moving average of squared gradient values
+                    state["exp_avg_sq"] = torch.zeros_like(p_data)
+                    if amsgrad:
+                        # Maintains max of all exp. moving avg. of sq. grad. values
+                        state["max_exp_avg_sq"] = torch.zeros_like(p_data)
+                else:
+                    state["exp_avg"] = state["exp_avg"].to(p_data)
+                    state["exp_avg_sq"] = state["exp_avg_sq"].to(p_data)
+                    if amsgrad:
+                        state["max_exp_avg_sq"] = state["max_exp_avg_sq"].to(p_data)
+
+                exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+                if amsgrad:
+                    max_exp_avg_sq = state["max_exp_avg_sq"]
+                beta1, beta2 = group["betas"]
+
+                state["step"] += 1
+
+                exp_avg_data = exp_avg.data
+                exp_avg_sq_data = exp_avg_sq.data
+
+                # Decay the first and second moment running average coefficient
+                exp_avg_data.mul_(beta1).add_(grad, alpha=1 - beta1)
+                exp_avg_sq_data.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+                if amsgrad:
+                    # Maintains the maximum of all 2nd moment running avg. till now
+                    torch.max(max_exp_avg_sq, exp_avg_sq_data, out=max_exp_avg_sq_data)
+                    # Use the max. for normalizing running avg. of gradient
+                    denom = max_exp_avg_sq.sqrt().add_(group["eps"])
+                else:
+                    denom = exp_avg_sq_data.sqrt().add_(group["eps"])
+
+                bias_correction1 = 1 - beta1 ** state["step"]
+                bias_correction2 = 1 - beta2 ** state["step"]
+                step_size = group["lr"] * math.sqrt(bias_correction2) / bias_correction1
+
+                if group["weight_decay"] != 0:
+                    p_data.add_(p_data, alpha=-group["weight_decay"] * group["lr"])
+                p_data.addcdiv_(exp_avg_data, denom, value=-step_size)
+
         return loss
 
 
@@ -321,7 +545,9 @@ def make_model(args, device, ntokens):
         return Adam(model.parameters(), lr=lr)
 
     def make_custom_optimizer(model, args):
-        if args.spectrain:
+        if args.xpipe:
+            return XpipeAdam(model.parameters(), lr=lr)
+        elif args.spectrain:
             return SpectrainSGDMomentum(model.parameters(), lr=lr)
         else:
             return MySGD(model.parameters(), lr=lr)
@@ -398,7 +624,9 @@ def train(lm_dataloader, model, criterion, optimizer, vocab_size, args):
 
     optimizer = optimizer(model, args)
     transform_and_log = AsyncDelegate(vocab_size)
-    model.interleave(lm_dataloader, criterion, optimizer, transform_and_log, args.min_update_interval, args.spectrain)
+    model.interleave(
+        lm_dataloader, criterion, optimizer, transform_and_log, args.min_update_interval, args.spectrain or args.xpipe
+    )
     if model.group.rank() == model.group.size() - 1:
         print("Done with an epoch")
 
@@ -615,6 +843,7 @@ parser.add_argument("--max-batch", type=int, default=4, help="Max number of batc
 parser.add_argument("--socket-name", type=str, default=None, help="socket ifname for gloo/tp")
 parser.add_argument("--num-decoder-layers", type=int, default=10, help="Number of decoder layers in the model")
 parser.add_argument("--spectrain", action="store_true", default=False, help="Use spectrain based weight prediction")
+parser.add_argument("--xpipe", action="store_true", default=False, help="Use xpipe based weight prediction")
 parser.add_argument(
     "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
 )
@@ -627,7 +856,9 @@ parser.add_argument("--min-update-interval", type=int, default=1, help="min upda
 To run the script,
    1. please build a suitable version of OpenMPI with a cuda-enabled UCX backend.
    2. For running on 2 gpus:
-   <open-mpi-installed-dir>/bin/mpirun --host localhost:8 -np 2 --map-by node --mca pml ucx -x UCX_TLS=rc,sm,cuda_ipc,cuda_copy -x PYTHONPATH=$PWD -x PATH=$PATH -x LD_LIBRARY_PATH=$LD_LIBRARY_PATH -x UCX_RNDV_SCHEME=put_zcopy -x UCX_MEMTYPE_CACHE=n python3 benchmarks/experimental_ampnet.py --num-decoder-layers=8 --host localhost --batch-size 4
+   <open-mpi-installed-dir>/bin/mpirun --host localhost:8 -np 2 --map-by node --mca pml ucx -x UCX_TLS=rc,sm,cuda_ipc,cuda_copy -x PYTHONPATH=$PWD -x PATH=$PATH -x LD_LIBRARY_PATH=$LD_LIBRARY_PATH -x UCX_RNDV_SCHEME=put_zcopy -x UCX_MEMTYPE_CACHE=n python3 benchmarks/experimental/experimental_async_approaches.py --num-decoder-layers=8 --host localhost --batch-size 4
+   3. For doing Spectrain based weight prediction, add `--spectrain` to the training command line argument.
+   4. For doing Xpipe based weight prediction, add `--xpipe` to the training command line argument.
 """
 
 if __name__ == "__main__":

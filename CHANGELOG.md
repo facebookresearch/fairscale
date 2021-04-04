@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 ### Fixed
 
+## [0.3.3] - 2021-04-1
+### Added
+- FSDP: changed auto\_wrap\_bn utility function so that single FSDP group is optional ([#556](https://github.com/facebookresearch/fairscale/pull/556))
+- FSDP: optimizer state load/save ([#537](https://github.com/facebookresearch/fairscale/pull/537))
+- FSDP: fix weight init when using apply() ([#543](https://github.com/facebookresearch/fairscale/pull/543))
+- Multiprocess Pipe: retired old implementation
+- Experimental: xpipe
+
+### Fixed
+- ShardedDDP deferred init ([#558](https://github.com/facebookresearch/fairscale/pull/558))
+
 ## [0.3.2] - 2021-03-18
 ### Added
 - Experimental: Add spectrain support ([#372](https://github.com/facebookresearch/fairscale/issues/372))

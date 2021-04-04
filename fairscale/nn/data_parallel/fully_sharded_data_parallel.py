@@ -196,6 +196,9 @@ class FullyShardedDataParallel(nn.Module):
         self.bucket_cap_mb = bucket_cap_mb
         self.uncollected_opt_state: Dict[int, Dict] = {}
         self.no_broadcast_optim_state = no_broadcast_optim_state
+        self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
+        self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
+
 
         self.numel_padded_per_param: List[int] = []
         self.compute_device = compute_device
@@ -260,6 +263,12 @@ class FullyShardedDataParallel(nn.Module):
         # full params. This defaults to True, but may be set to False if the
         # user explicitly requests the local state dict via local_state_dict().
         self._return_full_state_dict = True
+
+    def get_gradient_predivide_factor(self, world_size: int) -> int:
+        factor = 1
+        while world_size % factor == 0 and world_size / factor > factor:
+            factor = factor * 2
+        return factor
 
     @property
     def module(self) -> nn.Module:
@@ -1084,9 +1093,9 @@ class FullyShardedDataParallel(nn.Module):
                 # Cast grad to FP32.
                 param.grad.data = param.grad.data.to(param.dtype)
 
-            if self.world_size > 1:
+            if self.gradient_predivide_factor > 1:
                 # Average grad by world_size for consistency with PyTorch DDP.
-                param.grad.data.div_(self.world_size)
+                param.grad.data.div_(self.gradient_predivide_factor)
 
             callback_fn = functools.partial(self._post_reduction_hook, param)
             if param._is_sharded:
@@ -1114,6 +1123,9 @@ class FullyShardedDataParallel(nn.Module):
         assert param.grad is not None
         self.assert_state(TrainingState.BACKWARD_POST)
         param.grad.data = reduced_grad
+        if self.gradient_postdivide_factor > 1:
+            # Average grad by world_size for consistency with PyTorch DDP.
+            param.grad.data.div_(self.gradient_postdivide_factor)
         # Cast grad to param's dtype (typically FP32). Note: we do this
         # before the move_grads_to_cpu step so that this entire hook remains
         # non-blocking. The downside is a bit more D2H transfer in that case.

@@ -49,7 +49,7 @@ def get_model_and_optimizer(args, device, benchmark_config, model_specs):
         optimizer = torch.optim.SGD
 
     model = OffloadModel(
-        model_cpu=model,
+        model=model,
         device=torch.device("cuda"),
         offload_device=torch.device("cpu"),
         num_slices=benchmark_config["slices"],
@@ -214,7 +214,8 @@ def train(model_config, model, benchmark_config, model_specs, args):
             total_tokens_per_log_interval = 0
             total_loss = 0
             start_time = time.time()
-        prof.export_chrome_trace("/tmp/offload_prof")
+        if args.use_profiler:
+            prof.export_chrome_trace("/tmp/offload_prof")
 
     if epoch_start_time != 0:
         wps = total_tokens / (time.time() - epoch_start_time)
