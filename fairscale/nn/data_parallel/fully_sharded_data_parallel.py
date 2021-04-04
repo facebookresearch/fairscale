@@ -157,6 +157,12 @@ class FullyShardedDataParallel(nn.Module):
             device, the param's device will be used. If not given and module
             params are on CPU, then the current CUDA device (as indicated by
             ``torch.cuda.current_device()`` will be used.
+        no_broadcast_optim_state: (bool, Optional)
+            do not broadcast this modules optimizer state when ``gather_full_optim_state_dict`` is called.
+            If you set this true, you are expected to overwrite the relevant state entries of the returned optimizer state dict
+            with the proper state at each rank. This is useful for situations, like Mixture Of Experts,
+            where all but a few parameters can fit on one node.
+            Default: False
     """
 
     def __init__(
@@ -173,6 +179,7 @@ class FullyShardedDataParallel(nn.Module):
         move_grads_to_cpu: Optional[bool] = None,
         bucket_cap_mb: int = 25,
         compute_device: Optional[torch.device] = None,
+        no_broadcast_optim_state: Optional[bool] = False,
     ):
         super().__init__()
         self.process_group = process_group or dist.new_group()
@@ -187,6 +194,8 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
+        self.uncollected_opt_state: Dict[int, Dict] = {}
+        self.no_broadcast_optim_state = no_broadcast_optim_state
         self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
 
@@ -849,6 +858,12 @@ class FullyShardedDataParallel(nn.Module):
                 if m.process_group != self.process_group:
                     self.children_share_process_group = False
 
+                # if child instance in its own (smaller) world, that was probably an attempt to avoid OOM.
+                # Therefore gathering this child's optim state will probably cause OOM, so we won't do it.
+                m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
+                    (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
+                )
+
     def _setup_streams(self) -> None:
         """Create streams to overlap data transfer and computation."""
         if len(self._streams) > 0 or not self._is_root:
@@ -1391,7 +1406,7 @@ class FullyShardedDataParallel(nn.Module):
         dummy_tensor = torch.tensor([0], dtype=torch.uint8, device=self.compute_device)
         for rank in range(self.world_size):
             if rank == self.rank:
-                sd = optim.state_dict()
+                sd = self._remove_uncollectable_params_from_optim_state_dict(optim.state_dict())
                 sd["num_padded"] = [m.numel_padded_per_param for m in self._fsdp_instances]
             else:
                 sd = dummy_tensor  # type: ignore
@@ -1428,14 +1443,28 @@ class FullyShardedDataParallel(nn.Module):
         if self.rank != recipient_rank and recipient_rank is not None:
             return None
         # Unify the shard states by concatenating tensors and unflattening params
-        new_state_dict = ou.build_unflat_state_dict(self._fsdp_instances, world_optim_states)
-        # TODO: check if this code supports nested instances with different world size
+        new_state_dict = ou.build_unflat_state_dict(
+            self._fsdp_instances, world_optim_states, self.uncollected_opt_state
+        )
+        self.uncollected_opt_state = {}
+        assert "uncollected_local_ids" in new_state_dict
         return new_state_dict
 
     @property
     def _fsdp_instances(self) -> List[nn.Module]:
         """Returns all fsdp modules in self.modules() including self."""
         return [m for m in self.modules() if isinstance(m, FullyShardedDataParallel)]
+
+    def _remove_uncollectable_params_from_optim_state_dict(self, osd: Dict) -> Dict:
+        uncollected_ids = [i for i, m in enumerate(self._fsdp_instances) if m.no_broadcast_optim_state]
+        new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
+        if self.rank == 0:
+            # Save placeholders for uncollected opt state to keep the same unflat OSD format.
+            self.uncollected_opt_state = {k: v for k, v in osd["state"].items() if k in uncollected_ids}
+
+        pg = copy.deepcopy(osd["param_groups"])
+        new_dct["param_groups"] = pg
+        return new_dct
 
     def get_shard_from_optim_state_dict(self, full_optim_state_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Get the portion of the optimizer state dict associated with the shard
@@ -1451,18 +1480,19 @@ class FullyShardedDataParallel(nn.Module):
         """
         # Assert nesting is the same as it was at save time
         instance_list = self._fsdp_instances
-        assert all(
-            x.world_size == self.world_size for x in instance_list
-        ), "all nested instances must have same world size"
         ou.check_param_counts_before_sharding(full_optim_state_dict, len(instance_list))
+        ids_not_to_shard = copy.deepcopy(full_optim_state_dict["uncollected_local_ids"])
         if self.flatten_parameters:
             full_optim_state_dict = ou.flatten_optim_state_dict(full_optim_state_dict)
-            assert len(full_optim_state_dict["state"]) in (0, len(instance_list))
+            assert len(full_optim_state_dict["state"]) in (
+                0,
+                len(instance_list),
+            ), f'{len(full_optim_state_dict["state"])}, {len(instance_list)}'
 
         # get the portion of dict associated with the shard, in place
         for id, s in full_optim_state_dict["state"].items():
             for k, v in s.items():
-                if torch.is_tensor(v):
+                if torch.is_tensor(v) and id not in ids_not_to_shard:
                     v_shard, _ = self._get_shard(v)
                 else:
                     v_shard = v  # dont shard entries that are not tensors

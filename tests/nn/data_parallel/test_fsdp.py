@@ -782,6 +782,7 @@ class MixtureOfExperts(NestedWrappedModule):
         # "expert" params are different on each rank
         torch.manual_seed(42 + group.rank())
         expert = nn.Linear(16, 4)
+        self.num_expert_params = sum([p.numel() for p in expert.parameters()])
         for p in expert.parameters():
             p.expert = True
 
@@ -795,7 +796,7 @@ class MixtureOfExperts(NestedWrappedModule):
 
         if wrapper_config is not None:
             # we create a process group of size 1 for the expert params
-            expert_group = torch.distributed.new_group([group.rank()])
+            expert_group = torch.distributed.new_group([group.rank()])  # world size 1 means no shard
             expert = FullyShardedDataParallel(expert, expert_group, **wrapper_config)
 
             shared = FullyShardedDataParallel(shared, group, **wrapper_config)
