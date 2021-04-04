@@ -326,7 +326,10 @@ class OSS(Optimizer):
 
         self._all_states = []
         should_collect_state = self.rank == recipient_rank or recipient_rank == -1
-        should_send_state = (self.rank != recipient_rank and recipient_rank != -1) or recipient_rank == -1
+        should_send_state = self.rank != recipient_rank
+
+        # NCCL requires CUDA tensors for all communication primitives
+        dist_device = torch.device("cuda") if self.backend == dist.Backend.NCCL else self._default_device
 
         for rank in range(self.world_size):
             if rank == self.rank:
@@ -340,18 +343,18 @@ class OSS(Optimizer):
                 state_to_share = (
                     self.optim.state_dict()
                     if should_send_state
-                    else torch.tensor([0], dtype=torch.uint8, device=self._default_device)
+                    else torch.tensor([0], dtype=torch.uint8, device=dist_device)
                 )
                 broadcast_object(
-                    state_to_share, src_rank=self.global_rank, group=self.group, dist_device=self._default_device,
+                    state_to_share, src_rank=self.global_rank, group=self.group, dist_device=dist_device,
                 )
             else:
                 # Fetch the optim state from the other replicas
                 replica_state = broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=self._default_device),
+                    torch.tensor([0], dtype=torch.uint8, device=dist_device),
                     src_rank=self._local_to_global_rank[rank],
                     group=self.group,
-                    dist_device=self._default_device,
+                    dist_device=dist_device,
                 )
 
                 if should_collect_state:
