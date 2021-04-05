@@ -24,7 +24,7 @@ Device = Union[torch.device, int, str]
 ExcInfo = Tuple[Type[BaseException], BaseException, TracebackType]
 
 
-def check_pytorch_version():
+def check_pytorch_version() -> None:
     if torch.__version__.split("+")[0].split(".")[:2] < ["1", "9"]:
         raise Exception("DistributedPipeline requires PyTorch version 1.9 or higher")
 
@@ -43,21 +43,36 @@ def DistributedLoss(loss: nn.Module, *args: Tuple, **kwargs: Dict) -> Callable:
 
 
 class PipelineModule(nn.Module):
+    """Constructs a module on a remote device, possibly at a later time (in case the device is not
+    specified when creating PipelineModule.
+    Args:
+        module_cls (nn.Module): Class for the module to be created remotely.
+        args (Sequence): args to be passed to ``module_cls``.
+        kwargs (Dict, optional): kwargs to be passed to ``module_cls``.
+        num_input (int): number of inputs to the forward function.
+        num_outputs: (int, optional): If the forward function returns a tuple, number of elements
+            in the tuple, otherwise it should be None
+        remote_device: (str, optional): Device on the destination worker where we‘d like to place
+            this module. The format should be "<workername>/<device>", where the device field can be
+            parsed as torch.device type. E.g., "trainer0/cpu", "trainer0", "ps0/cuda:0".
+            If this parameter can be provided later by calling the method instantiate
+    """
+
     def __init__(
         self,
-        module_cls: Callable,
+        module_cls: nn.Module,
         args: Tuple,
         kwargs: Optional[Dict] = None,
         num_inputs: int = 1,
         num_outputs: Optional[int] = None,
-        worker: Optional[Tuple[str, str]] = None,
+        remote_device: str = None,
     ):
         super().__init__()
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
         self.module_args = (module_cls, args, kwargs or {})
-        if worker is not None:
-            self.instantiate(*worker)
+        if remote_device is not None:
+            self.instantiate(remote_device)
 
     @staticmethod
     def _create_module(module_cls: Callable, args: Tuple, kwargs: Dict, device: str) -> nn.Module:
@@ -65,7 +80,8 @@ class PipelineModule(nn.Module):
         result.to(device)
         return result
 
-    def instantiate(self, on: str, device: str) -> "PipelineModule":
+    def instantiate(self, remote_device: str) -> "PipelineModule":
+        on, device = remote_device.split("/")
         self.on = on
         self.device = device
         self.module_rref = rpc.remote(on, PipelineModule._create_module, self.module_args + (device,))
@@ -223,9 +239,7 @@ class PartitionHandler:
             self.forward_results(i, dist_record)
 
     def fence(self, dist_record: DistributedPipelineRecord, chunk: int) -> None:
-        """Copies micro-batches after computation for the previous
-        micro-batches.
-        """
+        """Prepares micro-batches for computation."""
         # Ensure that batches[chunk-1] is executed after batches[chunk] in
         # backpropagation by an explicit dependency.
         if chunk != 0 and dist_record.users and dist_record.rank > 1:
@@ -241,7 +255,7 @@ class PartitionHandler:
             dist_record.batches[chunk] = Batch(tuple(t), chunk)
 
     def compute(self, dist_record: DistributedPipelineRecord, chunk: int) -> None:
-        """Runs tasks with synchronization to copy streams."""
+        """Runs tasks with synchronization to tensor-pipe streams."""
         checkpoint_stop = self.checkpoint_stop
 
         # Disable checkpointing if in eval mode.
@@ -324,6 +338,7 @@ class PartitionHandler:
             result = result[0]
             s0 = current_stream(result.device)
             if is_cuda(s0):
+                # TODO. Investigate why this is needed and remove it if possible.
                 as_cuda(s0).synchronize()
             return result
 
@@ -331,6 +346,11 @@ class PartitionHandler:
 
 
 class MultiInputSequential(nn.Module):
+    """
+        A variation of nn.Sequential, that allows the first module in the sequence accepts
+        multiple inputs.
+    """
+
     def __init__(self, *modules: nn.Module) -> None:
         super().__init__()
         self.modules_list = modules
@@ -393,13 +413,7 @@ MOVING_DENIED = TypeError(
 
 
 class DistributedPipeline(nn.Module):
-    def __init__(
-        self,
-        g: PipelineModulesGraph,
-        chunks: int = 1,
-        checkpoint: str = "except_last",
-        deferred_batch_norm: bool = False,
-    ) -> None:
+    def __init__(self, g: PipelineModulesGraph, chunks: int = 1, checkpoint: str = "except_last",) -> None:
         super().__init__()
 
         check_pytorch_version()
@@ -414,16 +428,11 @@ class DistributedPipeline(nn.Module):
 
         self.chunks = chunks
 
-        # if deferred_batch_norm:
-        #    module = DeferredBatchNorm.convert_deferred_batch_norm(module, chunks)
-
         self.partitions = _split_module(g)
         self.input_feeds = [
             next((i, fj, feed_idx) for i, (p, m) in enumerate(self.partitions) if p[0] == fi)
             for fi, fj, feed_idx in g.model_input_users
         ]
-
-        self._copy_streams: List[List[AbstractStream]] = []
 
         # The micro-batch index where the checkpointing stops.
         checkpoint_stop = {"always": self.chunks, "except_last": self.chunks - 1, "never": 0}[checkpoint]
@@ -527,10 +536,10 @@ def create_sequence_pipeline(
     g = PipelineModulesGraph()
 
     index = 0
-    for num_layers, device_spec in zip(balance, devices):
+    for num_layers, remote_device in zip(balance, devices):
         next_index = index + num_layers
         for li in range(index, next_index):
-            layers[li].instantiate(*device_spec.split("/"))
+            layers[li].instantiate(remote_device)
         index = next_index
 
     g.add_sequence(layers)
