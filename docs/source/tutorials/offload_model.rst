@@ -5,8 +5,8 @@ OffloadModel
 users to train large models on limited GPU resources that would have traditionally resulted in OOM errors. 
 `OffloadModel` API wraps the given model and shards it almost equally. Each shard of the model is copied 
 from the CPU to the GPU for the forward pass and then copied back. The same process is repeated in the reverse 
-order for the backward pass. `OffloadModel` supports FP16, activation checkpointing and using micro batches to reduce 
-the memory footprint and increase throughput respectively.
+order for the backward pass. `OffloadModel` supports mixed precision training, activation checkpointing for reducing
+the memory footprint and using micro batches to reduce throughput.
 
 Consider a training loop as described below:
 
