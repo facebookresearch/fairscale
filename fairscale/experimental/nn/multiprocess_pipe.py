@@ -24,17 +24,13 @@ Device = Union[torch.device, int, str]
 ExcInfo = Tuple[Type[BaseException], BaseException, TracebackType]
 
 
-if torch.__version__.split("+")[0].split(".")[:3] <= ["1", "8", "1"]:
-    BOUNCE_TENSORS = True
-else:
-    BOUNCE_TENSORS = False
+def check_pytorch_version():
+    if torch.__version__.split("+")[0].split(".")[:2] < ["1", "9"]:
+        raise Exception("DistributedPipeline requires PyTorch version 1.9 or higher")
 
 
 def rloss(loss_func: Callable, input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
-    if BOUNCE_TENSORS:
-        return loss_func(input_rref.remote().cpu().to_here(), target_rref.remote().cpu().to_here())
-    else:
-        return loss_func(input_rref.to_here(), target_rref.to_here())
+    return loss_func(input_rref.to_here(), target_rref.to_here())
 
 
 def DistributedLoss(loss: nn.Module, *args: Tuple, **kwargs: Dict) -> Callable:
@@ -316,8 +312,6 @@ class PartitionHandler:
         with use_stream(self.stream):
             for user, input_idx, output_idx in dist_record.users:
                 v = dist_record.get_batch(chunk).value[output_idx]
-                if BOUNCE_TENSORS:
-                    v = v.cpu()
                 dist_record.forwarded_phony[chunk][output_idx].append(user.remote().feed(chunk, input_idx, v))
 
     def run_pipeline(self, dist_record_ref: rpc.RRef) -> Optional[Tensor]:
@@ -407,6 +401,8 @@ class DistributedPipeline(nn.Module):
         deferred_batch_norm: bool = False,
     ) -> None:
         super().__init__()
+
+        check_pytorch_version()
 
         chunks = int(chunks)
         checkpoint = str(checkpoint)

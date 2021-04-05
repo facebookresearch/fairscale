@@ -19,12 +19,6 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 
 from fairscale.experimental.nn.multiprocess_pipe import DistributedLoss, PipelineModule, create_sequence_pipeline
-from fairscale.utils.testing import torch_version
-
-if torch_version() <= (1, 8, 1):
-    BOUNCE_TENSORS = True
-else:
-    BOUNCE_TENSORS = False
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
 GPU_DEVICES = ["worker0/cuda:0", "worker1/cuda:1"]
@@ -33,26 +27,12 @@ if torch.cuda.is_available():
 else:
     DEVICES = [CPU_DEVICES]
 
-pytestmark = pytest.mark.skipif(torch_version() < (1, 8, 0), reason="requires torch version >= 1.8.0")
-
 
 def rpc_worker(rank, world_size, init_file, func, *args):
-    if torch_version() == (1, 8, 0):
-        if torch.cuda.is_available():
-            # Workaround for https://github.com/pytorch/pytorch/issues/53844
-            options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file, _transports=["ibv", "uv"])
-        else:
-            # Workaround for https://github.com/pytorch/pytorch/issues/54266
-            options = rpc.TensorPipeRpcBackendOptions(
-                init_method="file://" + init_file,
-                _channels=["mpt_uv", "basic", "cuda_ipc", "cuda_gdr", "cuda_xth", "cuda_basic"],
-            )
-    else:
-        options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
-    if torch_version() > (1, 8, 1):
-        for i in range(world_size):
-            if i != rank:
-                options.set_device_map("worker" + str(i), {rank: i})
+    options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
+    for i in range(world_size):
+        if i != rank:
+            options.set_device_map("worker" + str(i), {rank: i})
     rpc.init_rpc(
         "worker" + str(rank),
         rank=rank,
@@ -139,10 +119,7 @@ def forward_multi(devices, checkpoint):
     x.requires_grad = True  # TODO(msb) remove this limitation
     model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
     pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2], checkpoint=checkpoint)
-    if BOUNCE_TENSORS:
-        y = pipe(x).remote().cpu().to_here()
-    else:
-        y = pipe(x).to_here()
+    y = pipe(x).to_here()
     expected_sum = torch.tensor(5.0615)
     assert y.shape == torch.Size([8, 4])
     assert y.requires_grad is True
