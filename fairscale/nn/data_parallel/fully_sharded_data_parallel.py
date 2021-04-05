@@ -163,6 +163,10 @@ class FullyShardedDataParallel(nn.Module):
             with the proper state at each rank. This is useful for situations, like Mixture Of Experts,
             where all but a few parameters can fit on one node.
             Default: False
+        state_dict_device (torch.device, Optional):
+            device for parameters returned by :func:`state_dict`. If not given,
+            this will default to ``compute_dtype``. Note that only the device
+            type will be respected (e.g., "cuda:0" and "cuda:1" are the same).
     """
 
     def __init__(
@@ -180,6 +184,7 @@ class FullyShardedDataParallel(nn.Module):
         bucket_cap_mb: int = 25,
         compute_device: Optional[torch.device] = None,
         no_broadcast_optim_state: Optional[bool] = False,
+        state_dict_device: Optional[torch.device] = None,
     ):
         super().__init__()
         self.process_group = process_group or dist.new_group()
@@ -194,25 +199,20 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
+        self.compute_device = compute_device or _get_default_compute_device(module)
         self.uncollected_opt_state: Dict[int, Dict] = {}
         self.no_broadcast_optim_state = no_broadcast_optim_state
+        self.state_dict_device = state_dict_device or self.compute_device
+
         self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
 
         self.numel_padded_per_param: List[int] = []
-        self.compute_device = compute_device
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
         if self.cpu_offload and not self.mixed_precision:
             raise ValueError("cpu_offload requires mixed_precision=True")
-
-        if self.compute_device is None:
-            # Try to infer CUDA device from module parameters.
-            self.compute_device = next(module.parameters()).device
-            if self.compute_device.type != "cuda":
-                # Fall back to current CUDA device.
-                self.compute_device = torch.device("cuda")
 
         validate_process_group(self.compute_device, self.process_group)
         enable_pytorch_sync_bn(module)
@@ -1501,6 +1501,15 @@ class FullyShardedDataParallel(nn.Module):
         return full_optim_state_dict
 
 
+def _get_default_compute_device(module):
+    # Try to infer CUDA device from module parameters.
+    compute_device = next(module.parameters()).device
+    if compute_device.type != "cuda":
+        # Fall back to current CUDA device.
+        compute_device = torch.device("cuda")
+    return compute_device
+
+
 @torch.no_grad()
 def cast_inputs_to_fp16(*args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     """
@@ -1534,12 +1543,14 @@ def alloc_storage_(data: torch.Tensor, size: torch.Size) -> None:
 
 
 def _post_state_dict_hook(
-    module: nn.Module, state_dict: "OrderedDict[str, torch.Tensor]", prefix: str, *args: Any
+    module: FullyShardedDataParallel, state_dict: "OrderedDict[str, torch.Tensor]", prefix: str, *args: Any
 ) -> "OrderedDict[str, torch.Tensor]":
-    if module.training_state == TrainingState.SUMMON_FULL_PARAMS:
-        # We copy the state_dict since full param will be freed after
-        # we exit the summon_full_params() context.
-        for key in state_dict.keys():
+    for key in state_dict.keys():
+        if state_dict[key].device.type != module.state_dict_device.type:
+            state_dict[key] = state_dict[key].to(device=module.state_dict_device)
+        elif module.training_state == TrainingState.SUMMON_FULL_PARAMS:
+            # We copy the state_dict since full param will be freed after
+            # we exit the summon_full_params() context.
             state_dict[key] = state_dict[key].clone()
 
     # Remove "_fsdp_wrapped_module." prefix

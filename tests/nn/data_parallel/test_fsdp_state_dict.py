@@ -177,5 +177,43 @@ class TestSaveLoadStateDict(DistributedTest):
             ), f"{key}, {ref_state_dict[key]} != {state_dict[key]}"
 
 
+class TestStateDictDevice(DistributedTest):
+    @parameterized.expand([[False], [True]], name_func=rename_test)
+    def test_state_dict_device(self, cpu_offload):
+        test_fn = functools.partial(self._test_state_dict_device, {"cpu_offload": cpu_offload, "mixed_precision": True})
+        spawn_and_init(test_fn)
+
+    @parameterized.expand([[False], [True]], name_func=rename_test)
+    def test_state_dict_device_cuda(self, cpu_offload):
+        test_fn = functools.partial(
+            self._test_state_dict_device,
+            {"cpu_offload": cpu_offload, "mixed_precision": True, "state_dict_device": torch.device("cuda")},
+        )
+        spawn_and_init(test_fn)
+
+    @parameterized.expand([[False], [True]], name_func=rename_test)
+    def test_state_dict_device_cpu(self, cpu_offload):
+        test_fn = functools.partial(
+            self._test_state_dict_device,
+            {"cpu_offload": cpu_offload, "mixed_precision": True, "state_dict_device": torch.device("cpu")},
+        )
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_state_dict_device(self, config, rank, group, **model_kwargs):
+        fsdp_model = FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs), group, **config)
+        if not config["cpu_offload"]:
+            fsdp_model = fsdp_model.cuda()
+        autocast = fsdp_model.mixed_precision
+        self._train_for_several_steps(fsdp_model, 1, autocast)
+        sd = fsdp_model.state_dict()
+        sd_device = config.get("state_dict_device")
+        for k, v in sd.items():
+            if config["cpu_offload"] or (sd_device is not None and sd_device.type == "cpu"):
+                assert v.device.type == "cpu", v.device.type
+            else:
+                assert v.device.type == "cuda", v.device.type
+
+
 if __name__ == "__main__":
     unittest.main()
