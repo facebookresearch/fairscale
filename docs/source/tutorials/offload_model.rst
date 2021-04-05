@@ -11,6 +11,8 @@ the memory footprint and using micro batches to reduce throughput.
 Consider a training loop as described below:
 
 .. code-block:: python
+
+
     from torch.utils.data.dataloader import DataLoader
     from torchvision.datasets import FakeData
     from torchvision.transforms import ToTensor
@@ -45,6 +47,7 @@ to use for computing the forward and backward pass, the offload device on which 
 of slices that the model should be sharded into. By default activation checkpointing is turned off and number of microbatches is 1.
 
 .. code-block:: python
+
 
     offload_model = OffloadModel(
         model=model,
