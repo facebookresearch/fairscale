@@ -193,3 +193,5 @@ Here is a list of all authors on relevant research papers this work is based on:
 * AdaScale SGD: Tyler B. Johnson, Pulkit Agrawal, Haijie Gu, Carlos Guestrin. [[Paper](https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Paper.pdf)]
 * GShard: Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu, Dehao Chen, Orhan Firat, Yanping Huang, Maxim Krikun, Noam Shazeer, Zhifeng Chen [[Paper]](https://arxiv.org/abs/2006.16668)
 * AMPNet:Alexander L. Gaunt, Matthew A. Johnson, Maik Riechert, Daniel Tarlow, Ryota Tomioka, Dimitrios Vytiniotis, Sam Webster [[Paper]](https://arxiv.org/abs/1705.09786)
+* L2L: Training large Neural networks with constant Memory using a new execution Algorithm, 2020, [[Paper](https://arxiv.org/abs/2002.05645)]
+* ZeRO-Offload: Democratizing Billion-Scale Model Training. 2021, [[Paper](https://arxiv.org/abs/2101.06840)]
