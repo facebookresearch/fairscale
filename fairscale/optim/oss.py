@@ -591,13 +591,14 @@ class OSS(Optimizer):
 
                     # Merge all the trainable params in a single bucket
                     trainable_params = list(filter(lambda x: x.requires_grad, params))
-                    buffer_size = sum(map(lambda x: x.numel(), trainable_params))
-                    bucket = ParamBucket(size=buffer_size, dtype=params[0].dtype, device=device)
+                    if trainable_params:
+                        buffer_size = sum(map(lambda x: x.numel(), trainable_params))
+                        bucket = ParamBucket(size=buffer_size, dtype=trainable_params[0].dtype, device=device)
 
-                    for param in trainable_params:
-                        bucket.add_param(param)
+                        for param in trainable_params:
+                            bucket.add_param(param)
 
-                    self.buckets[device][dst_rank] = bucket
+                        self.buckets[device][dst_rank] = bucket
 
         # Clear the buffer keys which are not in use anymore (could be that the devices changed)
         devices_in_use = list(self._per_device_params.keys())
