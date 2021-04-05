@@ -544,10 +544,8 @@ class FullyShardedDataParallel(nn.Module):
             self._cast_buffers(dtype=torch.float32)
 
         if self._return_full_state_dict:
-            if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
-                with self.summon_full_params(volatile=True):
-                    state_dict = super().state_dict(*args, **kwargs)
-            else:
+            assert self.training_state != TrainingState.SUMMON_FULL_PARAMS
+            with self.summon_full_params(recurse=False, volatile=True):
                 state_dict = super().state_dict(*args, **kwargs)
         else:
             if self.flatten_parameters:
@@ -1545,13 +1543,23 @@ def alloc_storage_(data: torch.Tensor, size: torch.Size) -> None:
 def _post_state_dict_hook(
     module: FullyShardedDataParallel, state_dict: "OrderedDict[str, torch.Tensor]", prefix: str, *args: Any
 ) -> "OrderedDict[str, torch.Tensor]":
+    # Assuming we are in a ``summon_full_params()`` context, we need to clone
+    # each tensor so that it does not get freed (in-place) when the context
+    # exits. At the same time, this hook can be called multiple times
+    # recursively, so we need to make sure that we only clone each tensor at
+    # mostonce. Thus we add an attribute on the tensor called "_has_been_cloned"
+    # which keeps track of tensors that are no longer at risk of being freed.
     for key in state_dict.keys():
+        if not key.startswith(prefix) or getattr(state_dict[key], "_has_been_cloned", False):
+            continue
         if state_dict[key].device.type != module.state_dict_device.type:
             state_dict[key] = state_dict[key].to(device=module.state_dict_device)
+            state_dict[key]._has_been_cloned = True
         elif module.training_state == TrainingState.SUMMON_FULL_PARAMS:
-            # We copy the state_dict since full param will be freed after
-            # we exit the summon_full_params() context.
+            # We copy the state_dict since full param will be freed after we
+            # exit the ``summon_full_params()`` context.
             state_dict[key] = state_dict[key].clone()
+            state_dict[key]._has_been_cloned = True
 
     # Remove "_fsdp_wrapped_module." prefix
     replace_by_prefix_(state_dict, prefix + "_fsdp_wrapped_module.", prefix)
