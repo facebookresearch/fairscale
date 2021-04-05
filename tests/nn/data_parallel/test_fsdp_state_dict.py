@@ -205,6 +205,7 @@ class TestStateDictDeviceDtype(DistributedTest):
         test_fn = functools.partial(
             self._test_state_dict_device,
             {"cpu_offload": False, "mixed_precision": False, "compute_dtype": torch.float16},
+            # pure_fp16 is similar to the --memory-efficient-fp16 option in fairseq
             pure_fp16=True,
         )
         spawn_and_init(test_fn)

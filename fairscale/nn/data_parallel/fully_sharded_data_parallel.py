@@ -199,7 +199,7 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
-        self.compute_device = compute_device or _get_default_compute_device(module)
+        self.compute_device = compute_device or _get_default_cuda_device(module)
         self.uncollected_opt_state: Dict[int, Dict] = {}
         self.no_broadcast_optim_state = no_broadcast_optim_state
         self.state_dict_device = state_dict_device or self.compute_device
@@ -1501,8 +1501,8 @@ class FullyShardedDataParallel(nn.Module):
         return full_optim_state_dict
 
 
-def _get_default_compute_device(module: nn.Module) -> torch.device:
-    # Try to infer CUDA device from module parameters.
+def _get_default_cuda_device(module: nn.Module) -> torch.device:
+    """Try to infer CUDA device from module parameters."""
     compute_device = next(module.parameters()).device
     if compute_device.type != "cuda":
         # Fall back to current CUDA device.
