@@ -18,6 +18,13 @@ class Workhandle:
         self.callback = callback
 
 
+def get_global_rank(group: Any, rank: int) -> int:
+    if group is dist.group.WORLD:
+        return rank
+
+    return dist.distributed_c10d._get_global_rank(group, rank)
+
+
 # Credits:  classy_vision/generic/distributed_util.py
 def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.device) -> Any:
     """

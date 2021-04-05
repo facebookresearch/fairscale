@@ -681,7 +681,7 @@ def run_gradient_clipping(rank, world_size, tempfile_name):
         assert torch.allclose(oss_total_norm, total_norm), "torch and fairscale should return the same grad norm"
 
         # Check that the params have indeed been clipped
-        for params in sharded_optimizer.per_device_params.values():
+        for params in sharded_optimizer._per_device_params.values():
             for param in filter(lambda x: x.grad is not None, params[rank]):
                 assert torch.norm(param.grad, p=norm) < CLIP_NORM, f"param grad norm above clip : {param.grad}"
 
