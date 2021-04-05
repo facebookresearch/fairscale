@@ -1410,7 +1410,7 @@ class FullyShardedDataParallel(nn.Module):
                 sd["num_padded"] = [m.numel_padded_per_param for m in self._fsdp_instances]
             else:
                 sd = dummy_tensor  # type: ignore
-            sd = broadcast_object(sd, src_rank=rank, group=self.process_group, dist_device=self.compute_device)  # type: ignore
+            sd = broadcast_object(sd, src_rank=rank, group=self.process_group, dist_device=self.compute_device)
             if should_collect_state:
                 assert isinstance(sd, dict), f"{self.rank} received {type(sd)} from {rank}, expected dict"
                 all_states.append(recursive_copy_to_device(sd, non_blocking=False, device=torch.device("cpu")))
@@ -1501,7 +1501,7 @@ class FullyShardedDataParallel(nn.Module):
         return full_optim_state_dict
 
 
-def _get_default_compute_device(module):
+def _get_default_compute_device(module: nn.Module) -> torch.device:
     # Try to infer CUDA device from module parameters.
     compute_device = next(module.parameters()).device
     if compute_device.type != "cuda":
