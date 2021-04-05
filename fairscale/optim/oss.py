@@ -456,8 +456,7 @@ class OSS(Optimizer):
 
     @property
     def _local_params(self) -> List[torch.Tensor]:
-        """ Iterable which goes through the parameters that this rank owns
-        """
+        """ Iterable which goes through the parameters that this rank owns """
         if self.__local_params is None:
             self.__local_params = list(
                 chain(
@@ -473,8 +472,7 @@ class OSS(Optimizer):
 
     @property
     def _param_to_index(self) -> Dict[int, int]:
-        """ Hash table in between parameter indices in the global optimizer scheme, and the actual params
-        """
+        """ Hash table in between parameter indices in the global optimizer scheme, and the actual params """
         if len(self.__param_to_index) == 0:
             self.__param_to_index = {id(p): i for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
 
@@ -506,14 +504,14 @@ class OSS(Optimizer):
 
     @property
     def _param_to_rank(self) -> Dict[torch.Tensor, int]:
-        """param to data parallel rank"""
+        """Map the params to the rank which owns them"""
         if len(self.__param_rank) == 0:
             for rank, param_groups in enumerate(self.partition_parameters()):
                 for param_group in param_groups:
                     for param in param_group["params"]:
                         self.__param_rank[param] = rank
 
-            logging.debug("ZeRO: Parameters dispatched to ranks %s " % list(self.__param_rank.values()))
+            logging.debug("FairScale OSS: Parameters dispatched to ranks %s " % list(self.__param_rank.values()))
 
         return self.__param_rank
 
