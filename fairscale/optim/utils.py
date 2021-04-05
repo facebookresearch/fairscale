@@ -21,9 +21,8 @@ class Workhandle:
 def get_global_rank(group: Any, rank: int) -> int:
     if group is dist.group.WORLD:
         return rank
-    else:
-        global_rank = dist.distributed_c10d._get_global_rank(group, rank)
-    return global_rank
+
+    return dist.distributed_c10d._get_global_rank(group, rank)
 
 
 # Credits:  classy_vision/generic/distributed_util.py
