@@ -9,6 +9,7 @@ Testing MultiProcessPipe Module
 
 import functools
 import tempfile
+from typing import Any, List
 
 import pytest
 import torch
@@ -18,7 +19,13 @@ import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
-from fairscale.experimental.nn.multiprocess_pipe import DistributedLoss, PipelineModule, create_sequence_pipeline
+from fairscale.experimental.nn.multiprocess_pipe import (
+    DistributedLoss,
+    DistributedPipeline,
+    PipelineModule,
+    PipelineModulesGraph,
+)
+from fairscale.utils.testing import torch_version
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
 GPU_DEVICES = ["worker0/cuda:0", "worker1/cuda:1"]
@@ -28,11 +35,13 @@ else:
     DEVICES = [CPU_DEVICES]
 
 
+pytestmark = pytest.mark.skipif(torch_version() < (1, 9, 0), reason="requires torch version >= 1.9.0")
+
+
 def rpc_worker(rank, world_size, init_file, func, *args):
     options = rpc.TensorPipeRpcBackendOptions(init_method="file://" + init_file)
     for i in range(world_size):
-        if i != rank:
-            options.set_device_map("worker" + str(i), {rank: i})
+        options.set_device_map("worker" + str(i), {rank: i})
     rpc.init_rpc(
         "worker" + str(rank),
         rank=rank,
@@ -43,6 +52,31 @@ def rpc_worker(rank, world_size, init_file, func, *args):
     if rank == 0:
         func(*args)
     rpc.shutdown()
+
+
+def create_sequence_pipeline(
+    layers: List[PipelineModule], balance: List[int], devices: List[str], **kwargs: Any
+) -> DistributedPipeline:
+    """A simple helper function to create a pipeline from list of pipeline-modules that run sequentially.
+       Args:
+           layers: list of modules. They should not be already assigned a remote-device.
+           balance: a list of integers how layers should be paritioned. Sum of numbers in 'balance'
+               should be equal to the number of layers.
+           devices: specification of remote device for each partition. Should be of the same length
+               as 'balance'.
+    """
+    index = 0
+    for num_layers, remote_device in zip(balance, devices):
+        next_index = index + num_layers
+        for li in range(index, next_index):
+            layers[li].instantiate(remote_device)
+        index = next_index
+
+    graph = PipelineModulesGraph()
+    graph.add_sequence(layers)
+    graph.feed_model_input(layers[0])
+
+    return DistributedPipeline(graph, **kwargs)
 
 
 def rpc_test(world_size=1):
@@ -153,6 +187,57 @@ def update(devices):
     x = torch.randn(8, 4).to(device)
     model = [PipelineModule(nn.Linear, (4, 4), {}), PipelineModule(nn.ReLU, (), {})]
     pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
+    params = pipe.parameter_rrefs()
+    opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
+    losses = []
+    for i in range(2):
+        with dist_autograd.context() as context_id:
+            y = pipe(x)
+            loss = criterion(y, rpc.RRef(x))
+            losses.append(loss)
+            loss.backward(context_id)
+            opt.step(context_id)
+    losses = [l.to_here() for l in losses]
+    assert losses[0] > losses[1], f"{losses[0]} !> {losses[1]}"
+
+
+class ConcatenateTensors(nn.Module):
+    def forward(self, *inputs):
+        return torch.cat(inputs, dim=1)
+
+
+class SplitTensors(nn.Module):
+    def forward(self, input):
+        return torch.split(input, (input.shape[1] + 1) // 2, dim=1)
+
+
+@rpc_test(world_size=2)
+@pytest.mark.parametrize("devices", DEVICES)
+def multi_input_multi_output_layers(devices):
+    device = devices[0].split("/")[1]
+    torch.random.manual_seed(3)
+    criterion = DistributedLoss(torch.nn.MSELoss)
+    x = torch.randn(8, 4).to(device)
+
+    #                                / ->linear_layer_2_1
+    # input -> linear_layer1 -> split                     ->concatenate->linear_layer_3
+    #                                \ ->linear_layer_2_2
+
+    linear_layer_1 = PipelineModule(nn.Linear, (4, 4), {}, remote_device=devices[0])
+    split = PipelineModule(SplitTensors, (), {}, num_outputs=2, remote_device=devices[0])
+    linear_layers_2 = [
+        PipelineModule(nn.Linear, (2, 2), {}, remote_device=devices[0]),
+        PipelineModule(nn.Linear, (2, 2), {}, remote_device=devices[1]),
+    ]
+    concatenate = PipelineModule(ConcatenateTensors, tuple(), num_inputs=2, remote_device=devices[1])
+
+    graph = PipelineModulesGraph()
+    graph.add_sequence([linear_layer_1, split])
+    graph.feed_model_input(linear_layer_1)
+    graph.fan_out(split, linear_layers_2)
+    graph.add_multi_input_layer(concatenate, linear_layers_2)
+
+    pipe = DistributedPipeline(graph, chunks=4)
     params = pipe.parameter_rrefs()
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []

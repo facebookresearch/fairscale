@@ -29,7 +29,7 @@ def check_pytorch_version() -> None:
         raise Exception("DistributedPipeline requires PyTorch version 1.9 or higher")
 
 
-def rloss(loss_func: Callable, input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
+def _rloss(loss_func: Callable, input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
     return loss_func(input_rref.to_here(), target_rref.to_here())
 
 
@@ -37,7 +37,7 @@ def DistributedLoss(loss: nn.Module, *args: Tuple, **kwargs: Dict) -> Callable:
     loss_func = loss(*args, **kwargs)
 
     def dloss(input_rref: rpc.RRef, target_rref: rpc.RRef) -> rpc.RRef:
-        return rpc.remote(input_rref.owner(), rloss, args=(loss_func, input_rref, target_rref))
+        return rpc.remote(input_rref.owner(), _rloss, args=(loss_func, input_rref, target_rref))
 
     return dloss
 
@@ -49,13 +49,13 @@ class PipelineModule(nn.Module):
         module_cls (nn.Module): Class for the module to be created remotely.
         args (Sequence): args to be passed to ``module_cls``.
         kwargs (Dict, optional): kwargs to be passed to ``module_cls``.
-        num_input (int): number of inputs to the forward function.
+        num_inputs (int, optional): number of inputs to the forward function.
         num_outputs: (int, optional): If the forward function returns a tuple, number of elements
             in the tuple, otherwise it should be None
         remote_device: (str, optional): Device on the destination worker where we‘d like to place
             this module. The format should be "<workername>/<device>", where the device field can be
             parsed as torch.device type. E.g., "trainer0/cpu", "trainer0", "ps0/cuda:0".
-            If this parameter can be provided later by calling the method instantiate
+            This parameter can be provided later by calling the method instantiate.
     """
 
     def __init__(
@@ -81,10 +81,10 @@ class PipelineModule(nn.Module):
         return result
 
     def instantiate(self, remote_device: str) -> "PipelineModule":
-        on, device = remote_device.split("/")
-        self.on = on
+        worker, device = remote_device.split("/")
+        self.worker = worker
         self.device = device
-        self.module_rref = rpc.remote(on, PipelineModule._create_module, self.module_args + (device,))
+        self.module_rref = rpc.remote(worker, PipelineModule._create_module, self.module_args + (device,))
         return self
 
     def get_module_rref(self) -> rpc.RRef:
@@ -101,35 +101,33 @@ class PipelineModulesGraph(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.modules_list: List = []
+        # self.inputs specifies inputs to each module in modules_list. Each input to each module
+        # is represented by a tuple (i, j). If i>=0, then the input is the j'th output of the i'th
+        # module. If i<0, the input is the j'th input to the model.
         self.inputs: List[Optional[List[Tuple[int, int]]]] = []
-
-    def _add_new_module(self, num: int = 1) -> None:
-        for i in range(num):
-            self.inputs.append(None)
 
     def _find_or_add(self, module: PipelineModule) -> int:
         try:
             return self.modules_list.index(module)
         except ValueError:
-            self._add_new_module()
+            self.inputs.append(None)
             self.modules_list.append(module)
             return len(self.modules_list) - 1
 
     def add_sequence(self, modules: List[PipelineModule], first_input: Optional[PipelineModule] = None) -> None:
-        """Adds a list of modules to the graph, to be run sequencially.
+        """Adds a list of modules to the graph, to be run sequentially.
         The connection between these modules is as follows: the first output of each of these modules
         (except the last one) is used as the first input of its next module in this sequence.
-        The user also may optionally specify the input to the first module in this sequence with
-        argument 'first_input'. In this case the module 'first_input' must be added to the graph previously.
+        The user may also specify the input to the first module in this sequence with argument 'first_input'.
+        In this case the module 'first_input' must have been added to the graph previously.
         """
-        old_m = len(self.modules_list)
-        m = len(modules)
-        self._add_new_module(m)
+        old_modules_len = len(self.modules_list)
+        new_modules_len = len(modules)
         self.modules_list.extend(modules)
-        for i in range(old_m + 1, old_m + m):
-            self.inputs[i] = [(i - 1, 0)]
-        if first_input is not None:
-            self.inputs[old_m] = [(self.modules_list.index(first_input), 0)]
+        # update inputs array
+        self.inputs.append([(self.modules_list.index(first_input), 0)] if first_input is not None else None)
+        for i in range(old_modules_len + 1, old_modules_len + new_modules_len):
+            self.inputs.append([(i - 1, 0)])
 
     def feed_model_input(self, module: PipelineModule, ind: int = 0) -> None:
         """Declares the input to a module as the input to the model. In case the model has multiple
@@ -139,7 +137,7 @@ class PipelineModulesGraph(nn.Module):
 
     def add_multi_input_layer(self, module: PipelineModule, inputs: List[PipelineModule]) -> None:
         """Adds a module with multiple inputs to the graph. The modules that provide inpurs to this module
-        must be added previously to the graph and are listed with argument inputs.
+        must have been added previously to the graph and are listed with argument inputs.
         """
         self.inputs[self._find_or_add(module)] = [(self.modules_list.index(m), 0) for m in inputs]
 
@@ -152,31 +150,20 @@ class PipelineModulesGraph(nn.Module):
         for i, m in enumerate(outputs):
             self.inputs[self._find_or_add(m)] = [(mi, i)]
 
-    def replicate_output(self, module: PipelineModule, outputs: List[PipelineModule]) -> None:
-        """Feeds the first output of a previously added module to multiple modules specified by
-        argument 'outputs'. Modules in the list 'outputs' are added to the graph if they have not
-        been added previously.
-        """
-        mi = self.modules_list.index(module)
-        for m in outputs:
-            self.inputs[self._find_or_add(m)] = [(mi, 0)]
-
-    def validate_graph(self) -> None:
-        """Makes sure graph satisfies necessary requirements"""
-        # TODO: implement following checks:
-        #   * the graph has a least one module, and is connected.
-        #   * num_inputs and num_outputs for modules matche list of connections defined in the graph.
-        #   * all inputs to a module should come from model input, or modules with smaller index in
-        #     the graph. This condition is used in implementaion of DistributedPipeline.forward. Even
-        #     if we relax this condition, still need to make sure the graph is acyclic.
-        pass
-
-    def compute_output_users(self) -> None:
+    def compile_output_users(self) -> None:
         """Precomputs self.model_input_users and self.output_users for internal use by the pipleine
         class. These two lists show consumers of inputs to the model, and outputs of each module of
         the graph. Each consumer is a pair (i, j) which stands for the j'th input to the i'th module
         in the graph.
         """
+
+        # TODO: We need to make sure following conditions hold before preparing the graph for the pipeline:
+        #   * the graph has a least one module, and is connected.
+        #   * num_inputs and num_outputs for modules matche list of connections defined in the graph.
+        #   * all inputs to a module should come from model input, or modules with smaller index in
+        #     the graph. This condition is used in implementaion of DistributedPipeline.forward. Even
+        #     if we relax this condition, still need to make sure the graph is acyclic.
+
         m = len(self.modules_list)
         self.output_users: List[List[Tuple[int, int, int]]] = [[] for _ in range(m)]
         self.model_input_users = []
@@ -204,20 +191,28 @@ class DistributedPipelineRecord:
     """
 
     def __init__(
-        self, device: torch.device, rank: int, chunks: int, num_input: int, users: List[Tuple[rpc.RRef, int, int]]
+        self,
+        device: torch.device,
+        rank: int,
+        chunks: int,
+        num_inputs: int,
+        num_outputs: Optional[int],
+        users: List[Tuple[rpc.RRef, int, int]],
     ) -> None:
         self.ready_cv = Condition()
-        # Each chunk consists of num_input tensors. self.tensors stores these individual tensors.
-        self.tensors: List[List[Optional[Tensor]]] = [[None] * num_input for _ in range(chunks)]
+        # Each chunk consists of num_inputs tensors. self.tensors stores these individual tensors.
+        self.tensors: List[List[Optional[Tensor]]] = [[None] * num_inputs for _ in range(chunks)]
         # For each tensor in self.tensors, we record a cuda event in corrsponding tensorpipe stream in self.recv_events,
         # and later the stream that processes that tensor will wait on that event.
-        self.recv_events = [[None] * num_input for _ in range(chunks)]
-        # Once all num_input tensors of a given chunk are recieved, they are assembled as a batch and stored in
+        self.recv_events = [[None] * num_inputs for _ in range(chunks)]
+        # Once all num_inputs tensors of a given chunk are recieved, they are assembled as a batch and stored in
         # self.batches
         self.batches: List[Optional[Batch]] = [None] * chunks
         # For each tensor of each chunk, we fork a phony tensor, which will be used for injecting dependency between
         # different chunks in backward path.
-        self.forwarded_phony: List[List[List[rpc.RRef]]] = [[[] for j in range(num_input)] for i in range(chunks)]
+        if num_outputs is None:
+            num_outputs = 1
+        self.forwarded_phony: List[List[List[rpc.RRef]]] = [[[] for j in range(num_outputs)] for i in range(chunks)]
         self.users = users
         self.rank = rank
         self.device = device
@@ -249,6 +244,12 @@ class DistributedPipelineRecord:
                 tensors = cast(List[Tensor], self.tensors[chunk])
                 self.batches[chunk] = Batch(tuple(tensors), chunk)
 
+    def sync_stream(self, chunk: int, stream: torch.cuda.Stream) -> None:
+        """syncs the stream with cuda events associated with transmission of the chunck to the cuda device."""
+        for e in self.recv_events[chunk]:
+            if e is not None:
+                stream.wait_event(e)
+
     def get_batch(self, chunk: int) -> Batch:
         batch = self.batches[chunk]
         assert batch is not None
@@ -259,21 +260,21 @@ class PartitionHandler:
     """This class processes a single partition of the pipeline.
     Args:
         module_rref: RRef to the nn.Module for this partition. It should be on the local rpc worker.
-        device: The device that hols the module.
-        num_input: Numer of inputs to the module
-        num_output: Number of outputs of the module. If the module output is not a tuple (and it is a
-            single tensor), num_output should be None.
+        device: The device that holds the module.
+        num_inputs: Numer of inputs to the module
+        num_outputs: Number of outputs of the module. If the module output is not a tuple (and it is a
+            single tensor), num_outputs should be None.
         rank: The rank of the partition
         chunks: Number of micor-batches in a mini-batch
-        checkpoint_stop::
+        checkpoint_stop:: Checkpointing is done only for the first checkpoint_stop chunks of a mini-batch.
     """
 
     def __init__(
         self,
         module_rref: rpc.RRef,
         device: str,
-        num_input: int,
-        num_output: Optional[int],
+        num_inputs: int,
+        num_outputs: Optional[int],
         rank: int,
         chunks: int,
         checkpoint_stop: int,
@@ -283,8 +284,8 @@ class PartitionHandler:
         self.device = torch.device(device)
         self.checkpoint_stop = checkpoint_stop
         self.rank = rank
-        self.num_input = num_input
-        self.num_output = num_output
+        self.num_inputs = num_inputs
+        self.num_outputs = num_outputs
         (self.in_queue,), (self.out_queue,) = create_workers([self.device])
 
     def local_parameter_rrefs(self) -> List[rpc.RRef]:
@@ -295,15 +296,10 @@ class PartitionHandler:
         return [rpc.RRef(p) for p in self.module.parameters()]
 
     def make_pipeline_record(self, users: List[Tuple[rpc.RRef, int, int]]) -> DistributedPipelineRecord:
-        return DistributedPipelineRecord(self.device, self.rank, self.chunks, self.num_input, users)
+        return DistributedPipelineRecord(self.device, self.rank, self.chunks, self.num_inputs, self.num_outputs, users)
 
     def run(self, pipeline_record: DistributedPipelineRecord) -> None:
-        """Runs pipeline parallelism.
-
-        It modifies the given batches in place.
-
-        """
-
+        """Runs pipeline parallelism. It modifies the given batches in place."""
         m = len(pipeline_record.batches)
 
         self.stream = current_stream(self.device)
@@ -324,16 +320,16 @@ class PartitionHandler:
         # with this constraint, replace the condition 'pipeline_record.rank > 0' below with
         # a more accurate one.
         if chunk != 0 and pipeline_record.users and pipeline_record.rank > 0:
-            t = []
+            dependant_tensors = []
             batch = pipeline_record.batches[chunk]
             assert batch is not None
-            for b, remote_ph_list in zip(batch.tensors, pipeline_record.forwarded_phony[chunk - 1]):
-                r = b
+            for tensor, remote_ph_list in zip(batch.tensors, pipeline_record.forwarded_phony[chunk - 1]):
+                dependant = tensor
                 for remote_ph in remote_ph_list:
                     ph = remote_ph.to_here()
-                    r = join(r, ph)
-                t.append(r)
-            pipeline_record.batches[chunk] = Batch(tuple(t), chunk)
+                    dependant = join(dependant, ph)
+                dependant_tensors.append(dependant)
+            pipeline_record.batches[chunk] = Batch(tuple(dependant_tensors), chunk)
 
     def compute(self, pipeline_record: DistributedPipelineRecord, chunk: int) -> None:
         """Runs tasks with synchronization to tensor-pipe streams."""
@@ -347,10 +343,8 @@ class PartitionHandler:
 
         batch = pipeline_record.get_batch(chunk)
 
-        if pipeline_record is not None and pipeline_record.rank >= 0:
-            for e in pipeline_record.recv_events[chunk]:
-                if e is not None and is_cuda(self.stream):
-                    self.stream.wait_event(e)
+        if is_cuda(self.stream):
+            pipeline_record.sync_stream(chunk, as_cuda(self.stream))
 
         # Determine whether checkpointing or not.
         checkpoint = chunk < checkpoint_stop
@@ -359,7 +353,7 @@ class PartitionHandler:
             def function(input: TensorOrTensors, chunk_id: int = chunk) -> TensorOrTensors:
                 with record_function("chunk%d-rank%d" % (chunk_id, pipeline_record.rank)):
                     result = self.module(*input)
-                    if self.num_output is None:
+                    if self.num_outputs is None:
                         result = (result,)
                     return tuple(result)
 
@@ -376,7 +370,7 @@ class PartitionHandler:
             ) -> Batch:
                 with record_function("chunk%d-rank%d" % (chunk_id, pipeline_record.rank)):
                     result = self.module(*batch.tensors)
-                    if self.num_output is None:
+                    if self.num_outputs is None:
                         result = (result,)
                 return Batch(result, chunk_id)
 
@@ -457,7 +451,7 @@ def _split_module(graph: PipelineModulesGraph) -> List[Tuple[List[int], rpc.RRef
     If there is only one module in the partition, module_rref is reference to that module; otherwise those modules
     are wrapped by a MultiInputSequential and module_rref referes to that.
     """
-    graph.compute_output_users()
+    graph.compile_output_users()
     module_used = [False] * len(graph.modules_list)
     partitions = []
     for module_idx, module in enumerate(graph.modules_list):
@@ -483,7 +477,7 @@ def _split_module(graph: PipelineModulesGraph) -> List[Tuple[List[int], rpc.RRef
             if graph.inputs[next_module_idx] != [(current_module_idx, 0)]:
                 break
             # If the next module is on a different deivce or worker, stop
-            if next_module.on != current_module.on:
+            if next_module.worker != current_module.worker:
                 break
             if next_module.device != current_module.device:
                 break
@@ -493,7 +487,7 @@ def _split_module(graph: PipelineModulesGraph) -> List[Tuple[List[int], rpc.RRef
             remote_module = graph.modules_list[partition[0]].get_module_rref()
         else:
             remote_module = rpc.remote(
-                graph.modules_list[partition[0]].on,
+                graph.modules_list[partition[0]].worker,
                 RemoteSequential,
                 args=([graph.modules_list[p].get_module_rref() for p in partition],),
             )
@@ -541,7 +535,6 @@ class DistributedPipeline(nn.Module):
         super().__init__()
 
         check_pytorch_version()
-        graph.validate_graph()
 
         chunks = int(chunks)
         checkpoint = str(checkpoint)
@@ -654,29 +647,3 @@ class DistributedPipeline(nn.Module):
                     pipeline_record.rpc_async().feed(i, fj, b[feed_idx].value)  # type: ignore
 
         return result
-
-
-def create_sequence_pipeline(
-    layers: List[PipelineModule], balance: List[int], devices: List[str], **kwargs: Any
-) -> DistributedPipeline:
-    """A simple helper function to create a pipeline from list of pipeline-modules that run sequentially.
-       Args:
-           layers: list of modules. They should not be already assigned a remote-device.
-           balance: a list of integers how layers should be paritioned. Sum of numbers in 'balance'
-               should be equal to the number of layers.
-           devices: specification of remote device for each partition. Should be of the same length
-               as 'balance'.
-    """
-    graph = PipelineModulesGraph()
-
-    index = 0
-    for num_layers, remote_device in zip(balance, devices):
-        next_index = index + num_layers
-        for li in range(index, next_index):
-            layers[li].instantiate(remote_device)
-        index = next_index
-
-    graph.add_sequence(layers)
-    graph.feed_model_input(layers[0])
-
-    return DistributedPipeline(graph, **kwargs)
