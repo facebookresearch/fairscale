@@ -51,7 +51,8 @@ def rpc_test(world_size=1):
         def wrapper(*args, **kwargs):
             mp.spawn(rpc_worker, args=(world_size, tempfile.mkstemp()[1], func, *kwargs.values()), nprocs=world_size)
 
-        globals()["test_" + func.__name__] = wrapper
+        if torch.__version__.split("+")[0].split(".")[:2] >= ["1", "9"]:
+            globals()["test_" + func.__name__] = wrapper
         return func
 
     return decorator
