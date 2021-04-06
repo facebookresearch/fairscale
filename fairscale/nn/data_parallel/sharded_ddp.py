@@ -494,18 +494,24 @@ class ShardedDataParallel(nn.Module):
             if param.grad is not None and param.grad.requires_grad:
                 raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
 
-            # Register the hook to the next function in line,
-            # so that the hook is fired when this grad has properly been computed
             p_tmp = param.expand_as(param)
-            assert p_tmp.grad_fn is not None
-            grad_acc = p_tmp.grad_fn.next_functions[0][0]
-            dst_rank = self._trainable_param_to_rank[param]
 
-            reduce_function = self._get_reduce_fn(index, param, dst_rank)
+            # See https://pytorch.org/docs/stable/tensors.html?highlight=grad_fn
+            # We're interested in the tensors which will be tracked by Autograd
+            # Some tensors can have gradients independent of the inputs (ie. pooling layer for instance),
+            # these do not need to be sync'ed
+            if p_tmp.grad_fn is not None:
+                # Register the hook to the next function in line,
+                # so that the hook is fired when this grad has properly been computed
+                # (by default the hook with Pytorch is a pre-grad, not a post-grad)
+                grad_acc = p_tmp.grad_fn.next_functions[0][0]
+                dst_rank = self._trainable_param_to_rank[param]
 
-            self._grad_hooks.append(grad_acc.register_hook(reduce_function))
-            self._grad_accs.append(grad_acc)  # keep this hook in scope
-            self._manual_reduce.append(reduce_function)
+                reduce_function = self._get_reduce_fn(index, param, dst_rank)
+
+                self._grad_hooks.append(grad_acc.register_hook(reduce_function))
+                self._grad_accs.append(grad_acc)  # keep this hook in scope
+                self._manual_reduce.append(reduce_function)
 
     @torch.no_grad()
     def _sync_params_and_buffers(self) -> None:

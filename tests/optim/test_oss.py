@@ -322,8 +322,8 @@ def run_test_step(rank, world_size, tempfile_name):
         dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM)
         p.grad.data /= world_size
     o.step()
-    assert m.weight == torch.tensor([[0.75]], device=rank)
-    assert m.bias == torch.tensor([1.85], device=rank)
+    assert m.weight == torch.tensor([[0.75]], device=rank), f"{rank}: {m.weight.item()}, 0.75 expected"
+    assert m.bias == torch.tensor([1.85], device=rank), f"{rank}: {m.bias.item()}, 1.85 expected"
 
     dist.destroy_process_group()
 
