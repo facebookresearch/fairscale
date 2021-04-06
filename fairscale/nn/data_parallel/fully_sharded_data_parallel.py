@@ -544,8 +544,10 @@ class FullyShardedDataParallel(nn.Module):
             self._cast_buffers(dtype=torch.float32)
 
         if self._return_full_state_dict:
-            assert self.training_state != TrainingState.SUMMON_FULL_PARAMS
-            with self.summon_full_params(recurse=False, volatile=True):
+            if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
+                with self.summon_full_params(recurse=False, volatile=True):
+                    state_dict = super().state_dict(*args, **kwargs)
+            else:
                 state_dict = super().state_dict(*args, **kwargs)
         else:
             if self.flatten_parameters:
