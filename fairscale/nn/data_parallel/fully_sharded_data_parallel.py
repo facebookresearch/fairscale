@@ -1460,8 +1460,8 @@ class FullyShardedDataParallel(nn.Module):
         new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
         if self.rank == 0:
             # Save placeholders for uncollected opt state to keep the same unflat OSD format.
-            self.uncollected_opt_state = {k: v for k, v in osd["state"].items() if k in uncollected_ids}
-
+            self.uncollected_opt_state = {k: recursive_copy_to_device(v,non_blocking=False, device=torch.device('cpu')) for k, v in osd["state"].items() if k in uncollected_ids}
+            # self.uncollected_opt_state = {k: v for k, v in osd["state"].items() if k in uncollected_ids}
         pg = copy.deepcopy(osd["param_groups"])
         new_dct["param_groups"] = pg
         return new_dct
