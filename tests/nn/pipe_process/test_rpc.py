@@ -241,6 +241,8 @@ def rpc_multiple_tensors():
 @torch_spawn([2])
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" in os.environ, reason="no mpi")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
+# TODO(msb) Fix this
+@pytest.mark.skipif(torch.__version__.split("+")[0].split(".") >= ["1", "8", "0"], reason="disabled for torch 1.8.0")
 def construct_only_rank_zero():
     model = [nn.Linear(10, 10), nn.ReLU()]
     if torch.distributed.get_rank() == 0:

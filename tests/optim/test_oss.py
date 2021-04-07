@@ -24,6 +24,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import fairscale.optim as optim
 from fairscale.utils.testing import (
     check_same_model_params,
+    check_same_models_across_ranks,
     skip_if_no_cuda,
     skip_if_py39_no_cuda,
     skip_if_single_gpu,
@@ -152,6 +153,18 @@ class TestSingleRank(unittest.TestCase):
         o.step(0, kwarg=kwarg)
         assert kwarg == [5]
         assert x == torch.tensor([0.9], device=DEVICE)
+
+    @skip_if_no_cuda
+    def test_device_change(self):
+        x = torch.nn.Linear(1, 1).to("cpu")
+        o = optim.OSS(x.parameters(), torch.optim.SGD, lr=0.1)
+
+        # Move the model to device after OSS was constructed
+        x.to(DEVICE)
+        x(torch.zeros((1), device=DEVICE)).backward()
+
+        # Check that OSS detects that the device changed
+        o.step()
 
     def test_step_with_extra_inner_key(self):
         class SGDWithNewKey(torch.optim.SGD):
@@ -309,8 +322,8 @@ def run_test_step(rank, world_size, tempfile_name):
         dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM)
         p.grad.data /= world_size
     o.step()
-    assert m.weight == torch.tensor([[0.75]], device=rank)
-    assert m.bias == torch.tensor([1.85], device=rank)
+    assert m.weight == torch.tensor([[0.75]], device=rank), f"{rank}: {m.weight.item()}, 0.75 expected"
+    assert m.bias == torch.tensor([1.85], device=rank), f"{rank}: {m.bias.item()}, 1.85 expected"
 
     dist.destroy_process_group()
 
@@ -402,6 +415,7 @@ def test_sharding():
 def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
     dist_init(rank, world_size, tempfile_name)
     device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
+    torch.cuda.set_device(rank)
 
     # Run a dummy step so that the optimizer state dict exists
     batch, input_width, hidden, target_width = 3, 3, 3, 5
@@ -443,15 +457,31 @@ def run_test_collect_shards(rank, world_size, reference_rank, tempfile_name):
 
     # Load the optimizer state dict
     optimizer.load_state_dict(optimizer_state_dict)
+
+    # Check that the states are not None, but {}
+    for state in optimizer.state.values():
+        for _, _ in state.items():
+            pass
+
+    # Test the state dict materialization on all ranks
+    _ = optimizer.step(closure=closure)
+    optimizer_state_dict = optimizer.state_dict(all_ranks=True)  # one per rank
+    optimizer.load_state_dict(optimizer_state_dict)
+    _ = optimizer.step(closure=closure)
+    check_same_models_across_ranks(model, dist.group.WORLD, params_should_be_equal=True, check_broadcast_buffers=False)
+
+    # Check that if the model is moved to cpu, the optimizer consolidation still works
+    model.cpu()
+    optimizer = optim.OSS(model.parameters(), lr=0.1, momentum=0.99)
+    optimizer.consolidate_state_dict(recipient_rank=reference_rank)
+
     dist.destroy_process_group()
 
 
+@skip_if_single_gpu
 def test_collect_shards():
-    world_size = 3
+    world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
-
-    if torch.cuda.is_available():
-        world_size = min(world_size, torch.cuda.device_count())
     reference_rank = 0
 
     mp.spawn(
@@ -459,9 +489,10 @@ def test_collect_shards():
     )
 
 
-def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
+def run_test_reproducibility(rank, world_size, tempfile_name, broadcast_fp16):
     dist_init(rank, world_size, tempfile_name)
     device = torch.device(rank) if torch.cuda.device_count() > 1 else DEVICE
+    torch.cuda.set_device(rank)
 
     # Run a dummy step so that the optimizer state dict exists
     batch, input_width, hidden, target_width = 3, 3, 3, 5
@@ -470,11 +501,12 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
 
     model = torch.nn.Sequential(torch.nn.Linear(input_width, hidden), torch.nn.Linear(hidden, target_width))
     model.to(device)
+    model = DDP(model, device_ids=[device])
 
     loss_fn = torch.nn.L1Loss()
     loss_fn.to(device)
 
-    optimizer = optim.OSS(model.parameters(), optim=torch.optim.RMSprop, lr=0.1)
+    optimizer = optim.OSS(model.parameters(), optim=torch.optim.RMSprop, lr=0.1, broadcast_fp16=broadcast_fp16)
 
     def closure():
         optimizer.zero_grad()
@@ -485,14 +517,9 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
 
     _ = optimizer.step(closure=closure)
 
-    # Update the optimizer state on the reference rank
-    optimizer.consolidate_state_dict(recipient_rank=reference_rank)
-
-    # Fetch the state on the reference rank, broadcast to the other ones
-    if rank == reference_rank:
-        optimizer_state_dict = optimizer.state_dict()
-    else:
-        optimizer_state_dict = {}
+    # Get a snapshot of the state at this point
+    optimizer_state_dict = copy.deepcopy(optimizer.state_dict(all_ranks=True))
+    model_state_dict = copy.deepcopy(model.state_dict())
 
     # Run two steps, log the loss
     _ = optimizer.step(closure=closure)
@@ -500,28 +527,25 @@ def run_test_reproducibility(rank, world_size, reference_rank, tempfile_name):
 
     # Load the optimizer state dict, rewind the state two steps back
     optimizer.load_state_dict(optimizer_state_dict)
+    model.load_state_dict(model_state_dict)
 
     # Run two new steps, log the loss again and check that we get the same
     _ = optimizer.step(closure=closure)
     test_loss = optimizer.step(closure=closure)
 
-    assert torch.allclose(reference_loss, test_loss)
+    assert torch.allclose(reference_loss, test_loss), f"{reference_loss} vs {test_loss}. Reproducibility is broken"
 
     dist.destroy_process_group()
 
 
-def test_reproducibility():
+@skip_if_single_gpu
+@pytest.mark.parametrize("broadcast_fp16", [False, True])
+def test_reproducibility(broadcast_fp16: bool):
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
-    if torch.cuda.is_available() and torch.cuda.device_count() < world_size:
-        # Bail out if not enough devices
-        return
-
-    reference_rank = 0
-
     mp.spawn(
-        run_test_collect_shards, args=(world_size, reference_rank, temp_file_name), nprocs=world_size, join=True,
+        run_test_reproducibility, args=(world_size, temp_file_name, broadcast_fp16), nprocs=world_size, join=True,
     )
 
 
@@ -657,7 +681,7 @@ def run_gradient_clipping(rank, world_size, tempfile_name):
         assert torch.allclose(oss_total_norm, total_norm), "torch and fairscale should return the same grad norm"
 
         # Check that the params have indeed been clipped
-        for params in sharded_optimizer.per_device_params.values():
+        for params in sharded_optimizer._per_device_params.values():
             for param in filter(lambda x: x.grad is not None, params[rank]):
                 assert torch.norm(param.grad, p=norm) < CLIP_NORM, f"param grad norm above clip : {param.grad}"
 
@@ -792,7 +816,7 @@ def test_state_dict_distributed():
     )
 
 
-def run_ddp_parity(rank, world_size, backend, temp_file_name):
+def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph, broadcast_fp16):
     url = "file://" + temp_file_name
     dist.init_process_group(init_method=url, backend=backend, rank=rank, world_size=world_size)
 
@@ -910,16 +934,22 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name):
             check_step()
 
     for opt in [torch.optim.Adam, torch.optim.SGD]:
-        check_optimizer_equivalence(opt, change_train_graph=False)
-        check_optimizer_equivalence(opt, change_train_graph=True)
+        check_optimizer_equivalence(opt, change_train_graph=change_train_graph)
 
     dist.destroy_process_group()
 
 
 @skip_if_no_cuda
 @skip_if_single_gpu
-def test_ddp_parity():
+@pytest.mark.parametrize("change_train_graph", [True, False])
+@pytest.mark.parametrize("backend", [dist.Backend.NCCL, dist.Backend.GLOO])
+@pytest.mark.parametrize("broadcast_fp16", [False, True])
+def test_ddp_parity(change_train_graph: bool, backend: dist.Backend, broadcast_fp16: bool):
     temp_file_name = tempfile.mkstemp()[1]
     world_size = torch.cuda.device_count()
-    backend = dist.Backend.NCCL
-    mp.spawn(run_ddp_parity, args=(world_size, backend, temp_file_name), nprocs=world_size, join=True)
+    mp.spawn(
+        run_ddp_parity,
+        args=(world_size, backend, temp_file_name, change_train_graph, broadcast_fp16),
+        nprocs=world_size,
+        join=True,
+    )

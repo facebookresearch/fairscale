@@ -10,8 +10,6 @@ mypy == 0.790
 # Tools for unit tests & coverage.
 pytest == 5.4.1
 pytest-cov == 2.10.0
-pytest-mpi == 0.4
 pytest-timeout == 1.4.2
-mpi4py == 3.0.3
 remote-pdb >= 2.1.0
 parameterized >= 0.8.1

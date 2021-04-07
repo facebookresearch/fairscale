@@ -13,7 +13,7 @@ import torch
 from torch import nn
 
 
-def conditional_amp_fwd_decorator(orig_func):  # type: ignore
+def _conditional_amp_fwd_decorator(orig_func):  # type: ignore
 
     if hasattr(torch.cuda.amp, "custom_fwd"):
         return torch.cuda.amp.custom_fwd(orig_func)  # type: ignore
@@ -25,7 +25,7 @@ def conditional_amp_fwd_decorator(orig_func):  # type: ignore
     return inner_decorator
 
 
-def conditional_amp_bwd_decorator(orig_func):  # type: ignore
+def _conditional_amp_bwd_decorator(orig_func):  # type: ignore
     if hasattr(torch.cuda.amp, "custom_bwd"):
         return torch.cuda.amp.custom_bwd(orig_func)  # type: ignore
 
@@ -51,6 +51,8 @@ def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
     )
 
     for m in modules:
+        for p in m.parameters():
+            p.data = p.data.pin_memory()
         # Number of parameters in the current shard
         current_shard_params = sum(p.numel() for sm in splits[current_shard] for p in sm.parameters())
 
@@ -91,9 +93,8 @@ class ModelShard(nn.Module):
         self.offload_device = offload_device
 
         self.model_shard.to(offload_device)
-        self.cuda_stream = torch.cuda.Stream(
-            device=self.device
-        )  # needed to make sure load/offload really run in parallel with compute
+        self._cpu_to_gpu_stream = torch.cuda.Stream(device=self.device)
+        self._gpu_to_cpu_stream = torch.cuda.Stream(device=self.device)
 
     def forward(self, *inputs):  # type: ignore
         return self.model_shard(*inputs) if isinstance(inputs, tuple) else self.model_shard(inputs)
@@ -112,20 +113,20 @@ class ModelShard(nn.Module):
         self.model_shard.to(device=self.device, non_blocking=True)
 
     def forward_load(self, non_blocking: bool = True) -> None:
-        with torch.cuda.stream(self.cuda_stream):
+        with torch.cuda.stream(self._cpu_to_gpu_stream):
             # Restore all the parameter buffers
             self.model_shard.to(device=self.device, non_blocking=non_blocking)
 
     def backward_load(self, non_blocking: bool = True) -> None:
-        with torch.cuda.stream(self.cuda_stream):
+        with torch.cuda.stream(self._cpu_to_gpu_stream):
             self.model_shard.to(self.device, non_blocking=non_blocking)
 
     def forward_drop(self, non_blocking: bool = True) -> None:
-        with torch.cuda.stream(self.cuda_stream):
+        with torch.cuda.stream(self._gpu_to_cpu_stream):
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
     def backward_drop(self, non_blocking: bool = True) -> None:
-        with torch.cuda.stream(self.cuda_stream):
+        with torch.cuda.stream(self._gpu_to_cpu_stream):
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
 
@@ -149,8 +150,8 @@ class ActivationCheckpointing(torch.autograd.Function):
      """
 
     @staticmethod
-    @conditional_amp_fwd_decorator  # type: ignore
-    def forward(ctx: Any, inputs: Any, model_instance: Any) -> Any:
+    @_conditional_amp_fwd_decorator  # type: ignore
+    def forward(ctx: Any, inputs: Any, dummy_input: Any, model_instance: Any) -> Any:
         inputs = inputs if isinstance(inputs, tuple) else (inputs,)
 
         ctx.inputs = inputs
@@ -164,44 +165,48 @@ class ActivationCheckpointing(torch.autograd.Function):
         model_instance._activations = [inputs]
         # Enumerate through layer shards and apply activations from the previous shard.
         for index, layer_shard in enumerate(model_instance.model_slices):
-            # Bring in the current activations onto the device.
-            model_instance._activations[index] = tuple([a.cuda() for a in list(model_instance._activations[index])])
-            # Bring in the current layer shard onto the device.
-            layer_shard.forward_load()
+            with torch.autograd.profiler.record_function("fairscale.experimental.nn.offload:forward_load"):
+                # Bring in the current activations onto the device.
+                model_instance._activations[index] = tuple([a.cuda() for a in list(model_instance._activations[index])])
+                # Bring in the current layer shard onto the device.
+                layer_shard.forward_load()
+
             # Apply the FP and store the activations on the CPU.
             inputs = model_instance._activations[index]
-
-            with torch.no_grad():
-                output_list: List[Any] = []
-                for given_input in inputs:
-                    given_input_list = torch.chunk(given_input, model_instance._num_microbatches)
-                    given_output_list = []
-                    for inputs in given_input_list:
-                        output = layer_shard(inputs)
-                        given_output_list.append(output)
-                    given_output = torch.cat(given_output_list).squeeze(-1)
-                    output_list.append(given_output)
-                output = tuple(output_list)
+            with torch.autograd.profiler.record_function("fairscale.experimental.nn.offload:no_grad_forward_pass"):
+                with torch.no_grad():
+                    output_list: List[Any] = []
+                    for given_input in inputs:
+                        given_input_list = torch.chunk(given_input, model_instance._num_microbatches)
+                        given_output_list = []
+                        for inputs in given_input_list:
+                            output = layer_shard(inputs)
+                            given_output_list.append(output)
+                        given_output = torch.cat(given_output_list).squeeze(-1)
+                        output_list.append(given_output)
+                    output = tuple(output_list)
 
             output = output if isinstance(output, tuple) else (output,)
-            # The last instance will lose the gradient function if we move it to the CPU.
-            # This is because all grad function are present on the device that ran the FW pass.
-            if index == len(model_instance.model_slices) - 1:
-                model_instance._activations.append(output)
-            else:
-                model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
-            print(f"model_instance._activations device {[a.device for a in model_instance._activations[-1]]}")
-            # Move the layer shard back to the CPU.
-            layer_shard.forward_drop()
+            with torch.autograd.profiler.record_function("fairscale.experimental.nn.offload:forward_drop"):
+                # The last instance will lose the gradient function if we move it to the CPU.
+                # This is because all grad function are present on the device that ran the FW pass.
+                if index == len(model_instance.model_slices) - 1:
+                    model_instance._activations.append(output)
+                else:
+                    model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
+                print(f"model_instance._activations device {[a.device for a in model_instance._activations[-1]]}")
+                # Move the layer shard back to the CPU.
+                layer_shard.forward_drop()
 
         # TODO(anj-s): Check device of the result to make sure the outputs and targets match device.
         result = model_instance._activations[-1]
+        result = [r.cuda() for r in result]
         for r in result:
             r.requires_grad = True
         return result[0] if len(result) == 1 else result
 
     @staticmethod
-    @conditional_amp_bwd_decorator
+    @_conditional_amp_bwd_decorator
     def backward(ctx, *grad_outputs):  # type: ignore
         print("\n\n HERE")
         if not torch.autograd._is_checkpoint_valid():
@@ -214,20 +219,16 @@ class ActivationCheckpointing(torch.autograd.Function):
 
         all_grads = [grad_outputs]
 
-        final_index = len(model_instance._activations) - 1
-
         for model_shard, activation in zip(
             reversed(model_instance.model_slices), reversed(model_instance._activations[:-1])
         ):
-            
             # Move the activation to the device.
-            activation = tuple([a.cuda() for a in list(activation)])
-            # One of the inputs to the FW pass must require grad.
-            for a in activation:
-                a.requires_grad = True
+            # activation = tuple([a.cuda() for a in list(activation)])
 
-            # Move the model shard to the device.
-            model_shard.backward_load()
+            with torch.autograd.profiler.record_function("fairscale.experimental.nn.offload:backward_load"):
+                # Move the model shard to the device.
+                model_shard.backward_load()
+
             # Store the BW pass state.
             bwd_rng_state = torch.get_rng_state()
 
@@ -235,6 +236,7 @@ class ActivationCheckpointing(torch.autograd.Function):
             activation = torch.utils.checkpoint.detach_variable(activation)
             # Get the last gradient calculation.
             final_grads = all_grads[-1]
+
             if isinstance(activation, torch.Tensor):
                 activation = (activation,)
             if isinstance(final_grads, torch.Tensor):
@@ -256,105 +258,38 @@ class ActivationCheckpointing(torch.autograd.Function):
 
                 # Since we need a grad value of a non leaf element we need to set these properties.
                 for a in chunked_activation:
+                    if a.dtype == torch.long:
+                        continue
                     a.requires_grad = True
                     a.retain_grad()
 
-                with torch.enable_grad():
-                    # calculate the output of the last shard wrt to the stored activation at the slice boundary.
-                    outputs = model_shard(*chunked_activation)
+                with torch.autograd.profiler.record_function(
+                    "fairscale.experimental.nn.offload:forward_pass_with_enable_grad"
+                ):
+                    with torch.enable_grad():
+                        # calculate the output of the last shard wrt to the stored activation at the slice boundary.
+                        outputs = model_shard(*chunked_activation)
 
                 # Set the states back to what it was at the start of this function.
                 torch.set_rng_state(bwd_rng_state)
-                torch.autograd.backward(outputs, chunked_grad)
-                chunked_grad_list += [a.grad for a in chunked_activation]
-
-            # Append the list of grads to the all_grads list and this should be on the CPU.
-            all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))  # type: ignore
-            # Move activation back to the CPU.
+                with torch.autograd.profiler.record_function("fairscale.experimental.nn.offload:backward_pass"):
+                    torch.autograd.backward(outputs, chunked_grad)
+                intermediate_grads = []
+                for a in chunked_activation:
+                    if a.grad is not None:
+                        intermediate_grads.append(a.grad)
+                if None not in intermediate_grads:
+                    chunked_grad_list += intermediate_grads
+            if chunked_grad_list:
+                # Append the list of grads to the all_grads list and this should be on the CPU.
+                all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))  # type: ignore
             # TODO(anj-s): Why does moving activations to CPU cause the .grad property to be None?
-            activation = tuple([a.cpu() for a in list(activation)])
-            # Move the shard back to the CPU.
-            model_shard.backward_drop()
+            with torch.autograd.profiler.record_function("fairscale.experimental.nn.offload:backward_drop"):
+                # Move the shard back to the CPU.
+                model_shard.backward_drop()
         detached_inputs = model_instance._activations[0]
         grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp for inp in detached_inputs)
         return (None, None) + grads
-
-
-class ShardSyncLayer(torch.autograd.Function):
-    """
-     The shard sync layer is a synchronization point between model shards.
-
-     - In the forward pass, it drops parameters in the previous shard and
-     loads parameters for the next shard.
-
-     - In the backward pass, it does the reverse.
-
-     It does not change or create any outputs at all, instead it just
-     forwards the input as the output.
-
-     NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
-     """
-
-    @staticmethod
-    @conditional_amp_fwd_decorator  # type: ignore
-    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, model_instance: Any) -> Any:
-        drop_index = index
-        load_index = index + 1
-        max_slices = len(model_slices)
-
-        if drop_index >= 0:
-            # Move shard from device to offload device.
-            logging.info(f"Dropping shard {drop_index}")
-            model_slices[drop_index].forward_drop()
-
-        if load_index < max_slices:
-            # Load shard from offload device to device.
-            logging.info(f"Loading shard{load_index}")
-            model_slices[load_index].forward_load()
-
-        ctx.index = index
-        ctx.model_slices = model_slices
-        ctx.model_instance = model_instance
-
-        return inputs if isinstance(inputs, tuple) else (inputs,)
-
-    @staticmethod
-    @conditional_amp_bwd_decorator
-    def backward(ctx, *grad_outputs):  # type: ignore
-
-        load_index = ctx.index
-        drop_index = load_index + 1
-        model_slices = ctx.model_slices
-        model_instance = ctx.model_instance
-
-        # TODO(anj-s): Are these redundant in the backward pass?
-        if drop_index == len(model_slices):
-            # Drop the last activation since it is still on the CPU
-            # after the loss.backward() call.
-            model_instance._activations[-1] = tuple([a.cuda() for a in list(model_instance._activations[-1])])
-
-        if drop_index < len(model_slices):
-            # Move shard from device to offload device.
-            logging.info(f"Backward Dropping shard {drop_index}")
-            model_slices[drop_index].backward_drop()
-            model_instance._activations[drop_index] = tuple(
-                [a.cpu() for a in list(model_instance._activations[drop_index])]
-            )
-
-        if load_index >= 0:
-            # Load shard from offload device to device.
-            logging.info(f"Backward Loading shard{load_index}")
-            model_slices[load_index].backward_load()
-            model_instance._activations[load_index] = tuple(
-                [a.cuda() for a in list(model_instance._activations[load_index])]
-            )
-
-        # The returned variables need to mirror the forward inputs
-        # TODO(anj-s): Why do we need to do this?
-        if isinstance(grad_outputs, tuple):
-            return grad_outputs[0], None, None, None
-
-        return grad_outputs, None, None, None
 
 
 class OffloadModel(nn.Module):
@@ -391,21 +326,31 @@ class OffloadModel(nn.Module):
 
     def __init__(
         self,
-        model_cpu: nn.Sequential,
+        model: nn.Sequential,
         device: torch.device,
         offload_device: torch.device = torch.device("cpu"),
-        num_slices: int = 5,
+        num_slices: int = 3,
         checkpoint_activation: bool = False,
         num_microbatches: int = 1,
     ):
         super().__init__()
-        # TODO(anj-s): Add error checks for cuda and sequential model.
+        if not model:
+            raise TypeError("`model` argument to `OffloadModel` cannot be None.")
+
+        if not device:
+            raise TypeError("`device` argument to `OffloadModel` cannot be None.")
+
+        if not isinstance(model, nn.Sequential):
+            raise TypeError("`model` argument to `OffloadModel` must be of type `nn.Sequential`.")
+
+        if not torch.cuda.is_available():
+            raise TypeError("CUDA must be available as one of the compute devices for `OffloadModel`.")
 
         self.device = device
         self.offload_device = offload_device
 
         # Slice the model into roughly equivalent sequential shards.
-        splits = _split(model_cpu, num_slices)
+        splits = _split(model, num_slices)
 
         # List of model shards that will be placed on/off the device.
         self.model_slices: List[nn.Module] = []
@@ -419,7 +364,7 @@ class OffloadModel(nn.Module):
             )
 
         # Expose a unified view of the slices
-        self.model = torch.nn.Sequential(*self.model_slices)
+        self._model = torch.nn.Sequential(*self.model_slices)
 
         # intermediate activations at the slice boundaries.
         self._activations: List[Tuple] = []
@@ -435,38 +380,10 @@ class OffloadModel(nn.Module):
         self._num_microbatches = num_microbatches
 
     def forward(self, *inputs: Any, **_: Any) -> Any:
-        # At least one of the inputs needs to have `requires_grad` set.
-        # TODO(anj-s): Should we require users to set this or should we set it here?
-        set_at_least_once = False
-        for inp in inputs:
-            if inp.dtype == torch.long:
-                continue
-            inp.requires_grad = True
-            set_at_least_once = True
+        # `apply` calls the `forward` function of the `ActivationCheckpointing` class
+        # and the `forward` function calls `inputs` on the first model shard.
+        # Please see https://pytorch.org/docs/stable/autograd.html#function for more details.
 
-        # if not set_at_least_once:
-        #     raise RuntimeError("We need at least one of the inputs to require grads.")
-
-        if self._checkpoint_activation:
-            return ActivationCheckpointing.apply(*inputs, self)
-
-        self._activations = []
-        for index in range(-1, len(self.model_slices)):
-            if index >= 0:
-                # TODO(anj-s): This might be a redundant call since we have the previous
-                # activation on the device already.
-                self._activations[index] = tuple([a.cuda() for a in list(self._activations[index])])
-                inputs = self._activations[index]
-                inputs = self.model_slices[index](*inputs)
-            # Call the custom autograd hooks (discard/load slices FW and BW)
-            inputs = ShardSyncLayer.apply(inputs, index, self.model_slices, self)
-            self._activations.append(inputs)
-            if index >= 0:
-                self._activations[index] = tuple([a.cpu() for a in list(self._activations[index])])
-
-        # We don't move the last activation/output since the target is present
-        # on the device.
-        # TODO(anj-s): It is now a requirement that the target tensors be placed on the
-        # device.
-        result = self._activations[-1]
-        return result[0] if len(result) == 1 else result
+        # We need the second param to be a dummy input to enable the
+        # backward pass to be triggered for integer inputs.
+        return ActivationCheckpointing.apply(*inputs, torch.tensor([], requires_grad=True), self)

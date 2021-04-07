@@ -18,6 +18,13 @@ class Workhandle:
         self.callback = callback
 
 
+def get_global_rank(group: Any, rank: int) -> int:
+    if group is dist.group.WORLD:
+        return rank
+
+    return dist.distributed_c10d._get_global_rank(group, rank)
+
+
 # Credits:  classy_vision/generic/distributed_util.py
 def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.device) -> Any:
     """
@@ -79,32 +86,6 @@ def broadcast_object(
     return obj
 
 
-class Bucket:
-    """
-    Helper class to simplify the handling of broadcast or reduce buckets
-    """
-
-    def __init__(self, buffer: torch.Tensor) -> None:
-        # The actual flat tensor
-        self.buffer = buffer
-        self.max_size = buffer.numel()
-
-        # Current status for this buffer
-        self.fill = 0
-        self.params_checked_in = 0
-        self.max_params_checked_in = 0  # atttribute present for convenience purposes
-        self.destination = -1
-        self.sent = True
-
-    def reset(self) -> None:
-        self.params_checked_in = 0
-        self.sent = False
-
-    def full(self) -> bool:
-        """ is the bucket full ? """
-        return self.max_params_checked_in == self.params_checked_in
-
-
 def calc_grad_norm(parameters: List[torch.nn.Parameter], p: float) -> torch.Tensor:
     r"""Calculate gradient norm of an iterable of parameters.
     Returns:
@@ -120,5 +101,6 @@ def calc_grad_norm(parameters: List[torch.nn.Parameter], p: float) -> torch.Tens
     if p == inf:
         local_norm = max(par.grad.detach().abs().max() for par in parameters)  # type: ignore
     else:
-        local_norm = torch.norm(torch.stack([torch.norm(par.grad.detach(), p) for par in parameters]), p)  # type: ignore
+        # Compute the norm in full precision no matter what
+        local_norm = torch.norm(torch.stack([torch.norm(par.grad.detach(), p, dtype=torch.float32) for par in parameters]), p).to(dtype=parameters[0].dtype)  # type: ignore
     return local_norm

@@ -17,21 +17,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 import torch
 from torch import nn
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader, Dataset
 
 from fairscale.experimental.nn.ampnet_pipe.pipe import AMPnetPipe
-from fairscale.utils.testing import get_worker_map, torch_spawn, torch_version
-
-# Current on CI, there appears to be a bug with torch 1.8
-# See:
-# https://app.circleci.com/pipelines/github/facebookresearch/fairscale/1892/workflows/8f658bf4-8052-4084-bb3e-4cc2c445c8aa/jobs/10080/parallel-runs/0/steps/0-112
-# So we skip this file in that case until it is fixed.
-if torch_version() >= (1, 8, 0):
-    pytestmark = pytest.mark.skip
+from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 class MySGD(Optimizer):

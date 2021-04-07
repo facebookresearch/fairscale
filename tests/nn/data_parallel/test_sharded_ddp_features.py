@@ -21,17 +21,34 @@ from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
 from fairscale.utils.testing import (
     GPT2,
+    SGDWithPausingCompute,
     available_devices,
     check_same_models_across_ranks,
     skip_if_less_than_four_gpu,
     skip_if_no_cuda,
-    skip_if_py38,
     skip_if_single_gpu,
 )
 
 
-def _get_mlp():
-    return Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
+def _get_mlp(tripwire: bool = False):
+    if not tripwire:
+        return Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
+
+    class Tripwire(torch.nn.Module):
+        """A model made to expose possible corner cases
+        """
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = Linear(2, 3, bias=False)
+
+            # mismatched types in between trainable or not, can trip the buckets for instance
+            self.register_parameter("tripwire", torch.nn.Parameter(torch.LongTensor((3, 3)), requires_grad=False))
+
+        def forward(self, x):
+            return self.model(x)
+
+    return Tripwire()
 
 
 class _DoubleInput(torch.nn.Module):
@@ -46,7 +63,15 @@ class _DoubleInput(torch.nn.Module):
 
 
 def run_one_step(
-    rank, world_size, backend, device, temp_file_name, broadcast_buffers, grad_accumulation, reduce_buffer_size,
+    rank,
+    world_size,
+    backend,
+    device,
+    temp_file_name,
+    broadcast_buffers,
+    grad_accumulation,
+    reduce_buffer_size,
+    optimizer_type,
 ):
     dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
     if device == torch.device("cuda"):
@@ -62,7 +87,11 @@ def run_one_step(
 
     next(model.parameters()).requires_grad = False  # Test non-trainable parameters
 
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+    optimizer_settings = {"lr": 1e-3, "momentum": 0.99}
+    if optimizer_type == SGDWithPausingCompute:
+        optimizer_settings["rank"] = rank
+
+    optimizer = OSS(params=model.parameters(), optim=optimizer_type, **optimizer_settings)
     ddp_model = ShardedDataParallel(
         model, optimizer, broadcast_buffers=broadcast_buffers, reduce_buffer_size=reduce_buffer_size
     )
@@ -85,6 +114,11 @@ def run_one_step(
     # The models should stay the same in between the ranks
     for i in range(5):
         _ = optimizer.step(closure=closure)
+
+        # For a sync of all the streams
+        if device.type == torch.device("cuda").type:
+            torch.cuda.synchronize(device=device)
+
         # when running on cpu/gloo the "nodes" are not really different
         same_params = device == torch.device("cpu") or not grad_accumulation
         check_same_models_across_ranks(
@@ -94,7 +128,7 @@ def run_one_step(
     dist.destroy_process_group()
 
 
-def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size):
+def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size, optimizer_type):
     temp_file_name = tempfile.mkstemp()[1]
     mp.spawn(
         run_one_step,
@@ -109,21 +143,33 @@ def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, 
 @pytest.mark.parametrize("broadcast_buffers", [True, False])
 @pytest.mark.parametrize("grad_accumulation", [True, False])
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
-def test_step_gpu(broadcast_buffers, grad_accumulation, reduce_buffer_size):
+@pytest.mark.parametrize("optimizer_type", [torch.optim.SGD, SGDWithPausingCompute])
+@pytest.mark.parametrize(
+    "setup",
+    [
+        [dist.Backend.NCCL, torch.device("cuda")],
+        [dist.Backend.GLOO, torch.device("cpu")],
+        [dist.Backend.GLOO, torch.device("cuda")],
+    ],
+)
+def test_step(broadcast_buffers, grad_accumulation, reduce_buffer_size, optimizer_type, setup):
     world_size = 2
-    run_test(
-        dist.Backend.NCCL, torch.device("cuda"), world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size
-    )
+    temp_file_name = tempfile.mkstemp()[1]
 
-
-@skip_if_py38
-@pytest.mark.parametrize("broadcast_buffers", [True, False])
-@pytest.mark.parametrize("grad_accumulation", [True, False])
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
-def test_step_cpu(broadcast_buffers, grad_accumulation, reduce_buffer_size):
-    world_size = 2
-    run_test(
-        dist.Backend.GLOO, torch.device("cpu"), world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size
+    mp.spawn(
+        run_one_step,
+        args=(
+            world_size,
+            setup[0],
+            setup[1],
+            temp_file_name,
+            broadcast_buffers,
+            grad_accumulation,
+            reduce_buffer_size,
+            optimizer_type,
+        ),
+        nprocs=world_size,
+        join=True,
     )
 
 
@@ -202,6 +248,20 @@ def test_random_attributes():
     dist.destroy_process_group()
 
 
+def test_mixed_types():
+    # Check that ShardedDDP exposes the original module's attributes
+    dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
+
+    model = _get_mlp(tripwire=True)
+
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+    model = ShardedDataParallel(model, optimizer)
+    input_tensor = torch.rand((2, 2))
+    _ = model(input_tensor)
+
+    dist.destroy_process_group()
+
+
 def run_test_device_change(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
     # Check that the wrapped module can change devices
     dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
@@ -225,7 +285,7 @@ def run_test_device_change(rank, world_size, backend, device, temp_file_name, re
 @skip_if_single_gpu
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 def test_device_change(reduce_buffer_size):
-    # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
+    # Check that ShardedDDP handles a device change properly
     world_size = 2
     backend = "nccl"
     temp_file_name = tempfile.mkstemp()[1]
@@ -357,9 +417,12 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
     np.random.seed(rank)
     model = GPT2(
         embed_dim=256, num_heads=2, num_layers=12, num_positions=INPUT_DIM * INPUT_DIM, num_vocab=512, num_classes=2
-    ).to(device)
+    )
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     ddp_model = ShardedDataParallel(model, optimizer)
+
+    # Move the model to another device post-construction
+    model = model.to(device)
 
     # Optim loop
     def closure():
@@ -379,9 +442,9 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
 
 @skip_if_no_cuda
 @skip_if_single_gpu
-def test_gpt2():
-    # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
-    world_size = 2
+@pytest.mark.parametrize("world_size", [1, 2])
+def test_gpt2(world_size):
+    # Check that having trainable unused params is fine
     backend = "gloo"
     temp_file_name = tempfile.mkstemp()[1]
     device = "cuda"

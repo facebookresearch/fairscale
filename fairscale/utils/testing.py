@@ -32,6 +32,7 @@ import logging
 import multiprocessing
 import os
 import random
+import subprocess
 import sys
 import tempfile
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
@@ -116,6 +117,30 @@ def torch_version() -> Tuple[int, ...]:
     return tuple(int(n) for n in numbering)
 
 
+_smi_ver = None
+
+
+def torch_cuda_version(compiled: bool = False) -> Tuple[int, ...]:
+    if compiled:
+        numbering = torch.version.cuda.split(".")[:2]
+    else:
+        global _smi_ver
+        if _smi_ver is None:
+
+            def get_smi_ver() -> str:
+                """Get CUDA version from nvidia-smi"""
+                for line in subprocess.check_output("nvidia-smi".split()).decode("utf-8").split("\n"):
+                    if "CUDA Version" in line:
+                        res = line.split()[8]
+                        assert res.startswith("10.") or res.startswith("11."), res
+                        return res
+                assert False
+
+            _smi_ver = get_smi_ver()
+        numbering = _smi_ver.split(".")[:2]
+    return tuple(int(n) for n in numbering)
+
+
 def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "") -> bool:
     """
     Initialize torch distributed, based on a temporary file shared across ranks, which makes it possible for unrelated
@@ -146,12 +171,22 @@ def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "")
 
         torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method=url)
 
+        tp_options = {"init_method": url_rpc}
+        # Workaround for bug in torch v1.8.0. Should be fixed in v1.8.1
+        if torch_version() == (1, 8, 0):
+            if torch.cuda.is_available():
+                # Workaround for https://github.com/pytorch/pytorch/issues/53844
+                tp_options["_transports"] = ["ibv", "uv"]  # type: ignore
+            else:
+                # Workaround for https://github.com/pytorch/pytorch/issues/54266
+                tp_options["_channels"] = ["mpt_uv", "basic", "cuda_ipc", "cuda_gdr", "cuda_xth", "cuda_basic"]  # type: ignore
+
         rpc.init_rpc(
             f"Test{rank}",
             rank=rank,
             world_size=world_size,
             backend=rpc.BackendType.TENSORPIPE,
-            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method=url_rpc),
+            rpc_backend_options=rpc.TensorPipeRpcBackendOptions(**tp_options),
         )
 
     else:
@@ -390,34 +425,54 @@ class GPT2(Base):
         return self.clf_head(h), logits
 
 
-def objects_are_equal(a: Any, b: Any, raise_exception: bool = False) -> bool:
+def objects_are_equal(a: Any, b: Any, raise_exception: bool = False, dict_key: Optional[str] = None) -> bool:
     """
     Test that two objects are equal. Tensors are compared to ensure matching
     size, dtype, device and values.
     """
     if type(a) is not type(b):
+        if raise_exception:
+            raise ValueError(f"type mismatch {type(a)} vs. {type(b)}")
         return False
     if isinstance(a, dict):
         if set(a.keys()) != set(b.keys()):
+            if raise_exception:
+                raise ValueError(f"keys mismatch {a.keys()} vs. {b.keys()}")
             return False
         for k in a.keys():
-            if not objects_are_equal(a[k], b[k], raise_exception):
+            if not objects_are_equal(a[k], b[k], raise_exception, k):
                 return False
         return True
     elif isinstance(a, (list, tuple, set)):
         if len(a) != len(b):
+            if raise_exception:
+                raise ValueError(f"length mismatch {len(a)} vs. {len(b)}")
             return False
         return all(objects_are_equal(x, y, raise_exception) for x, y in zip(a, b))
     elif torch.is_tensor(a):
         try:
-            torch.testing.assert_allclose(a, b)
             # assert_allclose doesn't strictly test shape, dtype and device
             shape_dtype_device_match = a.size() == b.size() and a.dtype == b.dtype and a.device == b.device
-            assert shape_dtype_device_match
+            if not shape_dtype_device_match:
+                if raise_exception:
+                    msg = f"sizes: {a.size()} vs. {b.size()}, "
+                    msg += f"types: {a.dtype} vs. {b.dtype}, "
+                    msg += f"device: {a.device} vs. {b.device}"
+                    raise AssertionError(msg)
+                else:
+                    return False
+            # assert_allclose.
+            torch.testing.assert_allclose(a, b)
             return True
         except (AssertionError, RuntimeError) as e:
             if raise_exception:
-                raise e
+                if dict_key and isinstance(e, AssertionError):
+                    # Add dict key to the assertion error.
+                    msg = e.args[0]
+                    new_msg = f"For dict key '{dict_key}': {msg}"
+                    raise AssertionError(new_msg) from None
+                else:
+                    raise e
             else:
                 return False
     else:
@@ -548,3 +603,45 @@ class DummyProcessGroup:
 
     def size(self) -> int:
         return self._size
+
+
+class SGDWithPausingCompute(torch.optim.SGD):
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore
+        self.rank = kwargs["rank"]
+        del kwargs["rank"]
+
+        super().__init__(*args, **kwargs)
+
+    def step(self, closure: Optional[Any] = None) -> Any:
+        loss = super().step(closure=closure)
+
+        # This is used to make sure that OSS and ShardedDDP enforce a proper stream synchronization
+        # - Add a long cuda wait on a compute stream, non blocking from the CPU perspective
+        with torch.cuda.stream(torch.cuda.Stream()):
+            torch.cuda._sleep(100000000)
+
+            # - optionally change the params on a per rank basis
+            with torch.no_grad():
+                for param_group in self.param_groups:
+                    for param in param_group["params"]:
+                        param *= 1.0 + self.rank / 10.0
+
+        return loss
+
+
+def state_dict_norm(state: Dict[str, torch.Tensor]) -> torch.Tensor:
+    """Compute the norm from a state_dict for simple comparison."""
+    norm = torch.zeros(1)
+    for v in state.values():
+        if not v.is_floating_point():
+            v = v.float()
+        norm += v.norm()
+    return norm
+
+
+def rmf(filename: str) -> None:
+    """Remove a file like rm -f."""
+    try:
+        os.remove(filename)
+    except FileNotFoundError:
+        pass
