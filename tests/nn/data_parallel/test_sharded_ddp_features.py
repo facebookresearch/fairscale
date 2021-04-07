@@ -30,8 +30,25 @@ from fairscale.utils.testing import (
 )
 
 
-def _get_mlp():
-    return Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
+def _get_mlp(tripwire: bool = False):
+    if not tripwire:
+        return Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
+
+    class Tripwire(torch.nn.Module):
+        """A model made to expose possible corner cases
+        """
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = Linear(2, 3, bias=False)
+
+            # mismatched types in between trainable or not, can trip the buckets for instance
+            self.register_parameter("tripwire", torch.nn.Parameter(torch.LongTensor((3, 3)), requires_grad=False))
+
+        def forward(self, x):
+            return self.model(x)
+
+    return Tripwire()
 
 
 class _DoubleInput(torch.nn.Module):
@@ -227,6 +244,20 @@ def test_random_attributes():
 
     assert hasattr(ddp_model, "banana")
     assert not hasattr(ddp_model, "orange")
+
+    dist.destroy_process_group()
+
+
+def test_mixed_types():
+    # Check that ShardedDDP exposes the original module's attributes
+    dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
+
+    model = _get_mlp(tripwire=True)
+
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+    model = ShardedDataParallel(model, optimizer)
+    input_tensor = torch.rand((2, 2))
+    _ = model(input_tensor)
 
     dist.destroy_process_group()
 

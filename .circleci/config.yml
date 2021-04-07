@@ -166,6 +166,12 @@ upload_coverage: &upload_coverage
       file: 'coverage.xml'
       token: $CODECOV_TOKEN
 
+run_offload_benchmark: &run_offload_benchmark
+  - run:
+      name: Run Offload Benchmark
+      command: |
+        python benchmarks/experimental/offload.py
+
 run_pipe_benchmark: &run_pipe_benchmark
   - run:
       name: Run Pipe Benchmark
@@ -543,6 +549,8 @@ jobs:
       - <<: *install_repo
 
       - <<: *run_pipe_benchmark
+
+      - <<: *run_offload_benchmark
 
       - <<: *run_oss_amp
 

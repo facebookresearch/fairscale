@@ -22,7 +22,7 @@ import torch.distributed as dist
 
 from fairscale.nn.misc import GradBucket
 from fairscale.optim import OSS
-from fairscale.optim.utils import Workhandle
+from fairscale.optim.utils import Workhandle, get_global_rank
 
 
 def _trainable(param: torch.Tensor) -> bool:
@@ -122,11 +122,11 @@ class ShardedDataParallel(nn.Module):
         self.process_group = process_group if process_group is not None else dist.group.WORLD
         self.backend = dist.get_backend(self.process_group)
         self.world_size_scaling = 1.0 / dist.get_world_size(self.process_group)  # > 0
-        self.reference_global_rank = OSS.get_global_rank(self.process_group, 0)  # picking rank 0 as the reference
+        self.reference_global_rank = get_global_rank(self.process_group, 0)  # picking rank 0 as the reference
         self.rank = dist.get_rank(self.process_group)
-        self.global_rank = OSS.get_global_rank(self.process_group, self.rank)
+        self.global_rank = get_global_rank(self.process_group, self.rank)
         self._local_to_global_rank = [
-            OSS.get_global_rank(self.process_group, i) for i in range(dist.get_world_size(self.process_group))
+            get_global_rank(self.process_group, i) for i in range(dist.get_world_size(self.process_group))
         ]
 
         # Expose some of the PytorchDDP attributes, some frameworks rely on them.
@@ -149,7 +149,7 @@ class ShardedDataParallel(nn.Module):
         # - we build an iterator which goes through all the parameters involved globally
         self._all_params = list(
             chain(
-                *[sum([sum(p, []) for p in optim.per_device_params.values()], []) for optim in self.sharded_optimizers]
+                *[sum([sum(p, []) for p in optim._per_device_params.values()], []) for optim in self.sharded_optimizers]
             )
         )
         self._trainable_params: List[torch.Tensor] = []
@@ -288,10 +288,10 @@ class ShardedDataParallel(nn.Module):
             # Update ShardedDDP given the new partitions
             for (
                 device_per_rank_params
-            ) in optim.per_device_params.values():  # all the params on this device (inc all ranks)
+            ) in optim._per_device_params.values():  # all the params on this device (inc all ranks)
                 for device_params in device_per_rank_params:
                     for param in filter(lambda x: x.requires_grad, device_params):
-                        self._trainable_param_to_rank[param] = optim.param_to_rank[param]
+                        self._trainable_param_to_rank[param] = optim._param_to_rank[param]
 
         self._setup_bucket_strategy()
         self._setup_backward_hooks()
@@ -494,18 +494,24 @@ class ShardedDataParallel(nn.Module):
             if param.grad is not None and param.grad.requires_grad:
                 raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
 
-            # Register the hook to the next function in line,
-            # so that the hook is fired when this grad has properly been computed
             p_tmp = param.expand_as(param)
-            assert p_tmp.grad_fn is not None
-            grad_acc = p_tmp.grad_fn.next_functions[0][0]
-            dst_rank = self._trainable_param_to_rank[param]
 
-            reduce_function = self._get_reduce_fn(index, param, dst_rank)
+            # See https://pytorch.org/docs/stable/tensors.html?highlight=grad_fn
+            # We're interested in the tensors which will be tracked by Autograd
+            # Some tensors can have gradients independent of the inputs (ie. pooling layer for instance),
+            # these do not need to be sync'ed
+            if p_tmp.grad_fn is not None:
+                # Register the hook to the next function in line,
+                # so that the hook is fired when this grad has properly been computed
+                # (by default the hook with Pytorch is a pre-grad, not a post-grad)
+                grad_acc = p_tmp.grad_fn.next_functions[0][0]
+                dst_rank = self._trainable_param_to_rank[param]
 
-            self._grad_hooks.append(grad_acc.register_hook(reduce_function))
-            self._grad_accs.append(grad_acc)  # keep this hook in scope
-            self._manual_reduce.append(reduce_function)
+                reduce_function = self._get_reduce_fn(index, param, dst_rank)
+
+                self._grad_hooks.append(grad_acc.register_hook(reduce_function))
+                self._grad_accs.append(grad_acc)  # keep this hook in scope
+                self._manual_reduce.append(reduce_function)
 
     @torch.no_grad()
     def _sync_params_and_buffers(self) -> None:
