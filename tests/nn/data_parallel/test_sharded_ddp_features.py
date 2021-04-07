@@ -271,7 +271,8 @@ def test_train_eval_change():
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
     model = ShardedDataParallel(model, optimizer)
     input_tensor = torch.rand((2, 2))
-    _ = model(input_tensor)
+    loss = model(input_tensor).sum()
+    loss.backward()  # make sure that the gradients are reduced
 
     model = model.eval()
     _ = model(input_tensor)
