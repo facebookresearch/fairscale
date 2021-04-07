@@ -41,8 +41,11 @@ class ShardedGradScaler(TorchGradScaler):
             logging.warning(
                 "ShardedGradScaler is to be used in combination with a sharded optimizer, this could not be checked"
             )
-
         self.display_warning = False  # Only warn once
+
+        # Make sure that gradients in flight are taken into account
+        if hasattr(optimizer, "_consume_work_handles"):
+            optimizer._consume_work_handles()
 
         # Call the upstream unscale_ method which will only act on this rank's gradients
         super().unscale_(optimizer)

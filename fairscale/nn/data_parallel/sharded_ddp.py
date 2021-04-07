@@ -155,6 +155,7 @@ class ShardedDataParallel(nn.Module):
         self._trainable_params: List[torch.Tensor] = []
         self._grad_to_be_reduced: List[bool] = []
         self._trainable_param_to_rank: Dict[torch.Tensor, int] = {}
+        self._trainable_param_to_optim: Dict[torch.Tensor, int] = {}
         self._reference_trainable_mask = list(map(_trainable, self._all_params))
 
         # - setup buckets and tensor views
@@ -276,7 +277,8 @@ class ShardedDataParallel(nn.Module):
         self._trainable_params.sort(key=lambda x: x.numel())
 
         self._trainable_param_to_rank = {}
-        for optim in self.sharded_optimizers:
+        self._trainable_param_to_optim = {}
+        for io, optim in enumerate(self.sharded_optimizers):
             # OSS may need to change the communication pattern
             optim.refresh_trainable()
 
@@ -287,6 +289,7 @@ class ShardedDataParallel(nn.Module):
                 for device_params in device_per_rank_params:
                     for param in filter(lambda x: x.requires_grad, device_params):
                         self._trainable_param_to_rank[param] = optim._param_to_rank[param]
+                        self._trainable_param_to_optim[param] = io
 
         self._setup_bucket_strategy()
         self._setup_backward_hooks()
@@ -395,6 +398,7 @@ class ShardedDataParallel(nn.Module):
                 if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
                     assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
 
+                    # Make sure that the buckets will be flushed no matter what
                     if not self._bucket_flush_callback_set:
                         Variable._execution_engine.queue_callback(self._flush_reduce_calls)
                         self._bucket_flush_callback_set = True
@@ -415,17 +419,22 @@ class ShardedDataParallel(nn.Module):
                             param.grad.data = param.grad.data.to(dtype=param.dtype)
 
                     # Async reduce for this buffer, log the future
-                    self._work_handles.append(
-                        Workhandle(
-                            handle=dist.reduce(
-                                tensor=param.grad.data,
-                                dst=self._local_to_global_rank[dst_rank],
-                                group=self.process_group,
-                                async_op=True,
-                            ),
-                            callback=cleanup,
-                        )
+                    handle = Workhandle(
+                        handle=dist.reduce(
+                            tensor=param.grad.data,
+                            dst=self._local_to_global_rank[dst_rank],
+                            group=self.process_group,
+                            async_op=True,
+                        ),
+                        callback=cleanup,
                     )
+                    if dst_rank == self.rank:
+                        # This reduction will be blocking
+                        self._work_handles.append(handle)
+                    else:
+                        # This reduction can wait until after the optim step
+                        i_optim = self._trainable_param_to_optim[param]
+                        self.sharded_optimizers[i_optim]._work_handles.append(handle)
 
                     # Opportunistically try to empty the queue, free memory
                     self._try_consume_work_handle()
@@ -439,6 +448,10 @@ class ShardedDataParallel(nn.Module):
                 if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
                     assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
 
+                    # Count this grad-to-optim reduction
+                    i_optim = self._trainable_param_to_optim[param]
+
+                    # Make sure that the buckets will be flushed no matter what
                     if not self._bucket_flush_callback_set:
                         Variable._execution_engine.queue_callback(self._flush_reduce_calls)
                         self._bucket_flush_callback_set = True
@@ -456,17 +469,20 @@ class ShardedDataParallel(nn.Module):
 
                         # Reduce the bucket
                         bucket.sent = True
-                        self._work_handles.append(
-                            Workhandle(
-                                handle=dist.reduce(
-                                    tensor=bucket.buffer,
-                                    dst=bucket.destination,
-                                    group=self.process_group,
-                                    async_op=True,
-                                ),
-                                callback=None,
-                            )
+                        handle = Workhandle(
+                            handle=dist.reduce(
+                                tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
+                            ),
+                            callback=None,
                         )
+
+                        if bucket.destination == self.global_rank:
+                            # This reduction will be blocking
+                            self._work_handles.append(handle)
+                        else:
+                            # This reduction can wait until after the optim step
+                            i_optim = self._trainable_param_to_optim[param]
+                            self.sharded_optimizers[i_optim]._work_handles.append(handle)
 
                     # Opportunistically try to empty the queue
                     self._try_consume_work_handle()
