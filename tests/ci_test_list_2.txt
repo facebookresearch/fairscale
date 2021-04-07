@@ -38,3 +38,4 @@ tests/nn/moe/test_top2gating.py
 tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
 tests/experimental/nn/test_offload.py
 tests/nn/data_parallel/test_fsdp_apply.py
+tests/nn/data_parallel/test_fsdp_state_dict.py
