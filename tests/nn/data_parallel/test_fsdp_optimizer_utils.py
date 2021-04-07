@@ -81,21 +81,31 @@ class TestOptimizerUtils(DistributedTest):
             unwrapped_model.run_backward(loss)
             optim_unwrapped.step()
         unwrapped_sd = optim_unwrapped.state_dict()
+        torch.cuda.empty_cache()
 
         if not transformer:
             no_broadcast_children = [x for x in fsdp._fsdp_instances if x.no_broadcast_optim_state]
             assert len(no_broadcast_children) == 1
             assert fsdp._fsdp_instances[-1].no_broadcast_optim_state
-
-        tstart = time()
+        cuda_gb_before = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024 ** 3
         sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=0)
-        duration = time() - tstart
-        # Switching from fairscale.optim.utils.broadcast_object to torch.broadcast_object_list will cause this to raise
-        #assert duration < fsdp.world_size, f"gather optim state took {duration} seconds, suspect change in _consolidate"
+        cuda_gb_after = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024 ** 3
+        mem_usg_gb = cuda_gb_after - cuda_gb_before
+        max_cuda_mem_gb = 0
+        assert mem_usg_gb <= max_cuda_mem_gb, f'gather_full_optim_state_dict used {max_cuda_mem_gb:.2f} GB, max allowed is 1'
+        assert cuda_gb_after > 0, 'got 0 memory usage, logging is broken'
 
         if fsdp.rank > 0:
             assert sd is None
             return
+
+
+        for k, v in sd['state'].items():
+            for buffer_name, t in v.items():
+                if torch.is_tensor(t):
+                    assert t.device == torch.device('cpu'), f'got device {t.device} for {k}: {buffer_name}. expected CPU'
+
+        #import ipdb; ipdb.set_trace()
         unflat_state = sd["state"]
         assert "uncollected_local_ids" in sd
         shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
