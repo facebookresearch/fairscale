@@ -3,12 +3,11 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections import OrderedDict
-import copy
+from collections import OrderedDict, deque
 from itertools import chain
 import logging
 from math import inf
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Callable, Deque, Dict, List, Optional, Type, Union
 
 import torch
 import torch.distributed as dist
@@ -17,7 +16,8 @@ from torch.optim import SGD, Optimizer
 
 from fairscale.nn.misc import ParamBucket
 
-from .utils import broadcast_object, calc_grad_norm, get_global_rank, recursive_copy_to_device
+from .oss_utils import partition_keep_ordering, partition_memory
+from .utils import Workhandle, broadcast_object, calc_grad_norm, get_global_rank, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
@@ -25,6 +25,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
+
+import enum
 
 
 class OSS(Optimizer):
@@ -58,7 +60,9 @@ class OSS(Optimizer):
             Compress the model shards in fp16 before sharing them in between ranks.
             This is safe to use when PyTorch AMP is activated. Without torch AMP this will lead to a slight
             degradation in terms of accuracy.
-
+        partition_type:
+            whether to optimizer the partitioning in between the ranks for memory, or keeping the parameters
+            ordering.
 
     .. warning: the communication patterns that OSS use depend on the "trainability" graph,
         meaning that all the parameters which `require_grad` are handled differently. This is
@@ -67,6 +71,10 @@ class OSS(Optimizer):
         If used with :class:<fairscale.nn.ShardedDDP> then an automatic change detection is possible,
         via the `auto_refresh_trainable` parameter.
     """
+
+    class PartitionType(enum.Enum):
+        ORDERING = enum.auto()
+        MEMORY = enum.auto()
 
     #: The optimizer used for a given shard
     optim: Optimizer
@@ -80,6 +88,7 @@ class OSS(Optimizer):
         group: Optional[Any] = None,
         broadcast_buffer_size: int = -1,
         broadcast_fp16: bool = False,
+        partition_type: PartitionType = PartitionType.MEMORY,
         **default: Any,
     ):
 
@@ -98,6 +107,7 @@ class OSS(Optimizer):
         # Default empty values + immutables
         self._optim_defaults = default
         self._optim_constructor = optim
+        self._loss: Optional[float] = -1.0
 
         self.group = group if group is not None else dist.group.WORLD
         self.world_size = dist.get_world_size(self.group)
@@ -110,6 +120,8 @@ class OSS(Optimizer):
         self.buckets: Dict[torch.device, Dict[int, ParamBucket]] = {}
         self._all_states: List[Dict[str, Any]] = []  # Optional consolidated optimizer state
         self._default_device = torch.device("cpu")
+        self._partition_type = partition_type
+        self._work_handles: Deque[Workhandle] = deque()
 
         # Setup everything which is related to the parameters to be trained
         # (partition and optimizer for the shard)
@@ -125,29 +137,12 @@ class OSS(Optimizer):
         inside step().
         """
         if len(self._partition_parameters) == 0:
-            self._partition_parameters = [list() for _ in range(self.world_size)]
-            sizes = [0] * self.world_size
-            for param_group in self.param_groups:
-                param_lists: List[List] = [list() for _ in range(self.world_size)]
-                for param in param_group["params"]:
-                    # Add this param to rank with smallest size.
-                    rank = sizes.index(min(sizes))
-                    param_lists[rank].append(param)
+            if self._partition_type == OSS.PartitionType.MEMORY:
+                self._partition_parameters = partition_memory(self.param_groups, self.world_size)
 
-                    # We're partitioning the optimizer state,
-                    # so trainable parameters are the ones which really count
-                    if param.requires_grad:
-                        sizes[rank] += param.numel()
-                    else:
-                        # Spread frozen params on a per-tensor basis
-                        # Mostly useful for balance partitions for fine tuning for instance
-                        # Not required strictly speaking
-                        sizes[rank] += 1
-
-                for rank, params in enumerate(param_lists):
-                    param_group_rank = copy.copy(param_group)
-                    param_group_rank["params"] = params
-                    self._partition_parameters[rank].append(param_group_rank)
+            elif self._partition_type == OSS.PartitionType.ORDERING:
+                # TODO: update the partitioning and ordering given the backward pass information
+                self._partition_parameters = partition_keep_ordering(self.param_groups, self.world_size, None)
 
         return self._partition_parameters
 
@@ -182,7 +177,6 @@ class OSS(Optimizer):
 
         # Sync hypothethical new results from the wrapped optimizer to the exposed param_groups
         OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
-
         return loss
 
     def clip_grad_norm(
@@ -541,8 +535,6 @@ class OSS(Optimizer):
             for device in self._per_device_params.keys():
                 torch.cuda.synchronize(device=device)
 
-        work_handles = []  # Work handles are consumed within this scope, no callback
-
         # Populate the fp16 shards
         if self.broadcast_fp16:
             for device in self.buckets.keys():
@@ -555,19 +547,33 @@ class OSS(Optimizer):
         # Exchange all the shards with the other ranks
         for device in self.buckets.keys():
             for dst_rank, bucket in self.buckets[device].items():
-                work_handles.append(
-                    dist.broadcast(
-                        tensor=bucket.buffer, src=self._local_to_global_rank[dst_rank], group=self.group, async_op=True,
+                self._work_handles.append(
+                    Workhandle(
+                        dist.broadcast(
+                            tensor=bucket.buffer,
+                            src=self._local_to_global_rank[dst_rank],
+                            group=self.group,
+                            async_op=True,
+                        ),
+                        None,
                     )
                 )
 
-        _ = list(filter(lambda x: x.wait(), work_handles))
+        self._consume_work_handles()
 
         # Populate back the fp32 shards
         if self.broadcast_fp16:
             for device in self.buckets.keys():
                 for dst_rank in self.buckets[device].keys():
                     bucket.to(dtype=torch.float32, device=device, non_blocking=True, keep_param_alignment=True)
+
+    def _consume_work_handles(self) -> None:
+        # Consume all the pseudo-futures, starting with the oldest ones
+        while len(self._work_handles) > 0:
+            future = self._work_handles.popleft()
+            future.handle.wait()
+            if future.callback is not None:
+                future.callback()
 
     def _setup_flat_buffers(self) -> None:
         """Make all params which are on the same device and tied to the same rank views of a single buffer.
