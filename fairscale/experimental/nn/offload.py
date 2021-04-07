@@ -192,7 +192,6 @@ class ActivationCheckpointing(torch.autograd.Function):
                 model_instance._activations[index] = tuple([a.cpu() for a in list(model_instance._activations[index])])
                 # The newly computed activations remain on the GPU ready for the next shard computation.
                 model_instance._activations.append(output)
-                # model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
                 # Move the layer shard back to the CPU.
                 layer_shard.forward_drop()
 
