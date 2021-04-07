@@ -274,13 +274,16 @@ def test_train_eval_change():
     loss = model(input_tensor).sum()
     loss.backward()  # make sure that the gradients are reduced
 
-    model = model.eval()
+    # Wipe the gradients and switch to eval mode
+    model.zero_grad()
+    model.eval()
     _ = model(input_tensor)
-    _ = model(input_tensor)
+    assert next(model.parameters()).grad is None or torch.norm(next(model.parameters()).grad) < 1e-6
 
+    # Get back to training
     model = model.train()
-    _ = model(input_tensor)
-    _ = model(input_tensor)
+    model(input_tensor).sum().backward()
+    assert torch.norm(next(model.parameters()).grad) > 0.0
 
     dist.destroy_process_group()
 

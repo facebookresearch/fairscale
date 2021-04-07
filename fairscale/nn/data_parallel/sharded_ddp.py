@@ -635,7 +635,9 @@ class ShardedDataParallel(nn.Module):
         trainability_changed |= not self.training and len(self._grad_hooks) > 0
 
         if trainability_changed:
-            logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")
+            logging.warning(
+                "ShardedDDP detected that the trainable params changed, either because of eval/train mode or parameter freezing/unfreeze."
+            )
             self._reference_trainable_mask = trainable_mask
 
         return trainability_changed
