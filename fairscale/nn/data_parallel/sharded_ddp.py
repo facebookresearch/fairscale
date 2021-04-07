@@ -198,15 +198,10 @@ class ShardedDataParallel(nn.Module):
         """
 
         # Deferred initialization, or change detection
-        needs_setup = len(self._grad_hooks) == 0
+        needs_setup = len(self._grad_hooks) == 0 and self.training
 
         if self.auto_refresh_trainable:
-            # Optionally check whether the trainable parameters have changed
-            trainable_mask = list(map(_trainable, self._all_params))
-            if trainable_mask != self._reference_trainable_mask:
-                logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")
-                needs_setup = True
-                self._reference_trainable_mask = trainable_mask
+            needs_setup |= self._detect_train_change()
 
         if needs_setup:
             self.refresh_trainable()
@@ -272,13 +267,13 @@ class ShardedDataParallel(nn.Module):
         """ If the module trainability has changed, update all the assumptions """
 
         # Make sure that this is not done while gradients are waiting to be reduced (if no_sync context for instance)
-        assert not functools.reduce(
-            lambda x, y: x or y, self._grad_to_be_reduced, False
-        ), "Grads waiting to be reduced: {}".format(self._grad_to_be_reduced)
+        assert not functools.reduce(lambda x, y: x or y, self._grad_to_be_reduced, False), (
+            "Grads waiting to be reduced: {}".format(self._grad_to_be_reduced)
+            + "\nIf this is on purpose (grad accumulation), please use a no_sync() context"
+        )
 
         self._trainable_params = list(filter(lambda x: x.requires_grad, self._all_params))
         self._trainable_params.sort(key=lambda x: x.numel())
-        self._grad_to_be_reduced = [True for _ in self._trainable_params]
 
         self._trainable_param_to_rank = {}
         for optim in self.sharded_optimizers:
@@ -373,7 +368,8 @@ class ShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _clear_counters(self) -> None:
         """Reset all the grad reduce and call counters"""
-        self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
+        if self.training:
+            self._grad_to_be_reduced = [True for _ in self._trainable_params]
         self._bucket_flush_callback_set = False
 
         if self.use_buckets:
@@ -490,6 +486,9 @@ class ShardedDataParallel(nn.Module):
         # Go through the parameters, attach the hook
         self._grad_accs = []
         self._manual_reduce = []
+        if not self.training:
+            return
+
         for index, param in enumerate(self._trainable_params):
             if param.grad is not None and param.grad.requires_grad:
                 raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
@@ -624,3 +623,21 @@ class ShardedDataParallel(nn.Module):
                 bucket.sent = True
 
         self._consume_work_handles()
+
+    def _detect_train_change(self) -> bool:
+        # Optionally check whether the trainable parameters have changed
+        trainable_mask = list(map(_trainable, self._all_params))
+
+        # - one or more parameters trainability changed
+        trainability_changed = trainable_mask != self._reference_trainable_mask
+
+        # - the whole model is not trainable but we still have grad hooks
+        trainability_changed |= not self.training and len(self._grad_hooks) > 0
+
+        if trainability_changed:
+            logging.warning(
+                "ShardedDDP detected that the trainable params changed, either because of eval/train mode or parameter freezing/unfreeze."
+            )
+            self._reference_trainable_mask = trainable_mask
+
+        return trainability_changed
