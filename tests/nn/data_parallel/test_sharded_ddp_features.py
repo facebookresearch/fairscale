@@ -262,6 +262,28 @@ def test_mixed_types():
     dist.destroy_process_group()
 
 
+def test_train_eval_change():
+    # Check that ShardedDDP handles the switch from training to eval properly
+    dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
+
+    model = _get_mlp()
+    model.train()
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+    model = ShardedDataParallel(model, optimizer)
+    input_tensor = torch.rand((2, 2))
+    _ = model(input_tensor)
+
+    model = model.eval()
+    _ = model(input_tensor)
+    _ = model(input_tensor)
+
+    model = model.train()
+    _ = model(input_tensor)
+    _ = model(input_tensor)
+
+    dist.destroy_process_group()
+
+
 def run_test_device_change(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
     # Check that the wrapped module can change devices
     dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
