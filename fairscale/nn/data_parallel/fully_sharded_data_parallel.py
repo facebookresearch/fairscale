@@ -18,7 +18,7 @@ from torch.distributed import ProcessGroup
 import torch.nn as nn
 from torch.nn import Parameter
 import torch.nn.functional as F
-
+import time
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.optim.utils import broadcast_object, calc_grad_norm, recursive_copy_to_device
@@ -1404,7 +1404,9 @@ class FullyShardedDataParallel(nn.Module):
         should_collect_state = recipient_rank is None or (self.rank == recipient_rank)
         all_states: List[Dict[str, Any]] = []
         dummy_tensor = torch.tensor([0], dtype=torch.uint8, device=self.compute_device)
+        self.print_r0('FSDP: start gather')
         for rank in range(self.world_size):
+            self.print_r0(f'FSDP: gathering OSD rank {rank}')
             if rank == self.rank:
                 sd = self._remove_uncollectable_params_from_optim_state_dict(optim.state_dict())
                 sd["num_padded"] = [m.numel_padded_per_param for m in self._fsdp_instances]
@@ -1414,7 +1416,7 @@ class FullyShardedDataParallel(nn.Module):
             if should_collect_state:
                 assert isinstance(sd, dict), f"{self.rank} received {type(sd)} from {rank}, expected dict"
                 all_states.append(recursive_copy_to_device(sd, non_blocking=False, device=torch.device("cpu")))
-
+        self.print_r0('FSDP: done gather')
         return all_states
 
     def gather_full_optim_state_dict(
@@ -1437,6 +1439,7 @@ class FullyShardedDataParallel(nn.Module):
                 * param_groups - a dict containing the 1 parameter group
 
         """
+        self.tstart = time.time()
         if not self.flatten_parameters:
             raise NotImplementedError("optim state dict requires flatten_parameters=True")
         world_optim_states = self._consolidate_optim_state_dict(optim, recipient_rank)
@@ -1446,7 +1449,9 @@ class FullyShardedDataParallel(nn.Module):
         new_state_dict = ou.build_unflat_state_dict(
             self._fsdp_instances, world_optim_states, self.uncollected_opt_state
         )
+
         self.uncollected_opt_state = {}
+        self.print_r0('FSDP: done unflat')
         assert "uncollected_local_ids" in new_state_dict
         return new_state_dict
 
@@ -1460,8 +1465,12 @@ class FullyShardedDataParallel(nn.Module):
         new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
         if self.rank == 0:
             # Save placeholders for uncollected opt state to keep the same unflat OSD format.
-            self.uncollected_opt_state = {k: recursive_copy_to_device(v,non_blocking=False, device=torch.device('cpu')) for k, v in osd["state"].items() if k in uncollected_ids}
-            # self.uncollected_opt_state = {k: v for k, v in osd["state"].items() if k in uncollected_ids}
+            import os
+            print(f"COPY_CPU: {os.getenv('COPY_CPU', False)}")
+            if True: #os.getenv('COPY_CPU', False):
+                self.uncollected_opt_state = {k: recursive_copy_to_device(v,non_blocking=False, device=torch.device('cpu')) for k, v in osd["state"].items() if k in uncollected_ids}
+            else:
+                self.uncollected_opt_state = {k: v for k, v in osd["state"].items() if k in uncollected_ids}
         pg = copy.deepcopy(osd["param_groups"])
         new_dct["param_groups"] = pg
         return new_dct
@@ -1500,6 +1509,10 @@ class FullyShardedDataParallel(nn.Module):
 
         return full_optim_state_dict
 
+    def print_r0(self, msg):
+        if self.rank == 0:
+            gb_denom = 1024**3
+            print(f'{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, t={time.time()-self.tstart: .1f}')
 
 def _get_default_cuda_device(module: nn.Module) -> torch.device:
     """Try to infer CUDA device from module parameters."""
