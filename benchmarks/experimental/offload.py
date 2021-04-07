@@ -131,7 +131,6 @@ def train_seq(model_config, benchmark_config, model_specs, args):
                 with _get_profiler_record_context("model_training", args.use_profiler):
                     with _get_fp16_context(use_fp16=args.use_fp16):
                         output = model(inputs)
-                        print(f"output grad_fn {output.grad_fn}")
                         loss = criterion(output, target=batch_outputs)
                         loss.backward()
                     optimizer.step()
@@ -149,7 +148,7 @@ def train_seq(model_config, benchmark_config, model_specs, args):
         if args.use_profiler:
             prof.export_chrome_trace("/tmp/offload_prof")
 
-    train_epoch(args, num_iters=5)
+    train_epoch(args, num_iters=2)
 
 
 def train(model_config, model, benchmark_config, model_specs, args):
@@ -414,7 +413,7 @@ parser.add_argument(
     help="Print debugging statements which is more verbose than the default.",
 )
 parser.add_argument(
-    "--model_name", default="lm", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
+    "--model_name", default="seq", type=str, help="Language Model(LM) used to benchmark nn.pipe.",
 )
 parser.add_argument(
     "--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks."

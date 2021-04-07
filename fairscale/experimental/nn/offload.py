@@ -188,17 +188,19 @@ class ActivationCheckpointing(torch.autograd.Function):
 
             output = output if isinstance(output, tuple) else (output,)
             with torch.autograd.profiler.record_function("fairscale.experimental.nn.offload:forward_drop"):
-                # The last instance will lose the gradient function if we move it to the CPU.
-                # This is because all grad function are present on the device that ran the FW pass.
-                if index == len(model_instance.model_slices) - 1:
-                    model_instance._activations.append(output)
-                else:
-                    model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
-                print(f"model_instance._activations device {[a.device for a in model_instance._activations[-1]]}")
+                # Move the activation used back for the curent shard back to the CPU.
+                model_instance._activations[index] = tuple([a.cpu() for a in list(model_instance._activations[index])])
+                # The newly computed activations remain on the GPU ready for the next shard computation.
+                model_instance._activations.append(output)
+                # model_instance._activations.append(tuple([a.cpu() for a in list(output)]))
                 # Move the layer shard back to the CPU.
                 layer_shard.forward_drop()
 
-        # TODO(anj-s): Check device of the result to make sure the outputs and targets match device.
+        # The last instance will lose the gradient function if we move it to the CPU.
+        # This is because all grad function are present on the device that ran the FW pass.
+        # The last activation remains on the GPU and is the return value of this function.
+        # Note that this assumes that the target is also on the GPU which is required for calculating
+        # the loss.
         result = model_instance._activations[-1]
         result = [r.cuda() for r in result]
         for r in result:
@@ -208,7 +210,6 @@ class ActivationCheckpointing(torch.autograd.Function):
     @staticmethod
     @_conditional_amp_bwd_decorator
     def backward(ctx, *grad_outputs):  # type: ignore
-        print("\n\n HERE")
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
         inputs = ctx.inputs
@@ -222,11 +223,11 @@ class ActivationCheckpointing(torch.autograd.Function):
         for model_shard, activation in zip(
             reversed(model_instance.model_slices), reversed(model_instance._activations[:-1])
         ):
-            # Move the activation to the device.
-            # activation = tuple([a.cuda() for a in list(activation)])
-
             with torch.autograd.profiler.record_function("fairscale.experimental.nn.offload:backward_load"):
-                # Move the model shard to the device.
+                # Move the activation to the GPU.
+                activation = tuple([a.cuda() for a in list(activation)])
+
+                # Move the model shard to the GPU.
                 model_shard.backward_load()
 
             # Store the BW pass state.
@@ -281,11 +282,11 @@ class ActivationCheckpointing(torch.autograd.Function):
                 if None not in intermediate_grads:
                     chunked_grad_list += intermediate_grads
             if chunked_grad_list:
-                # Append the list of grads to the all_grads list and this should be on the CPU.
+                # Append the list of grads to the all_grads list and this should be on the GPU.
                 all_grads.append(torch.cat(chunked_grad_list).squeeze(-1))  # type: ignore
-            # TODO(anj-s): Why does moving activations to CPU cause the .grad property to be None?
             with torch.autograd.profiler.record_function("fairscale.experimental.nn.offload:backward_drop"):
-                # Move the shard back to the CPU.
+                # Move the shard back to the CPU. This should move all the grad tensors to CPU as well.
+                # We don't need to move activations since we are using a copy of the tensors on the GPU.
                 model_shard.backward_drop()
         detached_inputs = model_instance._activations[0]
         grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp for inp in detached_inputs)
