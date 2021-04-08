@@ -1384,7 +1384,7 @@ class FullyShardedDataParallel(nn.Module):
 
     def _consolidate_optim_state_dict(
         self, optim: torch.optim.Optimizer, recipient_rank: Optional[int] = None
-    ) -> List[Dict]:
+    ) -> Tuple[List[Dict], Dict[int, Dict[str, List[Any]]]]:
         """Update the consolidated state_dict list, one per rank.
 
         Args:
@@ -1395,7 +1395,8 @@ class FullyShardedDataParallel(nn.Module):
             None is a special value, which means that all ranks should have the state
 
         Returns:
-            all_states (list[dict]) the optimizer state from each rank
+            non_tensor_state (list[dict]) the non-tensor optimizer state from each rank
+            tensor_state (dict[list]) tensor state (combined from all ranks using all_gather)
 
 
         .. warning: This needs to be called on all replicas"""
@@ -1432,17 +1433,16 @@ class FullyShardedDataParallel(nn.Module):
     def _gather_optim_state(self, sd_state: Dict[int, Dict[str, Any]]) -> Dict[int, Dict[str, List]]:
         """for each buffer in state[i], if the buffer is a tensor, collect it from the world. Else use rank 0's entry."""
         self._print_r0(f"start: n state: {len(sd_state)}")
-        gathered_state = {}
+        gathered_state: Dict[int, Dict[str, List[Any]]] = {}
         for k, v in sd_state.items():
             gathered_state[k] = {}
-            desired_buffer_size = self._fsdp_instances[k].flat_param._full_param_padded.size()
+            desired_buffer_size = self._fsdp_instances[k].flat_param._full_param_padded.size()  # type: ignore
             buffer = None
 
             for buffer_name, t in v.items():
                 if torch.is_tensor(t):
-                    # TODO(SS): reuse this buffer and then free it.
                     if buffer is None:
-                        buffer = self._fsdp_instances[k].flat_param.new_zeros(*desired_buffer_size, dtype=t.dtype)
+                        buffer = self._fsdp_instances[k].flat_param.new_zeros(*desired_buffer_size, dtype=t.dtype)  # type: ignore
                         chunks = list(buffer.chunk(self.world_size))
                     dist.all_gather(chunks, t, group=self.process_group)
                     # unpad each chunk here
