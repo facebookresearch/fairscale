@@ -180,8 +180,8 @@ class PipelineModulesGraph(nn.Module):
         consumer_input_idx: int  # indicating which input of the consumer module
         producer_output_idx: int  # indicating which output of the producer module
 
-    def compile_output_users(self) -> None:
-        """Precomputes self.model_input_users and self.output_users for internal use by the pipleine
+    def compile_output_consumers(self) -> None:
+        """Precomputes self.model_input_consumers and self.output_consumers for internal use by the pipleine
         class. These two lists show consumers of inputs to the model, and outputs of each module of
         the graph. Each consumer is a pair (i, j) which stands for the j'th input to the i'th module
         in the graph.
@@ -195,15 +195,17 @@ class PipelineModulesGraph(nn.Module):
         #     if we relax this condition, still need to make sure the graph is acyclic.
 
         m = len(self.modules_list)
-        self.output_users: List[List[PipelineModulesGraph.OutputConsumer]] = [[] for _ in range(m)]
-        self.model_input_users = []
+        self.output_consumers: List[List[PipelineModulesGraph.OutputConsumer]] = [[] for _ in range(m)]
+        self.model_input_consumers = []
         for i, input in enumerate(self.inputs):
             assert input is not None
             for j, input_item in enumerate(input):
                 if input_item[0] >= 0:
-                    self.output_users[input_item[0]].append(PipelineModulesGraph.OutputConsumer(i, j, input_item[1]))
+                    self.output_consumers[input_item[0]].append(
+                        PipelineModulesGraph.OutputConsumer(i, j, input_item[1])
+                    )
                 else:
-                    self.model_input_users.append((i, j, input_item[1]))
+                    self.model_input_consumers.append((i, j, input_item[1]))
 
     def _trace_modules(self, module_idx: int) -> List[int]:
         """Compiles a list of modules (starting from module number module_idx), where each module in the list
@@ -216,14 +218,14 @@ class PipelineModulesGraph(nn.Module):
         current_module = self.modules_list[module_idx]
         while True:
             partition.append(current_module_idx)
-            # If we reached a module with multiple outputs or with multiple users for its output,
+            # If we reached a module with multiple outputs or with multiple consumers for its output,
             # stop adding more modules to the partition.
-            if len(self.output_users[current_module_idx]) != 1:
+            if len(self.output_consumers[current_module_idx]) != 1:
                 break
             if self.modules_list[current_module_idx].num_outputs is not None:
                 break
             # Next module to add is the only consumer of the ouput of the current module
-            next_module_idx = self.output_users[current_module_idx][0].consumer_idx
+            next_module_idx = self.output_consumers[current_module_idx][0].consumer_idx
             next_module = self.modules_list[next_module_idx]
             # If the next module has multiple inputs, do not add it to the current partition and stop.
             if self.inputs[next_module_idx] != [(current_module_idx, 0)]:
@@ -246,7 +248,7 @@ class PipelineModulesGraph(nn.Module):
         If there is only one module in the partition, module_rref is reference to that module; otherwise those modules
         are wrapped by a MultiInputSequential and module_rref referes to that.
         """
-        self.compile_output_users()
+        self.compile_output_consumers()
         module_used = [False] * len(self.modules_list)
         partitions = []
         for module_idx, module in enumerate(self.modules_list):
@@ -278,11 +280,18 @@ class DistributedPipelineRecord:
         rank: the rank of the partition in the pipeline.
         chunks: number of micro-batches in a mini-batch
         num_inputs: number of inputs to the partition.
-        users: list of consumers of outputs of the partition. Each consumer in the list is a tuple
+        consumers: list of consumers of outputs of the partition. Each consumer in the list is a tuple
             (remote_partition_rref, input_idx, output_idx) where remote_partition_rref points to a
             remote DistributedPipelineRecord for consumer partiton for this mini-batch. The output number
             output_idx of this partition will be used as the input number input_idx of that partition.
     """
+
+    class OutputConsumer(NamedTuple):
+        """A data class for representating a consumer of an output of the module."""
+
+        consumer_rref: rpc.RRef  # reference to the consumer (of type DistributedPipelineRecord)
+        consumer_input_idx: int  # indicating which input of the consumer module
+        output_idx: int  # indicating which output of the module
 
     def __init__(
         self,
@@ -291,7 +300,7 @@ class DistributedPipelineRecord:
         chunks: int,
         num_inputs: int,
         num_outputs: Optional[int],
-        users: List[Tuple[rpc.RRef, int, int]],
+        consumers: List["DistributedPipelineRecord.OutputConsumer"],
     ) -> None:
         self.ready_cv = Condition()
         # Each chunk consists of num_inputs tensors. self.tensors stores these individual tensors.
@@ -307,7 +316,7 @@ class DistributedPipelineRecord:
         if num_outputs is None:
             num_outputs = 1
         self.forwarded_phony: List[List[List[rpc.RRef]]] = [[[] for j in range(num_outputs)] for i in range(chunks)]
-        self.users = users
+        self.consumers = consumers
         self.rank = rank
         self.device = device
 
@@ -389,8 +398,12 @@ class PartitionHandler:
         """
         return [rpc.RRef(p) for p in self.module.parameters()]
 
-    def make_pipeline_record(self, users: List[Tuple[rpc.RRef, int, int]]) -> DistributedPipelineRecord:
-        return DistributedPipelineRecord(self.device, self.rank, self.chunks, self.num_inputs, self.num_outputs, users)
+    def make_pipeline_record(
+        self, consumers: List[DistributedPipelineRecord.OutputConsumer]
+    ) -> DistributedPipelineRecord:
+        return DistributedPipelineRecord(
+            self.device, self.rank, self.chunks, self.num_inputs, self.num_outputs, consumers
+        )
 
     def run(self, pipeline_record: DistributedPipelineRecord) -> None:
         """Runs pipeline parallelism. It modifies the given batches in place."""
@@ -405,9 +418,11 @@ class PartitionHandler:
             self.compute(pipeline_record, chunk)
             # Forward outputs of processing the chunk in this parition for processing by next partition.
             with use_stream(self.stream):
-                for user, input_idx, output_idx in pipeline_record.users:
+                for consumer, input_idx, output_idx in pipeline_record.consumers:
                     v = pipeline_record.get_batch(chunk).value[output_idx]
-                    pipeline_record.forwarded_phony[chunk][output_idx].append(user.remote().feed(chunk, input_idx, v))
+                    pipeline_record.forwarded_phony[chunk][output_idx].append(
+                        consumer.remote().feed(chunk, input_idx, v)
+                    )
 
     def fence(self, pipeline_record: DistributedPipelineRecord, chunk: int) -> None:
         """Prepares micro-batches for computation."""
@@ -417,7 +432,7 @@ class PartitionHandler:
         # gets its input from model input. 1) Figure out why 2) If we need to live
         # with this constraint, replace the condition 'pipeline_record.rank > 0' below with
         # a more accurate one.
-        if chunk != 0 and pipeline_record.users and pipeline_record.rank > 0:
+        if chunk != 0 and pipeline_record.consumers and pipeline_record.rank > 0:
             dependant_tensors = []
             batch = pipeline_record.batches[chunk]
             assert batch is not None
@@ -497,13 +512,13 @@ class PartitionHandler:
 
     def run_pipeline(self, pipeline_record_rref: rpc.RRef) -> Optional[Tensor]:
         """Processes a min-batch on this partition.
-           If this is the last partition (pipeline_record has no user), concatenates results of processing
+           If this is the last partition (pipeline_record has no consumer), concatenates results of processing
            all chunks and returns the result as the output of the model on the whole mini-batch.
         """
         pipeline_record = pipeline_record_rref.local_value()
         self.run(pipeline_record)
 
-        if not pipeline_record.users:
+        if not pipeline_record.consumers:
             result = microbatch.gather(pipeline_record.batches)
             assert len(result) == 1
             result = result[0]
@@ -569,7 +584,7 @@ class DistributedPipeline(nn.Module):
         self.partitions = graph.partition_graph()
         self.input_feeds = [
             next((i, fj, feed_idx) for i, (p, m) in enumerate(self.partitions) if p[0] == fi)
-            for fi, fj, feed_idx in graph.model_input_users
+            for fi, fj, feed_idx in graph.model_input_consumers
         ]
 
         # The micro-batch index where the checkpointing stops.
@@ -637,18 +652,22 @@ class DistributedPipeline(nn.Module):
         num_partitions = len(self.partition_handlers)
 
         # Create a DistributedPipelineRecord, one per partition, and make connections between them (i.e.
-        # set list of users).
+        # set list of consumers).
         pipeline_records: List[Optional[rpc.RRef]] = [None] * (num_partitions + 1)
         for part_idx in reversed(range(num_partitions)):
             r_handler = self.partition_handlers[part_idx].remote()
-            users = []
-            # Identify users of the outputs of the partition
-            for user, input_idx, output_idx in self.graph.output_users[self.partitions[part_idx][0][-1]]:
-                user_partition = next(i for i, (p, num_partitions) in enumerate(self.partitions) if p[0] == user)
-                # Index of a user partition should be greater than index of the partition.
-                assert user_partition > part_idx
-                users.append((pipeline_records[user_partition], input_idx, output_idx))
-            pipeline_records[part_idx] = r_handler.make_pipeline_record(users)
+            consumers = []
+            # Identify consumers of the outputs of the partition
+            for consumer, input_idx, output_idx in self.graph.output_consumers[self.partitions[part_idx][0][-1]]:
+                consumer_partition_idx = next(
+                    i for i, (p, num_partitions) in enumerate(self.partitions) if p[0] == consumer
+                )
+                # Index of a consumer partition should be greater than index of the partition.
+                assert consumer_partition_idx > part_idx
+                consumer_partition = pipeline_records[consumer_partition_idx]
+                assert consumer_partition is not None
+                consumers.append(DistributedPipelineRecord.OutputConsumer(consumer_partition, input_idx, output_idx))
+            pipeline_records[part_idx] = r_handler.make_pipeline_record(consumers)
             # Let the pipeline-handler for the partition starts processing the pipeline-record for that partition.
             this_result = r_handler.run_pipeline(pipeline_records[part_idx])
             # If this is the last partition, we expect the result of the model be the output of this partition.
