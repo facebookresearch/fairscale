@@ -36,7 +36,8 @@ def one_hot(tensor: torch.Tensor, num_classes: int) -> Tensor:
 
 def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     """Implements Top2Gating on logits."""
-    gates = F.softmax(logits, dim=1)
+    # NOTE(msb) softmax requires FP32: https://docs.nvidia.com/deeplearning/performance/mixed-precision-training/
+    gates = F.softmax(logits, dim=1, dtype=torch.float)
 
     # gates has shape of SE
     num_tokens = gates.shape[0]
@@ -95,7 +96,7 @@ def top2gating(logits: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     combine_weights = combine1_sec + combine2_sec
     dispatch_mask = combine_weights.bool()
 
-    return l_aux, combine_weights, dispatch_mask
+    return l_aux.to(logits.dtype), combine_weights.to(logits.dtype), dispatch_mask
 
 
 class Top2Gate(torch.nn.Module):
