@@ -5,7 +5,7 @@
 
 from threading import Condition
 from types import TracebackType
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple, Type, Union, cast
 
 import torch
 from torch import Tensor, nn
@@ -134,6 +134,9 @@ class PipelineModulesGraph(nn.Module):
             self.modules_list.append(module)
             return len(self.modules_list) - 1
 
+    def _set_inputs(self, module: PipelineModule, inputs: List[Tuple[int, int]]) -> None:
+        self.inputs[self._find_or_add(module)] = inputs
+
     def add_sequence(self, modules: List[PipelineModule], first_input: Optional[PipelineModule] = None) -> None:
         """Adds a list of modules to the graph, to be run sequentially.
         The connection between these modules is as follows: the first output of each of these modules
@@ -153,13 +156,13 @@ class PipelineModulesGraph(nn.Module):
         """Declares the input to a module as the input to the model. In case the model has multiple
         inputs, the argument 'ind' indicates the index of the model input that is fed to the module.
         """
-        self.inputs[self._find_or_add(module)] = [(-1, ind)]
+        self._set_inputs(module, [(-1, ind)])
 
     def add_multi_input_layer(self, module: PipelineModule, inputs: List[PipelineModule]) -> None:
-        """Adds a module with multiple inputs to the graph. The modules that provide inpurs to this module
+        """Adds a module with multiple inputs to the graph. The modules that provide inputs to this module
         must have been added previously to the graph and are listed with argument inputs.
         """
-        self.inputs[self._find_or_add(module)] = [(self.modules_list.index(m), 0) for m in inputs]
+        self._set_inputs(module, [(self.modules_list.index(m), 0) for m in inputs])
 
     def fan_out(self, module: PipelineModule, outputs: List[PipelineModule]) -> None:
         """Feeds outputs of a previously added module to modules specified by argument 'outputs' (so
@@ -168,10 +171,17 @@ class PipelineModulesGraph(nn.Module):
         """
         mi = self.modules_list.index(module)
         for i, m in enumerate(outputs):
-            self.inputs[self._find_or_add(m)] = [(mi, i)]
+            self._set_inputs(m, [(mi, i)])
+
+    class OutputConsumer(NamedTuple):
+        """A data class for representating a consumer of an output of a module."""
+
+        consumer_idx: int  # index of the consumer module
+        consumer_input_idx: int  # indicating which input of the consumer module
+        producer_output_idx: int  # indicating which output of the producer module
 
     def compile_output_users(self) -> None:
-        """Precomputs self.model_input_users and self.output_users for internal use by the pipleine
+        """Precomputes self.model_input_users and self.output_users for internal use by the pipleine
         class. These two lists show consumers of inputs to the model, and outputs of each module of
         the graph. Each consumer is a pair (i, j) which stands for the j'th input to the i'th module
         in the graph.
@@ -185,13 +195,13 @@ class PipelineModulesGraph(nn.Module):
         #     if we relax this condition, still need to make sure the graph is acyclic.
 
         m = len(self.modules_list)
-        self.output_users: List[List[Tuple[int, int, int]]] = [[] for _ in range(m)]
+        self.output_users: List[List[PipelineModulesGraph.OutputConsumer]] = [[] for _ in range(m)]
         self.model_input_users = []
         for i, input in enumerate(self.inputs):
             assert input is not None
             for j, input_item in enumerate(input):
                 if input_item[0] >= 0:
-                    self.output_users[input_item[0]].append((i, j, input_item[1]))
+                    self.output_users[input_item[0]].append(PipelineModulesGraph.OutputConsumer(i, j, input_item[1]))
                 else:
                     self.model_input_users.append((i, j, input_item[1]))
 
@@ -213,7 +223,7 @@ class PipelineModulesGraph(nn.Module):
             if self.modules_list[current_module_idx].num_outputs is not None:
                 break
             # Next module to add is the only consumer of the ouput of the current module
-            next_module_idx = self.output_users[current_module_idx][0][0]
+            next_module_idx = self.output_users[current_module_idx][0].consumer_idx
             next_module = self.modules_list[next_module_idx]
             # If the next module has multiple inputs, do not add it to the current partition and stop.
             if self.inputs[next_module_idx] != [(current_module_idx, 0)]:
@@ -388,12 +398,16 @@ class PartitionHandler:
 
         self.stream = current_stream(self.device)
 
-        for i in range(m):
+        for chunk in range(m):
             with record_function("feed"):
-                pipeline_record.wait_for(i)
-            self.fence(pipeline_record, i)
-            self.compute(pipeline_record, i)
-            self.forward_results(i, pipeline_record)
+                pipeline_record.wait_for(chunk)
+            self.fence(pipeline_record, chunk)
+            self.compute(pipeline_record, chunk)
+            # Forward outputs of processing the chunk in this parition for processing by next partition.
+            with use_stream(self.stream):
+                for user, input_idx, output_idx in pipeline_record.users:
+                    v = pipeline_record.get_batch(chunk).value[output_idx]
+                    pipeline_record.forwarded_phony[chunk][output_idx].append(user.remote().feed(chunk, input_idx, v))
 
     def fence(self, pipeline_record: DistributedPipelineRecord, chunk: int) -> None:
         """Prepares micro-batches for computation."""
@@ -410,8 +424,8 @@ class PartitionHandler:
             for tensor, remote_ph_list in zip(batch.tensors, pipeline_record.forwarded_phony[chunk - 1]):
                 dependant = tensor
                 for remote_ph in remote_ph_list:
-                    ph = remote_ph.to_here()
-                    dependant = join(dependant, ph)
+                    phony = remote_ph.to_here()
+                    dependant = join(dependant, phony)
                 dependant_tensors.append(dependant)
             pipeline_record.batches[chunk] = Batch(tuple(dependant_tensors), chunk)
 
@@ -480,13 +494,6 @@ class PartitionHandler:
 
         if exc_info is not None:
             raise exc_info[0].with_traceback(exc_info[1], exc_info[2])
-
-    def forward_results(self, chunk: int, pipeline_record: DistributedPipelineRecord) -> None:
-        """Forwards outputs of processing a chunk in this parition for processing by next partition."""
-        with use_stream(self.stream):
-            for user, input_idx, output_idx in pipeline_record.users:
-                v = pipeline_record.get_batch(chunk).value[output_idx]
-                pipeline_record.forwarded_phony[chunk][output_idx].append(user.remote().feed(chunk, input_idx, v))
 
     def run_pipeline(self, pipeline_record_rref: rpc.RRef) -> Optional[Tensor]:
         """Processes a min-batch on this partition.
