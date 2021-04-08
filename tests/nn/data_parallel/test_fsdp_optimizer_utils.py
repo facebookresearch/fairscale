@@ -105,7 +105,6 @@ class TestOptimizerUtils(DistributedTest):
                 if torch.is_tensor(t):
                     assert t.device == torch.device('cpu'), f'got device {t.device} for {k}: {buffer_name}. expected CPU'
 
-        #import ipdb; ipdb.set_trace()
         unflat_state = sd["state"]
         assert "uncollected_local_ids" in sd
         shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
