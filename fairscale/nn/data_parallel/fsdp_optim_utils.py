@@ -136,7 +136,7 @@ def _unflatten_optim_state(
 
 
 def build_unflat_state_dict(
-    instance_list: List[torch.nn.Module], world_optim_states: List[Dict], uncollected_opt_state: Dict[int, Dict]
+    instance_list: List[torch.nn.Module], world_optim_states: List[Dict], tensor_state: Dict[int, Dict[str, List[torch.Tensor]]], uncollected_opt_state: Dict[int, Dict]
 ) -> Dict:
     """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts from each rank."""
     world_pad_info: List[List[List[int]]] = [s.pop("num_padded") for s in world_optim_states]
