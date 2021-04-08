@@ -1509,7 +1509,7 @@ class FullyShardedDataParallel(nn.Module):
     def print_r0(self, msg):
         if self.rank == 0:
             gb_denom = 1024**3
-            print(f'{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, t={time.time()-self.tstart: .1f}')
+            print(f'{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, t={time.time()-self.tstart: .4f}')
 
 def _get_default_cuda_device(module: nn.Module) -> torch.device:
     """Try to infer CUDA device from module parameters."""
