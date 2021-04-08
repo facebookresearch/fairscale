@@ -42,6 +42,26 @@ def DistributedLoss(loss: nn.Module, *args: Tuple, **kwargs: Dict) -> Callable:
     return dloss
 
 
+class MultiInputSequential(nn.Module):
+    """A variation of nn.Sequential, that allows the first module in the sequence accepts
+        multiple inputs. To be used internally by _split_module
+    """
+
+    def __init__(self, *modules: nn.Module) -> None:
+        super().__init__()
+        self.modules_list = modules
+
+    def forward(self, *inputs: Tuple[Tensor]) -> Tensor:  # type: ignore
+        input = self.modules_list[0](*inputs)
+        for module in self.modules_list[1:]:
+            input = module(input)
+        return input
+
+
+def RemoteSequential(rref_list: List[rpc.RRef]) -> MultiInputSequential:
+    return MultiInputSequential(*(r.local_value() for r in rref_list))
+
+
 class PipelineModule(nn.Module):
     """Constructs a module on a remote device, possibly at a later time (in case the device is not
     specified when creating PipelineModule.
@@ -174,6 +194,70 @@ class PipelineModulesGraph(nn.Module):
                     self.output_users[input_item[0]].append((i, j, input_item[1]))
                 else:
                     self.model_input_users.append((i, j, input_item[1]))
+
+    def _trace_modules(self, module_idx: int) -> List[int]:
+        """Compiles a list of modules (starting from module number module_idx), where each module in the list
+        gets the output of previous module in the list as its input. So every module in the list, except the
+        first one should have only one input, and similarly, every module in the list, except the last one
+        should have only one output.
+        """
+        partition = []
+        current_module_idx = module_idx
+        current_module = self.modules_list[module_idx]
+        while True:
+            partition.append(current_module_idx)
+            # If we reached a module with multiple outputs or with multiple users for its output,
+            # stop adding more modules to the partition.
+            if len(self.output_users[current_module_idx]) != 1:
+                break
+            if self.modules_list[current_module_idx].num_outputs is not None:
+                break
+            # Next module to add is the only consumer of the ouput of the current module
+            next_module_idx = self.output_users[current_module_idx][0][0]
+            next_module = self.modules_list[next_module_idx]
+            # If the next module has multiple inputs, do not add it to the current partition and stop.
+            if self.inputs[next_module_idx] != [(current_module_idx, 0)]:
+                break
+            # If the next module is on a different deivce or worker, stop
+            if next_module.worker != current_module.worker:
+                break
+            if next_module.device != current_module.device:
+                break
+            current_module = next_module
+            current_module_idx = next_module_idx
+
+        return partition
+
+    def partition_graph(self) -> List[Tuple[List[int], rpc.RRef]]:
+        """Splits the graph into pipeline partitions and for each parition returns a tuple (indices, module_rref),
+        where indices is indices of modules of the partition in the graph, and module_rref is an RRef to an nn.Module:
+        Each partition is a list of modules on the same device that are executed sequentially (output of each module is
+        the input to the next module).
+        If there is only one module in the partition, module_rref is reference to that module; otherwise those modules
+        are wrapped by a MultiInputSequential and module_rref referes to that.
+        """
+        self.compile_output_users()
+        module_used = [False] * len(self.modules_list)
+        partitions = []
+        for module_idx, module in enumerate(self.modules_list):
+            if module_used[module_idx]:
+                continue
+            partition = self._trace_modules(module_idx)
+            for idx in partition:
+                assert not module_used[idx]
+                module_used[idx] = True
+
+            if len(partition) == 1:
+                remote_module = self.modules_list[partition[0]].get_module_rref()
+            else:
+                remote_module = rpc.remote(
+                    self.modules_list[partition[0]].worker,
+                    RemoteSequential,
+                    args=([self.modules_list[p].get_module_rref() for p in partition],),
+                )
+            partitions.append((partition, remote_module))
+
+        return partitions
 
 
 class DistributedPipelineRecord:
@@ -425,77 +509,6 @@ class PartitionHandler:
         return None
 
 
-class MultiInputSequential(nn.Module):
-    """A variation of nn.Sequential, that allows the first module in the sequence accepts
-        multiple inputs. To be used internally by _split_module
-    """
-
-    def __init__(self, *modules: nn.Module) -> None:
-        super().__init__()
-        self.modules_list = modules
-
-    def forward(self, *inputs: Tuple[Tensor]) -> Tensor:  # type: ignore
-        input = self.modules_list[0](*inputs)
-        for module in self.modules_list[1:]:
-            input = module(input)
-        return input
-
-
-def RemoteSequential(rref_list: List[rpc.RRef]) -> MultiInputSequential:
-    return MultiInputSequential(*(r.local_value() for r in rref_list))
-
-
-def _split_module(graph: PipelineModulesGraph) -> List[Tuple[List[int], rpc.RRef]]:
-    """Splits the graph into pipeline partitions and for each parition returns a tuple (indices, module_rref),
-    where indices is indices of modules of the partition in the graph, and module_rref is an RRef to an nn.Module:
-    If there is only one module in the partition, module_rref is reference to that module; otherwise those modules
-    are wrapped by a MultiInputSequential and module_rref referes to that.
-    """
-    graph.compile_output_users()
-    module_used = [False] * len(graph.modules_list)
-    partitions = []
-    for module_idx, module in enumerate(graph.modules_list):
-        if module_used[module_idx]:
-            continue
-        partition = []
-        current_module_idx = module_idx
-        current_module = module
-        while True:
-            assert not module_used[current_module_idx]
-            module_used[current_module_idx] = True
-            partition.append(current_module_idx)
-            # If we reached a module with multiple outputs or with multiple users for its output,
-            # stop adding more modules to the partition.
-            if len(graph.output_users[current_module_idx]) != 1:
-                break
-            if graph.modules_list[current_module_idx].num_outputs is not None:
-                break
-            # Next module to add is the only consumer of the ouput of the current module
-            next_module_idx = graph.output_users[current_module_idx][0][0]
-            next_module = graph.modules_list[next_module_idx]
-            # If the next module has multiple inputs, do not add it to the current partition and stop.
-            if graph.inputs[next_module_idx] != [(current_module_idx, 0)]:
-                break
-            # If the next module is on a different deivce or worker, stop
-            if next_module.worker != current_module.worker:
-                break
-            if next_module.device != current_module.device:
-                break
-            current_module = next_module
-            current_module_idx = next_module_idx
-        if len(partition) == 1:
-            remote_module = graph.modules_list[partition[0]].get_module_rref()
-        else:
-            remote_module = rpc.remote(
-                graph.modules_list[partition[0]].worker,
-                RemoteSequential,
-                args=([graph.modules_list[p].get_module_rref() for p in partition],),
-            )
-        partitions.append((partition, remote_module))
-
-    return partitions
-
-
 MOVING_DENIED = TypeError(
     "denied to move parameters and buffers, " "because DistributedPipeline should manage device placement"
 )
@@ -546,7 +559,7 @@ class DistributedPipeline(nn.Module):
 
         self.chunks = chunks
 
-        self.partitions = _split_module(graph)
+        self.partitions = graph.partition_graph()
         self.input_feeds = [
             next((i, fj, feed_idx) for i, (p, m) in enumerate(self.partitions) if p[0] == fi)
             for fi, fj, feed_idx in graph.model_input_users
