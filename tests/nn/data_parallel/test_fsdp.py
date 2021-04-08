@@ -627,7 +627,7 @@ class MixtureOfExperts(NestedWrappedModule):
 
         # "expert" params are different on each rank
         torch.manual_seed(42 + group.rank())
-        d_expert = 10000
+        d_expert = 16
         expert = nn.Linear(d_expert, 4)
         self.num_expert_params = sum([p.numel() for p in expert.parameters()])
         for p in expert.parameters():
