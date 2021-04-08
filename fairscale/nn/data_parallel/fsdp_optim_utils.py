@@ -136,10 +136,14 @@ def _unflatten_optim_state(
 
 
 def build_unflat_state_dict(
-    instance_list: List[torch.nn.Module], world_optim_states: List[Dict], tensor_state: Dict[int, Dict[str, List[torch.Tensor]]], uncollected_opt_state: Dict[int, Dict]
+    instance_list: List[torch.nn.Module],
+    world_optim_states: List[Dict],
+    tensor_state: Dict[int, Dict[str, List[torch.Tensor]]],
+    uncollected_opt_state: Dict[int, Dict],
 ) -> Dict:
     """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts from each rank."""
     world_pad_info: List[List[List[int]]] = [s.pop("num_padded") for s in world_optim_states]
+    print(f"world_pad_info: {world_pad_info}")
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)
     # Since there are no tensors in param_groups, deepcopy is fine
@@ -147,7 +151,7 @@ def build_unflat_state_dict(
     assert len(param_groups) == 1
 
     # Aggregate from a list of dictionaries to a dictionary of lists
-    #combined_state = _combine_state([x["state"] for x in world_optim_states])
+    # combined_state = _combine_state([x["state"] for x in world_optim_states])
     for local_id, v in uncollected_opt_state.items():
         assert local_id not in tensor_state
         tensor_state[local_id] = {}
