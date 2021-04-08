@@ -1427,21 +1427,19 @@ class FullyShardedDataParallel(nn.Module):
         tensor_lst = {}
         self.print_r0(f'start: n state: {len(sd_state)}')
         # print(f'')
+
         for k, v in sd_state.items():
             # orig_size = self._fsdp_instances[k].flat_param._full_param_padded
             tensor_lst[k] = {}
             desired_buffer_size = self._fsdp_instances[k].flat_param._full_param_padded.size()
-            dtype = self._fsdp_instances[k].flat_param._full_param_padded.dtype
-            #self.print_r0('about to allocate buffer')
-
-            #self.print_r0(f'desired buffer size: {buffer.shape, buffer.dtype, buffer.device}')
-            #raise ValueError(f'desired buffer size: {buffer.shape, buffer.dtype, buffer.device}')
+            buffer = None
 
             for buffer_name, t in v.items():
                 if torch.is_tensor(t):
                     # TODO(SS): reuse this buffer and then free it.
-                    buffer = self._fsdp_instances[k].flat_param.new_zeros(*desired_buffer_size, dtype=t.dtype)
-                    chunks = list(buffer.chunk(self.world_size))
+                    if buffer is None:
+                        buffer = self._fsdp_instances[k].flat_param.new_zeros(*desired_buffer_size, dtype=t.dtype)
+                        chunks = list(buffer.chunk(self.world_size))
                     dist.all_gather(chunks, t, group=self.process_group)
                     # unpad each chunk here
                     # This is required to make chunks save different data foreach buffer name
@@ -1479,15 +1477,14 @@ class FullyShardedDataParallel(nn.Module):
         self.tstart = time.time()
         if not self.flatten_parameters:
             raise NotImplementedError("optim state dict requires flatten_parameters=True")
-        world_optim_states, tensor_state = self._consolidate_optim_state_dict(optim, recipient_rank)
+        non_tensor_state, tensor_state = self._consolidate_optim_state_dict(optim, recipient_rank)
+        torch.save(tensor_state, f'tensor_state_{self.rank}.pt')
 
         if self.rank != recipient_rank and recipient_rank is not None:
             return None
-        assert world_optim_states is not None, 'Placeholder error'
-        raise ValueError('need to reimplement unflat')
         # Unify the shard states by concatenating tensors and unflattening params
         new_state_dict = ou.build_unflat_state_dict(
-            self._fsdp_instances, world_optim_states, tensor_state, self.uncollected_opt_state
+            self._fsdp_instances, non_tensor_state, tensor_state, self.uncollected_opt_state
         )
 
         self.uncollected_opt_state = {}

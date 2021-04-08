@@ -147,16 +147,16 @@ def build_unflat_state_dict(
     assert len(param_groups) == 1
 
     # Aggregate from a list of dictionaries to a dictionary of lists
-    combined_state = _combine_state([x["state"] for x in world_optim_states])
+    #combined_state = _combine_state([x["state"] for x in world_optim_states])
     for local_id, v in uncollected_opt_state.items():
-        assert local_id not in combined_state
-        combined_state[local_id] = {}
+        assert local_id not in tensor_state
+        tensor_state[local_id] = {}
         for buffer_name, tensor in v.items():
-            combined_state[local_id][buffer_name] = [tensor]
+            tensor_state[local_id][buffer_name] = [tensor]
     del world_optim_states
 
     # local ids are in the current state, global_ids will be in returned state.
-    unflat_state, global_to_local_id = _unflatten_optim_state(combined_state, instance_list, world_pad_info)
+    unflat_state, global_to_local_id = _unflatten_optim_state(tensor_state, instance_list, world_pad_info)
     num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
     param_groups[0]["params"] = list(range(num_params))
     return {
