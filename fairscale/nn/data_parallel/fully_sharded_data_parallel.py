@@ -8,6 +8,7 @@ import copy
 from enum import Enum, auto
 import functools
 from math import inf
+import time
 import traceback
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Set, Tuple, Union
 
@@ -208,6 +209,7 @@ class FullyShardedDataParallel(nn.Module):
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
 
         self.numel_padded_per_param: List[int] = []
+        self._tstart = time.time()
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
@@ -1414,7 +1416,6 @@ class FullyShardedDataParallel(nn.Module):
             if should_collect_state:
                 assert isinstance(sd, dict), f"{self.rank} received {type(sd)} from {rank}, expected dict"
                 all_states.append(recursive_copy_to_device(sd, non_blocking=False, device=torch.device("cpu")))
-
         return all_states
 
     def gather_full_optim_state_dict(
@@ -1459,8 +1460,12 @@ class FullyShardedDataParallel(nn.Module):
         uncollected_ids = [i for i, m in enumerate(self._fsdp_instances) if m.no_broadcast_optim_state]
         new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
         if self.rank == 0:
-            # Save placeholders for uncollected opt state to keep the same unflat OSD format.
-            self.uncollected_opt_state = {k: v for k, v in osd["state"].items() if k in uncollected_ids}
+            # Save placeholders for uncollected opt state to keep the same unflat OSD format, and move them to CPU.
+            self.uncollected_opt_state = {
+                k: recursive_copy_to_device(v, non_blocking=False, device=torch.device("cpu"))
+                for k, v in osd["state"].items()
+                if k in uncollected_ids
+            }
 
         pg = copy.deepcopy(osd["param_groups"])
         new_dct["param_groups"] = pg
@@ -1499,6 +1504,14 @@ class FullyShardedDataParallel(nn.Module):
                 full_optim_state_dict["state"][id][k] = v_shard
 
         return full_optim_state_dict
+
+    def _print_r0(self, msg: str) -> None:
+        """Debugging utility to print memory usage stats nicely on rank 0"""
+        if self.rank == 0:
+            gb_denom = 1024 ** 3
+            print(
+                f"{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, t={time.time()-self._tstart: .1f}"
+            )
 
 
 def _get_default_cuda_device(module: nn.Module) -> torch.device:

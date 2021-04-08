@@ -627,14 +627,15 @@ class MixtureOfExperts(NestedWrappedModule):
 
         # "expert" params are different on each rank
         torch.manual_seed(42 + group.rank())
-        expert = nn.Linear(16, 4)
+        d_expert = 16
+        expert = nn.Linear(d_expert, 4)
         self.num_expert_params = sum([p.numel() for p in expert.parameters()])
         for p in expert.parameters():
             p.expert = True
 
         # everything else is shared
         torch.manual_seed(0)
-        shared = nn.Linear(4, 16)
+        shared = nn.Linear(4, d_expert)
 
         if checkpoint_act:
             expert = checkpoint_wrapper(expert)

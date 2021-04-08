@@ -86,16 +86,30 @@ class TestOptimizerUtils(DistributedTest):
             no_broadcast_children = [x for x in fsdp._fsdp_instances if x.no_broadcast_optim_state]
             assert len(no_broadcast_children) == 1
             assert fsdp._fsdp_instances[-1].no_broadcast_optim_state
-
+        torch.cuda.empty_cache()
+        cuda_gb_before = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024 ** 3
         tstart = time()
         sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=0)
         duration = time() - tstart
         # Switching from fairscale.optim.utils.broadcast_object to torch.broadcast_object_list will cause this to raise
         assert duration < fsdp.world_size, f"gather optim state took {duration} seconds, suspect change in _consolidate"
 
+        cuda_gb_after = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024 ** 3
+        mem_usg_gb = cuda_gb_after - cuda_gb_before
+        assert mem_usg_gb == 0, f"gather_full_optim_state_dict used {mem_usg_gb:.2f} CUDA GB, max allowed is 0"
+        assert cuda_gb_after > 0, "got 0 memory usage, logging is broken"
+
         if fsdp.rank > 0:
             assert sd is None
             return
+
+        # assert whole state dict on CPU
+        for k, v in sd["state"].items():
+            for buffer_name, t in v.items():
+                if torch.is_tensor(t):
+                    msg = f"got device {t.device} for {k}: {buffer_name}. expected CPU"
+                    assert t.device == torch.device("cpu"), msg
+
         unflat_state = sd["state"]
         assert "uncollected_local_ids" in sd
         shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
