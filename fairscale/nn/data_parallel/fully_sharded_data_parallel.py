@@ -1419,7 +1419,7 @@ class FullyShardedDataParallel(nn.Module):
                 assert isinstance(sd, dict), f"{self.rank} received {type(sd)} from {rank}, expected dict"
                 osd_besides_state.append(recursive_copy_to_device(sd, non_blocking=False, device=torch.device("cpu")))
 
-            self.print_r0(f'gathered non tensor state from {rank}')
+            self.print_r0(f'gathered non tensor state from rank {rank}')
 
         return osd_besides_state, tensor_state
 
@@ -1431,24 +1431,16 @@ class FullyShardedDataParallel(nn.Module):
             # orig_size = self._fsdp_instances[k].flat_param._full_param_padded
             tensor_lst[k] = {}
             desired_buffer_size = self._fsdp_instances[k].flat_param._full_param_padded.size()
-            self.print_r0('about to allocate buffer')
-            buffer = self._fsdp_instances[k].flat_param.new_zeros(*desired_buffer_size)
-            self.print_r0(f'desired buffer size: {buffer.shape, buffer.dtype, buffer.device}')
+            dtype = self._fsdp_instances[k].flat_param._full_param_padded.dtype
+            #self.print_r0('about to allocate buffer')
+
+            #self.print_r0(f'desired buffer size: {buffer.shape, buffer.dtype, buffer.device}')
             #raise ValueError(f'desired buffer size: {buffer.shape, buffer.dtype, buffer.device}')
 
             for buffer_name, t in v.items():
-
-                #print(f'buffer.shape: {buffer.shape}')
-
-                #self._fsdp_instances[k].flat_param._full_param_padded.
-                # TODO(SS): verify that there are not side effects on
-                # TODO(SS): may need to free memory after, or
-                # p_size = p._full_param_padded.size()
-                # assert p_size.numel() % self.world_size == 0
-                # if p._full_param_padded.storage().size() != p_size.numel():
-                #     # Allocate based on full size from all shards.
-                #     alloc_storage_(p._full_param_padded, size=p_size)
                 if torch.is_tensor(t):
+                    # TODO(SS): reuse this buffer and then free it.
+                    buffer = self._fsdp_instances[k].flat_param.new_zeros(*desired_buffer_size, dtype=t.dtype)
                     chunks = list(buffer.chunk(self.world_size))
                     dist.all_gather(chunks, t, group=self.process_group)
                     # unpad each chunk here
@@ -1461,7 +1453,7 @@ class FullyShardedDataParallel(nn.Module):
                         tensor_lst[k][buffer_name].append(t)
                     else:
                         tensor_lst[k][buffer_name] = [t]
-            self.print_r0(f'gathered {k}')
+            self.print_r0(f'gathered tensor state for key {k} from all ranks')
         return tensor_lst
 
     def gather_full_optim_state_dict(
@@ -1557,7 +1549,7 @@ class FullyShardedDataParallel(nn.Module):
         return full_optim_state_dict
 
     def print_r0(self, msg):
-        if True: #self.rank == 0:
+        if self.rank == 0:
             gb_denom = 1024**3
             print(f'{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, t={time.time()-self.tstart: .4f}')
 
