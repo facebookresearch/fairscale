@@ -173,7 +173,7 @@ class PipelineModulesGraph(nn.Module):
         for i, m in enumerate(outputs):
             self._set_inputs(m, [(mi, i)])
 
-    class OutputConsumer(NamedTuple):
+    class OutputConsumerIndex(NamedTuple):
         """A data class for representating a consumer of an output of a module."""
 
         consumer_idx: int  # index of the consumer module
@@ -195,14 +195,14 @@ class PipelineModulesGraph(nn.Module):
         #     if we relax this condition, still need to make sure the graph is acyclic.
 
         m = len(self.modules_list)
-        self.output_consumers: List[List[PipelineModulesGraph.OutputConsumer]] = [[] for _ in range(m)]
+        self.output_consumers: List[List[PipelineModulesGraph.OutputConsumerIndex]] = [[] for _ in range(m)]
         self.model_input_consumers = []
         for i, input in enumerate(self.inputs):
             assert input is not None
             for j, input_item in enumerate(input):
                 if input_item[0] >= 0:
                     self.output_consumers[input_item[0]].append(
-                        PipelineModulesGraph.OutputConsumer(i, j, input_item[1])
+                        PipelineModulesGraph.OutputConsumerIndex(i, j, input_item[1])
                     )
                 else:
                     self.model_input_consumers.append((i, j, input_item[1]))
@@ -272,6 +272,14 @@ class PipelineModulesGraph(nn.Module):
         return partitions
 
 
+class OutputConsumer(NamedTuple):
+    """A data class for representating a consumer of an output of the module."""
+
+    consumer_rref: rpc.RRef  # reference to the consumer (of type DistributedPipelineRecord)
+    consumer_input_idx: int  # indicating which input of the consumer module
+    output_idx: int  # indicating which output of the module
+
+
 class DistributedPipelineRecord:
     """ A class for storing a single mini-batch (consisting of multiple micro-batches) as input to
     a single partition.
@@ -286,13 +294,6 @@ class DistributedPipelineRecord:
             output_idx of this partition will be used as the input number input_idx of that partition.
     """
 
-    class OutputConsumer(NamedTuple):
-        """A data class for representating a consumer of an output of the module."""
-
-        consumer_rref: rpc.RRef  # reference to the consumer (of type DistributedPipelineRecord)
-        consumer_input_idx: int  # indicating which input of the consumer module
-        output_idx: int  # indicating which output of the module
-
     def __init__(
         self,
         device: torch.device,
@@ -300,7 +301,7 @@ class DistributedPipelineRecord:
         chunks: int,
         num_inputs: int,
         num_outputs: Optional[int],
-        consumers: List["DistributedPipelineRecord.OutputConsumer"],
+        consumers: List[OutputConsumer],
     ) -> None:
         self.ready_cv = Condition()
         # Each chunk consists of num_inputs tensors. self.tensors stores these individual tensors.
@@ -398,9 +399,7 @@ class PartitionHandler:
         """
         return [rpc.RRef(p) for p in self.module.parameters()]
 
-    def make_pipeline_record(
-        self, consumers: List[DistributedPipelineRecord.OutputConsumer]
-    ) -> DistributedPipelineRecord:
+    def make_pipeline_record(self, consumers: List[OutputConsumer]) -> DistributedPipelineRecord:
         return DistributedPipelineRecord(
             self.device, self.rank, self.chunks, self.num_inputs, self.num_outputs, consumers
         )
@@ -666,7 +665,7 @@ class DistributedPipeline(nn.Module):
                 assert consumer_partition_idx > part_idx
                 consumer_partition = pipeline_records[consumer_partition_idx]
                 assert consumer_partition is not None
-                consumers.append(DistributedPipelineRecord.OutputConsumer(consumer_partition, input_idx, output_idx))
+                consumers.append(OutputConsumer(consumer_partition, input_idx, output_idx))
             pipeline_records[part_idx] = r_handler.make_pipeline_record(consumers)
             # Let the pipeline-handler for the partition starts processing the pipeline-record for that partition.
             this_result = r_handler.run_pipeline(pipeline_records[part_idx])
