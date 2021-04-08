@@ -74,7 +74,7 @@ def create_sequence_pipeline(
 
     graph = PipelineModulesGraph()
     graph.add_sequence(layers)
-    graph.feed_model_input(layers[0])
+    graph.set_model_input(layers[0])
 
     return DistributedPipeline(graph, **kwargs)
 
@@ -232,7 +232,7 @@ def multi_input_multi_output_layers(devices):
 
     graph = PipelineModulesGraph()
     graph.add_sequence([linear_layer_1, split])
-    graph.feed_model_input(linear_layer_1)
+    graph.set_model_input(linear_layer_1)
     graph.fan_out(split, linear_layers_2)
     graph.add_multi_input_layer(concatenate, linear_layers_2)
 

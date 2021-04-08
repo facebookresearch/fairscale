@@ -152,7 +152,7 @@ class PipelineModulesGraph(nn.Module):
         for i in range(old_modules_len + 1, old_modules_len + new_modules_len):
             self.inputs.append([(i - 1, 0)])
 
-    def feed_model_input(self, module: PipelineModule, ind: int = 0) -> None:
+    def set_model_input(self, module: PipelineModule, ind: int = 0) -> None:
         """Declares the input to a module as the input to the model. In case the model has multiple
         inputs, the argument 'ind' indicates the index of the model input that is fed to the module.
         """
