@@ -630,12 +630,14 @@ class MixtureOfExperts(NestedWrappedModule):
         d_expert = 10000
         d_shared = 512
         expert = nn.Linear(d_expert, d_shared)
+
         self.num_expert_params = sum([p.numel() for p in expert.parameters()])
         for p in expert.parameters():
             p.expert = True
 
         # everything else is shared
         torch.manual_seed(0)
+
         shared = nn.Linear(d_shared, d_expert)
 
         if checkpoint_act:
