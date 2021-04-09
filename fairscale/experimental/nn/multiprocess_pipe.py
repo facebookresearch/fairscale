@@ -356,11 +356,39 @@ class DistributedPipelineRecord:
                 tensors = cast(List[Tensor], self.tensors[chunk])
                 self.batches[chunk] = Batch(tuple(tensors), chunk)
 
+    def fence(self, chunk: int) -> None:
+        """Prepares micro-batches for computation."""
+        # Ensure that batches[chunk-1] is executed after batches[chunk] in
+        # backpropagation by an explicit dependency.
+        # TODO: This dependency injection causes deadlock if this partition
+        # gets its input from model input. 1) Figure out why 2) If we need to live
+        # with this constraint, replace the condition 'self.rank > 0' below with
+        # a more accurate one.
+        if chunk != 0 and self.consumers and self.rank > 0:
+            dependant_tensors = []
+            batch = self.batches[chunk]
+            assert batch is not None
+            for tensor, remote_ph_list in zip(batch.tensors, self.forwarded_phony[chunk - 1]):
+                dependant = tensor
+                for remote_ph in remote_ph_list:
+                    phony = remote_ph.to_here()
+                    dependant = join(dependant, phony)
+                dependant_tensors.append(dependant)
+            self.batches[chunk] = Batch(tuple(dependant_tensors), chunk)
+
     def sync_stream(self, chunk: int, stream: torch.cuda.Stream) -> None:
         """syncs the stream with cuda events associated with transmission of the chunck to the cuda device."""
         for e in self.recv_events[chunk]:
             if e is not None:
                 stream.wait_event(e)
+
+    def forward_results(self, chunk: int) -> None:
+        """Forward outputs of processing the chunk in this parition for processing by next partition."""
+        for consumer in self.consumers:
+            v = self.get_batch(chunk).value[consumer.output_idx]
+            self.forwarded_phony[chunk][consumer.output_idx].append(
+                consumer.consumer_rref.remote().feed(chunk, consumer.consumer_input_idx, v)
+            )
 
     def get_batch(self, chunk: int) -> Batch:
         batch = self.batches[chunk]
@@ -421,35 +449,10 @@ class PartitionHandler:
         for chunk in range(m):
             with record_function("feed"):
                 pipeline_record.wait_for(chunk)
-            self.fence(pipeline_record, chunk)
+            pipeline_record.fence(chunk)
             self.compute(pipeline_record, chunk)
-            # Forward outputs of processing the chunk in this parition for processing by next partition.
             with use_stream(self.stream):
-                for consumer in pipeline_record.consumers:
-                    v = pipeline_record.get_batch(chunk).value[consumer.output_idx]
-                    pipeline_record.forwarded_phony[chunk][consumer.output_idx].append(
-                        consumer.consumer_rref.remote().feed(chunk, consumer.consumer_input_idx, v)
-                    )
-
-    def fence(self, pipeline_record: DistributedPipelineRecord, chunk: int) -> None:
-        """Prepares micro-batches for computation."""
-        # Ensure that batches[chunk-1] is executed after batches[chunk] in
-        # backpropagation by an explicit dependency.
-        # TODO: This dependency injection causes deadlock if this partition
-        # gets its input from model input. 1) Figure out why 2) If we need to live
-        # with this constraint, replace the condition 'pipeline_record.rank > 0' below with
-        # a more accurate one.
-        if chunk != 0 and pipeline_record.consumers and pipeline_record.rank > 0:
-            dependant_tensors = []
-            batch = pipeline_record.batches[chunk]
-            assert batch is not None
-            for tensor, remote_ph_list in zip(batch.tensors, pipeline_record.forwarded_phony[chunk - 1]):
-                dependant = tensor
-                for remote_ph in remote_ph_list:
-                    phony = remote_ph.to_here()
-                    dependant = join(dependant, phony)
-                dependant_tensors.append(dependant)
-            pipeline_record.batches[chunk] = Batch(tuple(dependant_tensors), chunk)
+                pipeline_record.forward_results(chunk)
 
     def compute(self, pipeline_record: DistributedPipelineRecord, chunk: int) -> None:
         """Runs tasks with synchronization to tensor-pipe streams."""
