@@ -259,7 +259,8 @@ class Pipe(Module):
         if torch.__version__.split(".")[:2] >= ["1", "8"]:
             warnings.warn(
                 "fairscale.nn.Pipe has been upstreamed to PyTorch as torch.distributed.pipeline.sync.Pipe. "
-                "It is now deprecated and will be removed in a future version of fairscale.",
+                "It is now deprecated and will be removed in a future version of fairscale. "
+                "The PyTorch API has minor changes. Please see https://pytorch.org/docs/stable/pipeline.html for details.",
                 DeprecationWarning,
             )
 
