@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from threading import Condition
 from types import TracebackType
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
 import torch
 from torch import Tensor, nn
@@ -256,15 +256,14 @@ class PipelineModulesGraph(nn.Module):
         are wrapped by a MultiInputSequential and module_rref referes to that.
         """
         self._compile()
-        module_used = [False] * len(self.modules_list)
+        modules_used: Set[int] = set()
         partitions = []
         for module_idx, module in enumerate(self.modules_list):
-            if module_used[module_idx]:
+            if module_idx in modules_used:
                 continue
             partition = self._trace_modules(module_idx)
-            for idx in partition:
-                assert not module_used[idx]
-                module_used[idx] = True
+            assert not modules_used.intersection(partition)
+            modules_used.update(partition)
 
             if len(partition) == 1:
                 remote_module = self.modules_list[partition[0]].get_module_rref()
