@@ -37,6 +37,7 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
             new_state[local_id][buffer_name] = torch.cat(tensors)
         new_state[local_id].update(non_tensor_state)
     new_sd = {"state": new_state, "param_groups": copy.deepcopy(sd["param_groups"])}
+    # TODO(SS): if there are other keys, like loss_scale, don't delete them
 
     # add pointers from the `params` dict.
     for pg_id, _ in enumerate(sd["param_groups"]):
@@ -70,20 +71,6 @@ def _extract_non_tensor_state(combined_state: Dict[int, Dict[str, List]], param_
     return non_tensor_state
 
 
-def _combine_state(states: List[Dict]) -> Dict[int, Dict]:
-    combined_state = states[0]
-    for param_id in combined_state:
-        combined_state[param_id] = {k: [v] for k, v in combined_state[param_id].items()}
-    if len(states) == 1:
-        return combined_state
-
-    for rank, s in enumerate(states[1:]):
-        for param_id, param_state in s.items():
-            for k, tensor in param_state.items():
-                combined_state[param_id][k].append(tensor)
-    return combined_state
-
-
 def _unflatten_optim_state(
     combined_state: Dict[int, Dict], instance_list: List[torch.nn.Module], world_pad_info: List[List[List[int]]],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
@@ -91,7 +78,7 @@ def _unflatten_optim_state(
     # global ids will be the keys in the unflattened state
     next_global_id = 0  # gets incremented
     pad_info = {id: [s[id][0] for s in world_pad_info] for id in combined_state}
-    local_ids = [id for id in sorted(combined_state.keys())]
+    local_ids = list(sorted(combined_state.keys()))
 
     # non_tensor_state refers to entries in sd[state][param_id] that are not tensors, like "step".
     # we check that these are identical across workers and then take the first
@@ -108,6 +95,7 @@ def _unflatten_optim_state(
         return {}, global_to_local_id
 
     # If the constant state is the same as the combined state,  copy it N times, no unflattening needed.
+    # deepcopy is OK because there are no tensors.
     unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_unflat_params))}
 
     if non_tensor_state[0].keys() == combined_state[0].keys():
@@ -137,29 +125,24 @@ def _unflatten_optim_state(
 
 def build_unflat_state_dict(
     instance_list: List[torch.nn.Module],
-    world_optim_states: List[Dict],
-    tensor_state: Dict[int, Dict[str, List[torch.Tensor]]],
+    world_pad_info: List[List[List[int]]],
+    state: Dict[int, Dict[str, List[torch.Tensor]]],
     uncollected_opt_state: Dict[int, Dict],
+    param_groups: List[Dict],
 ) -> Dict:
     """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts from each rank."""
-    world_pad_info: List[List[List[int]]] = [s.pop("num_padded") for s in world_optim_states]
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)
-    # Since there are no tensors in param_groups, deepcopy is fine
-    param_groups = copy.deepcopy(world_optim_states[0]["param_groups"])
-    assert len(param_groups) == 1
 
-    # Aggregate from a list of dictionaries to a dictionary of lists
+    # Add uncollected state to tensor_state
     for local_id, v in uncollected_opt_state.items():
-        assert local_id not in tensor_state
-        tensor_state[local_id] = {}
-        for buffer_name, tensor in v.items():
-            tensor_state[local_id][buffer_name] = [tensor]
-    del world_optim_states
-
+        assert local_id not in state
+        state[local_id] = {buffer_name: [x] for buffer_name, x in v.items()}
     # local ids are in the current state, global_ids will be in returned state.
-    unflat_state, global_to_local_id = _unflatten_optim_state(tensor_state, instance_list, world_pad_info)
+    unflat_state, global_to_local_id = _unflatten_optim_state(state, instance_list, world_pad_info)
     num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
+    # Since there are no tensors in param_groups, deepcopy is fine
+    param_groups = copy.deepcopy(param_groups)
     param_groups[0]["params"] = list(range(num_params))
     return {
         "state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
