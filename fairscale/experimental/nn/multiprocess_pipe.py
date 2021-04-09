@@ -206,13 +206,13 @@ class PipelineModulesGraph(nn.Module):
         self.model_input_consumers = []
         for module_index, module_inputs in enumerate(self.inputs):
             assert module_inputs is not None
-            for j, input_item in enumerate(module_inputs):
+            for input_index, input_item in enumerate(module_inputs):
                 if not self._is_model_input(input_item):
                     self.output_consumers[input_item[0]].append(
-                        PipelineModulesGraph.OutputConsumerIndex(module_index, j, input_item[1])
+                        PipelineModulesGraph.OutputConsumerIndex(module_index, input_index, input_item[1])
                     )
                 else:
-                    self.model_input_consumers.append((module_index, j, input_item[1]))
+                    self.model_input_consumers.append((module_index, input_index, input_item[1]))
 
     def _trace_modules(self, module_idx: int) -> List[int]:
         """Compiles a list of modules (starting from module number module_idx), where each module in the list
