@@ -78,7 +78,7 @@ def _unflatten_optim_state(
     # global ids will be the keys in the unflattened state
     next_global_id = 0  # gets incremented
     pad_info = {id: [s[id][0] for s in world_pad_info] for id in combined_state}
-    local_ids = list(sorted(combined_state.keys()))
+    local_ids = [id for id in sorted(combined_state.keys())]
 
     # non_tensor_state refers to entries in sd[state][param_id] that are not tensors, like "step".
     # we check that these are identical across workers and then take the first
@@ -95,7 +95,6 @@ def _unflatten_optim_state(
         return {}, global_to_local_id
 
     # If the constant state is the same as the combined state,  copy it N times, no unflattening needed.
-    # deepcopy is OK because there are no tensors.
     unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_unflat_params))}
 
     if non_tensor_state[0].keys() == combined_state[0].keys():
@@ -140,9 +139,9 @@ def build_unflat_state_dict(
         state[local_id] = {buffer_name: [x] for buffer_name, x in v.items()}
     # local ids are in the current state, global_ids will be in returned state.
     unflat_state, global_to_local_id = _unflatten_optim_state(state, instance_list, world_pad_info)
-    num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
     # Since there are no tensors in param_groups, deepcopy is fine
     param_groups = copy.deepcopy(param_groups)
+    num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
     param_groups[0]["params"] = list(range(num_params))
     return {
         "state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
