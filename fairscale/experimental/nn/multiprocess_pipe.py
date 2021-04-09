@@ -182,7 +182,12 @@ class PipelineModulesGraph(nn.Module):
         consumer_input_idx: int  # indicating which input of the consumer module
         producer_output_idx: int  # indicating which output of the producer module
 
-    def compile_output_consumers(self) -> None:
+    @staticmethod
+    def _is_model_input(input_desc: Tuple[int, int]) -> bool:
+        """Checks if an entry in self.inputs refers to a model input"""
+        return input_desc[0] < 0
+
+    def _compile(self) -> None:
         """Precomputes self.model_input_consumers and self.output_consumers for internal use by the pipleine
         class. These two lists show consumers of inputs to the model, and outputs of each module of
         the graph. Each consumer is a pair (i, j) which stands for the j'th input to the i'th module
@@ -202,7 +207,7 @@ class PipelineModulesGraph(nn.Module):
         for i, input in enumerate(self.inputs):
             assert input is not None
             for j, input_item in enumerate(input):
-                if input_item[0] >= 0:
+                if not self._is_model_input(input_item):
                     self.output_consumers[input_item[0]].append(
                         PipelineModulesGraph.OutputConsumerIndex(i, j, input_item[1])
                     )
@@ -250,7 +255,7 @@ class PipelineModulesGraph(nn.Module):
         If there is only one module in the partition, module_rref is reference to that module; otherwise those modules
         are wrapped by a MultiInputSequential and module_rref referes to that.
         """
-        self.compile_output_consumers()
+        self._compile()
         module_used = [False] * len(self.modules_list)
         partitions = []
         for module_idx, module in enumerate(self.modules_list):
