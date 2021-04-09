@@ -3,9 +3,10 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from dataclasses import dataclass
 from threading import Condition
 from types import TracebackType
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple, Type, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
 
 import torch
 from torch import Tensor, nn
@@ -173,7 +174,8 @@ class PipelineModulesGraph(nn.Module):
         for i, m in enumerate(outputs):
             self._set_inputs(m, [(mi, i)])
 
-    class OutputConsumerIndex(NamedTuple):
+    @dataclass
+    class OutputConsumerIndex:
         """A data class for representating a consumer of an output of a module."""
 
         consumer_idx: int  # index of the consumer module
@@ -272,7 +274,8 @@ class PipelineModulesGraph(nn.Module):
         return partitions
 
 
-class OutputConsumer(NamedTuple):
+@dataclass
+class OutputConsumer:
     """A data class for representating a consumer of an output of the module."""
 
     consumer_rref: rpc.RRef  # reference to the consumer (of type DistributedPipelineRecord)
@@ -417,10 +420,10 @@ class PartitionHandler:
             self.compute(pipeline_record, chunk)
             # Forward outputs of processing the chunk in this parition for processing by next partition.
             with use_stream(self.stream):
-                for consumer, input_idx, output_idx in pipeline_record.consumers:
-                    v = pipeline_record.get_batch(chunk).value[output_idx]
-                    pipeline_record.forwarded_phony[chunk][output_idx].append(
-                        consumer.remote().feed(chunk, input_idx, v)
+                for consumer in pipeline_record.consumers:
+                    v = pipeline_record.get_batch(chunk).value[consumer.output_idx]
+                    pipeline_record.forwarded_phony[chunk][consumer.output_idx].append(
+                        consumer.consumer_rref.remote().feed(chunk, consumer.consumer_input_idx, v)
                     )
 
     def fence(self, pipeline_record: DistributedPipelineRecord, chunk: int) -> None:
@@ -657,15 +660,17 @@ class DistributedPipeline(nn.Module):
             r_handler = self.partition_handlers[part_idx].remote()
             consumers = []
             # Identify consumers of the outputs of the partition
-            for consumer, input_idx, output_idx in self.graph.output_consumers[self.partitions[part_idx][0][-1]]:
+            for consumer in self.graph.output_consumers[self.partitions[part_idx][0][-1]]:
                 consumer_partition_idx = next(
-                    i for i, (p, num_partitions) in enumerate(self.partitions) if p[0] == consumer
+                    i for i, (p, num_partitions) in enumerate(self.partitions) if p[0] == consumer.consumer_idx
                 )
                 # Index of a consumer partition should be greater than index of the partition.
                 assert consumer_partition_idx > part_idx
                 consumer_partition = pipeline_records[consumer_partition_idx]
                 assert consumer_partition is not None
-                consumers.append(OutputConsumer(consumer_partition, input_idx, output_idx))
+                consumers.append(
+                    OutputConsumer(consumer_partition, consumer.consumer_input_idx, consumer.producer_output_idx)
+                )
             pipeline_records[part_idx] = r_handler.make_pipeline_record(consumers)
             # Let the pipeline-handler for the partition starts processing the pipeline-record for that partition.
             this_result = r_handler.run_pipeline(pipeline_records[part_idx])
