@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from threading import Condition
 from types import TracebackType
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, cast
+from typing import Any, Callable, Dict, Generic, List, Optional, Set, Tuple, Type, TypeVar, Union, cast
 
 import torch
 from torch import Tensor, nn
@@ -64,12 +64,33 @@ def RemoteSequential(rref_list: List[rpc.RRef]) -> MultiInputSequential:
     return MultiInputSequential(*(r.local_value() for r in rref_list))
 
 
+ConsumerType = TypeVar("ConsumerType")
+
+
+@dataclass
+class DataConsumer(Generic[ConsumerType]):
+    """A data class for representating a consumer of an output of a module."""
+
+    consumer: ConsumerType
+    consumer_input_idx: int  # indicating which input of the consumer module
+    output_idx: int  # indicating which output of the producer module
+
+
 class PipelineModulesGraph(nn.Module):
     """A collection of remote modules (of type RemoteModule) with connections showing how inputs
     to the model or outputs of individual modules are use as inputs of subsequent modules.
     The graph has a number of helper functions that add new modules to the graph and define inputs
     to these module.
     """
+
+    DataConsumer = DataConsumer["PipelineModulesGraph.Node"]
+
+    @dataclass
+    class DataSource:
+        # If producer is None, we are referring to the model input
+        producer: Optional["PipelineModulesGraph.Node"]
+        # indicating which output of the producer module, or which input of the model if producer is None.
+        output_idx: int
 
     class Node:
         def __init__(self, module: RemoteModule):
@@ -78,9 +99,9 @@ class PipelineModulesGraph(nn.Module):
             # self.inputs specifies inputs to the module. Each input is represented by a tuple (i, j).
             # If i>=0, then the input is the j'th output of the i'th # module in the graph. If i<0,
             # the input is the j'th input to the model.
-            self.inputs: List[Tuple[int, int]] = []
+            self.inputs: List["PipelineModulesGraph.DataSource"] = []
             # To be compiled by _compile method
-            self.output_consumers: List[PipelineModulesGraph.OutputConsumerIndex] = []
+            self.output_consumers: List[DataConsumer] = []
 
     def __init__(self) -> None:
         super().__init__()
@@ -92,6 +113,12 @@ class PipelineModulesGraph(nn.Module):
                 return i
         raise ValueError
 
+    def _node(self, module: RemoteModule) -> Node:
+        for n in self.nodes:
+            if n.module is module:
+                return n
+        raise ValueError
+
     def _find_or_add(self, module: RemoteModule) -> int:
         try:
             return self._node_index(module)
@@ -99,7 +126,7 @@ class PipelineModulesGraph(nn.Module):
             self.nodes.append(self.Node(module))
             return len(self.nodes) - 1
 
-    def _set_inputs(self, module: RemoteModule, inputs: List[Tuple[int, int]]) -> None:
+    def _set_inputs(self, module: RemoteModule, inputs: List[DataSource]) -> None:
         self.nodes[self._find_or_add(module)].inputs = inputs
 
     def add_sequence(self, modules: List[RemoteModule], first_input: Optional[RemoteModule] = None) -> None:
@@ -114,44 +141,31 @@ class PipelineModulesGraph(nn.Module):
         self.nodes.extend(self.Node(mod) for mod in modules)
         # update inputs array
         if first_input is not None:
-            self.nodes[old_modules_len].inputs = [(self._node_index(first_input), 0)]
+            self.nodes[old_modules_len].inputs = [self.DataSource(self._node(first_input), 0)]
         for i in range(old_modules_len + 1, old_modules_len + new_modules_len):
-            self.nodes[i].inputs = [(i - 1, 0)]
+            self.nodes[i].inputs = [self.DataSource(self.nodes[i - 1], 0)]
 
     def set_model_input(self, module: RemoteModule, ind: int = 0) -> None:
         """Declares the input to a module as the input to the model. In case the model has multiple
         inputs, the argument 'ind' indicates the index of the model input that is fed to the module.
         """
-        self._set_inputs(module, [(-1, ind)])
+        self._set_inputs(module, [self.DataSource(None, ind)])
 
     def add_multi_input_layer(self, module: RemoteModule, inputs: List[RemoteModule]) -> None:
         """Adds a module with multiple inputs to the graph. The modules that provide inputs to this module
         must have been added previously to the graph and are listed with argument inputs.
         """
-        self._set_inputs(module, [(self._node_index(m), 0) for m in inputs])
+        self._set_inputs(module, [self.DataSource(self._node(m), 0) for m in inputs])
 
     def fan_out(self, module: RemoteModule, outputs: List[RemoteModule]) -> None:
         """Feeds outputs of a previously added module to modules specified by argument 'outputs' (so
         'module' should have at least 'len(outputs)' outputs.
         Modules in the list 'outputs' are added to the graph if they have not been added previously.
         """
-        mi = self._node_index(module)
-        self.nodes[mi].num_outputs = len(outputs)
+        node = self._node(module)
+        node.num_outputs = len(outputs)
         for i, m in enumerate(outputs):
-            self._set_inputs(m, [(mi, i)])
-
-    @dataclass
-    class OutputConsumerIndex:
-        """A data class for representating a consumer of an output of a module."""
-
-        consumer_idx: int  # index of the consumer module
-        consumer_input_idx: int  # indicating which input of the consumer module
-        producer_output_idx: int  # indicating which output of the producer module
-
-    @staticmethod
-    def _is_model_input(input_desc: Tuple[int, int]) -> bool:
-        """Checks if an entry in self.inputs refers to a model input"""
-        return input_desc[0] < 0
+            self._set_inputs(m, [self.DataSource(node, i)])
 
     def _compile(self) -> None:
         """Precomputes self.model_input_consumers and self.output_consumers for internal use by the pipleine
@@ -169,26 +183,24 @@ class PipelineModulesGraph(nn.Module):
 
         m = len(self.nodes)
         self.model_input_consumers = []
-        for node_index, node in enumerate(self.nodes):
+        for node in self.nodes:
             for input_index, input_item in enumerate(node.inputs):
-                if input_item[0] >= 0:
-                    self.nodes[input_item[0]].output_consumers.append(
-                        PipelineModulesGraph.OutputConsumerIndex(node_index, input_index, input_item[1])
-                    )
+                data_consumer = DataConsumer(node, input_index, input_item.output_idx)
+                if input_item.producer is not None:
+                    input_item.producer.output_consumers.append(data_consumer)
                 else:
-                    self.model_input_consumers.append((node_index, input_index, input_item[1]))
+                    self.model_input_consumers.append(data_consumer)
 
-    def _trace_modules(self, node_idx: int) -> List[int]:
+    def _trace_modules(self, node: "PipelineModulesGraph.Node") -> List["PipelineModulesGraph.Node"]:
         """Compiles a list of modules (starting from module number module_idx), where each module in the list
         gets the output of previous module in the list as its input. So every module in the list, except the
         first one should have only one input, and similarly, every module in the list, except the last one
         should have only one output.
         """
         partition = []
-        current_node_idx = node_idx
-        current_node = self.nodes[node_idx]
+        current_node = node
         while True:
-            partition.append(current_node_idx)
+            partition.append(current_node)
             # If we reached a module with multiple outputs or with multiple consumers for its output,
             # stop adding more modules to the partition.
             if len(current_node.output_consumers) != 1:
@@ -196,10 +208,9 @@ class PipelineModulesGraph(nn.Module):
             if current_node.num_outputs is not None:
                 break
             # Next module to add is the only consumer of the ouput of the current module
-            next_node_idx = current_node.output_consumers[0].consumer_idx
-            next_node = self.nodes[next_node_idx]
+            next_node = current_node.output_consumers[0].consumer
             # If the next module has multiple inputs, do not add it to the current partition and stop.
-            if next_node.inputs != [(current_node_idx, 0)]:
+            if next_node.inputs != [(current_node, 0)]:
                 break
             # If the next module is on a different deivce or worker, stop
             if next_node.module.on != current_node.module.on:
@@ -207,11 +218,10 @@ class PipelineModulesGraph(nn.Module):
             if next_node.module.device != current_node.module.device:
                 break
             current_node = next_node
-            current_node_idx = next_node_idx
 
         return partition
 
-    def partition_graph(self) -> List[Tuple[List[int], rpc.RRef]]:
+    def partition_graph(self) -> List[Tuple[List[Node], rpc.RRef]]:
         """Splits the graph into pipeline partitions and for each parition returns a tuple (indices, module_rref),
         where indices is indices of modules of the partition in the graph, and module_rref is an RRef to an nn.Module:
         Each partition is a list of modules on the same device that are executed sequentially (output of each module is
@@ -220,35 +230,24 @@ class PipelineModulesGraph(nn.Module):
         are wrapped by a MultiInputSequential and module_rref referes to that.
         """
         self._compile()
-        modules_used: Set[int] = set()
+        modules_used: Set[PipelineModulesGraph.Node] = set()
         partitions = []
-        for node_idx, node in enumerate(self.nodes):
-            if node_idx in modules_used:
+        for node in self.nodes:
+            if node in modules_used:
                 continue
-            partition = self._trace_modules(node_idx)
+            partition = self._trace_modules(node)
             assert not modules_used.intersection(partition)
             modules_used.update(partition)
 
             if len(partition) == 1:
-                remote_module = self.nodes[partition[0]].module.get_module_rref()
+                remote_module = partition[0].module.get_module_rref()
             else:
                 remote_module = rpc.remote(
-                    self.nodes[partition[0]].module.on,
-                    RemoteSequential,
-                    args=([self.nodes[p].module.get_module_rref() for p in partition],),
+                    partition[0].module.on, RemoteSequential, args=([p.module.get_module_rref() for p in partition],),
                 )
             partitions.append((partition, remote_module))
 
         return partitions
-
-
-@dataclass
-class OutputConsumer:
-    """A data class for representating a consumer of an output of the module."""
-
-    consumer_rref: rpc.RRef  # reference to the consumer (of type DistributedPipelineRecord)
-    consumer_input_idx: int  # indicating which input of the consumer module
-    output_idx: int  # indicating which output of the module
 
 
 class DistributedPipelineRecord:
@@ -265,6 +264,8 @@ class DistributedPipelineRecord:
             output_idx of this partition will be used as the input number input_idx of that partition.
     """
 
+    DataConsumer = DataConsumer[rpc.RRef]
+
     def __init__(
         self,
         device: torch.device,
@@ -272,7 +273,7 @@ class DistributedPipelineRecord:
         chunks: int,
         num_inputs: int,
         num_outputs: Optional[int],
-        consumers: List[OutputConsumer],
+        consumers: List[DataConsumer],
     ) -> None:
         self.ready_cv = Condition()
         # Each chunk consists of num_inputs tensors. self.tensors stores these individual tensors.
@@ -350,7 +351,7 @@ class DistributedPipelineRecord:
         for consumer in self.consumers:
             v = self.get_batch(chunk).value[consumer.output_idx]
             self.forwarded_phony[chunk][consumer.output_idx].append(
-                consumer.consumer_rref.remote().feed(chunk, consumer.consumer_input_idx, v)
+                consumer.consumer.remote().feed(chunk, consumer.consumer_input_idx, v)
             )
 
     def get_batch(self, chunk: int) -> Batch:
@@ -398,7 +399,9 @@ class PartitionHandler:
         """
         return [rpc.RRef(p) for p in self.module.parameters()]
 
-    def make_pipeline_record(self, consumers: List[OutputConsumer]) -> DistributedPipelineRecord:
+    def make_pipeline_record(
+        self, consumers: List[DistributedPipelineRecord.DataConsumer]
+    ) -> DistributedPipelineRecord:
         return DistributedPipelineRecord(
             self.device, self.rank, self.chunks, self.num_inputs, self.num_outputs, consumers
         )
@@ -539,6 +542,16 @@ class DistributedPipeline(nn.Module):
             and ``'always'`` enables checkpointing for all micro-batches.
     """
 
+    @dataclass
+    class Partition:
+        nodes: List[PipelineModulesGraph.Node]
+        handler: rpc.RRef
+
+        def __hash__(self) -> int:
+            return hash(self.handler)
+
+    DataConsumer = DataConsumer[Partition]
+
     def __init__(self, graph: PipelineModulesGraph, chunks: int = 1, checkpoint: str = "except_last",) -> None:
         super().__init__()
 
@@ -553,32 +566,37 @@ class DistributedPipeline(nn.Module):
             raise ValueError("checkpoint is not one of 'always', 'except_last', or 'never'")
 
         self.chunks = chunks
-
-        self.partitions = graph.partition_graph()
-        self.input_feeds = [
-            next((i, fj, feed_idx) for i, (p, m) in enumerate(self.partitions) if p[0] == fi)
-            for fi, fj, feed_idx in graph.model_input_consumers
-        ]
-
         # The micro-batch index where the checkpointing stops.
         checkpoint_stop = {"always": self.chunks, "except_last": self.chunks - 1, "never": 0}[checkpoint]
 
-        self.partition_handlers = [
-            rpc.remote(
-                m.owner(),
-                PartitionHandler,
-                args=(
-                    m,
-                    graph.nodes[p[0]].module.device,
-                    len(graph.nodes[p[0]].inputs),
-                    graph.nodes[p[-1]].num_outputs,
-                    i,
-                    self.chunks,
-                    checkpoint_stop,
+        self.partitions = [
+            self.Partition(
+                nodes,
+                rpc.remote(
+                    handler.owner(),
+                    PartitionHandler,
+                    args=(
+                        handler,
+                        nodes[0].module.device,
+                        len(nodes[0].inputs),
+                        nodes[-1].num_outputs,
+                        i,
+                        self.chunks,
+                        checkpoint_stop,
+                    ),
                 ),
             )
-            for i, (p, m) in enumerate(self.partitions)
+            for i, (nodes, handler) in enumerate(graph.partition_graph())
         ]
+        self.input_consumers = [
+            next(
+                self.DataConsumer(partition, input_consumer.consumer_input_idx, input_consumer.output_idx)
+                for partition in self.partitions
+                if partition.nodes[0] is input_consumer.consumer
+            )
+            for input_consumer in graph.model_input_consumers
+        ]
+
         self.graph = graph
 
     # DistributedPipeline should manage the device of each partition.
@@ -612,8 +630,8 @@ class DistributedPipeline(nn.Module):
 
     def parameter_rrefs(self) -> List[rpc.RRef]:
         remote_params = []
-        for p in self.partition_handlers:
-            remote_params.extend(p.rpc_sync().local_parameter_rrefs())
+        for p in self.partitions:
+            remote_params.extend(p.handler.rpc_sync().local_parameter_rrefs())
         return remote_params
 
     def forward(self, *inputs: Tensor) -> rpc.RRef:  # type: ignore
@@ -622,42 +640,41 @@ class DistributedPipeline(nn.Module):
 
         # Divide a mini-batch into micro-batches.
         batches_list = [microbatch.scatter(input, self.chunks) for input in inputs]
-        num_partitions = len(self.partition_handlers)
+        num_partitions = len(self.partitions)
 
         # Create a DistributedPipelineRecord, one per partition, and make connections between them (i.e.
         # set list of consumers).
-        pipeline_records: List[Optional[rpc.RRef]] = [None] * (num_partitions + 1)
-        for part_idx in reversed(range(num_partitions)):
-            r_handler = self.partition_handlers[part_idx].remote()
+        pipeline_records: Dict[DistributedPipeline.Partition, rpc.RRef] = {}
+        for partition in reversed(self.partitions):
+            r_handler = partition.handler.remote()
             consumers = []
             # Identify consumers of the outputs of the partition
-            for consumer in self.graph.nodes[self.partitions[part_idx][0][-1]].output_consumers:
-                consumer_partition_idx = next(
-                    i for i, (p, num_partitions) in enumerate(self.partitions) if p[0] == consumer.consumer_idx
-                )
+            for consumer in partition.nodes[-1].output_consumers:
+                consumer_partition = next(p for p in self.partitions if p.nodes[0] is consumer.consumer)
                 # Index of a consumer partition should be greater than index of the partition.
-                assert consumer_partition_idx > part_idx
-                consumer_partition = pipeline_records[consumer_partition_idx]
-                assert consumer_partition is not None
+                assert consumer_partition in pipeline_records
                 consumers.append(
-                    OutputConsumer(consumer_partition, consumer.consumer_input_idx, consumer.producer_output_idx)
+                    DistributedPipelineRecord.DataConsumer(
+                        pipeline_records[consumer_partition], consumer.consumer_input_idx, consumer.output_idx
+                    )
                 )
-            pipeline_records[part_idx] = r_handler.make_pipeline_record(consumers)
+            pipeline_records[partition] = r_handler.make_pipeline_record(consumers)
             # Let the pipeline-handler for the partition starts processing the pipeline-record for that partition.
-            this_result = r_handler.run_pipeline(pipeline_records[part_idx])
+            this_result = r_handler.run_pipeline(pipeline_records[partition])
             # If this is the last partition, we expect the result of the model be the output of this partition.
-            if part_idx == num_partitions - 1:
+            if partition is self.partitions[-1]:
                 result = this_result
 
         # Start feeding model input to the partitions that need them.
         for i, b in enumerate(zip(*batches_list)):
-            for fi, fj, feed_idx in self.input_feeds:
-                pipeline_record = pipeline_records[fi]
-                assert pipeline_record is not None
+            for input_consumer in self.input_consumers:
+                pipeline_record = pipeline_records[input_consumer.consumer]
                 # TODO: Debug why we need this special handling
                 if pipeline_record.owner().name == rpc.get_worker_info().name:  # type: ignore
-                    pipeline_record.local_value().feed(i, fj, b[feed_idx].value)
+                    pipeline_record.local_value().feed(
+                        i, input_consumer.consumer_input_idx, b[input_consumer.output_idx].value
+                    )
                 else:
-                    pipeline_record.rpc_async().feed(i, fj, b[feed_idx].value)  # type: ignore
+                    pipeline_record.rpc_async().feed(i, input_consumer.consumer_input_idx, b[input_consumer.output_idx].value)  # type: ignore
 
         return result
