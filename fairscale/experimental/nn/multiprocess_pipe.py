@@ -107,27 +107,22 @@ class PipelineModulesGraph(nn.Module):
         super().__init__()
         self.nodes: List[PipelineModulesGraph.Node] = []
 
-    def _node_index(self, module: RemoteModule) -> int:
-        for i, n in enumerate(self.nodes):
-            if n.module is module:
-                return i
-        raise ValueError
-
-    def _node(self, module: RemoteModule) -> Node:
+    def _find_node(self, module: RemoteModule) -> Node:
         for n in self.nodes:
             if n.module is module:
                 return n
         raise ValueError
 
-    def _find_or_add(self, module: RemoteModule) -> int:
+    def _find_or_add(self, module: RemoteModule) -> Node:
         try:
-            return self._node_index(module)
+            return self._find_node(module)
         except ValueError:
-            self.nodes.append(self.Node(module))
-            return len(self.nodes) - 1
+            new_node = self.Node(module)
+            self.nodes.append(new_node)
+            return new_node
 
     def _set_inputs(self, module: RemoteModule, inputs: List[DataSource]) -> None:
-        self.nodes[self._find_or_add(module)].inputs = inputs
+        self._find_or_add(module).inputs = inputs
 
     def add_sequence(self, modules: List[RemoteModule], first_input: Optional[RemoteModule] = None) -> None:
         """Adds a list of modules to the graph, to be run sequentially.
@@ -141,7 +136,7 @@ class PipelineModulesGraph(nn.Module):
         self.nodes.extend(self.Node(mod) for mod in modules)
         # update inputs array
         if first_input is not None:
-            self.nodes[old_modules_len].inputs = [self.DataSource(self._node(first_input), 0)]
+            self.nodes[old_modules_len].inputs = [self.DataSource(self._find_node(first_input), 0)]
         for i in range(old_modules_len + 1, old_modules_len + new_modules_len):
             self.nodes[i].inputs = [self.DataSource(self.nodes[i - 1], 0)]
 
@@ -155,14 +150,14 @@ class PipelineModulesGraph(nn.Module):
         """Adds a module with multiple inputs to the graph. The modules that provide inputs to this module
         must have been added previously to the graph and are listed with argument inputs.
         """
-        self._set_inputs(module, [self.DataSource(self._node(m), 0) for m in inputs])
+        self._set_inputs(module, [self.DataSource(self._find_node(m), 0) for m in inputs])
 
     def fan_out(self, module: RemoteModule, outputs: List[RemoteModule]) -> None:
         """Feeds outputs of a previously added module to modules specified by argument 'outputs' (so
         'module' should have at least 'len(outputs)' outputs.
         Modules in the list 'outputs' are added to the graph if they have not been added previously.
         """
-        node = self._node(module)
+        node = self._find_node(module)
         node.num_outputs = len(outputs)
         for i, m in enumerate(outputs):
             self._set_inputs(m, [self.DataSource(node, i)])
