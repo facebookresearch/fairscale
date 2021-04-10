@@ -205,7 +205,7 @@ class PipelineModulesGraph(nn.Module):
             # Next module to add is the only consumer of the ouput of the current module
             next_node = current_node.output_consumers[0].consumer
             # If the next module has multiple inputs, do not add it to the current partition and stop.
-            if next_node.inputs != [(current_node, 0)]:
+            if next_node.inputs != [self.DataSource(current_node, 0)]:
                 break
             # If the next module is on a different deivce or worker, stop
             if next_node.module.on != current_node.module.on:
@@ -635,7 +635,6 @@ class DistributedPipeline(nn.Module):
 
         # Divide a mini-batch into micro-batches.
         batches_list = [microbatch.scatter(input, self.chunks) for input in inputs]
-        num_partitions = len(self.partitions)
 
         # Create a DistributedPipelineRecord, one per partition, and make connections between them (i.e.
         # set list of consumers).

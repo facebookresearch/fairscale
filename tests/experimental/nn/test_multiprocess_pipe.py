@@ -213,6 +213,10 @@ class SplitTensors(nn.Module):
         return torch.split(input, (input.shape[1] + 1) // 2, dim=1)
 
 
+def extract_partitions(graph: PipelineModulesGraph, pipeline: DistributedPipeline) -> List[List[int]]:
+    return [list(map(graph.nodes.index, p.nodes)) for p in pipeline.partitions]
+
+
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 def multi_input_multi_output_layers(devices):
@@ -222,7 +226,7 @@ def multi_input_multi_output_layers(devices):
     x = torch.randn(8, 4).to(device)
 
     #                                / ->linear_layer_2_1
-    # input -> linear_layer1 -> split                     ->concatenate->linear_layer_3
+    # input -> linear_layer1 -> split                     ->concatenate
     #                                \ ->linear_layer_2_2
 
     linear_layer_1 = RemoteModule(devices[0], nn.Linear, (4, 4), {})
@@ -240,6 +244,7 @@ def multi_input_multi_output_layers(devices):
     graph.add_multi_input_layer(concatenate, linear_layers_2)
 
     pipe = DistributedPipeline(graph, chunks=4)
+    assert [[0, 1], [2], [3], [4]] == extract_partitions(graph, pipe)
     params = pipe.parameter_rrefs()
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []
