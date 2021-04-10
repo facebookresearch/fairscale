@@ -12,6 +12,7 @@ import torch
 from torch import Tensor, nn
 from torch.autograd.profiler import record_function
 from torch.distributed import rpc
+from torch.distributed.nn import RemoteModule
 
 from fairscale.nn.pipe import microbatch
 from fairscale.nn.pipe.checkpoint import Checkpointing, TensorOrTensors
@@ -63,114 +64,77 @@ def RemoteSequential(rref_list: List[rpc.RRef]) -> MultiInputSequential:
     return MultiInputSequential(*(r.local_value() for r in rref_list))
 
 
-class PipelineModule(nn.Module):
-    """Constructs a module on a remote device, possibly at a later time (in case the device is not
-    specified when creating PipelineModule.
-    Args:
-        module_cls (nn.Module): Class for the module to be created remotely.
-        args (Sequence): args to be passed to ``module_cls``.
-        kwargs (Dict, optional): kwargs to be passed to ``module_cls``.
-        num_inputs (int, optional): number of inputs to the forward function.
-        num_outputs: (int, optional): If the forward function returns a tuple, number of elements
-            in the tuple, otherwise it should be None
-        remote_device: (str, optional): Device on the destination worker where we‘d like to place
-            this module. The format should be "<workername>/<device>", where the device field can be
-            parsed as torch.device type. E.g., "trainer0/cpu", "trainer0", "ps0/cuda:0".
-            This parameter can be provided later by calling the method instantiate.
-    """
-
-    def __init__(
-        self,
-        module_cls: nn.Module,
-        args: Tuple,
-        kwargs: Optional[Dict] = None,
-        num_inputs: int = 1,
-        num_outputs: Optional[int] = None,
-        remote_device: str = None,
-    ):
-        super().__init__()
-        self.num_inputs = num_inputs
-        self.num_outputs = num_outputs
-        self.module_args = (module_cls, args, kwargs or {})
-        if remote_device is not None:
-            self.instantiate(remote_device)
-
-    @staticmethod
-    def _create_module(module_cls: Callable, args: Tuple, kwargs: Dict, device: str) -> nn.Module:
-        result: nn.Module = module_cls(*args, **kwargs)
-        result.to(device)
-        return result
-
-    def instantiate(self, remote_device: str) -> "PipelineModule":
-        worker, device = remote_device.split("/")
-        self.worker = worker
-        self.device = device
-        self.module_rref = rpc.remote(worker, PipelineModule._create_module, self.module_args + (device,))
-        return self
-
-    def get_module_rref(self) -> rpc.RRef:
-        return self.module_rref
-
-
 class PipelineModulesGraph(nn.Module):
-    """A collection of remote modules (of type PipelineModule) with connections showing how inputs
+    """A collection of remote modules (of type RemoteModule) with connections showing how inputs
     to the model or outputs of individual modules are use as inputs of subsequent modules.
     The graph has a number of helper functions that add new modules to the graph and define inputs
     to these module.
     """
 
+    class Node:
+        def __init__(self, module: RemoteModule):
+            self.module = module
+            self.num_outputs: Optional[int] = None
+            # self.inputs specifies inputs to the module. Each input is represented by a tuple (i, j).
+            # If i>=0, then the input is the j'th output of the i'th # module in the graph. If i<0,
+            # the input is the j'th input to the model.
+            self.inputs: List[Tuple[int, int]] = []
+
     def __init__(self) -> None:
         super().__init__()
-        self.modules_list: List = []
-        # self.inputs specifies inputs to each module in modules_list. Each input to each module
-        # is represented by a tuple (i, j). If i>=0, then the input is the j'th output of the i'th
-        # module. If i<0, the input is the j'th input to the model.
-        self.inputs: List[Optional[List[Tuple[int, int]]]] = []
+        self.nodes: List[PipelineModulesGraph.Node] = []
 
-    def _find_or_add(self, module: PipelineModule) -> int:
+    def _node_index(self, module: RemoteModule) -> int:
+        for i, n in enumerate(self.nodes):
+            if n.module is module:
+                return i
+        raise ValueError
+
+    def _find_or_add(self, module: RemoteModule) -> int:
         try:
-            return self.modules_list.index(module)
+            return self._node_index(module)
         except ValueError:
-            self.inputs.append(None)
-            self.modules_list.append(module)
-            return len(self.modules_list) - 1
+            self.nodes.append(self.Node(module))
+            return len(self.nodes) - 1
 
-    def _set_inputs(self, module: PipelineModule, inputs: List[Tuple[int, int]]) -> None:
-        self.inputs[self._find_or_add(module)] = inputs
+    def _set_inputs(self, module: RemoteModule, inputs: List[Tuple[int, int]]) -> None:
+        self.nodes[self._find_or_add(module)].inputs = inputs
 
-    def add_sequence(self, modules: List[PipelineModule], first_input: Optional[PipelineModule] = None) -> None:
+    def add_sequence(self, modules: List[RemoteModule], first_input: Optional[RemoteModule] = None) -> None:
         """Adds a list of modules to the graph, to be run sequentially.
         The connection between these modules is as follows: the first output of each of these modules
         (except the last one) is used as the first input of its next module in this sequence.
         The user may also specify the input to the first module in this sequence with argument 'first_input'.
         In this case the module 'first_input' must have been added to the graph previously.
         """
-        old_modules_len = len(self.modules_list)
+        old_modules_len = len(self.nodes)
         new_modules_len = len(modules)
-        self.modules_list.extend(modules)
+        self.nodes.extend(self.Node(mod) for mod in modules)
         # update inputs array
-        self.inputs.append([(self.modules_list.index(first_input), 0)] if first_input is not None else None)
+        if first_input is not None:
+            self.nodes[old_modules_len].inputs = [(self._node_index(first_input), 0)]
         for i in range(old_modules_len + 1, old_modules_len + new_modules_len):
-            self.inputs.append([(i - 1, 0)])
+            self.nodes[i].inputs = [(i - 1, 0)]
 
-    def set_model_input(self, module: PipelineModule, ind: int = 0) -> None:
+    def set_model_input(self, module: RemoteModule, ind: int = 0) -> None:
         """Declares the input to a module as the input to the model. In case the model has multiple
         inputs, the argument 'ind' indicates the index of the model input that is fed to the module.
         """
         self._set_inputs(module, [(-1, ind)])
 
-    def add_multi_input_layer(self, module: PipelineModule, inputs: List[PipelineModule]) -> None:
+    def add_multi_input_layer(self, module: RemoteModule, inputs: List[RemoteModule]) -> None:
         """Adds a module with multiple inputs to the graph. The modules that provide inputs to this module
         must have been added previously to the graph and are listed with argument inputs.
         """
-        self._set_inputs(module, [(self.modules_list.index(m), 0) for m in inputs])
+        self._set_inputs(module, [(self._node_index(m), 0) for m in inputs])
 
-    def fan_out(self, module: PipelineModule, outputs: List[PipelineModule]) -> None:
+    def fan_out(self, module: RemoteModule, outputs: List[RemoteModule]) -> None:
         """Feeds outputs of a previously added module to modules specified by argument 'outputs' (so
         'module' should have at least 'len(outputs)' outputs.
         Modules in the list 'outputs' are added to the graph if they have not been added previously.
         """
-        mi = self.modules_list.index(module)
+        mi = self._node_index(module)
+        self.nodes[mi].num_outputs = len(outputs)
         for i, m in enumerate(outputs):
             self._set_inputs(m, [(mi, i)])
 
@@ -201,49 +165,48 @@ class PipelineModulesGraph(nn.Module):
         #     the graph. This condition is used in implementaion of DistributedPipeline.forward. Even
         #     if we relax this condition, still need to make sure the graph is acyclic.
 
-        m = len(self.modules_list)
+        m = len(self.nodes)
         self.output_consumers: List[List[PipelineModulesGraph.OutputConsumerIndex]] = [[] for _ in range(m)]
         self.model_input_consumers = []
-        for module_index, module_inputs in enumerate(self.inputs):
-            assert module_inputs is not None
-            for input_index, input_item in enumerate(module_inputs):
-                if not self._is_model_input(input_item):
+        for node_index, node in enumerate(self.nodes):
+            for input_index, input_item in enumerate(node.inputs):
+                if input_item[0] >= 0:
                     self.output_consumers[input_item[0]].append(
-                        PipelineModulesGraph.OutputConsumerIndex(module_index, input_index, input_item[1])
+                        PipelineModulesGraph.OutputConsumerIndex(node_index, input_index, input_item[1])
                     )
                 else:
-                    self.model_input_consumers.append((module_index, input_index, input_item[1]))
+                    self.model_input_consumers.append((node_index, input_index, input_item[1]))
 
-    def _trace_modules(self, module_idx: int) -> List[int]:
+    def _trace_modules(self, node_idx: int) -> List[int]:
         """Compiles a list of modules (starting from module number module_idx), where each module in the list
         gets the output of previous module in the list as its input. So every module in the list, except the
         first one should have only one input, and similarly, every module in the list, except the last one
         should have only one output.
         """
         partition = []
-        current_module_idx = module_idx
-        current_module = self.modules_list[module_idx]
+        current_node_idx = node_idx
+        current_node = self.nodes[node_idx]
         while True:
-            partition.append(current_module_idx)
+            partition.append(current_node_idx)
             # If we reached a module with multiple outputs or with multiple consumers for its output,
             # stop adding more modules to the partition.
-            if len(self.output_consumers[current_module_idx]) != 1:
+            if len(self.output_consumers[current_node_idx]) != 1:
                 break
-            if self.modules_list[current_module_idx].num_outputs is not None:
+            if current_node.num_outputs is not None:
                 break
             # Next module to add is the only consumer of the ouput of the current module
-            next_module_idx = self.output_consumers[current_module_idx][0].consumer_idx
-            next_module = self.modules_list[next_module_idx]
+            next_node_idx = self.output_consumers[current_node_idx][0].consumer_idx
+            next_node = self.nodes[next_node_idx]
             # If the next module has multiple inputs, do not add it to the current partition and stop.
-            if self.inputs[next_module_idx] != [(current_module_idx, 0)]:
+            if next_node.inputs != [(current_node_idx, 0)]:
                 break
             # If the next module is on a different deivce or worker, stop
-            if next_module.worker != current_module.worker:
+            if next_node.module.on != current_node.module.on:
                 break
-            if next_module.device != current_module.device:
+            if next_node.module.device != current_node.module.device:
                 break
-            current_module = next_module
-            current_module_idx = next_module_idx
+            current_node = next_node
+            current_node_idx = next_node_idx
 
         return partition
 
@@ -258,20 +221,20 @@ class PipelineModulesGraph(nn.Module):
         self._compile()
         modules_used: Set[int] = set()
         partitions = []
-        for module_idx, module in enumerate(self.modules_list):
-            if module_idx in modules_used:
+        for node_idx, node in enumerate(self.nodes):
+            if node_idx in modules_used:
                 continue
-            partition = self._trace_modules(module_idx)
+            partition = self._trace_modules(node_idx)
             assert not modules_used.intersection(partition)
             modules_used.update(partition)
 
             if len(partition) == 1:
-                remote_module = self.modules_list[partition[0]].get_module_rref()
+                remote_module = self.nodes[partition[0]].module.get_module_rref()
             else:
                 remote_module = rpc.remote(
-                    self.modules_list[partition[0]].worker,
+                    self.nodes[partition[0]].module.on,
                     RemoteSequential,
-                    args=([self.modules_list[p].get_module_rref() for p in partition],),
+                    args=([self.nodes[p].module.get_module_rref() for p in partition],),
                 )
             partitions.append((partition, remote_module))
 
@@ -605,9 +568,9 @@ class DistributedPipeline(nn.Module):
                 PartitionHandler,
                 args=(
                     m,
-                    graph.modules_list[p[0]].device,
-                    graph.modules_list[p[0]].num_inputs,
-                    graph.modules_list[p[-1]].num_outputs,
+                    graph.nodes[p[0]].module.device,
+                    len(graph.nodes[p[0]].inputs),
+                    graph.nodes[p[-1]].num_outputs,
                     i,
                     self.chunks,
                     checkpoint_stop,
