@@ -79,6 +79,8 @@ class PipelineModulesGraph(nn.Module):
             # If i>=0, then the input is the j'th output of the i'th # module in the graph. If i<0,
             # the input is the j'th input to the model.
             self.inputs: List[Tuple[int, int]] = []
+            # To be compiled by _compile method
+            self.output_consumers: List[PipelineModulesGraph.OutputConsumerIndex] = []
 
     def __init__(self) -> None:
         super().__init__()
@@ -166,12 +168,11 @@ class PipelineModulesGraph(nn.Module):
         #     if we relax this condition, still need to make sure the graph is acyclic.
 
         m = len(self.nodes)
-        self.output_consumers: List[List[PipelineModulesGraph.OutputConsumerIndex]] = [[] for _ in range(m)]
         self.model_input_consumers = []
         for node_index, node in enumerate(self.nodes):
             for input_index, input_item in enumerate(node.inputs):
                 if input_item[0] >= 0:
-                    self.output_consumers[input_item[0]].append(
+                    self.nodes[input_item[0]].output_consumers.append(
                         PipelineModulesGraph.OutputConsumerIndex(node_index, input_index, input_item[1])
                     )
                 else:
@@ -190,12 +191,12 @@ class PipelineModulesGraph(nn.Module):
             partition.append(current_node_idx)
             # If we reached a module with multiple outputs or with multiple consumers for its output,
             # stop adding more modules to the partition.
-            if len(self.output_consumers[current_node_idx]) != 1:
+            if len(current_node.output_consumers) != 1:
                 break
             if current_node.num_outputs is not None:
                 break
             # Next module to add is the only consumer of the ouput of the current module
-            next_node_idx = self.output_consumers[current_node_idx][0].consumer_idx
+            next_node_idx = current_node.output_consumers[0].consumer_idx
             next_node = self.nodes[next_node_idx]
             # If the next module has multiple inputs, do not add it to the current partition and stop.
             if next_node.inputs != [(current_node_idx, 0)]:
@@ -630,7 +631,7 @@ class DistributedPipeline(nn.Module):
             r_handler = self.partition_handlers[part_idx].remote()
             consumers = []
             # Identify consumers of the outputs of the partition
-            for consumer in self.graph.output_consumers[self.partitions[part_idx][0][-1]]:
+            for consumer in self.graph.nodes[self.partitions[part_idx][0][-1]].output_consumers:
                 consumer_partition_idx = next(
                     i for i, (p, num_partitions) in enumerate(self.partitions) if p[0] == consumer.consumer_idx
                 )
