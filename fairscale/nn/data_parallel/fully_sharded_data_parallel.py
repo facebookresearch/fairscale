@@ -1414,7 +1414,6 @@ class FullyShardedDataParallel(nn.Module):
                 # Three cases
                 if torch.is_tensor(t) and not ou.is_singleton_tensor(t):
                     assert buffer_name != "exp_avg_scale", t
-                    print(f"all_gather big tensor {buffer_name}")
                     if buffer is None or desired_buffer_size != buffer.size():
                         buffer = t.new_zeros(*desired_buffer_size)
                         chunks = list(buffer.chunk(self.world_size))
