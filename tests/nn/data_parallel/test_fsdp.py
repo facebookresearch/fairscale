@@ -144,6 +144,7 @@ class TestMixedPrecision(DistributedTest):
 
     def test_mixed_precision_autocast(self):
         """If autocast enabled, loss should be fp32."""
+
         self._spawn_test_case(
             {"mixed_precision": True},
             True,  # autocast enabled

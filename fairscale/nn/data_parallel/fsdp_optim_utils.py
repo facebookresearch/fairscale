@@ -72,7 +72,10 @@ def _extract_non_tensor_state(combined_state: Dict[int, Dict[str, List]], param_
 
 
 def _unflatten_optim_state(
-    combined_state: Dict[int, Dict], instance_list: List[torch.nn.Module], world_pad_info: List[List[List[int]]],
+    combined_state: Dict[int, Dict],
+    instance_list: List[torch.nn.Module],
+    world_pad_info: List[List[List[int]]],
+    singleton_state: Dict[int, Dict],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
     # local ids are the keys in the current state (combined_state), (usually fewer)
     # global ids will be the keys in the unflattened state
@@ -85,17 +88,17 @@ def _unflatten_optim_state(
     non_tensor_state = [_extract_non_tensor_state(combined_state, id) for id in combined_state]
 
     # local corresponds to flattened, global corresponds to unflattened
-    num_unflat_params = [len(m._param_numels) for m in instance_list]  # type: ignore
+    num_global_params = [len(m._param_numels) for m in instance_list]  # type: ignore
     global_to_local_id = {}
-    for local_id, num_unflat in enumerate(num_unflat_params):
+    for local_id, num_unflat in enumerate(num_global_params):
         for _ in range(num_unflat):
             global_to_local_id[next_global_id] = local_id
             next_global_id += 1
     if not combined_state:
         return {}, global_to_local_id
 
-    # If the constant state is the same as the combined state,  copy it N times, no unflattening needed.
-    unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_unflat_params))}
+    # copy non tensor steate to all global entries
+    unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_global_params))}
 
     if non_tensor_state[0].keys() == combined_state[0].keys():
         return unflat_state, global_to_local_id
@@ -118,6 +121,7 @@ def _unflatten_optim_state(
             for global_id, param_view in zip(sorted(local_to_global[local_id]), param_views):
                 assert k not in unflat_state[global_id], f"already added {k} to {global_id} {local_id}"
                 unflat_state[global_id][k] = param_view
+                unflat_state[global_id].update(singleton_state[local_id])
 
     return unflat_state, global_to_local_id
 
@@ -126,6 +130,7 @@ def build_unflat_state_dict(
     instance_list: List[torch.nn.Module],
     world_pad_info: List[List[List[int]]],
     state: Dict[int, Dict[str, List[torch.Tensor]]],
+    singleton_state: Dict[int, Dict[str, List[torch.Tensor]]],
     uncollected_opt_state: Dict[int, Dict],
     param_groups: List[Dict],
 ) -> Dict:
@@ -136,9 +141,10 @@ def build_unflat_state_dict(
     # Add uncollected state to tensor_state
     for local_id, v in uncollected_opt_state.items():
         assert local_id not in state
-        state[local_id] = {buffer_name: [x] for buffer_name, x in v.items()}
+        state[local_id] = {buffer_name: [x] for buffer_name, x in v.items() if not is_singleton_tensor(x)}
+        singleton_state[local_id] = {buffer_name: [x] for buffer_name, x in v.items() if is_singleton_tensor(x)}
     # local ids are in the current state, global_ids will be in returned state.
-    unflat_state, global_to_local_id = _unflatten_optim_state(state, instance_list, world_pad_info)
+    unflat_state, global_to_local_id = _unflatten_optim_state(state, instance_list, world_pad_info, singleton_state)
     # Since there are no tensors in param_groups, deepcopy is fine
     param_groups = copy.deepcopy(param_groups)
     num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
@@ -149,3 +155,14 @@ def build_unflat_state_dict(
         "param_groups": param_groups,
         "uncollected_local_ids": list(uncollected_opt_state.keys()),
     }
+
+
+from typing import Any
+
+
+def is_singleton_tensor(x: Any) -> bool:
+    """Is x a dimensionless tensor"""
+    if torch.is_tensor(x):
+        return not x.size()
+    else:
+        return False
