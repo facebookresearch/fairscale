@@ -20,7 +20,7 @@ import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
-from fairscale.experimental.nn.multiprocess_pipe import DistributedLoss, DistributedPipeline, PipelineModulesGraph
+from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
 from fairscale.utils.testing import torch_version
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
