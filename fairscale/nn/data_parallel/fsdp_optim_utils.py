@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 """These functions are used by FullyShardedDataParallel to help consolidate and shard optimizer states."""
 import copy
-from typing import Dict, Generator, List, Tuple
+from typing import Any, Dict, Generator, List, Tuple
 
 import torch
 
@@ -36,11 +36,10 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
         for buffer_name, tensors in state.items():
             new_state[local_id][buffer_name] = torch.cat(tensors)
         new_state[local_id].update(non_tensor_state)
-
     new_sd = {"state": new_state, "param_groups": copy.deepcopy(sd["param_groups"])}
-    for k in sd.keys():  # copy over extra keys like
+    for k in sd.keys():  # if there are extra keys, like loss_scale, don't delete them
         if k not in new_sd and k not in {"uncollected_local_ids", "param_id_map"}:
-            new_sd[k] = copy.deepcopy(sd[k])  # if there are other keys, like loss_scale, don't delete them
+            new_sd[k] = copy.deepcopy(sd[k])
 
     # add pointers from the `params` dict.
     for pg_id, _ in enumerate(sd["param_groups"]):
@@ -100,7 +99,7 @@ def _unflatten_optim_state(
     if not combined_state:
         return {}, global_to_local_id
 
-    # copy non tensor steate to all global entries
+    # copy non tensor state to all global entries
     unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_global_params))}
 
     if non_tensor_state[0].keys() == combined_state[0].keys():
@@ -141,7 +140,7 @@ def build_unflat_state_dict(
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)
 
-    # Add uncollected state to tensor_state
+    # Use uncollected_opt_state to update tensor_state, singleton_state
     for local_id, v in uncollected_opt_state.items():
         assert local_id not in state
         state[local_id] = {buffer_name: [x] for buffer_name, x in v.items() if not is_singleton_tensor(x)}
@@ -158,9 +157,6 @@ def build_unflat_state_dict(
         "param_groups": param_groups,
         "uncollected_local_ids": list(uncollected_opt_state.keys()),
     }
-
-
-from typing import Any
 
 
 def is_singleton_tensor(x: Any) -> bool:

@@ -144,7 +144,6 @@ class TestMixedPrecision(DistributedTest):
 
     def test_mixed_precision_autocast(self):
         """If autocast enabled, loss should be fp32."""
-
         self._spawn_test_case(
             {"mixed_precision": True},
             True,  # autocast enabled
@@ -630,6 +629,7 @@ class MixtureOfExperts(NestedWrappedModule):
         torch.manual_seed(42 + group.rank())
         d_expert = 23
         d_shared = 12
+        d_input = 8
         expert = nn.Linear(d_expert, d_shared)
 
         self.num_expert_params = sum([p.numel() for p in expert.parameters()])
@@ -652,7 +652,7 @@ class MixtureOfExperts(NestedWrappedModule):
 
             shared = FullyShardedDataParallel(shared, group, **wrapper_config)
 
-        self.module = nn.Sequential(nn.Linear(8, d_shared), shared, expert, nn.Linear(d_shared, 8))
+        self.module = nn.Sequential(nn.Linear(d_input, d_shared), shared, expert, nn.Linear(d_shared, d_input))
 
     def forward(self, x):
         if self.delay_before_free_ms > 0:
