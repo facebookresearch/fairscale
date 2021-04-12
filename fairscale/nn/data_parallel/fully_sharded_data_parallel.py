@@ -1405,35 +1405,31 @@ class FullyShardedDataParallel(nn.Module):
         gathered_state: Dict[int, Dict[str, List[Any]]] = {}
         singleton_state: Dict[int, Dict[str, List[Any]]] = {}
         for k, v in sd_state.items():
-
             gathered_state[k] = {}
             singleton_state[k] = {}
             desired_buffer_size = self._fsdp_instances[k].flat_param._full_param_padded.size()  # type: ignore
-            buffer = None
+            buffer = None  # for sharded tensors
+            singleton_buffer = None  # for singleton tensors
             for buffer_name, t in v.items():
                 # Three cases
-                if torch.is_tensor(t) and not ou.is_singleton_tensor(t):
-                    assert buffer_name != "exp_avg_scale", t
-                    if buffer is None or desired_buffer_size != buffer.size():
-                        buffer = t.new_zeros(*desired_buffer_size)
-                        chunks = list(buffer.chunk(self.world_size))
-                    dist.all_gather(chunks, t, group=self.process_group)
-
+                if ou.is_singleton_tensor(t):
+                    if singleton_buffer is None:
+                        singleton_buffer = list(t.new_zeros(self.world_size).chunk(self.world_size))
+                    dist.all_gather(singleton_buffer, t, group=self.process_group)
                     if self.rank == 0:
-                        gathered_state[k][buffer_name] = [x.cpu() for x in chunks]
-                elif ou.is_singleton_tensor(t):
-                    small_buffer = t.new_zeros(self.world_size)
-                    baby_chunks = list(small_buffer.chunk(self.world_size))
-                    dist.all_gather(baby_chunks, t, group=self.process_group)
-                    if self.rank == 0:
-                        singleton_state[k][buffer_name] = [x.cpu().squeeze() for x in baby_chunks]
+                        singleton_state[k][buffer_name] = [x.cpu().squeeze() for x in singleton_buffer]
                         assert ou.is_singleton_tensor(singleton_state[k][buffer_name][0])
+                elif torch.is_tensor(t):
+                    if buffer is None:
+                        buffer = list(t.new_zeros(*desired_buffer_size).chunk(self.world_size))
+                    dist.all_gather(buffer, t, group=self.process_group)
+                    if self.rank == 0:
+                        gathered_state[k][buffer_name] = [x.cpu() for x in buffer]
 
                 elif self.rank == 0:
                     # Add non tensor state
                     assert buffer_name not in gathered_state[k]
                     gathered_state[k][buffer_name] = [t]
-            self._print_r0(f"gathered tensor state for key {k} from all ranks")
         return gathered_state, singleton_state
 
     def gather_full_optim_state_dict(self, optim: torch.optim.Optimizer, **ignored: Dict) -> Optional[Dict[str, Any]]:

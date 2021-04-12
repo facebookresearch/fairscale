@@ -36,8 +36,11 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
         for buffer_name, tensors in state.items():
             new_state[local_id][buffer_name] = torch.cat(tensors)
         new_state[local_id].update(non_tensor_state)
+
     new_sd = {"state": new_state, "param_groups": copy.deepcopy(sd["param_groups"])}
-    # TODO(SS): if there are other keys, like loss_scale, don't delete them
+    for k in sd.keys():  # copy over extra keys like
+        if k not in new_sd and k not in {"uncollected_local_ids", "param_id_map"}:
+            new_sd[k] = copy.deepcopy(sd[k])  # if there are other keys, like loss_scale, don't delete them
 
     # add pointers from the `params` dict.
     for pg_id, _ in enumerate(sd["param_groups"]):
