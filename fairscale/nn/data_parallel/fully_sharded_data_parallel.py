@@ -1434,19 +1434,19 @@ class FullyShardedDataParallel(nn.Module):
         sharded properties are not exposed. Multiple parameter groups are not yet supported.
 
         This should be called only on the root FSDP instance.
+        Nested FSDP instances are supported as long as they have the same world_size as the parent or world_size=1.
 
-        Nested FSDP instances are supported as long as they have the same world_size as the parent or world_size=1
         Args:
-                    optim (Optimizer): an optimizer instance for this FSDP rank. Its state is
-                    used in the consolidation. However, its state is not modified.
+            optim (Optimizer): an optimizer instance for this FSDP rank. Its state_dict is
+                        used in the consolidation. However, its state is not modified.
 
         Returns:
-            On rank zero, a dict with four entries:
+
+            * A dict with four entries (On rank zero, other workers return ``None``)
                 * state - a dict holding gathered optimization state, 1 entry per unflat parameter
                 * param_groups - a dict containing the 1 parameter group
                 * param_id_map - global (unflat) to local (flat) id mapping
                 * uncollected_local_ids - keys in the state dict that were not broadcast
-            On other workers, returns None
 
         """
         self._print_r0("start gather_full_optim_state_dict", restart=True)
