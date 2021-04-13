@@ -1382,70 +1382,88 @@ class FullyShardedDataParallel(nn.Module):
                 traceback.print_stack()
             raise ValueError(msg)
 
-    def _consolidate_optim_state_dict(
-        self, optim: torch.optim.Optimizer, recipient_rank: Optional[int] = None
-    ) -> List[Dict]:
-        """Update the consolidated state_dict list, one per rank.
-
-        Args:
-
-            optim (Optimizer): an optimizer instance for this FSDP rank. Its state is
-            used in the consolidation. However, its state is not modified.
-            recipient_rank (int): on which rank to materialize the full state dict.
-            None is a special value, which means that all ranks should have the state
-
-        Returns:
-            all_states (list[dict]) the optimizer state from each rank
-
-
-        .. warning: This needs to be called on all replicas"""
-        self._lazy_init()
-        # NOTE(SS): we do not support param groups yet, as they seem to break FSDP
-        # Pull the sharded state from all the other replicas
-        # Store all the states in order, rank by rank
-        should_collect_state = recipient_rank is None or (self.rank == recipient_rank)
-        all_states: List[Dict[str, Any]] = []
+    def _broadcast_pad_info_to_r0(self) -> List[List[List[int]]]:
+        """Collect [x.numel_padded_per_param for x in self._fsdp_instances] from teach rank."""
         dummy_tensor = torch.tensor([0], dtype=torch.uint8, device=self.compute_device)
+        world_pad_info: List[List[List[int]]] = []  # this will contain values from the whole world.
         for rank in range(self.world_size):
             if rank == self.rank:
-                sd = self._remove_uncollectable_params_from_optim_state_dict(optim.state_dict())
-                sd["num_padded"] = [m.numel_padded_per_param for m in self._fsdp_instances]
+                pad_info = [m.numel_padded_per_param for m in self._fsdp_instances]
             else:
-                sd = dummy_tensor  # type: ignore
-            sd = broadcast_object(sd, src_rank=rank, group=self.process_group, dist_device=self.compute_device)
-            if should_collect_state:
-                assert isinstance(sd, dict), f"{self.rank} received {type(sd)} from {rank}, expected dict"
-                all_states.append(recursive_copy_to_device(sd, non_blocking=False, device=torch.device("cpu")))
-        return all_states
+                pad_info = dummy_tensor  # type: ignore
+            pad_info = broadcast_object(
+                pad_info, src_rank=rank, group=self.process_group, dist_device=self.compute_device
+            )
+            if self.rank == 0:
+                world_pad_info.append(pad_info)  # type: ignore
+        return world_pad_info
 
-    def gather_full_optim_state_dict(
-        self, optim: torch.optim.Optimizer, recipient_rank: Optional[int] = 0
-    ) -> Optional[Dict[str, Any]]:
+    def _gather_optim_state(
+        self, sd_state: Dict[int, Dict[str, Any]]
+    ) -> Tuple[Dict[int, Dict[str, List]], Dict[int, Dict[str, List]]]:
+        """For each value in state[i], if the value is a tensor, collect it from the world. Else use rank 0's entry."""
+        gathered_state: Dict[int, Dict[str, List[Any]]] = {}
+        singleton_state: Dict[int, Dict[str, List[Any]]] = {}  # Dimensionless tensor
+        for k, v in sd_state.items():
+            gathered_state[k] = {}
+            singleton_state[k] = {}
+            desired_buffer_size = self._fsdp_instances[k].flat_param._full_param_padded.size()  # type: ignore
+            buffer = None  # for sharded tensors
+            singleton_buffer = None  # for singleton tensors
+            for buffer_name, t in v.items():
+                if ou.is_singleton_tensor(t):
+                    if singleton_buffer is None:
+                        singleton_buffer = list(t.new_zeros(self.world_size).chunk(self.world_size))
+                    dist.all_gather(singleton_buffer, t, group=self.process_group)
+                    if self.rank == 0:
+                        singleton_state[k][buffer_name] = [x.cpu().squeeze() for x in singleton_buffer]
+                        assert ou.is_singleton_tensor(singleton_state[k][buffer_name][0])
+                elif torch.is_tensor(t):
+                    if buffer is None:
+                        buffer = list(t.new_zeros(*desired_buffer_size).chunk(self.world_size))
+                    dist.all_gather(buffer, t, group=self.process_group)
+                    if self.rank == 0:
+                        gathered_state[k][buffer_name] = [x.cpu() for x in buffer]
+                elif self.rank == 0:  # Add non tensor state
+                    gathered_state[k][buffer_name] = [t]
+
+        return gathered_state, singleton_state
+
+    def gather_full_optim_state_dict(self, optim: torch.optim.Optimizer, **ignored: Dict) -> Optional[Dict[str, Any]]:
         """Return the last known global optimizer state. The returned state is compatible with Pytorch, in that the
         sharded properties are not exposed. Multiple parameter groups are not yet supported.
 
         This should be called only on the root FSDP instance.
+        Nested FSDP instances are supported as long as they have the same world_size as the parent or world_size=1.
 
-        Different world_size groups in nested FSDP instances is not supported.
         Args:
-                    optim (Optimizer): an optimizer instance for this FSDP rank. Its state is
-                    used in the consolidation. However, its state is not modified.
-                    recipient_rank (int): on which rank to materialize the full state dict.
+            optim (Optimizer): an optimizer instance for this FSDP rank. Its state_dict is
+                        used in the consolidation. However, its state is not modified.
 
         Returns:
-            a dict with two entries
+
+            * A dict with four entries (On rank zero, other workers return ``None``)
                 * state - a dict holding gathered optimization state, 1 entry per unflat parameter
                 * param_groups - a dict containing the 1 parameter group
+                * param_id_map - global (unflat) to local (flat) id mapping
+                * uncollected_local_ids - keys in the state dict that were not broadcast
 
         """
         if not self.flatten_parameters:
             raise NotImplementedError("optim state dict requires flatten_parameters=True")
-        world_optim_states = self._consolidate_optim_state_dict(optim, recipient_rank)
-        if self.rank != recipient_rank and recipient_rank is not None:
+
+        self._lazy_init()
+        sd = self._remove_uncollectable_params_from_optim_state_dict(optim.state_dict())
+        assert set(sd.keys()) == {"param_groups", "state"}, f'{set(sd.keys())} != {"param_groups", "state"}'
+        assert len(sd["param_groups"]) == 1, "Param groups are not supported"
+        # We use all_gather to consolidate OSD['state'] and broadcast to consolidate the other keys (like param_groups)
+        state, singleton_state = self._gather_optim_state(sd.pop("state"))
+        pad_info = self._broadcast_pad_info_to_r0()
+        if self.rank != 0:
             return None
         # Unify the shard states by concatenating tensors and unflattening params
         new_state_dict = ou.build_unflat_state_dict(
-            self._fsdp_instances, world_optim_states, self.uncollected_opt_state
+            self._fsdp_instances, pad_info, state, singleton_state, self.uncollected_opt_state, sd["param_groups"]
         )
         self.uncollected_opt_state = {}
         assert "uncollected_local_ids" in new_state_dict
@@ -1499,14 +1517,20 @@ class FullyShardedDataParallel(nn.Module):
             for k, v in s.items():
                 if torch.is_tensor(v) and id not in ids_not_to_shard:
                     v_shard, _ = self._get_shard(v)
+                elif isinstance(v, list) and ou.is_singleton_tensor(v[0]):
+                    # if we are resuming on larger world size, take first entry
+                    v_shard = v[0] if self.rank >= len(v) else v[self.rank]
+                    assert ou.is_singleton_tensor(v_shard)
                 else:
                     v_shard = v  # dont shard entries that are not tensors
                 full_optim_state_dict["state"][id][k] = v_shard
 
         return full_optim_state_dict
 
-    def _print_r0(self, msg: str) -> None:
+    def _print_r0(self, msg: str, restart: bool = False) -> None:
         """Debugging utility to print memory usage stats nicely on rank 0"""
+        if restart:
+            self._tstart = time.time()
         if self.rank == 0:
             gb_denom = 1024 ** 3
             print(

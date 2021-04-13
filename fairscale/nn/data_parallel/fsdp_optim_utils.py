@@ -4,10 +4,12 @@
 # LICENSE file in the root directory of this source tree.
 """These functions are used by FullyShardedDataParallel to help consolidate and shard optimizer states."""
 import copy
-from typing import Dict, Generator, List, Tuple
+from typing import Any, Dict, Generator, List, Tuple
 
 import torch
 
+# These return keys are used by fairseq. To change, add @sshleifer as a reviewer.
+UNFLAT_RETURN_KEYS = {"state", "param_groups", "uncollected_local_ids", "param_id_map"}
 
 # This function helps shard a full optimizer state dict
 def flatten_optim_state_dict(sd: Dict) -> Dict:
@@ -16,6 +18,7 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
     num_local_params = len(set(param_id_map.values()))
     if sd["state"]:
         new_state: Dict = {local_id: {} for local_id in range(num_local_params)}
+        singleton_state: Dict = copy.deepcopy(new_state)
     else:
         new_state = {}
     non_tensor_state = {}
@@ -24,19 +27,26 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
     for global_id, buffers in sd["state"].items():
         local_id = param_id_map[global_id]
         for buffer_name, p in buffers.items():
-            if torch.is_tensor(p):
+            if is_singleton_tensor(p):
+                singleton_state[local_id][buffer_name] = p
+            elif torch.is_tensor(p):
                 if buffer_name not in new_state[local_id]:
                     new_state[local_id][buffer_name] = []
                 new_state[local_id][buffer_name].append(p.reshape(-1))
+            elif isinstance(p, list):
+                singleton_state[local_id][buffer_name] = p
             else:
                 non_tensor_state[buffer_name] = p
-
     # Now combine all tensors in each buffer using torch.cat().
     for local_id, state in new_state.items():
         for buffer_name, tensors in state.items():
             new_state[local_id][buffer_name] = torch.cat(tensors)
         new_state[local_id].update(non_tensor_state)
+        new_state[local_id].update(singleton_state[local_id])
     new_sd = {"state": new_state, "param_groups": copy.deepcopy(sd["param_groups"])}
+    for k in sd.keys():  # if there are extra keys, like loss_scale, don't delete them
+        if k not in UNFLAT_RETURN_KEYS:
+            new_sd[k] = copy.deepcopy(sd[k])
 
     # add pointers from the `params` dict.
     for pg_id, _ in enumerate(sd["param_groups"]):
@@ -70,22 +80,11 @@ def _extract_non_tensor_state(combined_state: Dict[int, Dict[str, List]], param_
     return non_tensor_state
 
 
-def _combine_state(states: List[Dict]) -> Dict[int, Dict]:
-    combined_state = states[0]
-    for param_id in combined_state:
-        combined_state[param_id] = {k: [v] for k, v in combined_state[param_id].items()}
-    if len(states) == 1:
-        return combined_state
-
-    for rank, s in enumerate(states[1:]):
-        for param_id, param_state in s.items():
-            for k, tensor in param_state.items():
-                combined_state[param_id][k].append(tensor)
-    return combined_state
-
-
 def _unflatten_optim_state(
-    combined_state: Dict[int, Dict], instance_list: List[torch.nn.Module], world_pad_info: List[List[List[int]]],
+    combined_state: Dict[int, Dict],
+    instance_list: List[torch.nn.Module],
+    world_pad_info: List[List[List[int]]],
+    singleton_state: Dict[int, Dict],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
     # local ids are the keys in the current state (combined_state), (usually fewer)
     # global ids will be the keys in the unflattened state
@@ -98,17 +97,17 @@ def _unflatten_optim_state(
     non_tensor_state = [_extract_non_tensor_state(combined_state, id) for id in combined_state]
 
     # local corresponds to flattened, global corresponds to unflattened
-    num_unflat_params = [len(m._param_numels) for m in instance_list]  # type: ignore
+    num_global_params = [len(m._param_numels) for m in instance_list]  # type: ignore
     global_to_local_id = {}
-    for local_id, num_unflat in enumerate(num_unflat_params):
+    for local_id, num_unflat in enumerate(num_global_params):
         for _ in range(num_unflat):
             global_to_local_id[next_global_id] = local_id
             next_global_id += 1
     if not combined_state:
         return {}, global_to_local_id
 
-    # If the constant state is the same as the combined state,  copy it N times, no unflattening needed.
-    unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_unflat_params))}
+    # copy non tensor state to all global entries
+    unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_global_params))}
 
     if non_tensor_state[0].keys() == combined_state[0].keys():
         return unflat_state, global_to_local_id
@@ -131,37 +130,44 @@ def _unflatten_optim_state(
             for global_id, param_view in zip(sorted(local_to_global[local_id]), param_views):
                 assert k not in unflat_state[global_id], f"already added {k} to {global_id} {local_id}"
                 unflat_state[global_id][k] = param_view
+                unflat_state[global_id].update(singleton_state[local_id])
 
     return unflat_state, global_to_local_id
 
 
 def build_unflat_state_dict(
-    instance_list: List[torch.nn.Module], world_optim_states: List[Dict], uncollected_opt_state: Dict[int, Dict]
+    instance_list: List[torch.nn.Module],
+    world_pad_info: List[List[List[int]]],
+    state: Dict[int, Dict[str, List[torch.Tensor]]],
+    singleton_state: Dict[int, Dict[str, List[torch.Tensor]]],
+    uncollected_opt_state: Dict[int, Dict],
+    param_groups: List[Dict],
 ) -> Dict:
     """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts from each rank."""
-    world_pad_info: List[List[List[int]]] = [s.pop("num_padded") for s in world_optim_states]
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)
-    # Since there are no tensors in param_groups, deepcopy is fine
-    param_groups = copy.deepcopy(world_optim_states[0]["param_groups"])
-    assert len(param_groups) == 1
 
-    # Aggregate from a list of dictionaries to a dictionary of lists
-    combined_state = _combine_state([x["state"] for x in world_optim_states])
+    # Use uncollected_opt_state to update tensor_state, singleton_state
     for local_id, v in uncollected_opt_state.items():
-        assert local_id not in combined_state
-        combined_state[local_id] = {}
-        for buffer_name, tensor in v.items():
-            combined_state[local_id][buffer_name] = [tensor]
-    del world_optim_states
-
+        assert local_id not in state
+        state[local_id] = {buffer_name: [x] for buffer_name, x in v.items() if not is_singleton_tensor(x)}
+        singleton_state[local_id] = {buffer_name: [x] for buffer_name, x in v.items() if is_singleton_tensor(x)}
     # local ids are in the current state, global_ids will be in returned state.
-    unflat_state, global_to_local_id = _unflatten_optim_state(combined_state, instance_list, world_pad_info)
+    unflat_state, global_to_local_id = _unflatten_optim_state(state, instance_list, world_pad_info, singleton_state)
+    # Since there are no tensors in param_groups, deepcopy is fine
+    param_groups = copy.deepcopy(param_groups)
     num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
     param_groups[0]["params"] = list(range(num_params))
-    return {
+    unflat_optim_state_dict = {
         "state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
         "param_id_map": global_to_local_id,
         "param_groups": param_groups,
         "uncollected_local_ids": list(uncollected_opt_state.keys()),
     }
+    assert set(unflat_optim_state_dict.keys()) == UNFLAT_RETURN_KEYS
+    return unflat_optim_state_dict
+
+
+def is_singleton_tensor(x: Any) -> bool:
+    """Is x a dimensionless tensor?"""
+    return torch.is_tensor(x) and x.dim() == 0

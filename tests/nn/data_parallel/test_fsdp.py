@@ -627,15 +627,19 @@ class MixtureOfExperts(NestedWrappedModule):
 
         # "expert" params are different on each rank
         torch.manual_seed(42 + group.rank())
-        d_expert = 16
-        expert = nn.Linear(d_expert, 4)
+        d_expert = 23
+        d_shared = 12
+        d_input = 8
+        expert = nn.Linear(d_expert, d_shared)
+
         self.num_expert_params = sum([p.numel() for p in expert.parameters()])
         for p in expert.parameters():
             p.expert = True
 
         # everything else is shared
         torch.manual_seed(0)
-        shared = nn.Linear(4, d_expert)
+
+        shared = nn.Linear(d_shared, d_expert)
 
         if checkpoint_act:
             expert = checkpoint_wrapper(expert)
@@ -648,7 +652,7 @@ class MixtureOfExperts(NestedWrappedModule):
 
             shared = FullyShardedDataParallel(shared, group, **wrapper_config)
 
-        self.module = nn.Sequential(nn.Linear(8, 4), shared, expert, nn.Linear(4, 8))
+        self.module = nn.Sequential(nn.Linear(d_input, d_shared), shared, expert, nn.Linear(d_shared, d_input))
 
     def forward(self, x):
         if self.delay_before_free_ms > 0:
