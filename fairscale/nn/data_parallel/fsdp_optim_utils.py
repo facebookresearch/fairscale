@@ -16,6 +16,7 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
     num_local_params = len(set(param_id_map.values()))
     if sd["state"]:
         new_state: Dict = {local_id: {} for local_id in range(num_local_params)}
+        singleton_state: Dict = copy.deepcopy(new_state)
     else:
         new_state = {}
     non_tensor_state = {}
@@ -24,21 +25,25 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
     for global_id, buffers in sd["state"].items():
         local_id = param_id_map[global_id]
         for buffer_name, p in buffers.items():
-            if torch.is_tensor(p):
+            if is_singleton_tensor(p):
+                singleton_state[local_id][buffer_name] = p
+            elif torch.is_tensor(p):
                 if buffer_name not in new_state[local_id]:
                     new_state[local_id][buffer_name] = []
                 new_state[local_id][buffer_name].append(p.reshape(-1))
+            elif isinstance(p, list):
+                singleton_state[local_id][buffer_name] = p
             else:
                 non_tensor_state[buffer_name] = p
-
     # Now combine all tensors in each buffer using torch.cat().
     for local_id, state in new_state.items():
         for buffer_name, tensors in state.items():
             new_state[local_id][buffer_name] = torch.cat(tensors)
         new_state[local_id].update(non_tensor_state)
+        new_state[local_id].update(singleton_state[local_id])
     new_sd = {"state": new_state, "param_groups": copy.deepcopy(sd["param_groups"])}
     for k in sd.keys():  # if there are extra keys, like loss_scale, don't delete them
-        if k not in new_sd and k not in {"uncollected_local_ids", "param_id_map"}:
+        if k not in {"state", "param_groups", "uncollected_local_ids", "param_id_map"}:
             new_sd[k] = copy.deepcopy(sd[k])
 
     # add pointers from the `params` dict.

@@ -1449,8 +1449,6 @@ class FullyShardedDataParallel(nn.Module):
                 * uncollected_local_ids - keys in the state dict that were not broadcast
 
         """
-        self._print_r0("start gather_full_optim_state_dict", restart=True)
-
         if not self.flatten_parameters:
             raise NotImplementedError("optim state dict requires flatten_parameters=True")
 
@@ -1468,7 +1466,6 @@ class FullyShardedDataParallel(nn.Module):
             self._fsdp_instances, pad_info, state, singleton_state, self.uncollected_opt_state, sd["param_groups"]
         )
         self.uncollected_opt_state = {}
-        self._print_r0("FSDP: done unflat")
         assert "uncollected_local_ids" in new_state_dict
         return new_state_dict
 
