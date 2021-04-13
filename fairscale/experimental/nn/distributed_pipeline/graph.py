@@ -48,9 +48,6 @@ class Node:
     def __init__(self, module: RemoteModule):
         self.module = module
         self.num_outputs: Optional[int] = None
-        # self.inputs specifies inputs to the module. Each input is represented by a tuple (i, j).
-        # If i>=0, then the input is the j'th output of the i'th # module in the graph. If i<0,
-        # the input is the j'th input to the model.
         self.inputs: List[DataSource] = []
         # To be compiled by _compile method
         self.output_consumers: List[NodeDataConsumer] = []
