@@ -8,6 +8,8 @@ from typing import Any, Dict, Generator, List, Tuple
 
 import torch
 
+# These return keys are used by fairseq. To change, add @sshleifer as a reviewer.
+UNFLAT_RETURN_KEYS = {"state", "param_groups", "uncollected_local_ids", "param_id_map"}
 
 # This function helps shard a full optimizer state dict
 def flatten_optim_state_dict(sd: Dict) -> Dict:
@@ -43,7 +45,7 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
         new_state[local_id].update(singleton_state[local_id])
     new_sd = {"state": new_state, "param_groups": copy.deepcopy(sd["param_groups"])}
     for k in sd.keys():  # if there are extra keys, like loss_scale, don't delete them
-        if k not in {"state", "param_groups", "uncollected_local_ids", "param_id_map"}:
+        if k not in UNFLAT_RETURN_KEYS:
             new_sd[k] = copy.deepcopy(sd[k])
 
     # add pointers from the `params` dict.
@@ -156,17 +158,16 @@ def build_unflat_state_dict(
     param_groups = copy.deepcopy(param_groups)
     num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
     param_groups[0]["params"] = list(range(num_params))
-    return {
+    unflat_optim_state_dict = {
         "state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
         "param_id_map": global_to_local_id,
         "param_groups": param_groups,
         "uncollected_local_ids": list(uncollected_opt_state.keys()),
     }
+    assert set(unflat_optim_state_dict.keys()) == UNFLAT_RETURN_KEYS
+    return unflat_optim_state_dict
 
 
 def is_singleton_tensor(x: Any) -> bool:
-    """Is x a dimensionless tensor"""
-    if torch.is_tensor(x):
-        return not x.size()
-    else:
-        return False
+    """Is x a dimensionless tensor?"""
+    return torch.is_tensor(x) and x.dim() == 0

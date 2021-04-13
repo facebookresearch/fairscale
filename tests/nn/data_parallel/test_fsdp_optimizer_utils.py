@@ -10,6 +10,7 @@ import torch
 from torch.optim import SGD, Adadelta, Adam  # type: ignore
 
 from fairscale.nn import FullyShardedDataParallel
+from fairscale.nn.data_parallel.fsdp_optim_utils import is_singleton_tensor
 from fairscale.optim.utils import recursive_copy_to_device
 from fairscale.utils.testing import objects_are_equal
 
@@ -147,3 +148,10 @@ class TestOptimizerUtils(DistributedTest):
         named_pars = [p for n, p in model.named_parameters()]
         for i, p in enumerate(model.parameters()):
             assert objects_are_equal(p, named_pars[i])
+
+    def test_is_singleton_tensor(self):
+        assert is_singleton_tensor(torch.tensor(4.0))
+        assert not is_singleton_tensor(torch.tensor([4.0]))
+        assert not is_singleton_tensor(torch.tensor([4.0, 5.0]))
+        assert not is_singleton_tensor([4.0])
+        assert not is_singleton_tensor(4.0)
