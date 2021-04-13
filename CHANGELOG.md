@@ -5,8 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## NEXT - TBD
+
+## [0.3.4] - 2021-04-13
 ### Added
+- FSDP: Add no broadcast optim state option ([#560](https://github.com/facebookresearch/fairscale/pull/560))
+
 ### Fixed
+- ShardedDDP: Properly handle .eval() mode ([#587](https://github.com/facebookresearch/fairscale/pull/587))
+- ShardedDDP: Handle model being moved back to CPU prior to state consolidation ([#573](https://github.com/facebookresearch/fairscale/pull/573))
+- FSDP: much faster state consolidation ([#595](https://github.com/facebookresearch/fairscale/pull/595))
+- FSDP: Add gradient pre-dedivide to prevent overflow with large world sizes ([#565](https://github.com/facebookresearch/fairscale/pull/565))
+- Offload: (experimental) Fix activation offloading to CPU ([#588]((https://github.com/facebookresearch/fairscale/pull/588) )
 
 ## [0.3.3] - 2021-04-1
 ### Added
