@@ -390,10 +390,7 @@ def run_benchmark(args):
         model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
         model = model_config["model"]
 
-        if args.dry_run:
-            train(model_config, model, benchmark_config, model_specs, args)
-        else:
-            benchmark_language_model(model_config, model, benchmark_config, model_specs, args)
+        benchmark_language_model(model_config, model, benchmark_config, model_specs, args)
 
     elif args.model_name == "seq":
         benchmark_config = create_benchmark_config(args)
