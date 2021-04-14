@@ -28,29 +28,30 @@ def _init():
 
 
 @skip_if_no_cuda
-@pytest.mark.parametrize("checkpoint_activation", [True, False])
-def test_single_run(checkpoint_activation):
+def test_single_run():
     device, offload_device = _init()
     model = _get_model()
 
-    offload_model = OffloadModel(model=model, device=device, offload_device=offload_device, num_slices=2, checkpoint_activation=checkpoint_activation)
-    offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
+    peak_mem = {}
+    for checkpoint_activation in [True, False]:
+        offload_model = OffloadModel(model=model, device=device, offload_device=offload_device, num_slices=2, checkpoint_activation=checkpoint_activation)
+        offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
 
 
-    input = torch.ones(2, 2).to(device)
-    labels = torch.ones(2, 2).to(device)
-    offload_model.train()
-    pred = offload_model(input)
-    loss_fn = torch.nn.MSELoss(reduction="sum")
-    loss = loss_fn(pred, labels)
-    loss.backward()
-    offload_optimizer.step()
-    peak_mem = torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]/2**30
-    print("Peak allocated bytes on cuda:0 for checkpoint_activation "+ str(checkpoint_activation) + ": {:2f}".format(peak_mem))
-    if checkpoint_activation:
-        assert peak_mem == 0.000010
-    else:
-        assert peak_mem == 0.000009
+        input = torch.ones(2, 2).to(device)
+        labels = torch.ones(2, 2).to(device)
+        offload_model.train()
+        pred = offload_model(input)
+        loss_fn = torch.nn.MSELoss(reduction="sum")
+        loss = loss_fn(pred, labels)
+        loss.backward()
+        offload_optimizer.step()
+        key = "ca_" + str(checkpoint_activation)
+        peak_mem[key] = torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]/2**30
+        print("Peak allocated bytes on cuda:0 for checkpoint_activation "+ str(checkpoint_activation) + ": {:2f}".format(peak_mem[key]))
+
+
+    assert peak_mem["ca_True"] < peak_mem["ca_False"]
 
 
 def _get_model(num_inputs=2, num_hidden=2, num_layers=1, num_outputs=2):
@@ -61,7 +62,7 @@ def _get_model(num_inputs=2, num_hidden=2, num_layers=1, num_outputs=2):
     )
     return model
 
-'''
+
 def _check_parity(rmodel, omodel, ropt, oopt, rloss, oloss):
 
     for oparams, rparams in zip(omodel.parameters(), rmodel.parameters()):
@@ -144,4 +145,3 @@ def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
         num_microbatches=num_microbatches,
     )
     _check_parity(rmodel.cpu(), omodel.cpu(), ropt, oopt, rloss, oloss)
-'''
