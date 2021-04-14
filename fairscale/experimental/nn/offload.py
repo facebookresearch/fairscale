@@ -473,5 +473,5 @@ class OffloadModel(nn.Module):
                 self._activations[index] = tuple([a.cpu() for a in list(self._activations[index])])
 
         result = self._activations[-1]
-        result = [r.cuda() for r in result]
+        result = tuple([r.cuda() for r in result])
         return result[0] if len(result) == 1 else result
