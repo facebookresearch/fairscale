@@ -8,6 +8,8 @@ from the CPU to the GPU for the forward pass and then copied back. The same proc
 order for the backward pass. `OffloadModel` supports mixed precision training, activation checkpointing for reducing
 the memory footprint and using micro batches to reduce throughput.
 
+Note: We currently require the model to be a `nn.Sequential` model.
+
 Consider a training loop as described below:
 
 .. code-block:: python
