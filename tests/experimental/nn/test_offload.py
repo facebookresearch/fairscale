@@ -34,9 +34,14 @@ def test_single_run():
 
     peak_mem = {}
     for checkpoint_activation in [True, False]:
-        offload_model = OffloadModel(model=model, device=device, offload_device=offload_device, num_slices=2, checkpoint_activation=checkpoint_activation)
+        offload_model = OffloadModel(
+            model=model,
+            device=device,
+            offload_device=offload_device,
+            num_slices=2,
+            checkpoint_activation=checkpoint_activation,
+        )
         offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
-
 
         input = torch.ones(2, 2).to(device)
         labels = torch.ones(2, 2).to(device)
@@ -47,9 +52,12 @@ def test_single_run():
         loss.backward()
         offload_optimizer.step()
         key = "ca_" + str(checkpoint_activation)
-        peak_mem[key] = torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]/2**30
-        print("Peak allocated bytes on cuda:0 for checkpoint_activation "+ str(checkpoint_activation) + ": {:2f}".format(peak_mem[key]))
-
+        peak_mem[key] = torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] / 2 ** 30
+        print(
+            "Peak allocated bytes on cuda:0 for checkpoint_activation "
+            + str(checkpoint_activation)
+            + ": {:2f}".format(peak_mem[key])
+        )
 
     assert peak_mem["ca_True"] < peak_mem["ca_False"]
 
