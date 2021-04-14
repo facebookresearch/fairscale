@@ -1,5 +1,5 @@
-OffloadModel
-=============
+Training with `OffloadModel`
+============================
 
 `fairscale.experimental.nn.offload.OffloadModel` API democratizes large scale distributed training by enabling
 users to train large models on limited GPU resources that would have traditionally resulted in OOM errors. 
