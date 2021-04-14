@@ -1540,11 +1540,14 @@ class FullyShardedDataParallel(nn.Module):
 
 def _get_default_cuda_device(module: nn.Module) -> torch.device:
     """Try to infer CUDA device from module parameters."""
-    compute_device = next(module.parameters()).device
-    if compute_device.type != "cuda":
-        # Fall back to current CUDA device.
-        compute_device = torch.device("cuda")
-    return compute_device
+    try:
+        compute_device = next(module.parameters()).device
+        if compute_device.type == "cuda":
+            return compute_device
+    except StopIteration:
+        pass
+    # Fall back to current CUDA device
+    return torch.device("cuda")
 
 
 @torch.no_grad()

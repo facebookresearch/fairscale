@@ -88,9 +88,11 @@ def enable_wrap(auto_wrap_policy: Optional[Callable] = None, **wrapper_kwargs: A
         with enable_wrap(**params):
             # Wraps layer in FSDP by default if within context
             self.l1 = wrap(torch.nn.Linear(5, 5))
-            # Wraps children modules based on a different min_num_params
-            my_auto_wrap_policy = functools.partial(auto_wrap_policy, min_num_params=1e7)
-            self.l2 = auto_wrap(TransformerBlock(), shuold_wrap=my_auto_wrap_policy)
+            self.l2 = auto_wrap(
+                TransformerBlock(),
+                # Wraps children modules based on a different min_num_params
+                auto_wrap_policy=functools.partial(default_auto_wrap_policy, min_num_params=1e7)
+            )
 
     Args:
         auto_wrap_policy (Callable, Optional):
