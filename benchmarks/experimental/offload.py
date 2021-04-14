@@ -233,7 +233,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
 
 
 def verify_peak_memory(golden_config, std_dev):
-    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
+
     current_device_usage = torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]
     golden_ref = golden_config["peak_mem_usage"]
     if not current_device_usage < golden_ref * std_dev:
@@ -246,7 +246,6 @@ def verify_peak_memory(golden_config, std_dev):
 def verify_lm_throughput(wps, golden_config, args):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
-    print("Throughput(wps) is {:.2f}.".format(wps))
     if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
         raise RuntimeError(
             "Throughput(wps):{:.2f} is below the golden threshold of an "
@@ -272,9 +271,12 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
         raise RuntimeError(
             f"Golden data verification is only supported for the Transformer(lm) model and not {args.model_name}"
         )
-    golden_config = get_golden_config(args.model_name, args)
-    verify_lm_throughput(wps, golden_config, args)
-    verify_peak_memory(golden_config, 1.1)
+    print("Throughput(wps) is {:.2f}.".format(wps))
+    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
+    if not args.dry_run:
+        golden_config = get_golden_config(args.model_name, args)
+        verify_lm_throughput(wps, golden_config, args)
+        verify_peak_memory(golden_config, 1.1)
 
 
 def get_synthetic_dataloaders(args, device, benchmark_config, model_specs):
@@ -343,11 +345,11 @@ def create_model_config(args, benchmark_config=None, model_specs=None):
         raise RuntimeError(f"Unrecognized args.model_mame {args.model_name}")
 
 
-def create_benchmark_config(model_name):
+def create_benchmark_config(args):
     """Return a dict with configurations required for benchmarking `model_name` model."""
 
     if args.model_name == "lm":
-        return lm_wikitext2.get_benchmark_config()
+        return lm_wikitext2.get_benchmark_config(checkpoint_activation=args.checkpoint_activation)
     elif args.model_name == "seq":
         return offload_seq.get_benchmark_config()
     else:
@@ -383,7 +385,7 @@ def run_benchmark(args):
     init_random_seed(0)
 
     if args.model_name == "lm":
-        benchmark_config = create_benchmark_config(args.model_name)
+        benchmark_config = create_benchmark_config(args)
         model_specs = get_model_specs(args.model_name)
         model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
         model = model_config["model"]
@@ -392,8 +394,9 @@ def run_benchmark(args):
             train(model_config, model, benchmark_config, model_specs, args)
         else:
             benchmark_language_model(model_config, model, benchmark_config, model_specs, args)
+
     elif args.model_name == "seq":
-        benchmark_config = create_benchmark_config(args.model_name)
+        benchmark_config = create_benchmark_config(args)
         model_specs = get_model_specs(args.model_name)
         model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
         model = model_config["model"]
@@ -419,7 +422,7 @@ parser.add_argument(
     "--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks."
 )
 parser.add_argument("--use_fp16", action="store_true", default=False)
-parser.add_argument("--checkpoint_activation", action="store_true", default=True)
+parser.add_argument("--checkpoint_activation", action="store_true", default=False)
 parser.add_argument("--use_profiler", action="store_true", default=False)
 
 

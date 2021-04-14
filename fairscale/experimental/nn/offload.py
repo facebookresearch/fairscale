@@ -305,19 +305,17 @@ class ShardSyncLayer(torch.autograd.Function):
 
     @staticmethod
     @_conditional_amp_fwd_decorator  # type: ignore
-    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, dummy_input: Any, model_instance: Any) -> Any:
+    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, model_instance: Any) -> Any:
         drop_index = index
         load_index = index + 1
         max_slices = len(model_slices)
 
         if drop_index >= 0:
             # Move shard from device to offload device.
-            logging.info(f"Dropping shard {drop_index}")
             model_slices[drop_index].forward_drop()
 
         if load_index < max_slices:
             # Load shard from offload device to device.
-            logging.info(f"Loading shard{load_index}")
             model_slices[load_index].forward_load()
 
         ctx.index = index
@@ -343,7 +341,6 @@ class ShardSyncLayer(torch.autograd.Function):
 
         if drop_index < len(model_slices):
             # Move shard from device to offload device.
-            logging.info(f"Backward Dropping shard {drop_index}")
             model_slices[drop_index].backward_drop()
             model_instance._activations[drop_index] = tuple(
                 [a.cpu() for a in list(model_instance._activations[drop_index])]
@@ -351,7 +348,6 @@ class ShardSyncLayer(torch.autograd.Function):
 
         if load_index >= 0:
             # Load shard from offload device to device.
-            logging.info(f"Backward Loading shard{load_index}")
             model_slices[load_index].backward_load()
             model_instance._activations[load_index] = tuple(
                 [a.cuda() for a in list(model_instance._activations[load_index])]
@@ -360,9 +356,9 @@ class ShardSyncLayer(torch.autograd.Function):
         # The returned variables need to mirror the forward inputs
         # TODO(anj-s): Why do we need to do this?
         if isinstance(grad_outputs, tuple):
-            return grad_outputs[0], None, None, None, None
+            return grad_outputs[0], None, None, None
 
-        return grad_outputs, None, None, None, None
+        return grad_outputs, None, None, None
 
 
 class OffloadModel(nn.Module):
@@ -473,14 +469,11 @@ class OffloadModel(nn.Module):
                 inputs = self._activations[index]
                 inputs = self.model_slices[index](*inputs)
             # Call the custom autograd hooks (discard/load slices FW and BW)
-            inputs = ShardSyncLayer.apply(inputs, index, self.model_slices, dummy_input, self)
+            inputs = ShardSyncLayer.apply(inputs, index, self.model_slices, self)
             self._activations.append(inputs)
             if index >= 0:
                 self._activations[index] = tuple([a.cpu() for a in list(self._activations[index])])
 
-        # We don't move the last activation/output since the target is present
-        # on the device.
-        # TODO(anj-s): It is now a requirement that the target tensors be placed on the
-        # device.
         result = self._activations[-1]
+        result = [r.cuda() for r in result]
         return result[0] if len(result) == 1 else result
