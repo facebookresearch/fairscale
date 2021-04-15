@@ -42,7 +42,6 @@ from fairscale.utils.testing import (
     skip_if_single_gpu,
     state_dict_norm,
     teardown,
-    torch_cuda_version,
     torch_version,
 )
 
@@ -234,9 +233,6 @@ def _test_func(
     if fsdp_config:
         ddp = False
         assert isinstance(fsdp_config, dict), str(fsdp_config)
-        if fsdp_config["mixed_precision"]:
-            # To match DDP in AMP -O1, we need fp32 reduce scatter.
-            fsdp_config["fp32_reduce_scatter"] = True
 
     model = Model()
     model.load_state_dict(state_before)
@@ -343,8 +339,29 @@ def test1(temp_files, ddp_ref, precision, flatten):
     fsdp_config["mixed_precision"] = precision == "mixed"
     fsdp_config["flatten_parameters"] = flatten == "flatten"
 
-    if fsdp_config["mixed_precision"] and torch_cuda_version() < (11, 0):
-        pytest.skip("Only CUDA 11 is supported with AMP equivalency")
+    if fsdp_config["mixed_precision"]:
+        # For convolution layers, we need fp32_compute_dtype. Otherwise, we run
+        # into conv layer errors like below with mixed precision with larger
+        # regnet128Gf models when flatten parameter is true:
+        #
+        #   RuntimeError: Unable to find a valid cuDNN algorithm to run convolution
+        #   or
+        #   RuntimeError: cuDNN error: CUDNN_STATUS_BAD_PARAM
+        #
+        # Also, without fp32_compute_dtype, Linear layer with bias=True won't match DDP numerically.
+        #
+        # For DDP-equivalency, we also need fp32_reduce_scatter.
+        #
+        # On a small regnet16Gf, 8GPU, imagenette2 dateset, we have the following
+        # batch time (ms) observations:
+        #                           fp32 compute dtype        fp16 compute dtype
+        #   fp32 reduce scatter          475                         447
+        #   fp16 reduce scatter          483                         459
+        #
+        # There is small but non-zero performance impact. The actual impact will
+        # be depending on model size and number of GPUs.
+        fsdp_config["fp32_compute_dtype"] = True
+        fsdp_config["fp32_reduce_scatter"] = True
 
     # Wrap BN half of the time in full precision mode.
     wrap_bn = True
