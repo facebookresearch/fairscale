@@ -475,7 +475,7 @@ class OffloadModel(nn.Module):
         # We need the second param to be a dummy input to enable the
         # backward pass to be triggered for integer inputs.
         if self._checkpoint_activation:
-            return ActivationCheckpointing.apply(*inputs, torch.tensor([], requires_grad=True), self)
+            return OffloadFunction.apply(*inputs, torch.tensor([], requires_grad=True), self)
 
         self._activations = []
         for index in range(-1, len(self.model_slices)):
