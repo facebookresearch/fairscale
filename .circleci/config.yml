@@ -170,7 +170,7 @@ run_offload_benchmark: &run_offload_benchmark
   - run:
       name: Run Offload Benchmark
       command: |
-        python benchmarks/experimental/offload.py
+        python benchmarks/experimental/offload.py --checkpoint_activation
 
 run_pipe_benchmark: &run_pipe_benchmark
   - run:

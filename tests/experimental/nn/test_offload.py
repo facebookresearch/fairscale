@@ -32,20 +32,38 @@ def test_single_run():
     device, offload_device = _init()
     model = _get_model()
 
-    offload_model = OffloadModel(model=model, device=device, offload_device=offload_device, num_slices=2,)
-    offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
+    peak_mem = {}
+    for checkpoint_activation in [True, False]:
+        offload_model = OffloadModel(
+            model=model,
+            device=device,
+            offload_device=offload_device,
+            num_slices=2,
+            checkpoint_activation=checkpoint_activation,
+        )
+        offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
 
-    input = torch.ones(2, 2).to(device)
-    labels = torch.ones(2, 2).to(device)
-    offload_model.train()
-    pred = offload_model(input)
-    loss_fn = torch.nn.MSELoss(reduction="sum")
-    loss = loss_fn(pred, labels)
-    loss.backward()
-    offload_optimizer.step()
+        input = torch.ones(1000, 2).to(device)
+        labels = torch.ones(1000, 2).to(device)
+        offload_model.train()
+        pred = offload_model(input)
+        loss_fn = torch.nn.MSELoss(reduction="sum")
+        loss = loss_fn(pred, labels)
+        loss.backward()
+        offload_optimizer.step()
+        key = "ca_" + str(checkpoint_activation)
+        peak_mem[key] = torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]
+        print(
+            "Peak allocated bytes on cuda:0 for checkpoint_activation "
+            + str(checkpoint_activation)
+            + ": {:2f}".format(peak_mem[key])
+        )
+
+    # TODO(anj-s): We need a better requirement since this fails on CircleCI right now.
+    assert peak_mem["ca_True"] <= peak_mem["ca_False"]
 
 
-def _get_model(num_inputs=2, num_hidden=2, num_layers=1, num_outputs=2):
+def _get_model(num_inputs=2, num_hidden=20, num_layers=10, num_outputs=2):
     model = torch.nn.Sequential(
         torch.nn.Linear(num_inputs, num_hidden),
         *([torch.nn.Linear(num_hidden, num_hidden) for _ in range(num_layers)]),

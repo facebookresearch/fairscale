@@ -292,6 +292,75 @@ class OffloadFunction(torch.autograd.Function):
         return (None, None) + grads
 
 
+class ShardSyncLayer(torch.autograd.Function):
+    """
+     The shard sync layer is a synchronization point between model shards.
+     - In the forward pass, it drops parameters in the previous shard and
+     loads parameters for the next shard.
+     - In the backward pass, it does the reverse.
+     It does not change or create any outputs at all, instead it just
+     forwards the input as the output.
+     NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
+     """
+
+    @staticmethod
+    @_conditional_amp_fwd_decorator  # type: ignore
+    def forward(ctx: Any, inputs: Any, index: int, model_slices: Any, model_instance: Any) -> Any:
+        drop_index = index
+        load_index = index + 1
+        max_slices = len(model_slices)
+
+        if drop_index >= 0:
+            # Move shard from device to offload device.
+            model_slices[drop_index].forward_drop()
+
+        if load_index < max_slices:
+            # Load shard from offload device to device.
+            model_slices[load_index].forward_load()
+
+        ctx.index = index
+        ctx.model_slices = model_slices
+        ctx.model_instance = model_instance
+
+        return inputs if isinstance(inputs, tuple) else (inputs,)
+
+    @staticmethod
+    @_conditional_amp_bwd_decorator
+    def backward(ctx, *grad_outputs):  # type: ignore
+
+        load_index = ctx.index
+        drop_index = load_index + 1
+        model_slices = ctx.model_slices
+        model_instance = ctx.model_instance
+
+        # TODO(anj-s): Are these redundant in the backward pass?
+        if drop_index == len(model_slices):
+            # Drop the last activation since it is still on the CPU
+            # after the loss.backward() call.
+            model_instance._activations[-1] = tuple([a.cuda() for a in list(model_instance._activations[-1])])
+
+        if drop_index < len(model_slices):
+            # Move shard from device to offload device.
+            model_slices[drop_index].backward_drop()
+            model_instance._activations[drop_index] = tuple(
+                [a.cpu() for a in list(model_instance._activations[drop_index])]
+            )
+
+        if load_index >= 0:
+            # Load shard from offload device to device.
+            model_slices[load_index].backward_load()
+            model_instance._activations[load_index] = tuple(
+                [a.cuda() for a in list(model_instance._activations[load_index])]
+            )
+
+        # The returned variables need to mirror the forward inputs
+        # TODO(anj-s): Why do we need to do this?
+        if isinstance(grad_outputs, tuple):
+            return grad_outputs[0], None, None, None
+
+        return grad_outputs, None, None, None
+
+
 class OffloadModel(nn.Module):
     """Wraps an arbitrary :class:`nn.Sequential <torch.nn.Sequential>` module
     to train by offloading majority of the model parameters to the CPU.
@@ -405,4 +474,23 @@ class OffloadModel(nn.Module):
 
         # We need the second param to be a dummy input to enable the
         # backward pass to be triggered for integer inputs.
-        return OffloadFunction.apply(*inputs, torch.tensor([], requires_grad=True), self)
+        if self._checkpoint_activation:
+            return OffloadFunction.apply(*inputs, torch.tensor([], requires_grad=True), self)
+
+        self._activations = []
+        for index in range(-1, len(self.model_slices)):
+            if index >= 0:
+                # TODO(anj-s): This might be a redundant call since we have the previous
+                # activation on the device already.
+                self._activations[index] = tuple([a.cuda() for a in list(self._activations[index])])
+                inputs = self._activations[index]
+                inputs = self.model_slices[index](*inputs)
+            # Call the custom autograd hooks (discard/load slices FW and BW)
+            inputs = ShardSyncLayer.apply(inputs, index, self.model_slices, self)
+            self._activations.append(inputs)
+            if index >= 0:
+                self._activations[index] = tuple([a.cpu() for a in list(self._activations[index])])
+
+        result = self._activations[-1]
+        result = tuple([r.cuda() for r in result])
+        return result[0] if len(result) == 1 else result
