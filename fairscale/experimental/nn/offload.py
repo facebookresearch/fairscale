@@ -291,16 +291,14 @@ class OffloadModel(nn.Module):
     """Wraps an arbitrary :class:`nn.Sequential <torch.nn.Sequential>` module
     to train by offloading majority of the model parameters to the CPU.
     `OffloadModel` is heavily inspired by the _L2L algorithm and _Zero-Offload.
+    ::
 
-    # Define the model
-    model = get_model()
-    offload_model = OffloadModel(model, device,
-                                 offload_device=torch.device(“cpu”),
-                                 num_slices=3, 
-                                 checkpoint_activation=True,   
-                                 num_microbatches=5)
-
-    # All other steps remain the same.
+        model = get_model()
+        offload_model = OffloadModel(model, device,
+                                    offload_device=torch.device(“cpu”),
+                                    num_slices=3, 
+                                    checkpoint_activation=True,   
+                                    num_microbatches=5)
 
     .. _L2L: https://arxiv.org/abs/2002.05645
     .. _Zero-Offload: https://arxiv.org/abs/2101.06840
