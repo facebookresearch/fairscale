@@ -203,11 +203,8 @@ class FullyShardedDataParallel(nn.Module):
         self.world_size = self.process_group.size()
         self.reshard_after_forward = reshard_after_forward
         self.mixed_precision = mixed_precision
-        self.compute_dtype = torch.float16 if (mixed_precision and not fp32_compute_dtype) else torch.float32
-        buffer_dtype = None
-        if fp32_buffer_dtype is not None:
-            buffer_dtype = torch.float32 if fp32_buffer_dtype else torch.float16
-        self.buffer_dtype = buffer_dtype if buffer_dtype is not None else self.compute_dtype
+        self.fp32_compute_dtype = fp32_compute_dtype
+        self.fp32_buffer_dtype = fp32_buffer_dtype
         self.fp32_reduce_scatter = fp32_reduce_scatter
         self.flatten_parameters = flatten_parameters
         self.cpu_offload = cpu_offload
@@ -218,21 +215,32 @@ class FullyShardedDataParallel(nn.Module):
         self.no_broadcast_optim_state = no_broadcast_optim_state
         self.state_dict_device = state_dict_device or self.compute_device
 
-        self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
-        self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
-
-        self.numel_padded_per_param: List[int] = []
-        self._tstart = time.time()
-
+        # Validate args.
         if self.fp32_compute_dtype and not self.mixed_precision:
             raise ValueError("fp32_compute_dtype requires mixed_precision=True")
+        if self.fp32_buffer_dtype and not self.mixed_precision:
+            raise ValueError("fp32_buffer_dtype requires mixed_precision=True")
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
         if self.cpu_offload and not self.mixed_precision:
             raise ValueError("cpu_offload requires mixed_precision=True")
 
+        # A quick check and tick a module's flag.
         validate_process_group(self.compute_device, self.process_group)
         enable_pytorch_sync_bn(module)
+
+        # Compute derived variables.
+        self.compute_dtype = torch.float16 if (mixed_precision and not fp32_compute_dtype) else torch.float32
+        buffer_dtype = None
+        if fp32_buffer_dtype is not None:
+            buffer_dtype = torch.float32 if fp32_buffer_dtype else torch.float16
+        self.buffer_dtype = buffer_dtype if buffer_dtype is not None else self.compute_dtype
+
+        self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
+        self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
+
+        self.numel_padded_per_param: List[int] = []
+        self._tstart = time.time()
 
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to
@@ -494,8 +502,8 @@ class FullyShardedDataParallel(nn.Module):
             f"rank={self.rank}, world_size={self.world_size}, "
             f"reshard_after_forward={self.reshard_after_forward}, "
             f"mixed_precision={self.mixed_precision}, "
-            f"fp32_compute_dtype={self.compute_dtype == torch.float32}, "
-            f"fp32_buffer_dtype={self.buffer_dtype == torch.float32}, "
+            f"fp32_compute_dtype={self.fp32_compute_dtype}, "
+            f"fp32_buffer_dtype={self.fp32_buffer_dtype}, "
             f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
             f"flatten_parameters={self.flatten_parameters}, "
             f"cpu_offload={self.cpu_offload}, "
@@ -1551,7 +1559,9 @@ class FullyShardedDataParallel(nn.Module):
         if self.rank == 0:
             gb_denom = 1024 ** 3
             print(
-                f"{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, t={time.time()-self._tstart: .1f}"
+                f"{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, "
+                f"max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, "
+                f"t={time.time()-self._tstart: .1f}"
             )
 
 
