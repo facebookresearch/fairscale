@@ -127,8 +127,8 @@ class FullyShardedDataParallel(nn.Module):
             if ``True``, inputs, activations and gradients will be kept in FP16;
             computation and communication will occur in FP16; and a (sharded)
             master copy of the model weights will be maintained in FP16.
-            weight, buffer and grad data type can be overriden using the 3
-            options below.
+            Weight, buffer and communication data types can be overriden using
+            the 3 options below.
             Note, this is expected to work with autocast context from pytorch.
             Note, some layers, e.g. convolutions, may only work with
             ``fp32_compute_dtype==True`` below.
@@ -148,9 +148,11 @@ class FullyShardedDataParallel(nn.Module):
         flatten_parameters (bool, Optional):
             if ``True``, flatten parameters into a single contiguous tensor,
             which improves training speed.
+            Default: True
         cpu_offload (bool, Optional):
             if ``True``, offload FP32 params to CPU.
             This is only relevant when *``mixed_precision``* is ``True``.
+            Default: False
         move_grads_to_cpu (bool, Optional):
             move gradient shard to CPU after reduction. This is useful when
             combined with CPU-based optimizers.
