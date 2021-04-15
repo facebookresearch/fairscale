@@ -9,3 +9,5 @@ Tutorials
    oss
 
    adascale
+
+   offload_model
