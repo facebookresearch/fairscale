@@ -28,8 +28,13 @@ def test1():
     if random.randint(0, 1) == 0:
         print("setting determinism = True")
         if hasattr(torch, "_set_deterministic"):
+            # PyTorch 1.6
             torch._set_deterministic(True)
+        elif hasattr(torch, "set_deterministic"):
+            # PyTorch 1.7
+            torch.set_deterministic(True)
         else:
+            # PyTorch 1.8, 1.9, etc.
             torch.use_deterministic_algorithms(True)
 
     # Get a big tensor on cuda in fp16.

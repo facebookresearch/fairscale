@@ -126,26 +126,35 @@ class FullyShardedDataParallel(nn.Module):
         mixed_precision (bool, Optional):
             if ``True``, inputs, activations and gradients will be kept in FP16;
             computation and communication will occur in FP16; and a (sharded)
-            master copy of the model weights will be maintained in FP32.
-        fp32_reduce_scatter (bool, Optional):
-            if ``True``, then reduce-scatter gradients in FP32. This is only
-            relevant when *``mixed_precision``* is ``True``.
+            master copy of the model weights will be maintained in FP16.
+            weight, buffer and grad data type can be overriden using the 3
+            options below.
+            Note, this is expected to work with autocast context from pytorch.
+            Note, some layers, e.g. convolutions, may only work with
+            ``fp32_compute_dtype==True`` below.
+            Default: False
+        fp32_compute_dtype (bool):
+            if ``True``, use FP32 for full parameters for computation.
+            This is only relevant when *``mixed_precision``* is ``True``.
+            Default: False
+        fp32_buffer_dtype (bool, Optional):
+            if ``True``, use FP32 for buffers for computation.
+            This is only relevant when *``mixed_precision``* is ``True``.
+            Default: None, which means using the value of *``fp32_compute_dtype``*.
+        fp32_reduce_scatter (bool):
+            if ``True``, then reduce-scatter gradients in FP32.
+            This is only relevant when *``mixed_precision``* is ``True``.
+            Default: False
         flatten_parameters (bool, Optional):
             if ``True``, flatten parameters into a single contiguous tensor,
             which improves training speed.
         cpu_offload (bool, Optional):
-            if ``True``, offload FP32 params to CPU. This is only relevant when
-            *``mixed_precision``* is ``True``.
-        compute_dtype (torch.dtype, Optional):
-            dtype for full parameters for computation. This defaults to
-            ``torch.float32`` unless *``mixed_precision``* is set, in which case
-            it defaults to ``torch.float16``.
-        buffer_dtype (torch.dtype, Optional):
-            dtype for buffers for computation. This defaults to ``compute_dtype``.
+            if ``True``, offload FP32 params to CPU.
+            This is only relevant when *``mixed_precision``* is ``True``.
         move_grads_to_cpu (bool, Optional):
             move gradient shard to CPU after reduction. This is useful when
-            combined with CPU-based optimizers. It defaults to the value of
-            *``cpu_offload``*.
+            combined with CPU-based optimizers.
+            Default: the value of *``cpu_offload``*.
         bucket_cap_mb (int, Optional):
             FSDP will bucket parameters so that gradient reduction can
             potentially overlap with backward computation. bucket_cap_mb
@@ -158,16 +167,17 @@ class FullyShardedDataParallel(nn.Module):
             device, the param's device will be used. If not given and module
             params are on CPU, then the current CUDA device (as indicated by
             ``torch.cuda.current_device()`` will be used.
-        no_broadcast_optim_state: (bool, Optional)
-            do not broadcast this modules optimizer state when ``gather_full_optim_state_dict`` is called.
-            If you set this true, you are expected to overwrite the relevant state entries of the returned optimizer state dict
-            with the proper state at each rank. This is useful for situations, like Mixture Of Experts,
-            where all but a few parameters can fit on one node.
-            Default: False
         state_dict_device (torch.device, Optional):
             device for parameters returned by :func:`state_dict`. If not given,
             this will default to ``compute_dtype``. Note that only the device
             type will be respected (e.g., "cuda:0" and "cuda:1" are the same).
+            Default: None, in which case compute_device will be used.
+        no_broadcast_optim_state: (bool, Optional)
+            do not broadcast this modules optimizer state when ``gather_full_optim_state_dict`` is called.
+            If you set this true, you are expected to overwrite the relevant state entries of the returned
+            optimizer state dict with the proper state at each rank. This is useful for situations, like
+            Mixture Of Experts, where all but a few parameters can fit on one node.
+            Default: False
     """
 
     def __init__(
@@ -176,16 +186,16 @@ class FullyShardedDataParallel(nn.Module):
         process_group: Optional[ProcessGroup] = None,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
+        fp32_compute_dtype: bool = False,
+        fp32_buffer_dtype: Optional[bool] = None,
         fp32_reduce_scatter: bool = False,
         flatten_parameters: bool = True,
         cpu_offload: bool = False,
-        compute_dtype: Optional[torch.dtype] = None,
-        buffer_dtype: Optional[torch.dtype] = None,
         move_grads_to_cpu: Optional[bool] = None,
         bucket_cap_mb: int = 25,
         compute_device: Optional[torch.device] = None,
-        no_broadcast_optim_state: Optional[bool] = False,
         state_dict_device: Optional[torch.device] = None,
+        no_broadcast_optim_state: Optional[bool] = False,
     ):
         super().__init__()
         self.process_group = process_group or dist.new_group()
@@ -193,11 +203,14 @@ class FullyShardedDataParallel(nn.Module):
         self.world_size = self.process_group.size()
         self.reshard_after_forward = reshard_after_forward
         self.mixed_precision = mixed_precision
+        self.compute_dtype = torch.float16 if (mixed_precision and not fp32_compute_dtype) else torch.float32
+        buffer_dtype = None
+        if fp32_buffer_dtype is not None:
+            buffer_dtype = torch.float32 if fp32_buffer_dtype else torch.float16
+        self.buffer_dtype = buffer_dtype if buffer_dtype is not None else self.compute_dtype
         self.fp32_reduce_scatter = fp32_reduce_scatter
         self.flatten_parameters = flatten_parameters
         self.cpu_offload = cpu_offload
-        self.compute_dtype = compute_dtype or (torch.float16 if mixed_precision else torch.float32)
-        self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
         self.compute_device = compute_device or _get_default_cuda_device(module)
@@ -211,6 +224,8 @@ class FullyShardedDataParallel(nn.Module):
         self.numel_padded_per_param: List[int] = []
         self._tstart = time.time()
 
+        if self.fp32_compute_dtype and not self.mixed_precision:
+            raise ValueError("fp32_compute_dtype requires mixed_precision=True")
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
         if self.cpu_offload and not self.mixed_precision:
@@ -479,14 +494,16 @@ class FullyShardedDataParallel(nn.Module):
             f"rank={self.rank}, world_size={self.world_size}, "
             f"reshard_after_forward={self.reshard_after_forward}, "
             f"mixed_precision={self.mixed_precision}, "
+            f"fp32_compute_dtype={self.compute_dtype == torch.float32}, "
+            f"fp32_buffer_dtype={self.buffer_dtype == torch.float32}, "
             f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
             f"flatten_parameters={self.flatten_parameters}, "
             f"cpu_offload={self.cpu_offload}, "
-            f"compute_dtype={self.compute_dtype}, "
-            f"buffer_dtype={self.buffer_dtype}, "
             f"move_grads_to_cpu={self.move_grads_to_cpu}, "
             f"bucket_cap_mb={self.bucket_cap_mb}, "
-            f"compute_device={self.compute_device}"
+            f"compute_device={self.compute_device}, "
+            f"state_dict_device={self.state_dict_device}, "
+            f"no_broadcast_optim_state={self.no_broadcast_optim_state}"
         )
 
     def __getattr__(self, name: str) -> Any:

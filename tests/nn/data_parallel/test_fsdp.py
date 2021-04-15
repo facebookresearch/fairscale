@@ -87,7 +87,7 @@ class DistributedTest(unittest.TestCase):
             # identical results as PyTorch DDP when using autocast. Note that
             # this will cause the all-gather to happen in FP32, which is slower
             # than necessary in most cases.
-            config["compute_dtype"] = torch.float32
+            config["fp32_compute_dtype"] = True
         else:
             autocast = False
 
@@ -156,7 +156,7 @@ class TestMixedPrecision(DistributedTest):
     def test_mixed_precision_autocast_buffer_type_fp32(self):
         """If autocast enabled, loss should be fp32."""
         self._spawn_test_case(
-            {"mixed_precision": True, "buffer_dtype": torch.float32},
+            {"mixed_precision": True, "fp32_buffer_dtype": True},
             True,  # autocast enabled
             torch.float16,  # expected_input_dtype
             torch.float16,  # expected_param_dtype
@@ -167,7 +167,7 @@ class TestMixedPrecision(DistributedTest):
 
     def test_mixed_precision_autocast_fp32_compute(self):
         self._spawn_test_case(
-            {"mixed_precision": True, "compute_dtype": torch.float32},
+            {"mixed_precision": True, "fp32_compute_dtype": True},
             True,  # autocast enabled
             torch.float16,  # expected_input_dtype
             torch.float32,  # expected_param_dtype

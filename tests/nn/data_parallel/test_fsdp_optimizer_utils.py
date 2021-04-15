@@ -42,7 +42,7 @@ class TestOptimizerUtils(DistributedTest):
     )
     def test_consolidate_optimizer(self, optim_fn, transformer):
         config = {"mixed_precision": True, "flatten_parameters": True}
-        config["compute_dtype"] = torch.float32
+        config["fp32_compute_dtype"] = True
         test_fn = functools.partial(
             self._test_consolidated_optimizer, config, optim_fn=optim_fn, transformer=transformer
         )

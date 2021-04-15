@@ -142,7 +142,7 @@ class TestSaveLoadStateDict(DistributedTest):
 
         # Create a nested FSDP-wrapped instance.
         if config["mixed_precision"]:
-            config["compute_dtype"] = torch.float32
+            config["fp32_compute_dtype"] = True
         model = NestedWrappedModule(group, config)
         model = FullyShardedDataParallel(model, group, **config).cuda()
         cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
@@ -204,7 +204,7 @@ class TestStateDictDeviceDtype(DistributedTest):
     def test_state_dict_device_pure_fp16(self):
         test_fn = functools.partial(
             self._test_state_dict_device,
-            {"cpu_offload": False, "mixed_precision": False, "compute_dtype": torch.float16},
+            {"cpu_offload": False, "mixed_precision": False, "fp32_compute_dtype": False},
             # pure_fp16 is similar to the --memory-efficient-fp16 option in fairseq
             pure_fp16=True,
         )
