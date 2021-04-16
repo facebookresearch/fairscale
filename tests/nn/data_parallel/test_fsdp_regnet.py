@@ -10,6 +10,7 @@
 """ Test FSDP with regnet-like model. """
 
 import contextlib
+import os
 import random
 import tempfile
 
@@ -42,6 +43,7 @@ from fairscale.utils.testing import (
     skip_if_single_gpu,
     state_dict_norm,
     teardown,
+    torch_set_deterministic,
     torch_version,
 )
 
@@ -120,11 +122,7 @@ class Model(Module):
         self.trunk.add_module("any_stage_block1", Sequential(any_stage_block1_0))
 
         self.head = Sequential(
-            # TODO (Min): FSDP-mixed_precision doesn't compute the same ways as DDP AMP when bias=True.
-            #     so, we use bias=False for now in the projection_head.
-            #     The Conv2d layers above does not use bias in regnet, but even if they use
-            #     bias, FSDP and DDP seem to agree on how it is computed.
-            Sequential(Linear(16, 16, bias=False), ReLU(), Linear(16, 8, bias=False),),  # projection_head
+            Sequential(Linear(16, 16, bias=True), ReLU(), Linear(16, 8, bias=True)),  # projection_head
             Linear(8, 15, bias=False),  # prototypes0
         )
 
@@ -226,6 +224,11 @@ def _test_func(
     rank_0_output,
     state_after,
 ):
+    # Make convs more deterministic.
+    torch.backends.cudnn.benchmark = True
+    torch_set_deterministic(True)
+    os.putenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
     result = dist_init(rank, world_size, tempfile_name, unused)
     assert result, "Dist init failed"
 
@@ -348,9 +351,14 @@ def test1(temp_files, ddp_ref, precision, flatten):
         #   or
         #   RuntimeError: cuDNN error: CUDNN_STATUS_BAD_PARAM
         #
-        # Also, without fp32_compute_dtype, Linear layer with bias=True won't match DDP numerically.
+        # If you know the solutions to the above issue, please let me (min-xu-ai) know. Thanks!
         #
-        # For DDP-equivalency, we also need fp32_reduce_scatter.
+        # Also, without fp32_compute_dtype, Linear layer with bias=True won't match DDP
+        # numerically, which may not be necessary for convergence depending on the model and
+        # the optimizer and a number of other factors.
+        #
+        # For DDP-equivalency, we also need fp32_reduce_scatter, which again may not
+        # be needed for convergence though.
         #
         # On a small regnet16Gf, 8GPU, imagenette2 dateset, we have the following
         # batch time (ms) observations:
@@ -359,8 +367,9 @@ def test1(temp_files, ddp_ref, precision, flatten):
         #   fp16 reduce scatter          483                         459
         #
         # There is small but non-zero performance impact. The actual impact will
-        # be depending on model size and number of GPUs. Turning on fp32_compute_dtype doubles
-        # GPU memory usage for the weights as well.
+        # be depending on model size and number of GPUs. That means the impact could
+        # be significant. Turning on fp32_compute_dtype also *doubles* GPU memory usage
+        # for the weights.
         fsdp_config["fp32_compute_dtype"] = True
         fsdp_config["fp32_reduce_scatter"] = True
 

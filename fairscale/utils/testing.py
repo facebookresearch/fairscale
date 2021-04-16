@@ -101,6 +101,7 @@ def set_random_seed(seed: int) -> None:
 
 
 def torch_version() -> Tuple[int, ...]:
+    """Get torch version in a tuple."""
     numbering = torch.__version__.split("+")[0].split(".")[:3]
 
     # Catch torch version if run against internal pre-releases, like `1.8.0a0fb`,
@@ -121,6 +122,7 @@ _smi_ver = None
 
 
 def torch_cuda_version(compiled: bool = False) -> Tuple[int, ...]:
+    """Get torch compiled or system's CUDA version."""
     if compiled:
         numbering = torch.version.cuda.split(".")[:2]
     else:
@@ -139,6 +141,19 @@ def torch_cuda_version(compiled: bool = False) -> Tuple[int, ...]:
             _smi_ver = get_smi_ver()
         numbering = _smi_ver.split(".")[:2]
     return tuple(int(n) for n in numbering)
+
+
+def torch_set_deterministic(d: bool) -> None:
+    """Set torch deterministic for different versions."""
+    if torch_version() < (1, 7, 0):
+        # PyTorch 1.6
+        torch._set_deterministic(d)  # type: ignore
+    elif torch_version() < (1, 8, 0):
+        # PyTorch 1.7
+        torch.set_deterministic(d)  # type: ignore
+    else:
+        # PyTorch 1.8, 1.9, etc.
+        torch.use_deterministic_algorithms(d)  # type: ignore
 
 
 def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "") -> bool:
