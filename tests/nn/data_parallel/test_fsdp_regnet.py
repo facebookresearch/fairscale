@@ -342,7 +342,7 @@ def test1(temp_files, ddp_ref, precision, flatten):
     if fsdp_config["mixed_precision"]:
         # For convolution layers, we need fp32_compute_dtype. Otherwise, we run
         # into conv layer errors like below with mixed precision with larger
-        # regnet128Gf models when flatten parameter is true:
+        # regnet128Gf models when flatten_parameter is true:
         #
         #   RuntimeError: Unable to find a valid cuDNN algorithm to run convolution
         #   or
@@ -359,7 +359,8 @@ def test1(temp_files, ddp_ref, precision, flatten):
         #   fp16 reduce scatter          483                         459
         #
         # There is small but non-zero performance impact. The actual impact will
-        # be depending on model size and number of GPUs.
+        # be depending on model size and number of GPUs. Turning on fp32_compute_dtype doubles
+        # GPU memory usage for the weights as well.
         fsdp_config["fp32_compute_dtype"] = True
         fsdp_config["fp32_reduce_scatter"] = True
 
