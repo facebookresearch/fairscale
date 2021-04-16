@@ -133,14 +133,14 @@ class FullyShardedDataParallel(nn.Module):
             Note, some layers, e.g. convolutions, may only work with
             ``fp32_compute_dtype==True`` below.
             Default: False
-        fp32_compute_dtype (bool):
+        fp32_compute_dtype (bool, Optional):
             if ``True``, use FP32 for full parameters for computation.
-            This is only relevant when *``mixed_precision``* is ``True``.
-            Default: False
+            Default: None, which means default to FP16 or FP32 based on the
+            *``mixed_precision``* argument.
         fp32_buffer_dtype (bool, Optional):
             if ``True``, use FP32 for buffers for computation.
-            This is only relevant when *``mixed_precision``* is ``True``.
-            Default: None, which means using the value of *``fp32_compute_dtype``*.
+            Default: None, which means using the value of the
+            *``fp32_compute_dtype``* argument.
         fp32_reduce_scatter (bool):
             if ``True``, then reduce-scatter gradients in FP32.
             This is only relevant when *``mixed_precision``* is ``True``.
@@ -188,7 +188,7 @@ class FullyShardedDataParallel(nn.Module):
         process_group: Optional[ProcessGroup] = None,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
-        fp32_compute_dtype: bool = False,
+        fp32_compute_dtype: Optional[bool] = None,
         fp32_buffer_dtype: Optional[bool] = None,
         fp32_reduce_scatter: bool = False,
         flatten_parameters: bool = True,
@@ -218,10 +218,6 @@ class FullyShardedDataParallel(nn.Module):
         self.state_dict_device = state_dict_device or self.compute_device
 
         # Validate args.
-        if self.fp32_compute_dtype and not self.mixed_precision:
-            raise ValueError("fp32_compute_dtype requires mixed_precision=True")
-        if self.fp32_buffer_dtype and not self.mixed_precision:
-            raise ValueError("fp32_buffer_dtype requires mixed_precision=True")
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
         if self.cpu_offload and not self.mixed_precision:
@@ -232,11 +228,12 @@ class FullyShardedDataParallel(nn.Module):
         enable_pytorch_sync_bn(module)
 
         # Compute derived variables.
-        self.compute_dtype = torch.float16 if (mixed_precision and not fp32_compute_dtype) else torch.float32
-        buffer_dtype = None
+        self.compute_dtype = torch.float16 if mixed_precision else torch.float32
+        if self.fp32_compute_dtype is not None:
+            self.compute_dtype = torch.float32 if fp32_compute_dtype else torch.float16
+        self.buffer_dtype = self.compute_dtype
         if fp32_buffer_dtype is not None:
-            buffer_dtype = torch.float32 if fp32_buffer_dtype else torch.float16
-        self.buffer_dtype = buffer_dtype if buffer_dtype is not None else self.compute_dtype
+            self.buffer_dtype = torch.float32 if fp32_buffer_dtype else torch.float16
 
         self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
