@@ -1187,11 +1187,23 @@ class FullyShardedDataParallel(nn.Module):
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)
-                if m._has_params:
-                    m.assert_state(TrainingState.BACKWARD_POST)
+                if m.training_state == TrainingState.IDLE:
+                    # Unlikely case, only happens if has params but none of the param
+                    # has requires_grad.
+                    if not m._has_params:
+                        # using print in backward for better debugging.
+                        print("ERROR: IDLE instance should have params: " + str(self))
+                        raise RuntimeError()
+                    for p in m.params:
+                        if p.requires_grad:
+                            print("ERROR: IDLE instance not have params with grad: " + str(p.shape))
+                            raise RuntimeError()
                 else:
-                    m.assert_state(TrainingState.BACKWARD_PRE)
-                m.training_state = TrainingState.IDLE
+                    if m._has_params:
+                        m.assert_state(TrainingState.BACKWARD_POST)
+                    else:
+                        m.assert_state(TrainingState.BACKWARD_PRE)
+                    m.training_state = TrainingState.IDLE
 
     @torch.no_grad()
     def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
