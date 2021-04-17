@@ -21,6 +21,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 
 from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
+from fairscale.experimental.nn.distributed_pipeline.trace import make_graph
 from fairscale.utils.testing import torch_version
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
@@ -241,10 +242,51 @@ def multi_input_multi_output_layers(devices):
     graph.add_sequence([linear_layer_1, split])
     graph.set_model_input(linear_layer_1)
     graph.fan_out(split, linear_layers_2)
-    graph.add_multi_input_layer(concatenate, linear_layers_2)
+    graph.add_layer(concatenate, linear_layers_2)
 
     pipe = DistributedPipeline(graph, chunks=4)
     assert [[0, 1], [2], [3], [4]] == extract_partitions(graph, pipe)
+    params = pipe.parameter_rrefs()
+    opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
+    losses = []
+    for i in range(2):
+        with dist_autograd.context() as context_id:
+            y = pipe(x)
+            loss = criterion(y, rpc.RRef(x))
+            losses.append(loss)
+            loss.backward(context_id)
+            opt.step(context_id)
+    losses = [l.to_here() for l in losses]
+    assert losses[0] > losses[1], f"{losses[0]} !> {losses[1]}"
+
+
+class MyNN(nn.Module):
+    def __init__(self, devices):
+        super().__init__()
+        self.linear_layer_1 = RemoteModule(devices[0], nn.Linear, (4, 4), {})
+        self.split = RemoteModule(devices[0], SplitTensors, (), {})
+        self.linear_layers_2 = nn.ModuleList(
+            [RemoteModule(devices[0], nn.Linear, (2, 2), {}), RemoteModule(devices[1], nn.Linear, (2, 2), {}),]
+        )
+        self.concatenate = RemoteModule(devices[1], ConcatenateTensors, ())
+
+    def forward(self, input):
+        splits = self.split(self.linear_layer_1(input))
+        splits = [self.linear_layers_2[i](splits[i]) for i in range(2)]
+        return self.concatenate(*splits)
+
+
+@rpc_test(world_size=2)
+@pytest.mark.parametrize("devices", DEVICES)
+def auto_graph_extract(devices):
+    device = devices[0].split("/")[1]
+    torch.random.manual_seed(3)
+    criterion = DistributedLoss(torch.nn.MSELoss)
+    x = torch.randn(8, 4).to(device)
+    graph = make_graph(MyNN(devices), ["input"])
+    pipe = DistributedPipeline(graph, chunks=4)
+    partitions = extract_partitions(graph, pipe)
+    assert [[0, 1], [2], [3], [4]] == partitions, f"partitions={partitions}"
     params = pipe.parameter_rrefs()
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []

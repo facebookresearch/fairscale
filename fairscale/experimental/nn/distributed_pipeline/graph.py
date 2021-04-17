@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from dataclasses import dataclass
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple, Union
 
 from torch import Tensor, nn
 from torch.distributed import rpc
@@ -43,6 +43,11 @@ class DataSource:
     # indicating which output of the producer module, or which input of the model if producer is None.
     output_idx: int
 
+    def get_debug_str(self) -> str:
+        if self.producer is None:
+            return f"input({self.output_idx})"
+        return f"{self.producer.get_name()}({self.output_idx})"
+
 
 class Node:
     def __init__(self, module: RemoteModule):
@@ -51,6 +56,14 @@ class Node:
         self.inputs: List[DataSource] = []
         # To be compiled by _compile method
         self.output_consumers: List[NodeDataConsumer] = []
+
+    def get_name(self) -> str:
+        if not hasattr(self, "name"):
+            self.name = self.module.get_module_rref().rpc_sync()._get_name()
+        return self.name
+
+    def get_debug_str(self) -> str:
+        return f"{self.get_name()}({self.num_outputs if self.num_outputs is not None else ''}): {[i.get_debug_str() for i in self.inputs]}"
 
 
 class PipelineModulesGraph(nn.Module):
@@ -103,11 +116,23 @@ class PipelineModulesGraph(nn.Module):
         """
         self._set_inputs(module, [DataSource(None, ind)])
 
-    def add_multi_input_layer(self, module: RemoteModule, inputs: List[RemoteModule]) -> None:
-        """Adds a module with multiple inputs to the graph. The modules that provide inputs to this module
+    DataSourceSpec = Union[RemoteModule, Tuple[RemoteModule, int], int]
+
+    def _data_source_spec_to_data_source(self, spec: DataSourceSpec) -> DataSource:
+        if isinstance(spec, int):
+            return DataSource(None, spec)
+        if isinstance(spec, RemoteModule):
+            return DataSource(self._find_node(spec), 0)
+        return DataSource(self._find_node(spec[0]), spec[1])
+
+    def add_layer(self, module: RemoteModule, inputs: List[DataSourceSpec], num_outputs: Optional[int] = None) -> None:
+        """Adds a module with specifieds inputs to the graph. The modules that provide inputs to this module
         must have been added previously to the graph and are listed with argument inputs.
         """
-        self._set_inputs(module, [DataSource(self._find_node(m), 0) for m in inputs])
+        node = Node(module)
+        node.inputs = [self._data_source_spec_to_data_source(spec) for spec in inputs]
+        node.num_outputs = num_outputs
+        self.nodes.append(node)
 
     def fan_out(self, module: RemoteModule, outputs: List[RemoteModule]) -> None:
         """Feeds outputs of a previously added module to modules specified by argument 'outputs' (so
