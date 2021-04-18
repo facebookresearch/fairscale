@@ -1,5 +1,5 @@
 import operator
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple, Union, cast
+from typing import Dict, List, Optional, cast
 
 from torch.distributed.nn import RemoteModule
 import torch.fx

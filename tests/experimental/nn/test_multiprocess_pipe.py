@@ -21,7 +21,6 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 
 from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
-from fairscale.experimental.nn.distributed_pipeline.trace import make_graph
 from fairscale.utils.testing import torch_version
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
@@ -266,7 +265,7 @@ class MyNN(nn.Module):
         self.linear_layer_1 = RemoteModule(devices[0], nn.Linear, (4, 4), {})
         self.split = RemoteModule(devices[0], SplitTensors, (), {})
         self.linear_layers_2 = nn.ModuleList(
-            [RemoteModule(devices[0], nn.Linear, (2, 2), {}), RemoteModule(devices[1], nn.Linear, (2, 2), {}),]
+            [RemoteModule(devices[0], nn.Linear, (2, 2), {}), RemoteModule(devices[1], nn.Linear, (2, 2), {})]
         )
         self.concatenate = RemoteModule(devices[1], ConcatenateTensors, ())
 
@@ -279,6 +278,8 @@ class MyNN(nn.Module):
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 def auto_graph_extract(devices):
+    from fairscale.experimental.nn.distributed_pipeline.trace import make_graph
+
     device = devices[0].split("/")[1]
     torch.random.manual_seed(3)
     criterion = DistributedLoss(torch.nn.MSELoss)
