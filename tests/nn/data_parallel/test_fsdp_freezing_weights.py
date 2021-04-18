@@ -63,9 +63,8 @@ def _distributed_worker(
     model = model.cuda()
 
     # freezing the trunk.
-    for name, param in model.named_parameters():
-        if "trunk" in name:
-            param.requires_grad = False
+    for param in model.trunk.parameters():
+        param.requires_grad = False
 
     if with_fsdp:
         model = FSDP(model)
