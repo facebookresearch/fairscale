@@ -38,7 +38,7 @@ class Model(nn.Module):
         return self.head(self.trunk(x))
 
 
-def _create_model(with_fsdp: bool):
+def _create_model(with_fsdp):
     model = Model()
     if with_fsdp:
         model.trunk = FSDP(model.trunk)
@@ -47,7 +47,7 @@ def _create_model(with_fsdp: bool):
 
 
 def _distributed_worker(
-    gpu_id: int, world_size: int, with_fsdp: bool, tempfile_name, unused, rank_0_output, expected_state
+    gpu_id, world_size, with_fsdp, freezing_method, tempfile_name, unused, rank_0_output, expected_state
 ):
     torch.cuda.set_device(gpu_id)
 
@@ -62,9 +62,11 @@ def _distributed_worker(
     model = _create_model(with_fsdp)
     model = model.cuda()
 
-    # freezing the trunk.
-    for param in model.trunk.parameters():
-        param.requires_grad = False
+    # freezing the trunk using requires_grad.
+    assert freezing_method in ["requires_grad", "grad_to_none"]
+    if freezing_method == "requires_grad":
+        for param in model.trunk.parameters():
+            param.requires_grad = False
 
     if with_fsdp:
         model = FSDP(model)
@@ -84,6 +86,9 @@ def _distributed_worker(
         print("Loss", iteration, ":", fake_loss.item())
         optimizer.zero_grad()
         fake_loss.backward()
+        if freezing_method == "grad_to_none":
+            for param in model.trunk.parameters():
+                param.grad = None
         optimizer.step()
 
     if with_fsdp:
@@ -102,7 +107,7 @@ def _distributed_worker(
 # A fixture to get tempfiles and ensure they are cleaned up.
 @pytest.fixture()
 def temp_files():
-    num = 6  # DDP and FSDP each needs 3 files.
+    num = 9  # 1 DDP and 2 FSDP cases each needs 3 files.
     files = [tempfile.mkstemp()[1] for _ in range(num)]
 
     yield tuple(files)
@@ -117,8 +122,17 @@ def tests1(temp_files):
     world_size = 2
     # DDP
     fsdp = False
-    mp.spawn(_distributed_worker, (world_size, fsdp) + temp_files[:3] + (None,), nprocs=world_size)
-    # FSDP
+    freezing_method = "requires_grad"
+    mp.spawn(_distributed_worker, (world_size, fsdp, freezing_method) + temp_files[0:3] + (None,), nprocs=world_size)
+    # FSDP, case 1 and 2.
     fsdp = True
     expected_state = torch.load(temp_files[2])
-    mp.spawn(_distributed_worker, (world_size, fsdp) + temp_files[3:] + (expected_state,), nprocs=world_size)
+    temp_file_idx = 3
+    for freezing_method in ["requires_grad", "grad_to_none"]:
+        print(f"Testing FSDP with freezing method {freezing_method}")
+        mp.spawn(
+            _distributed_worker,
+            (world_size, fsdp, freezing_method) + temp_files[temp_file_idx : temp_file_idx + 3] + (expected_state,),
+            nprocs=world_size,
+        )
+        temp_file_idx += 3
