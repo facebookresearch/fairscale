@@ -258,20 +258,23 @@ def multi_input_multi_output_layers(devices):
     assert losses[0] > losses[1], f"{losses[0]} !> {losses[1]}"
 
 
-class MyNN(nn.Module):
-    def __init__(self, devices):
+# A test for extracting the same graph as in test multi_input_multi_output_layers automatically
+class ShardedLinearLayer(nn.Module):
+    def __init__(self, input_device, shard_devices, output_device):
         super().__init__()
-        self.linear_layer_1 = RemoteModule(devices[0], nn.Linear, (4, 4), {})
-        self.split = RemoteModule(devices[0], SplitTensors, (), {})
+        self.split = RemoteModule(input_device, SplitTensors, (), {})
         self.linear_layers_2 = nn.ModuleList(
-            [RemoteModule(devices[0], nn.Linear, (2, 2), {}), RemoteModule(devices[1], nn.Linear, (2, 2), {})]
+            [
+                RemoteModule(shard_devices[0], nn.Linear, (2, 2), {}),
+                RemoteModule(shard_devices[1], nn.Linear, (2, 2), {}),
+            ]
         )
-        self.concatenate = RemoteModule(devices[1], ConcatenateTensors, ())
+        self.concatenate = RemoteModule(output_device, ConcatenateTensors, ())
 
     def forward(self, input):
-        splits = self.split(self.linear_layer_1(input))
-        splits = [self.linear_layers_2[i](splits[i]) for i in range(2)]
-        return self.concatenate(*splits)
+        shards = self.split(input)
+        shards = [self.linear_layers_2[i](shards[i]) for i in range(2)]
+        return self.concatenate(*shards)
 
 
 @rpc_test(world_size=2)
@@ -283,7 +286,12 @@ def auto_graph_extract(devices):
     torch.random.manual_seed(3)
     criterion = DistributedLoss(torch.nn.MSELoss)
     x = torch.randn(8, 4).to(device)
-    graph = make_graph(MyNN(devices))
+
+    # create model
+    model = nn.Sequential(
+        RemoteModule(devices[0], nn.Linear, (4, 4), {}), ShardedLinearLayer(devices[0], devices, devices[1])
+    )
+    graph = make_graph(model)
     pipe = DistributedPipeline(graph, chunks=4)
     partitions = extract_partitions(graph, pipe)
     assert [[0, 1], [2], [3], [4]] == partitions, f"partitions={partitions}"
