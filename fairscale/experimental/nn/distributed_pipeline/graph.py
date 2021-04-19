@@ -43,11 +43,6 @@ class DataSource:
     # indicating which output of the producer module, or which input of the model if producer is None.
     output_idx: int
 
-    def get_debug_str(self) -> str:
-        if self.producer is None:
-            return f"input({self.output_idx})"
-        return f"{self.producer.get_name()}({self.output_idx})"
-
 
 class Node:
     def __init__(self, module: RemoteModule):
@@ -56,14 +51,6 @@ class Node:
         self.inputs: List[DataSource] = []
         # To be compiled by _compile method
         self.output_consumers: List[NodeDataConsumer] = []
-
-    def get_name(self) -> str:
-        if not hasattr(self, "name"):
-            self.name = self.module.get_module_rref().rpc_sync()._get_name()
-        return self.name
-
-    def get_debug_str(self) -> str:
-        return f"{self.get_name()}({self.num_outputs if self.num_outputs is not None else ''}): {[i.get_debug_str() for i in self.inputs]}"
 
 
 class PipelineModulesGraph(nn.Module):
