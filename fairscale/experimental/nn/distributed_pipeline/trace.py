@@ -1,6 +1,6 @@
 import inspect
 import operator
-from typing import Dict, List, Optional, cast
+from typing import Dict, Optional, cast
 
 from torch.distributed.nn import RemoteModule
 import torch.fx
