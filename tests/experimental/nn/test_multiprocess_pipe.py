@@ -76,8 +76,7 @@ def create_sequence_pipeline(
         index = next_index
 
     graph = PipelineModulesGraph()
-    graph.add_sequence(remote_modules)
-    graph.set_model_input(remote_modules[0])
+    graph.add_sequence(remote_modules, [0])
 
     return DistributedPipeline(graph, **kwargs)
 
@@ -238,9 +237,9 @@ def multi_input_multi_output_layers(devices):
     concatenate = RemoteModule(devices[1], ConcatenateTensors, ())
 
     graph = PipelineModulesGraph()
-    graph.add_sequence([linear_layer_1, split])
-    graph.set_model_input(linear_layer_1)
-    graph.fan_out(split, linear_layers_2)
+    graph.add_sequence([linear_layer_1, split], [0], 2)
+    for i, l in enumerate(linear_layers_2):
+        graph.add_layer(l, [(split, i)])
     graph.add_layer(concatenate, linear_layers_2)
 
     pipe = DistributedPipeline(graph, chunks=4)
