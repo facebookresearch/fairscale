@@ -91,6 +91,10 @@ def _call_trace(tracer: RemoteModuleTracer, module: nn.Module) -> torch.fx.Graph
 
 
 def make_graph(module: nn.Module) -> PipelineModulesGraph:
+    """
+    Creates a PipelineModulesGraph for the module. The module should be traceable by torch.fx.
+    Also all operators on tensors should be done by RemoteModule's.
+    """
     tracer = RemoteModuleTracer()
     r = _call_trace(tracer, module)
     g = torch.fx.GraphModule(module, r)
