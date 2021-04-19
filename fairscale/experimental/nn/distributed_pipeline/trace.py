@@ -1,3 +1,4 @@
+import inspect
 import operator
 from typing import Dict, List, Optional, cast
 
@@ -20,9 +21,7 @@ class GraphCreator:
         self.tracer = tracer
 
     def get_module(self, node: torch.fx.Node) -> Optional[nn.Module]:
-        """
-        Given a call_module node, returns the module corresponding to this module call
-        """
+        """Given a call_module node, returns the module corresponding to this module call"""
         if node.op != "call_module":
             return None
         module = self.tracer.root
@@ -30,7 +29,7 @@ class GraphCreator:
             module = getattr(module, t)
         return module
 
-    def create_graph(self, arg_names: List[str]) -> PipelineModulesGraph:
+    def create_graph(self) -> PipelineModulesGraph:
         node_to_data: Dict[torch.fx.Node, PipelineModulesGraph.DataSourceSpec] = {}
         node_to_module = {}
 
@@ -46,6 +45,7 @@ class GraphCreator:
                 assert isinstance(d, RemoteModule)
                 node_to_data[node] = (d, node.args[1])
             elif node.op == "placeholder":
+                arg_names = list(inspect.signature(self.tracer.root.forward).parameters)
                 node_to_data[node] = arg_names.index(node.target)
             elif node.op == "output":
                 pass
@@ -75,9 +75,6 @@ class GraphCreator:
             inputs = [node_to_data[arg] for arg in node.args]
             graph.add_layer(module, inputs, module_to_num_outputs.get(module))
 
-        for node in graph.nodes:
-            print(node.get_debug_str())
-
         return graph
 
 
@@ -93,9 +90,8 @@ def _call_trace(tracer: RemoteModuleTracer, module: nn.Module) -> torch.fx.Graph
         RemoteModule.named_children = org_named_children  # type: ignore
 
 
-def make_graph(module: nn.Module, arg_names: List[str]) -> PipelineModulesGraph:
+def make_graph(module: nn.Module) -> PipelineModulesGraph:
     tracer = RemoteModuleTracer()
     r = _call_trace(tracer, module)
     g = torch.fx.GraphModule(module, r)
-    print(g.code)
-    return GraphCreator(tracer).create_graph(arg_names)
+    return GraphCreator(tracer).create_graph()

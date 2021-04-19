@@ -283,7 +283,7 @@ def auto_graph_extract(devices):
     torch.random.manual_seed(3)
     criterion = DistributedLoss(torch.nn.MSELoss)
     x = torch.randn(8, 4).to(device)
-    graph = make_graph(MyNN(devices), ["input"])
+    graph = make_graph(MyNN(devices))
     pipe = DistributedPipeline(graph, chunks=4)
     partitions = extract_partitions(graph, pipe)
     assert [[0, 1], [2], [3], [4]] == partitions, f"partitions={partitions}"
