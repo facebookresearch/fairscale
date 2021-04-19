@@ -1188,7 +1188,12 @@ class FullyShardedDataParallel(nn.Module):
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)
                 if m._has_params:
-                    m.assert_state(TrainingState.BACKWARD_POST)
+                    if any(p.requires_grad for p in m.params):
+                        m.assert_state(TrainingState.BACKWARD_POST)
+                    else:
+                        # Unlikely case, should only happens if `m` has params but none of the
+                        # params has `requires_grad==True`.
+                        m.assert_state(TrainingState.IDLE)
                 else:
                     m.assert_state(TrainingState.BACKWARD_PRE)
                 m.training_state = TrainingState.IDLE

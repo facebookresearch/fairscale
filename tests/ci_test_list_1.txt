@@ -1,2 +1,3 @@
 tests/nn/misc/test_flatten_params_wrapper.py
 tests/nn/data_parallel/test_fsdp.py
+tests/nn/data_parallel/test_fsdp_freezing_weights.py
