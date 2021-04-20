@@ -1416,6 +1416,9 @@ class FullyShardedDataParallel(nn.Module):
             buffer = None  # for sharded tensors
             singleton_buffer = None  # for singleton tensors
             for buffer_name, t in v.items():
+                if torch.is_tensor(t):
+                    t = t.to(self.compute_device)
+
                 if ou.is_singleton_tensor(t):
                     if singleton_buffer is None:
                         singleton_buffer = list(t.new_zeros(self.world_size).chunk(self.world_size))
