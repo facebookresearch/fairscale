@@ -1412,7 +1412,7 @@ class FullyShardedDataParallel(nn.Module):
             singleton_buffer = None  # for singleton tensors
             for buffer_name, t in v.items():
                 if torch.is_tensor(t):
-                    t = t.cuda()
+                    t = t.to(self.compute_device)
 
                 if ou.is_singleton_tensor(t):
                     if singleton_buffer is None:
