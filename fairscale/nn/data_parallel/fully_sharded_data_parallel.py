@@ -187,7 +187,7 @@ class FullyShardedDataParallel(nn.Module):
         compute_device: Optional[torch.device] = None,
         no_broadcast_optim_state: Optional[bool] = False,
         state_dict_device: Optional[torch.device] = None,
-    ):  
+    ):
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or dist.new_group()
@@ -272,10 +272,8 @@ class FullyShardedDataParallel(nn.Module):
         init_end = time.time()
 
         logging.info(
-            "FSDP.__init__(done): total_init_time: {:.2f} num_params: {}".format(
-                (init_end - init_start), 
-                sum(p.numel() for p in self.params)),
-        )       
+            f"FSDP.__init__(done): total_init_time: {(init_end - init_start): .4f} num_params: {(sum(p.numel() for p in self.params))}"
+        )
 
     def get_gradient_predivide_factor(self, world_size: int) -> int:
         factor = 1
@@ -1666,7 +1664,9 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
         if recurse:
             return not isinstance(module, tuple(default_auto_wrap_policy.FORCE_LEAF_MODULES))  # type: ignore
         else:
-            return is_bn and not isinstance(module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES))  # type: ignore
+            return is_bn and not isinstance(
+                module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES)
+            )  # type: ignore
 
     pg = None
     if single_rank_pg:
