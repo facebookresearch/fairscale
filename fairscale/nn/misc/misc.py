@@ -3,7 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import List
+from typing import List, Optional
 
 import torch
 from torch import Tensor, nn
@@ -27,7 +27,6 @@ def patch_batchnorm(module: nn.Module) -> List:
         (list):
             A list of hook handles, late can be freed.
     """
-    hooks = []
 
     def pre_forward(module: _BatchNorm, input: Tensor) -> None:
         if torch.is_grad_enabled():
@@ -40,6 +39,7 @@ def patch_batchnorm(module: nn.Module) -> List:
             return
         module.track_running_stats = module._track_running_stats_backup
 
+    hooks = []
     for name, child in module.named_modules():
         # _BatchNorm is base for bn1d, bn2d, bn3d and sync_bn, apex_sync_bn, etc.
         if isinstance(child, _BatchNorm):
@@ -48,3 +48,28 @@ def patch_batchnorm(module: nn.Module) -> List:
             post_handle = child.register_forward_hook(post_forward)
             hooks += [pre_handle, post_handle]
     return hooks
+
+
+class CheckpointForwardPassCounter:
+    _module: Optional[nn.Module] = None
+
+    @staticmethod
+    def add_checkpoint_counter(module: nn.Module) -> None:
+        CheckpointForwardPassCounter._module = module
+
+        # Add or reset the counter variables.
+        module._checkpoint_fwd_counter = 0
+
+    @staticmethod
+    def _add(i: int) -> None:
+        assert CheckpointForwardPassCounter._module is not None
+        mod = CheckpointForwardPassCounter._module
+        mod._checkpoint_fwd_counter += i
+
+    @staticmethod
+    def inc() -> None:
+        CheckpointForwardPassCounter._add(1)
+
+    @staticmethod
+    def dec() -> None:
+        CheckpointForwardPassCounter._add(-1)

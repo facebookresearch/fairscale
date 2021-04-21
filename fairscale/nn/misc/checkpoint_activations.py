@@ -15,7 +15,7 @@ import torch.utils.checkpoint as torch_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
-from .misc import patch_batchnorm
+from .misc import CheckpointForwardPassCounter, patch_batchnorm
 
 
 def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Module:
@@ -65,8 +65,11 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
         (nn.Module):
             Wrapped module
     """
-    # Patch the batchnorm layers in case there are any.
+    # Patch the batchnorm layers in case there are any in this module.
     patch_batchnorm(module)
+
+    # Add forward pass counter
+    CheckpointForwardPassCounter.add_checkpoint_counter(module)
 
     # The use of weakref here is to prevent creating a ref cycle: m -> m.forward -> m.
     # When such cycle exists, gc won't collect the module when the module is freed.
@@ -168,6 +171,7 @@ class CheckpointFunction(torch.autograd.Function):
         with torch.no_grad():
             unpacked_args, unpacked_kwargs = unpack_kwargs(kwarg_keys, args)
             outputs = run_function(*unpacked_args, **unpacked_kwargs)
+            CheckpointForwardPassCounter.inc()
 
         if not isinstance(outputs, torch.Tensor):
             # Autograd Functions don't like non-Tensor outputs. We can split the
@@ -200,6 +204,7 @@ class CheckpointFunction(torch.autograd.Function):
             unpacked_args, unpacked_kwargs = unpack_kwargs(ctx.kwarg_keys, inputs)
             outputs = ctx.run_function(*unpacked_args, **unpacked_kwargs)
             tensor_outputs, _ = split_non_tensors(outputs)
+            CheckpointForwardPassCounter.dec()
 
         # Set the states back to what it was at the start of this function.
         set_rng_state(bwd_rng_state)

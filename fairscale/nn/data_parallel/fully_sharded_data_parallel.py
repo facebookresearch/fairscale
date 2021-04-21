@@ -207,6 +207,9 @@ class FullyShardedDataParallel(nn.Module):
 
         self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
+        self.gradient_predivide_factor = 1
+        self.gradient_postdivide_factor = 2.0
+        # print("XXX", self.gradient_predivide_factor, self.gradient_postdivide_factor)
 
         self.numel_padded_per_param: List[int] = []
         self._tstart = time.time()
@@ -264,6 +267,11 @@ class FullyShardedDataParallel(nn.Module):
         # full params. This defaults to True, but may be set to False if the
         # user explicitly requests the local state dict via local_state_dict().
         self._return_full_state_dict = True
+
+        # Flag to guard multiple pre-forward hook being executed per iteration.
+        # This is reset at the end of the backward().
+        self._pre_backward_hook_has_run = False
+        # self._b2_counter = 0
 
     def get_gradient_predivide_factor(self, world_size: int) -> int:
         factor = 1
@@ -902,6 +910,8 @@ class FullyShardedDataParallel(nn.Module):
         self._lazy_init()
 
         # Start of a forward pass.
+        # if self.rank == 0:
+        #    print("XXX fwd", self._id)
         self.training_state = TrainingState.FORWARD
 
         if self._is_root and self.mixed_precision:
@@ -930,28 +940,41 @@ class FullyShardedDataParallel(nn.Module):
         self._use_fp32_param_shard()
 
         # Register pre-backward hooks to all-gather the params for the backward
-        # pass (if needed).
+        # pass (if output's grad was needed). This won't register anything if
+        # we are in eval mode.
+        #
+        # Some model does forward pass multiple times, we need to register the
+        # pre-backward hook on every output since the last output's hook has to
+        # fire first to setup for backward. However, we use
+        # self._pre_backward_hook_has_run prevent repeated overhead from multiple
+        # hook callbacks.
         outputs = self._register_pre_backward_hooks(outputs)
 
         # Done with a forward pass.
+        # if self.rank == 0:
+        #    print("XXX fwd done, idle", self._id)
         self.training_state = TrainingState.IDLE
 
         return outputs
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
         """Register pre-backward hook to run before the wrapped module's
-        backward. Hooks should be attached to all outputs from the forward."""
+        backward. Hooks should be attached to all outputs from the forward.
+
+        Returns:
+            outputs: new outputs with hooks registered if they requires gradient.
+        """
         if not torch.is_grad_enabled():
             return outputs  # don't register hooks if grad isn't enabled
 
-        pre_backward_hook_has_run = [False]
-
         def _pre_backward_hook(*unused: Any) -> None:
-            if pre_backward_hook_has_run[0]:
-                return  # only run once
-            pre_backward_hook_has_run[0] = True
+            if self._pre_backward_hook_has_run:
+                return  # only run once (from multiple outputs or multiple forward passes)
+            self._pre_backward_hook_has_run = True
 
             # Start of a backward pass.
+            # if self.rank == 0:
+            #    print("XXX bwd pre", self._id)
             self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
             self.training_state = TrainingState.BACKWARD_PRE
 
@@ -1051,9 +1074,25 @@ class FullyShardedDataParallel(nn.Module):
         # First hook callback will see PRE state. If we have multiple params,
         # then subsequent hook callbacks will see POST state.
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
+        # if self.rank == 0:
+        #    print("XXX bwd post", self._id)
         self.training_state = TrainingState.BACKWARD_POST
         if param.grad is None:
             return
+        # if self.rank == 0:
+        #    print("XXX", self._id, param.grad.sum().item())
+        # if self._id == "block2":
+        #    self._b2_counter += 1
+        #    if self._b2_counter % 3 != 0:
+        #        print("XXX skip")
+        #        return
+
+        # If this is a checkpointed module, we check if the following
+        # counter reaches 0. If not, it is not the final backward call
+        # for this module yet. Therefore, we early return in that case.
+        if hasattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter"):
+            if self._fsdp_wrapped_module._checkpoint_fwd_counter != 0:
+                return
         if param.grad.requires_grad:
             raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require grad")
 
@@ -1078,7 +1117,10 @@ class FullyShardedDataParallel(nn.Module):
         # of FSDP (root and children) make this attempt here to queue to ensure it is queued
         # no matter which instance(s) has(have) params.
         assert self._queue_wait_for_post_backward_closure is not None or not self._is_root
+        # if self._queue_wait_for_post_backward_closure is not None and (self._id != "block2":
         if self._queue_wait_for_post_backward_closure is not None:
+            # if self.rank == 0:
+            #    print("XXX queued by", self._id)
             self._queue_wait_for_post_backward_closure()
 
         if not self._require_backward_grad_sync:
@@ -1160,6 +1202,8 @@ class FullyShardedDataParallel(nn.Module):
     def _wait_for_post_backward(self) -> None:
         """Wait for post-backward to finish. Only called on root instance."""
         assert self._is_root
+        # if self.rank == 0:
+        #    print("XXX _wait_for_post_backward", self._id)
         if self._has_params:
             self.assert_state(TrainingState.BACKWARD_POST)
         else:
@@ -1187,8 +1231,10 @@ class FullyShardedDataParallel(nn.Module):
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)
+                m._pre_backward_hook_has_run = False
                 if m._has_params:
                     if any(p.requires_grad for p in m.params):
+                        # pass
                         m.assert_state(TrainingState.BACKWARD_POST)
                     else:
                         # Unlikely case, should only happens if `m` has params but none of the
@@ -1196,6 +1242,8 @@ class FullyShardedDataParallel(nn.Module):
                         m.assert_state(TrainingState.IDLE)
                 else:
                     m.assert_state(TrainingState.BACKWARD_PRE)
+                # if self.rank == 0:
+                #    print("XXX bwd done", self._id)
                 m.training_state = TrainingState.IDLE
 
     @torch.no_grad()
@@ -1382,8 +1430,8 @@ class FullyShardedDataParallel(nn.Module):
             # In case we are failing in the context of autograd hook, asserting
             # may not generate useful msg. So, let's print it to be sure.
             if self.rank == 0:
-                print(self)
-                print(msg)
+                print(f"Asserting FSDP instance is: {self}")
+                print(f"ERROR: {msg}")
                 traceback.print_stack()
             raise ValueError(msg)
 
