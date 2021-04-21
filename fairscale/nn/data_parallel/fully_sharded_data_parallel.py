@@ -847,7 +847,8 @@ class FullyShardedDataParallel(nn.Module):
         for n, m in self.named_modules():
             # `n != ""` excludes self.
             if n != "" and isinstance(m, FullyShardedDataParallel):
-                assert m._is_root is None or m._is_root == False
+                # We relax the assert for non-root instance. A lightning unit test triggers this otherwise.
+                assert m._is_root is None or not m._is_root
                 if m._is_root is None:
                     m._is_root = False
                     # When root instance doesn't have params, allow children instances
