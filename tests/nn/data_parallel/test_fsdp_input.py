@@ -18,7 +18,7 @@ from torch.optim import SGD
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import TrainingState
-from fairscale.utils.testing import dist_init, rmf, skip_if_no_cuda, teardown
+from fairscale.utils.testing import dist_init, rmf, skip_if_no_cuda, teardown, torch_version
 
 
 # A fixture to get tempfiles and ensure they are cleaned up.
