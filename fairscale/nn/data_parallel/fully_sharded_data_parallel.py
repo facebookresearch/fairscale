@@ -1662,7 +1662,9 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
     def wrap_bn_only_policy(module: nn.Module, recurse: bool, unwrapped_params: int) -> bool:
         is_bn = isinstance(module, torch.nn.modules.batchnorm._BatchNorm)
         if recurse:
-            return not isinstance(module, tuple(default_auto_wrap_policy.FORCE_LEAF_MODULES))  # type: ignore
+            return not isinstance(
+                module, tuple(default_auto_wrap_policy.FORCE_LEAF_MODULES)  # type: ignore
+            )
         else:
             return is_bn and not isinstance(
                 module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES)  # type: ignore
