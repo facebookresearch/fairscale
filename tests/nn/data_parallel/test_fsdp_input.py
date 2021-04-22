@@ -34,7 +34,7 @@ def temp_files():
         rmf(name)
 
 
-# We only test on GPU since mix-precision only really works on GPU.
+# We only test on GPU since mix-precision only works on GPU.
 @skip_if_no_cuda
 @pytest.mark.parametrize(
     "fsdp_config", [{}, {"mixed_precision": True}],
