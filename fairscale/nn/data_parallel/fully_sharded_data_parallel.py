@@ -207,8 +207,8 @@ class FullyShardedDataParallel(nn.Module):
 
         self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
-        self.gradient_predivide_factor = 1
-        self.gradient_postdivide_factor = 2.0
+        # self.gradient_predivide_factor = 1
+        # self.gradient_postdivide_factor = 2.0
         # print("XXX", self.gradient_predivide_factor, self.gradient_postdivide_factor)
 
         self.numel_padded_per_param: List[int] = []
@@ -945,9 +945,8 @@ class FullyShardedDataParallel(nn.Module):
         #
         # Some model does forward pass multiple times, we need to register the
         # pre-backward hook on every output since the last output's hook has to
-        # fire first to setup for backward. However, we use
-        # self._pre_backward_hook_has_run prevent repeated overhead from multiple
-        # hook callbacks.
+        # fire first to setup for backward. However, we use ``self._pre_backward_hook_has_run``
+        # to prevent repeated overhead from multiple hook callbacks.
         outputs = self._register_pre_backward_hooks(outputs)
 
         # Done with a forward pass.
