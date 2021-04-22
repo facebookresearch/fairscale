@@ -271,7 +271,7 @@ class FullyShardedDataParallel(nn.Module):
         self._return_full_state_dict = True
         init_end = time.time()
 
-        logging.info(
+        logging.debug(
             f"FSDP.__init__(done): total_init_time: {(init_end - init_start): .4f} num_params: {(sum(p.numel() for p in self.params))}"
         )
 
