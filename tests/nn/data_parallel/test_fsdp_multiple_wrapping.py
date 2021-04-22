@@ -14,11 +14,12 @@ import tempfile
 import pytest
 import torch
 import torch.multiprocessing as mp
+from torch.nn import Linear, Module, Sequential
+from torch.optim import SGD
+
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import TrainingState
 from fairscale.utils.testing import dist_init, teardown, torch_version
-from torch.nn import Linear, Module, Sequential
-from torch.optim import SGD
 
 
 def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
