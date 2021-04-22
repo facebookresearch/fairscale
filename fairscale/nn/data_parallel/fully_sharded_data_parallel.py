@@ -207,11 +207,8 @@ class FullyShardedDataParallel(nn.Module):
         self.no_broadcast_optim_state = no_broadcast_optim_state
         self.state_dict_device = state_dict_device or self.compute_device
 
-        self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
+        self.gradient_predivide_factor: int = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
-        # self.gradient_predivide_factor = 1
-        # self.gradient_postdivide_factor = 2.0
-        # print("XXX", self.gradient_predivide_factor, self.gradient_postdivide_factor)
 
         self.numel_padded_per_param: List[int] = []
         self._tstart = time.time()
@@ -283,11 +280,27 @@ class FullyShardedDataParallel(nn.Module):
         self._pre_backward_hook_has_run = False
         # self._b2_counter = 0
 
-    def get_gradient_predivide_factor(self, world_size: int) -> int:
+    def _get_gradient_predivide_factor(self, world_size: int) -> int:
         factor = 1
         while world_size % factor == 0 and world_size / factor > factor:
             factor = factor * 2
         return factor
+
+    def set_gradient_divide_factors(self, pre: float, post: float, recursive: bool) -> None:
+        """Allowing user to override the pre and post divide factors.
+
+        Args:
+            pre (float): divide factor before the reduction.
+            post (float): divide factor after the reduction.
+            recursive (bool): recursively set it for all child FSDP instances or not.
+        """
+        self.assert_state(TrainingState.IDLE)
+        if recursive:
+            for module in self.modules():
+                if isinstance(module, FullyShardedDataParallel) and module != self:
+                    module.set_gradient_divide_factors(pre, post, False)
+        self.gradient_predivide_factor = pre
+        self.gradient_postdivide_factor = post
 
     @property
     def module(self) -> nn.Module:

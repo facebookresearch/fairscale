@@ -84,6 +84,7 @@ def _distributed_worker(gpu_id: int, with_fsdp: bool, double_forward: bool, with
         model = FSDP(model)
         model._id = "root"
         context = contextlib.suppress()
+        model.set_gradient_divide_factors(1., 2., True)
     else:
         model = DistributedDataParallel(model, device_ids=[gpu_id])
         context = model.no_sync()
