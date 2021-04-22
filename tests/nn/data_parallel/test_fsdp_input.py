@@ -43,6 +43,12 @@ def temp_files():
 def test_input_type(temp_files, fsdp_config, input_cls):
     """Test FSDP with input being a list or a dict, only single GPU."""
 
+    if torch_version() < (1, 7, 0):
+        # This test runs multiple test cases in a single process. On 1.6.0 it
+        # throw an error like this:
+        #     RuntimeError: Container is already initialized! Cannot initialize it twice!
+        pytest.skip("older pytorch doesn't work well with single process dist_init multiple times")
+
     result = dist_init(rank=0, world_size=1, filename=temp_files[0], filename_rpc=temp_files[1])
     assert result, "Dist init failed"
 
