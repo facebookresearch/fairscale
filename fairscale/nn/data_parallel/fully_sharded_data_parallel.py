@@ -857,7 +857,8 @@ class FullyShardedDataParallel(nn.Module):
         for n, m in self.named_modules():
             # `n != ""` excludes self.
             if n != "" and isinstance(m, FullyShardedDataParallel):
-                # We relax the assert for non-root instance. A lightning unit test triggers this otherwise.
+                # We relax the assert for non-root instance, when the nested inialized module is wrapped
+                # again in FSDP later, for example after training to run inference.
                 assert m._is_root is None or not m._is_root
                 if m._is_root is None:
                     m._is_root = False
