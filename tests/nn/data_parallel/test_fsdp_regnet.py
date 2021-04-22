@@ -169,9 +169,9 @@ def ddp_ref():
         unused = tempfile.mkstemp()[1]
         rank_0_output = tempfile.mkstemp()[1]
         try:
-            fsdp_config = None  # This means we use DDP in _test_func.
+            fsdp_config = None  # This means we use DDP in _distributed_worker.
             mp.spawn(
-                _test_func,
+                _distributed_worker,
                 args=(
                     world_size,
                     fsdp_config,
@@ -214,7 +214,7 @@ def temp_files():
     rmf(unused)
 
 
-def _test_func(
+def _distributed_worker(
     rank,
     world_size,
     fsdp_config,
@@ -227,6 +227,8 @@ def _test_func(
     rank_0_output,
     state_after,
 ):
+    torch.backends.cudnn.deterministic = True
+
     result = dist_init(rank, world_size, tempfile_name, unused)
     assert result, "Dist init failed"
 
@@ -328,7 +330,7 @@ def _test_func(
 @skip_if_single_gpu
 @pytest.mark.parametrize("precision", ["full", "mixed"])
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
-def test1(temp_files, ddp_ref, precision, flatten):
+def test_regnet(temp_files, ddp_ref, precision, flatten):
     if torch_version() < (1, 6, 0):
         pytest.skip("older pytorch doesn't support reduce_scatter")
 
@@ -356,7 +358,7 @@ def test1(temp_files, ddp_ref, precision, flatten):
 
     world_size = _world_size
     mp.spawn(
-        _test_func,
+        _distributed_worker,
         args=(
             world_size,
             fsdp_config,
