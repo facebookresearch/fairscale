@@ -1664,9 +1664,7 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
         if recurse:
             return not isinstance(module, tuple(default_auto_wrap_policy.FORCE_LEAF_MODULES))  # type: ignore
         else:
-            return is_bn and not isinstance(
-                module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES)
-            )  # type: ignore
+            return is_bn and not isinstance(module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES))  # type: ignore
 
     pg = None
     if single_rank_pg:
