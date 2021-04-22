@@ -43,8 +43,7 @@ def temp_files():
 def test_input_type(temp_files, fsdp_config, input_cls):
     """Test FSDP with input being a list or a dict, only single GPU."""
 
-    world_size = 1
-    result = dist_init(0, world_size, temp_files[0], temp_files[1])
+    result = dist_init(rank=0, world_size=1, filename=temp_files[0], filename_rpc=temp_files[1])
     assert result, "Dist init failed"
 
     assert isinstance(fsdp_config, dict), str(fsdp_config)
