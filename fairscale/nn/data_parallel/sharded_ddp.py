@@ -269,10 +269,10 @@ class ShardedDataParallel(nn.Module):
         """ If the module trainability has changed, update all the assumptions """
 
         # Make sure that this is not done while gradients are waiting to be reduced (if no_sync context for instance)
-        assert not functools.reduce(lambda x, y: x or y, self._grad_to_be_reduced, False), (
-            "Grads waiting to be reduced: {}".format(self._grad_to_be_reduced)
-            + "\nIf this is on purpose (grad accumulation), please use a no_sync() context"
-        )
+        if functools.reduce(lambda x, y: x or y, self._grad_to_be_reduced, False):
+            logging.warning(
+                "Grads waiting to be reduced. If this is on purpose (grad accumulation), please use a no_sync() context"
+            )
 
         self._trainable_params = list(filter(lambda x: x.requires_grad, self._all_params))
         self._trainable_params.sort(key=lambda x: x.numel())
