@@ -21,7 +21,7 @@ from fairscale.utils.testing import skip_if_no_cuda, torch_set_deterministic
 
 
 @skip_if_no_cuda
-def test1():
+def test_conv_weights_in_big_tensor():
     if random.randint(0, 1) == 0:
         print("setting benchmark = True")
         torch.backends.cudnn.benchmark = True
