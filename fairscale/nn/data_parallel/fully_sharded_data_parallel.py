@@ -282,7 +282,7 @@ class FullyShardedDataParallel(nn.Module):
         )
 
         # Flag to guard multiple pre-forward hook being executed per iteration.
-        # This is reset at the end of the backward().
+        # This is reset at the end of the backward pass.
         self._pre_backward_hook_has_run = False
 
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
