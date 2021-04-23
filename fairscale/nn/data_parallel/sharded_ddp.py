@@ -539,10 +539,11 @@ class ShardedDataParallel(nn.Module):
         Adapted from ``torch.nn.distributed.DistributedDataParallel``.
         """
         for layer in module.modules():
-            if isinstance(layer, torch.nn.modules.SyncBatchNorm):
+            if isinstance(layer, torch.nn.modules.SyncBatchNorm) and hasattr(layer, "_specify_ddp_gpu_num"):
                 assert self.device_type != "cpu", "SyncBatchNorm layers only work with GPU modules"
                 # device_id logic has not been handled, assume single-process single-device
                 # SyncBatchNorm only supports DDP with single-process single-device anyway'
+                # This function is removed from pytorch since 1.9.
                 layer._specify_ddp_gpu_num(1)  # type: ignore
 
     def _setup_bucket_strategy(self) -> None:
