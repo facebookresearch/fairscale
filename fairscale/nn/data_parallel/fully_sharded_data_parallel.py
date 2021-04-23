@@ -115,9 +115,15 @@ class FullyShardedDataParallel(nn.Module):
         an assert on the backward pass. The solution is to leave some parameters
         to the outer FSDP.
 
+    .. warning::
+
+        If activation checkpointing is used with FSDP, it is strongly encouraged
+        to use ``checkpoint_wrapper`` function from FairScale instead of the
+        ``checkpoint`` function from PyTorch.
+
     Args:
         module (nn.Module):
-            module to checkpoint
+            module to be wrapped with FullyShardedDataParallel.
         process_group (Optional):
             process group for sharding
         reshard_after_forward (bool, Optional):
@@ -207,7 +213,7 @@ class FullyShardedDataParallel(nn.Module):
         self.no_broadcast_optim_state = no_broadcast_optim_state
         self.state_dict_device = state_dict_device or self.compute_device
 
-        self.gradient_predivide_factor: int = self._get_gradient_predivide_factor(self.world_size)
+        self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
 
         self.numel_padded_per_param: List[int] = []
@@ -280,11 +286,11 @@ class FullyShardedDataParallel(nn.Module):
         self._pre_backward_hook_has_run = False
         # self._b2_counter = 0
 
-    def _get_gradient_predivide_factor(self, world_size: int) -> int:
-        factor = 1
+    def _get_gradient_predivide_factor(self, world_size: int) -> float:
+        factor: int = 1
         while world_size % factor == 0 and world_size / factor > factor:
-            factor = factor * 2
-        return factor
+            factor *= 2
+        return float(factor)
 
     def set_gradient_divide_factors(self, pre: float, post: float, recursive: bool) -> None:
         """Allowing user to override the pre and post divide factors.
@@ -996,7 +1002,7 @@ class FullyShardedDataParallel(nn.Module):
 
             # Start of a backward pass.
             # if self.rank == 0:
-            #    print("XXX bwd pre", self._id)
+            #    print("XXX bwd pre", self._id if hasattr(self, "_id") else "bn")
             self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
             self.training_state = TrainingState.BACKWARD_PRE
 
@@ -1094,8 +1100,14 @@ class FullyShardedDataParallel(nn.Module):
         the local optimizer only sees the relevant parameter shard.
         """
         # First hook callback will see PRE state. If we have multiple params,
-        # then subsequent hook callbacks will see POST state.
-        self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
+        # then subsequent hook callbacks will see POST state. When checkpoint
+        # fwd counter is used, IDLE is also possible since the pre-backward hook
+        # is not triggered (see ``auto_wrap_bn`` below, we have to use
+        # FSDP(checkpoint(conv, FSDP(bn), ...)), with reshard_after_forward=False).
+        if hasattr(self, "_checkpoint_fwd_counter"):
+            self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST, TrainingState.IDLE])
+        else:
+            self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         # if self.rank == 0:
         #    print("XXX bwd post", self._id)
         self.training_state = TrainingState.BACKWARD_POST
@@ -1109,14 +1121,16 @@ class FullyShardedDataParallel(nn.Module):
         #        print("XXX skip")
         #        return
 
+        if param.grad.requires_grad:
+            raise RuntimeError("FullyShardedDataParallel only works with gradients that "
+                               "don't require gradients")
+
         # If this is a checkpointed module, we check if the following
         # counter reaches 0. If not, it is not the final backward call
         # for this module yet. Therefore, we early return in that case.
         if hasattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter"):
             if self._fsdp_wrapped_module._checkpoint_fwd_counter != 0:
                 return
-        if param.grad.requires_grad:
-            raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require grad")
 
         if self._require_backward_grad_sync or self.reshard_after_forward:
             # Free full params. As a special case, we don't free the full params
@@ -1139,10 +1153,7 @@ class FullyShardedDataParallel(nn.Module):
         # of FSDP (root and children) make this attempt here to queue to ensure it is queued
         # no matter which instance(s) has(have) params.
         assert self._queue_wait_for_post_backward_closure is not None or not self._is_root
-        # if self._queue_wait_for_post_backward_closure is not None and (self._id != "block2":
         if self._queue_wait_for_post_backward_closure is not None:
-            # if self.rank == 0:
-            #    print("XXX queued by", self._id)
             self._queue_wait_for_post_backward_closure()
 
         if not self._require_backward_grad_sync:
@@ -1739,6 +1750,10 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
         "process_group": pg,
         "mixed_precision": False,  # Keep the weights in FP32.
         "flatten_parameters": False,  # Do not flatten.
+        # Reshard==False is good for performance. When FSDP(checkpoint(FSDP(bn))) is used, this
+        # **must** be False because BN's FSDP wrapper's pre-backward callback isn't called
+        # within the checkpoint's outer backward when multiple forward passes are used.
+        "reshard_after_forward": False,
     }
 
     with enable_wrap(wrap_bn_only_policy, **fsdp_config):

@@ -1,6 +1,16 @@
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
+
+# pylint: disable=missing-module-docstring
+# pylint: disable=missing-class-docstring
+# pylint: disable=missing-function-docstring
+
+""" Test FSDP with multiple forward pass + checkpoint. """
+
 import argparse
 import contextlib
-from typing import List, Union
 
 import torch
 import torch.distributed as dist
@@ -35,7 +45,7 @@ class Model(nn.Module):
         """
         self.head = nn.Linear(128, 10)
 
-    def forward(self, x: Union[torch.Tensor, List[torch.Tensor]]):
+    def forward(self, x):
         if isinstance(x, torch.Tensor):
             return self.head(self.block2(self.block1(x)))
         elif isinstance(x, list):
@@ -43,13 +53,14 @@ class Model(nn.Module):
             return torch.cat(ys, dim=0)
 
 
-def create_model(with_fsdp: bool, with_checkpoint: bool):
+def create_model(with_fsdp, with_checkpoint):
     model = Model()
     if with_fsdp:
+        # XXX: test auto_wrap_bn on & off.
         model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False)
         model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False)
         if with_checkpoint:
-            model.block2 = checkpoint_wrapper(model.block2)
+            model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=True)
         model.block1 = FSDP(model.block1)
         model.block1._id = "block1"
         model.block2 = FSDP(model.block2)
@@ -58,16 +69,21 @@ def create_model(with_fsdp: bool, with_checkpoint: bool):
         model.head._id = "head"
     else:
         if with_checkpoint:
-            model.block2 = checkpoint_wrapper(model.block2)
+            model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=False)
     return model
 
 
-def _distributed_worker(gpu_id: int, with_fsdp: bool, double_forward: bool, with_checkpoint: bool):
+def _distributed_worker(gpu_id, with_fsdp, double_forward, with_checkpoint):
     torch.cuda.set_device(gpu_id)
     dist.init_process_group(backend="nccl", init_method="tcp://127.0.0.1:9099", world_size=2, rank=gpu_id)
 
     torch.manual_seed(0)
+    # use False below to debug since error msg is not as good with cudnn.
+    torch.backends.cudnn.enabled = True
+    # these make things deterministic.
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     if double_forward:
         batch = [
             torch.randn(size=(2, 3, 224, 224)).cuda(),
@@ -84,7 +100,7 @@ def _distributed_worker(gpu_id: int, with_fsdp: bool, double_forward: bool, with
         model = FSDP(model)
         model._id = "root"
         context = contextlib.suppress()
-        model.set_gradient_divide_factors(1., 2., True)
+        model.set_gradient_divide_factors(1.0, 2.0, True)
     else:
         model = DistributedDataParallel(model, device_ids=[gpu_id])
         context = model.no_sync()

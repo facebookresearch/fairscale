@@ -3,7 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import List, Optional
+from typing import List
 
 import torch
 from torch import Tensor, nn
@@ -50,26 +50,26 @@ def patch_batchnorm(module: nn.Module) -> List:
     return hooks
 
 
-class CheckpointForwardPassCounter:
-    _module: Optional[nn.Module] = None
+def init_counter(module: nn.Module) -> None:
+    """Add a checkpoint forward pass counter to a module and all its child FSDP modules.
 
-    @staticmethod
-    def add_checkpoint_counter(module: nn.Module) -> None:
-        CheckpointForwardPassCounter._module = module
+       ``inc_counter`` and ``dec_counter`` are used together with this to maintain counters
+       for FSDP to use in case of multiple forward pass and checkpoint being used at the same time.
+    """
+    for mod in module.modules():
+        mod._checkpoint_fwd_counter = 0
 
-        # Add or reset the counter variables.
-        module._checkpoint_fwd_counter = 0
 
-    @staticmethod
-    def _add(i: int) -> None:
-        assert CheckpointForwardPassCounter._module is not None
-        mod = CheckpointForwardPassCounter._module
-        mod._checkpoint_fwd_counter += i
+def _add_counter(module: nn.Module, value: int) -> None:
+    if not hasattr(module, "_checkpoint_fwd_counter"):
+        return
+    for mod in module.modules():
+        mod._checkpoint_fwd_counter += value
 
-    @staticmethod
-    def inc() -> None:
-        CheckpointForwardPassCounter._add(1)
 
-    @staticmethod
-    def dec() -> None:
-        CheckpointForwardPassCounter._add(-1)
+def inc_counter(module: nn.Module) -> None:
+    _add_counter(module, 1)
+
+
+def dec_counter(module: nn.Module) -> None:
+    _add_counter(module, -1)
