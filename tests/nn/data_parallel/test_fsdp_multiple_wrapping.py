@@ -14,11 +14,12 @@ import tempfile
 import pytest
 import torch
 import torch.multiprocessing as mp
-from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.nn.data_parallel import TrainingState
-from fairscale.utils.testing import dist_init, teardown, torch_version, skip_if_no_cuda
 from torch.nn import Linear, Module, Sequential
 from torch.optim import SGD
+
+from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+from fairscale.nn.data_parallel import TrainingState
+from fairscale.utils.testing import dist_init, skip_if_no_cuda, teardown, torch_version
 
 
 def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
@@ -30,9 +31,7 @@ def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
     class InnerModel(Module):
         def __init__(self):
             super().__init__()
-            self.layers = Sequential(
-                FSDP(Linear(5, 5), **fsdp_config),
-            )
+            self.layers = Sequential(FSDP(Linear(5, 5), **fsdp_config),)
 
         def forward(self, x):
             return self.layers(x)
@@ -85,8 +84,5 @@ def test(world_size, precision, flatten):
     }
 
     mp.spawn(
-        _test_func,
-        args=(world_size, fsdp_config, temp_file_name, unused),
-        nprocs=world_size,
-        join=True,
+        _test_func, args=(world_size, fsdp_config, temp_file_name, unused), nprocs=world_size, join=True,
     )
