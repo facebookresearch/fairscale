@@ -24,7 +24,14 @@ from fairscale.nn import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import auto_wrap_bn
 from fairscale.nn.wrap import enable_wrap, wrap
-from fairscale.utils.testing import dist_init, objects_are_equal, skip_if_single_gpu, teardown, temp_files_ctx
+from fairscale.utils.testing import (
+    dist_init,
+    objects_are_equal,
+    skip_if_single_gpu,
+    teardown,
+    temp_files_ctx,
+    torch_version,
+)
 
 
 class Model(nn.Module):
@@ -170,6 +177,13 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn):
     flatten = flatten == "flatten"
     wrap_bn = wrap_bn == "auto_wrap_bn"
     fp32_reduce_scatter = True if mixed_precision else None
+
+    if torch_version() < (1, 8, 0) and flatten:
+        # 1.6 and 1.7 throws this error:
+        #   RuntimeError: Trying to backward through the graph a second time, but the saved
+        #   intermediate results have already been freed. Specify retain_graph=True when calling
+        #   backward the first time.
+        pytest.skip("older pytorch throws error when flatten is used")
 
     world_size = 2
     expected_losses = None
