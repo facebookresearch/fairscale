@@ -50,8 +50,9 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
        is happily running even without DDP. E.g. this is used by FSDP.
     """
     for layer in module.modules():
-        if isinstance(layer, torch.nn.modules.SyncBatchNorm):
+        if isinstance(layer, torch.nn.modules.SyncBatchNorm) and hasattr(layer, "_specify_ddp_gpu_num"):
             # Number "1" below meant to be the number of GPUs for each DDP worker.
             # (i.e. "device_ids" in DDP. As far as I see, the value is not actually
             # used, but this call needs to be made to avoid an exception.
+            # This function is removed from pytorch since 1.9.
             layer._specify_ddp_gpu_num(1)  # type: ignore
