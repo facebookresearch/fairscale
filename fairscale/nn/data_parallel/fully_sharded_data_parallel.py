@@ -1122,8 +1122,7 @@ class FullyShardedDataParallel(nn.Module):
         #        return
 
         if param.grad.requires_grad:
-            raise RuntimeError("FullyShardedDataParallel only works with gradients that "
-                               "don't require gradients")
+            raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require gradients")
 
         # If this is a checkpointed module, we check if the following
         # counter reaches 0. If not, it is not the final backward call
@@ -1611,7 +1610,7 @@ class FullyShardedDataParallel(nn.Module):
                     v_shard = v[0] if self.rank >= len(v) else v[self.rank]
                     assert ou.is_singleton_tensor(v_shard)
                 else:
-                    v_shard = v  # dont shard entries that are not tensors
+                    v_shard = v  # don't shard entries that are not tensors
                 full_optim_state_dict["state"][id][k] = v_shard
 
         return full_optim_state_dict
