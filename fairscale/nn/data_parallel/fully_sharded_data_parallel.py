@@ -7,6 +7,7 @@ import contextlib
 import copy
 from enum import Enum, auto
 import functools
+import logging
 from math import inf
 import time
 import traceback
@@ -199,6 +200,7 @@ class FullyShardedDataParallel(nn.Module):
         state_dict_device: Optional[torch.device] = None,
         no_broadcast_optim_state: Optional[bool] = False,
     ):
+        init_start = time.time()
         super().__init__()
         self.process_group = process_group or dist.new_group()
         self.rank = self.process_group.rank()
@@ -223,8 +225,11 @@ class FullyShardedDataParallel(nn.Module):
         if self.cpu_offload and not self.mixed_precision:
             raise ValueError("cpu_offload requires mixed_precision=True")
 
-        # A quick check and tick a module's flag.
-        validate_process_group(self.compute_device, self.process_group)
+        # skip validation if the process group was created above
+        if process_group:
+            validate_process_group(self.compute_device, self.process_group)
+
+        # tick a flag in bn before torch 1.9.
         enable_pytorch_sync_bn(module)
 
         # Compute derived variables.
@@ -286,6 +291,11 @@ class FullyShardedDataParallel(nn.Module):
         # full params. This defaults to True, but may be set to False if the
         # user explicitly requests the local state dict via local_state_dict().
         self._return_full_state_dict = True
+        init_end = time.time()
+
+        logging.debug(
+            f"FSDP.__init__(done): total_init_time: {(init_end - init_start): .4f} num_params: {(sum(p.numel() for p in self.params))}"
+        )
 
     def get_gradient_predivide_factor(self, world_size: int) -> int:
         factor = 1
@@ -871,16 +881,19 @@ class FullyShardedDataParallel(nn.Module):
         for n, m in self.named_modules():
             # `n != ""` excludes self.
             if n != "" and isinstance(m, FullyShardedDataParallel):
-                assert m._is_root is None
-                m._is_root = False
-                # When root instance doesn't have params, allow children instances
-                # to queue the post_backward hook.
-                #
-                # TODO (Min): we should think if we can have a empty param at the root
-                #             so that root always have a callback on the backward graph.
-                if not self._has_params:
-                    assert m._queue_wait_for_post_backward_closure is None
-                    m._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
+                # We relax the assert for non-root instance, when the nested inialized module is wrapped
+                # again in FSDP later, for example after training to run inference.
+                assert m._is_root is None or not m._is_root
+                if m._is_root is None:
+                    m._is_root = False
+                    # When root instance doesn't have params, allow children instances
+                    # to queue the post_backward hook.
+                    #
+                    # TODO (Min): we should think if we can have a empty param at the root
+                    #             so that root always have a callback on the backward graph.
+                    if not self._has_params:
+                        assert m._queue_wait_for_post_backward_closure is None
+                        m._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
                 if m.process_group != self.process_group:
                     self.children_share_process_group = False
 
@@ -1212,7 +1225,12 @@ class FullyShardedDataParallel(nn.Module):
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)
                 if m._has_params:
-                    m.assert_state(TrainingState.BACKWARD_POST)
+                    if any(p.requires_grad for p in m.params):
+                        m.assert_state(TrainingState.BACKWARD_POST)
+                    else:
+                        # Unlikely case, should only happens if `m` has params but none of the
+                        # params has `requires_grad==True`.
+                        m.assert_state(TrainingState.IDLE)
                 else:
                     m.assert_state(TrainingState.BACKWARD_PRE)
                 m.training_state = TrainingState.IDLE
@@ -1435,6 +1453,9 @@ class FullyShardedDataParallel(nn.Module):
             buffer = None  # for sharded tensors
             singleton_buffer = None  # for singleton tensors
             for buffer_name, t in v.items():
+                if torch.is_tensor(t):
+                    t = t.to(self.compute_device)
+
                 if ou.is_singleton_tensor(t):
                     if singleton_buffer is None:
                         singleton_buffer = list(t.new_zeros(self.world_size).chunk(self.world_size))
@@ -1557,7 +1578,7 @@ class FullyShardedDataParallel(nn.Module):
             self._tstart = time.time()
         if self.rank == 0:
             gb_denom = 1024 ** 3
-            print(
+            logging.info(
                 f"{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, "
                 f"max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, "
                 f"t={time.time()-self._tstart: .1f}"
@@ -1645,7 +1666,7 @@ def _pre_load_state_dict_hook(
 ########################################################################################
 
 
-def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False) -> nn.Module:
+def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group: ProcessGroup = None) -> nn.Module:
     """
     Auto wrap all BatchNorm (BN) instances with a safer FSDP, esp. when convert
     to sync BN is used and the outer FSDP is flattening.
@@ -1670,15 +1691,21 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False) -> nn.Module:
     def wrap_bn_only_policy(module: nn.Module, recurse: bool, unwrapped_params: int) -> bool:
         is_bn = isinstance(module, torch.nn.modules.batchnorm._BatchNorm)
         if recurse:
-            return not isinstance(module, tuple(default_auto_wrap_policy.FORCE_LEAF_MODULES))  # type: ignore
+            return not isinstance(
+                module, tuple(default_auto_wrap_policy.FORCE_LEAF_MODULES)  # type: ignore
+            )
         else:
-            return is_bn and not isinstance(module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES))  # type: ignore
+            return is_bn and not isinstance(
+                module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES)  # type: ignore
+            )
 
     pg = None
     if single_rank_pg:
         # No sharding with this single member group.
         my_rank = dist.get_rank()
         pg = dist.new_group(ranks=[my_rank])
+    else:
+        pg = process_group
 
     fsdp_config = {
         "wrapper_cls": FullyShardedDataParallel,

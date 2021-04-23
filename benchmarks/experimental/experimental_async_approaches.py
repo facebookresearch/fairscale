@@ -810,7 +810,6 @@ def bench_mpi(args):
     init_method = f"tcp://{os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}"
     rank = torch.distributed.get_rank()
     world_size = torch.distributed.get_world_size()
-    torch.cuda.set_device(local_rank % torch.cuda.device_count())
 
     rpc.init_rpc(
         f"Test{rank}",

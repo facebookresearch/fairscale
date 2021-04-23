@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 
+## [0.3.5] - 2021-04-19
+### Added
+- [offload] Add API, tutorial and smaller doc string changes. ([#576](https://github.com/facebookresearch/fairscale/pull/576))
+
+### Fixed
+- FSDP: fixing training with freezing weights ([#614](https://github.com/facebookresearch/fairscale/pull/614))
+- SDP: privatizing all the things ([#611](https://github.com/facebookresearch/fairscale/pull/611))
+- FSDP: Make `_get_default_cuda_device` more robust to modules without params ([#606](https://github.com/facebookresearch/fairscale/pull/606))
+- OffloadModel: Add prev codepath of using OffloadModel without activation checkpointing ([#608](https://github.com/facebookresearch/fairscale/pull/608))
+
 ## [0.3.4] - 2021-04-13
 ### Added
 - FSDP: Add no broadcast optim state option ([#560](https://github.com/facebookresearch/fairscale/pull/560))

@@ -269,10 +269,10 @@ class ShardedDataParallel(nn.Module):
         """ If the module trainability has changed, update all the assumptions """
 
         # Make sure that this is not done while gradients are waiting to be reduced (if no_sync context for instance)
-        assert not functools.reduce(lambda x, y: x or y, self._grad_to_be_reduced, False), (
-            "Grads waiting to be reduced: {}".format(self._grad_to_be_reduced)
-            + "\nIf this is on purpose (grad accumulation), please use a no_sync() context"
-        )
+        if functools.reduce(lambda x, y: x or y, self._grad_to_be_reduced, False):
+            logging.warning(
+                "Grads waiting to be reduced. If this is on purpose (grad accumulation), please use a no_sync() context"
+            )
 
         self._trainable_params = list(filter(lambda x: x.requires_grad, self._all_params))
         self._trainable_params.sort(key=lambda x: x.numel())
@@ -539,10 +539,11 @@ class ShardedDataParallel(nn.Module):
         Adapted from ``torch.nn.distributed.DistributedDataParallel``.
         """
         for layer in module.modules():
-            if isinstance(layer, torch.nn.modules.SyncBatchNorm):
+            if isinstance(layer, torch.nn.modules.SyncBatchNorm) and hasattr(layer, "_specify_ddp_gpu_num"):
                 assert self.device_type != "cpu", "SyncBatchNorm layers only work with GPU modules"
                 # device_id logic has not been handled, assume single-process single-device
                 # SyncBatchNorm only supports DDP with single-process single-device anyway'
+                # This function is removed from pytorch since 1.9.
                 layer._specify_ddp_gpu_num(1)  # type: ignore
 
     def _setup_bucket_strategy(self) -> None:

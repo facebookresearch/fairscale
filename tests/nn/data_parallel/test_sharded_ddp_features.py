@@ -262,9 +262,9 @@ def test_mixed_types():
     dist.destroy_process_group()
 
 
-def test_train_eval_change():
+def run_test_train_eval_change(rank, world_size, file):
     # Check that ShardedDDP handles the switch from training to eval properly
-    dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
+    dist.init_process_group(init_method="file://" + file, backend="gloo", rank=rank, world_size=world_size)
 
     model = _get_mlp()
     model.train()
@@ -286,6 +286,14 @@ def test_train_eval_change():
     assert torch.norm(next(model.parameters()).grad) > 0.0
 
     dist.destroy_process_group()
+
+
+def test_train_eval_change():
+    world_size = 4
+    temp_file_name = tempfile.mkstemp()[1]
+    mp.spawn(
+        run_test_train_eval_change, args=(world_size, temp_file_name), nprocs=world_size, join=True,
+    )
 
 
 def run_test_device_change(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
