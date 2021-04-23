@@ -118,7 +118,7 @@ def temp_files():
 
 
 @skip_if_single_gpu
-def tests1(temp_files):
+def test_freezing_weights(temp_files):
     world_size = 2
     # DDP
     fsdp = False

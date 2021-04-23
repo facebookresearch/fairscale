@@ -9,8 +9,8 @@
 
 """ Test FSDP with multiple forward pass + checkpoint. """
 
-import argparse
 import contextlib
+import pickle
 
 import torch
 import torch.distributed as dist
@@ -22,6 +22,7 @@ import torch.optim as optim
 from fairscale.nn import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import auto_wrap_bn
+from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
 
 
 class Model(nn.Module):
@@ -35,14 +36,6 @@ class Model(nn.Module):
             nn.AdaptiveAvgPool2d(output_size=(1, 1)),
             nn.Flatten(),
         )
-        """
-        self.block2 = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3),
-            nn.Conv2d(64, 64, kernel_size=3),
-            nn.AdaptiveAvgPool2d(output_size=(1, 1)),
-            nn.Flatten(),
-        )
-        """
         self.head = nn.Linear(128, 10)
 
     def forward(self, x):
@@ -63,46 +56,49 @@ def create_model(with_fsdp, with_checkpoint):
         if with_checkpoint:
             model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=True)
         model.block1 = FSDP(model.block1)
-        model.block1._id = "block1"
         model.block2 = FSDP(model.block2)
-        model.block2._id = "block2"
         model.head = FSDP(model.head)
-        model.head._id = "head"
     else:
         if with_checkpoint:
             model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=False)
     return model
 
 
-def _distributed_worker(gpu_id, with_fsdp, double_forward, with_checkpoint):
-    torch.cuda.set_device(gpu_id)
-    dist.init_process_group(backend="nccl", init_method="tcp://127.0.0.1:9099", world_size=2, rank=gpu_id)
+def _distributed_worker(gpu_id, world_size, with_fsdp, with_checkpoint, files):
+    filename, filename_rpc = files[:2]
+    filename_loss = files[2:]
 
-    torch.manual_seed(0)
+    torch.cuda.set_device(gpu_id)
+
+    rank = gpu_id
+    result = dist_init(rank, world_size, filename, filename_rpc)
+    assert result, "Dist init failed"
+
     # use False below to debug since error msg is not as good with cudnn.
     torch.backends.cudnn.enabled = True
+
     # these make things deterministic.
+    torch.manual_seed(0)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    if double_forward:
-        batch = [
-            torch.randn(size=(2, 3, 224, 224)).cuda(),
-            torch.randn(size=(2, 3, 96, 96)).cuda(),
-            torch.randn(size=(2, 3, 96, 96)).cuda(),
-        ]
-    else:
-        batch = torch.randn(size=(4, 3, 224, 224)).cuda()
+    # Ensure we have multiple forward passes.
+    batch = [
+        torch.randn(size=(2, 3, 224, 224)).cuda(),
+        torch.randn(size=(2, 3, 96, 96)).cuda(),
+        torch.randn(size=(2, 3, 96, 96)).cuda(),
+    ]
 
     model = create_model(with_fsdp, with_checkpoint)
     model = model.cuda()
 
     if with_fsdp:
         model = FSDP(model)
-        model._id = "root"
         context = contextlib.suppress()
         model.set_gradient_divide_factors(1.0, 2.0, True)
     else:
+        # With DDP, we need no_sync and manual gradient reduction below because
+        # it can't handle multiple forward pass + checkpointing otherwise.
         model = DistributedDataParallel(model, device_ids=[gpu_id])
         context = model.no_sync()
 
@@ -113,11 +109,15 @@ def _distributed_worker(gpu_id, with_fsdp, double_forward, with_checkpoint):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
 
+    losses = {}
+    i = 0
     with context:
         for iteration in range(3):
             out = model(batch)
             loss = criterion(out, target)
             print("Loss", iteration, ":", loss.item())
+            losses[f"iter_{i}"] = loss.item()
+            i += 1
             optimizer.zero_grad()
             loss.backward()
             if not with_fsdp:
@@ -126,11 +126,31 @@ def _distributed_worker(gpu_id, with_fsdp, double_forward, with_checkpoint):
                     p.grad.data.div_(2.0)
             optimizer.step()
 
+    # Due to dist.all_reduce code block above with ddp.no_sync, we seem to hit a bug
+    # in DDP where tensor.cpu() and torch.save() calls both hang. FSDP is not affected.
+    # Therefore, we have to compare losses here instead of states.
+    with open(filename_loss[rank], "wb") as f:
+        pickle.dump(losses, f)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-f", "--fsdp", action="store_const", const=True, default=False)
-    parser.add_argument("-d", "--double", action="store_const", const=True, default=False)
-    parser.add_argument("-c", "--checkpoint", action="store_const", const=True, default=False)
-    args = parser.parse_args()
-    mp.spawn(_distributed_worker, (args.fsdp, args.double, args.checkpoint), nprocs=2)
+    teardown()
+
+
+@skip_if_single_gpu
+def test_multiple_forward_checkpoint():
+    world_size = 2
+    expected_losses = None
+    # Ensure ddp == ddp+ckpt == fsdp == fsdp+ckpt.
+    for with_fsdp in [False, True]:
+        for with_checkpoint in [False, True]:
+            # Get 4 files: 2 for dist_init and 2 for each rank to save the losses.
+            with temp_files_ctx(num=2 + world_size) as temp_files:
+                mp.spawn(_distributed_worker, (world_size, with_fsdp, with_checkpoint, temp_files), nprocs=world_size)
+                final_losses = {}
+                for rank in range(world_size):
+                    with open(temp_files[2 + rank], "rb") as f:
+                        final_losses[f"rank_{rank}"] = pickle.load(f)
+                if expected_losses is None:
+                    expected_losses = final_losses
+                else:
+                    print(f"fsdp: {with_fsdp} ckpt: {with_checkpoint}")
+                    assert expected_losses == final_losses
