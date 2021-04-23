@@ -57,8 +57,9 @@ def create_model(with_fsdp, with_checkpoint):
     model = Model()
     if with_fsdp:
         # XXX: test auto_wrap_bn on & off.
-        model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False)
-        model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False)
+        if True:
+            model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False)
+            model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False)
         if with_checkpoint:
             model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=True)
         model.block1 = FSDP(model.block1)
