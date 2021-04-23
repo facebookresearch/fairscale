@@ -942,8 +942,6 @@ class FullyShardedDataParallel(nn.Module):
         self._lazy_init()
 
         # Start of a forward pass.
-        # if self.rank == 0:
-        #    print("XXX fwd", self._id)
         self.training_state = TrainingState.FORWARD
 
         if self._is_root and self.mixed_precision:
@@ -982,8 +980,6 @@ class FullyShardedDataParallel(nn.Module):
         outputs = self._register_pre_backward_hooks(outputs)
 
         # Done with a forward pass.
-        # if self.rank == 0:
-        #    print("XXX fwd done, idle", self._id)
         self.training_state = TrainingState.IDLE
 
         return outputs
@@ -1004,8 +1000,6 @@ class FullyShardedDataParallel(nn.Module):
             self._pre_backward_hook_has_run = True
 
             # Start of a backward pass.
-            # if self.rank == 0:
-            #    print("XXX bwd pre", self._id if hasattr(self, "_id") else "bn")
             self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
             self.training_state = TrainingState.BACKWARD_PRE
 
@@ -1111,18 +1105,9 @@ class FullyShardedDataParallel(nn.Module):
             self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST, TrainingState.IDLE])
         else:
             self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
-        # if self.rank == 0:
-        #    print("XXX bwd post", self._id)
         self.training_state = TrainingState.BACKWARD_POST
         if param.grad is None:
             return
-        # if self.rank == 0:
-        #    print("XXX", self._id, param.grad.sum().item())
-        # if self._id == "block2":
-        #    self._b2_counter += 1
-        #    if self._b2_counter % 3 != 0:
-        #        print("XXX skip")
-        #        return
 
         if param.grad.requires_grad:
             raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require gradients")
@@ -1237,8 +1222,6 @@ class FullyShardedDataParallel(nn.Module):
     def _wait_for_post_backward(self) -> None:
         """Wait for post-backward to finish. Only called on root instance."""
         assert self._is_root
-        # if self.rank == 0:
-        #    print("XXX _wait_for_post_backward", self._id)
         if self._has_params:
             self.assert_state(TrainingState.BACKWARD_POST)
         else:
@@ -1277,8 +1260,6 @@ class FullyShardedDataParallel(nn.Module):
                         m.assert_state(TrainingState.IDLE)
                 else:
                     m.assert_state(TrainingState.BACKWARD_PRE)
-                # if self.rank == 0:
-                #    print("XXX bwd done", self._id)
                 m.training_state = TrainingState.IDLE
 
     @torch.no_grad()
