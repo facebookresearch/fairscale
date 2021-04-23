@@ -857,16 +857,19 @@ class FullyShardedDataParallel(nn.Module):
         for n, m in self.named_modules():
             # `n != ""` excludes self.
             if n != "" and isinstance(m, FullyShardedDataParallel):
-                assert m._is_root is None
-                m._is_root = False
-                # When root instance doesn't have params, allow children instances
-                # to queue the post_backward hook.
-                #
-                # TODO (Min): we should think if we can have a empty param at the root
-                #             so that root always have a callback on the backward graph.
-                if not self._has_params:
-                    assert m._queue_wait_for_post_backward_closure is None
-                    m._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
+                # We relax the assert for non-root instance, when the nested inialized module is wrapped
+                # again in FSDP later, for example after training to run inference.
+                assert m._is_root is None or not m._is_root
+                if m._is_root is None:
+                    m._is_root = False
+                    # When root instance doesn't have params, allow children instances
+                    # to queue the post_backward hook.
+                    #
+                    # TODO (Min): we should think if we can have a empty param at the root
+                    #             so that root always have a callback on the backward graph.
+                    if not self._has_params:
+                        assert m._queue_wait_for_post_backward_closure is None
+                        m._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
                 if m.process_group != self.process_group:
                     self.children_share_process_group = False
 
