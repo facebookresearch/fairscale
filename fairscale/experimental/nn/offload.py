@@ -209,7 +209,7 @@ class OffloadFunction(torch.autograd.Function):
     # Disabling test coverage due to:https://discuss.pytorch.org/t/custom-autograd-function-backward-pass-not-called/9144/12
     @staticmethod
     @_conditional_amp_bwd_decorator
-    def backward(ctx, *grad_outputs):  # type: ignore  # pragma: no cover
+    def backward(ctx, *grad_outputs):  # pragma: no cover
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
         inputs = ctx.inputs
@@ -328,7 +328,7 @@ class ShardSyncLayer(torch.autograd.Function):
     # Disabling test coverage due to:https://discuss.pytorch.org/t/custom-autograd-function-backward-pass-not-called/9144/12
     @staticmethod
     @_conditional_amp_bwd_decorator
-    def backward(ctx, *grad_outputs):  # type: ignore  # pragma: no cover
+    def backward(ctx, *grad_outputs):  # pragma: no cover
 
         load_index = ctx.index
         drop_index = load_index + 1
