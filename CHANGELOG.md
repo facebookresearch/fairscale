@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 
+## [0.3.6] - 2021-04-26
+### Added
+- FSDP: Consolidate cpu_adam optimizer state dict ([#607](https://github.com/facebookresearch/fairscale/pull/607))
+
+### Fixed
+- FSDP: handle model with multiple forward pass and checkpoint ([#621](https://github.com/facebookresearch/fairscale/pull/621))
+- FSDP & SDP: check before calling `_specify_ddp_gpu_num` ([#626](https://github.com/facebookresearch/fairscale/pull/626))
+- FSDP: relax checking root condition ([#620](https://github.com/facebookresearch/fairscale/pull/620))
+- SDP: removing an assert which does not seem always accurate ([#625](https://github.com/facebookresearch/fairscale/pull/625))
+- FSDP: changing FSDP init to by pass pg validation ([#619](https://github.com/facebookresearch/fairscale/pull/619))
+- OSS: to 100% coverage ([#618](https://github.com/facebookresearch/fairscale/pull/618))
+
 ## [0.3.5] - 2021-04-19
 ### Added
 - [offload] Add API, tutorial and smaller doc string changes. ([#576](https://github.com/facebookresearch/fairscale/pull/576))
