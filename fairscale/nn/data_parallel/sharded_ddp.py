@@ -200,7 +200,7 @@ class ShardedDataParallel(nn.Module):
         backward pass for gradient reduction to the proper ranks.
         """
 
-        with profiler.record_function("sdp_forward"):
+        with profiler.record_function("fairscale::sdp::forward"):
             # Deferred initialization, or change detection
             needs_setup = len(self._grad_hooks) == 0 and self.training
 
@@ -276,7 +276,7 @@ class ShardedDataParallel(nn.Module):
                 "Grads waiting to be reduced. If this is on purpose (grad accumulation), please use a no_sync() context"
             )
 
-        with profiler.record_function("sdp_refresh_trainable"):
+        with profiler.record_function("fairscale::sdp::refresh_trainable"):
             self._trainable_params = list(filter(lambda x: x.requires_grad, self._all_params))
             self._trainable_params.sort(key=lambda x: x.numel())
 
@@ -323,7 +323,7 @@ class ShardedDataParallel(nn.Module):
             blocking (bool): wait for the operation to conclude.
         """
 
-        with profiler.record_function("sdp_sync_buffers"):
+        with profiler.record_function("fairscale::sdp::sync_buffers"):
             work_handles = []
 
             for buffer in self._module.buffers(recurse=True):
@@ -484,7 +484,7 @@ class ShardedDataParallel(nn.Module):
         Attach a reduce function to each grad-requiring parameter.
         This makes the gradient reduction automatic whenever there's a backward pass
         """
-        with profiler.record_function("sdp_setup_backward_hooks"):
+        with profiler.record_function("fairscale::sdp::setup_backward_hooks"):
             # Detach possible pre-existing hooks
             while len(self._grad_hooks) > 0:
                 self._grad_hooks.pop().remove()
@@ -556,7 +556,7 @@ class ShardedDataParallel(nn.Module):
         This method can be a slow for big models, but it it not typically called often (not for every forward for instance)
         """
 
-        with profiler.record_function("sdp_setup_buckets"):
+        with profiler.record_function("fairscale::sdp::setup_buckets"):
             if not self._use_buckets:
                 return
 
@@ -633,7 +633,7 @@ class ShardedDataParallel(nn.Module):
         self._consume_work_handles()
 
     def _detect_train_change(self) -> bool:
-        with profiler.record_function("sdp_detect_train_changes"):
+        with profiler.record_function("fairscale::sdp::detect_train_changes"):
             # Optionally check whether the trainable parameters have changed
             trainable_mask = list(map(_trainable, self._all_params))
 
