@@ -3,6 +3,12 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+"""
+To prevent underflow or overflow of gradients, Dynamic Loss Scaler is used to
+dynamically scale up and down gradients by scaling the loss.
+"""
+
+
 from collections import defaultdict
 from enum import Enum
 
@@ -21,6 +27,14 @@ def _refresh_per_optimizer_state():
 
 
 class DynamicLossScaler(object):
+    """An instance ``scaler`` helps perform the steps of gradient scaling
+    conveniently.
+
+    * ``scaler.scale(loss)`` multiplies a given loss by ``scaler``'s current scale factor.
+    * ``scaler.step(optimizer)`` safely unscales gradients and calls ``optimizer.step()``.
+    * ``scaler.update()`` updates ``scaler``'s scale factor.
+    """
+
     def __init__(
         self,
         init_scale=2.0 ** 15,
@@ -44,6 +58,14 @@ class DynamicLossScaler(object):
         self._scale = None
 
     def scale(self, outputs):
+        """
+        Multiplies ('scales') a tensor or list of tensors by the scale factor.
+
+        Returns scaled outputs.
+
+        Args:
+            outputs (Tensor or iterable of Tensors):  Outputs to scale.
+        """
         return self.loss_scale * outputs
 
     @torch.no_grad()
@@ -100,6 +122,9 @@ class DynamicLossScaler(object):
             raise OverflowError("setting loss scale to: " + str(self.loss_scale))
 
     def update(self):
+        """
+        Updates the scale factor.
+        """
 
         if (self._iter - self._last_overflow_iter) % self.scale_window == 0:
             self.loss_scale *= self.scale_factor
@@ -108,6 +133,18 @@ class DynamicLossScaler(object):
         self._per_optimizer_states = defaultdict(_refresh_per_optimizer_state)
 
     def step(self, optimizer, *args, **kwargs):
+        """
+        :meth:`step` unscale the gradients and step the optimizer.
+
+        ``*args`` and ``**kwargs`` are forwarded to ``optimizer.step()``.
+
+        Returns the return value of ``optimizer.step(*args, **kwargs)``.
+
+        Args:
+            optimizer (torch.optim.Optimizer):  Optimizer that applies the gradients.
+            args:  Any arguments.
+            kwargs:  Any keyword arguments.
+        """
         if "closure" in kwargs:
             raise RuntimeError("Closure use is not currently supported if GradScaler is enabled.")
 
