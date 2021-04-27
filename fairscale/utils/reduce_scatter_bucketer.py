@@ -21,6 +21,7 @@ class Bucket:
         self.output_shard = torch.zeros_like(data[0])
 
     def flush(self) -> None:
+        """Flush content of the bucket."""
         if self.offset == 0:
             assert len(self.callbacks) == 0
             return
@@ -36,6 +37,24 @@ class Bucket:
         self.offset = 0
         self.callbacks.clear()
         self.output_shard = torch.zeros_like(self.data[0])
+
+    def setup(self) -> None:
+        """ Setup the buffers if they are not allocated.
+
+            Using ``setup`` and ``teardown``, we can ensure that the bucket
+            buffers are only allocated during the backward pass, hence saving more
+            memory to other parts of the training process, such as the forward pass
+            for activation memory.
+        """
+        for tensor in [self.data, self.output_shard]:
+            if tensor.storage().size() == 0:
+                tensor.storage().resize_(tensor.size().numel())
+
+    def teardown(self) -> None:
+        """Tear down the bucket by freeing the memory"""
+        assert self.offset == 0 and self.callbacks == [], "Incorrect call of teardown"
+        for tensor in [self.data, self.output_shard]:
+            tensor.storage().resize_(0)
 
 
 class ReduceScatterBucketer:
@@ -131,6 +150,7 @@ class ReduceScatterBucketer:
         """Reduce-scatter any partial buckets."""
         for bucket in self.buckets.values():
             bucket.flush()
+            bucket.teardown()
 
     @functools.lru_cache()
     def _get_shard_size(self, element_size: int, num_shards: int) -> int:
@@ -148,4 +168,5 @@ class ReduceScatterBucketer:
             shard_size = self._get_shard_size(tensor.element_size(), world_size)
             data = tensor.new_zeros((world_size, shard_size))
             self.buckets[key] = Bucket(data, group)
+        self.buckets[key].setup()
         return self.buckets[key]
