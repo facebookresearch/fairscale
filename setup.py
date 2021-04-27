@@ -7,7 +7,6 @@
 
 import os
 import re
-import warnings
 
 import setuptools
 
@@ -32,8 +31,7 @@ def find_version(version_file_path):
 extensions = []
 cmdclass = {}
 
-build_cuda_extensions = os.getenv("BUILD_CUDA_EXTENSIONS", "0") == "1"
-if build_cuda_extensions:
+if os.getenv("BUILD_CUDA_EXTENSIONS", "0") == "1":
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
     extensions.extend(
@@ -51,8 +49,6 @@ if build_cuda_extensions:
     )
 
     cmdclass["build_ext"] = BuildExtension
-else:
-    warnings.warn("Cannot install FusedAdam cuda.")
 
 
 if __name__ == "__main__":
