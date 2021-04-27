@@ -53,18 +53,16 @@ class DynamicLossScaler(object):
         for p in params:
             if p.grad is None:
                 continue
-            else:   
+            else:
                 grads.append(p.grad.detach())
-        
+
         if len(grads) == 0:
             return torch.tensor(0.0)
 
         if len(grads) == 1:
             total_norm = torch.norm(grads[0], p=2, dtype=torch.float32)
         else:
-            total_norm = torch.norm(
-                torch.stack([torch.norm(g, p=2, dtype=torch.float32) for g in grads])
-            )
+            total_norm = torch.norm(torch.stack([torch.norm(g, p=2, dtype=torch.float32) for g in grads]))
         return total_norm.item()
 
     def _decrease_loss_scale(self):

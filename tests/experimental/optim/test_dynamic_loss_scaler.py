@@ -25,7 +25,9 @@ class ManualLinearRegression(nn.Module):
     def forward(self, x):
         return self.linear(x)
 
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 def _init_dataset():
     np.random.seed(42)
@@ -40,8 +42,9 @@ def _init_dataset():
     y_train_tensor = torch.tensor([y_train]).float().to(device)
     return x_train_tensor, y_train_tensor
 
+
 def _train_with_dls(x, y):
-    scaler = DynamicLossScaler()    
+    scaler = DynamicLossScaler()
     torch.manual_seed(42)
     lr = 1e-1
     n_epochs = 1000
@@ -56,16 +59,16 @@ def _train_with_dls(x, y):
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-    return model    
+    return model
+
 
 def test_dls():
     x, y = _init_dataset()
-    model = _train_with_dls(x, y)    
+    model = _train_with_dls(x, y)
     for name, param in model.named_parameters():
         if param.requires_grad:
-            print (name, param.data)
+            print(name, param.data)
             if name == "linear.weight":
                 assert (param.data.item() - 2) <= 0.05
             if name == "linear.bias":
-                assert (param.data.item() - 1) <= 0.03     
-        
+                assert (param.data.item() - 1) <= 0.03
