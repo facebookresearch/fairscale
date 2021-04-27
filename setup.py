@@ -10,8 +10,6 @@ import re
 import warnings
 
 import setuptools
-import torch
-from torch.utils.cpp_extension import CUDA_HOME, BuildExtension, CUDAExtension
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -34,8 +32,10 @@ def find_version(version_file_path):
 extensions = []
 cmdclass = {}
 
-force_cuda = os.getenv("FORCE_CUDA", "0") == "1"
-if (torch.cuda.is_available() and CUDA_HOME is not None) or force_cuda:
+build_cuda_extensions = os.getenv("BUILD_CUDA_EXTENSIONS", "0") == "1"
+if build_cuda_extensions:
+    from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+
     extensions.extend(
         [
             CUDAExtension(
