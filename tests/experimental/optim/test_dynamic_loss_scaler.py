@@ -7,7 +7,6 @@
 Testing scaler
 """
 
-from fairscale.experimental.optim.dynamic_loss_scaler import DynamicLossScaler
 import numpy as np
 import torch
 import torch.nn as nn
@@ -15,6 +14,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 from torch.utils.data.dataset import random_split
 
+from fairscale.experimental.optim.dynamic_loss_scaler import DynamicLossScaler
 
 
 class ManualLinearRegression(nn.Module):
