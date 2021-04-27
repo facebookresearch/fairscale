@@ -138,9 +138,8 @@ def _distributed_worker(gpu_id, world_size, with_fsdp, with_checkpoint, filename
         optimizer.step()
         get_cur_mem(gpu_id, results, f"iter {iteration}: after step")
 
-        # It is important to use the loop below, not optimizer.zero_grad() to reclaim memory.
-        for p in model.parameters():
-            p.grad = None
+        # It is important to use `set_to_none` below, not optimizer.zero_grad() to reclaim memory.
+        model.zero_grad(set_to_none=True)
         get_cur_mem(gpu_id, results, f"iter {iteration}: done")
 
     assert results == expected, f"{results} but expected {expected}"

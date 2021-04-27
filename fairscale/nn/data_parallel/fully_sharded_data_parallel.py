@@ -1246,15 +1246,6 @@ class FullyShardedDataParallel(nn.Module):
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
 
-        def _remove_shard_bwd_hook(fsdp_module: FullyShardedDataParallel) -> None:
-            """Helper used below on all fsdp modules."""
-            for p in fsdp_module.params:
-                if p.requires_grad:
-                    if hasattr(p, "_shard_bwd_hook"):
-                        assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
-                        p._shard_bwd_hook[1].remove()
-                        delattr(p, "_shard_bwd_hook")
-
         if self._require_backward_grad_sync:
             # Flush any unreduced buckets in the post_backward stream.
             with torch.cuda.stream(self._streams["post_backward"]):
@@ -1264,7 +1255,23 @@ class FullyShardedDataParallel(nn.Module):
             if self.move_grads_to_cpu:
                 # Wait for the non-blocking GPU -> CPU grad transfers to finish.
                 torch.cuda.current_stream().synchronize()
-        # A backward pass is done, update root and nested FSDP's flags.
+
+        # A backward pass is done, clean up below.
+
+        # Free reducer buffers.
+        if self._reducer is not None:
+            self._reducer.teardown()
+
+        def _remove_shard_bwd_hook(fsdp_module: FullyShardedDataParallel) -> None:
+            """Helper used below on all fsdp modules."""
+            for p in fsdp_module.params:
+                if p.requires_grad:
+                    if hasattr(p, "_shard_bwd_hook"):
+                        assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
+                        p._shard_bwd_hook[1].remove()
+                        delattr(p, "_shard_bwd_hook")
+
+        # Update root and nested FSDP's hooks and flags.
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)

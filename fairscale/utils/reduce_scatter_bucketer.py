@@ -150,6 +150,11 @@ class ReduceScatterBucketer:
         """Reduce-scatter any partial buckets."""
         for bucket in self.buckets.values():
             bucket.flush()
+
+    @torch.no_grad()
+    def teardown(self) -> None:
+        """Free buffers from all buckets."""
+        for bucket in self.buckets.values():
             bucket.teardown()
 
     @functools.lru_cache()
