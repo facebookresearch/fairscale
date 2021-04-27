@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Added
-- FSDP: better memory usage for reduce bucket
+- FSDP: better memory usage for reduce bucket ([#633](https://github.com/facebookresearch/fairscale/pull/633))
 
 ## [0.3.6] - 2021-04-26
 ### Added
