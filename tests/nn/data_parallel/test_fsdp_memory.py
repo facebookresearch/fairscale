@@ -122,7 +122,7 @@ def _distributed_worker(gpu_id, world_size, with_fsdp, with_checkpoint, filename
     optimizer = optim.SGD(model.parameters(), lr=1e-4)
 
     results = {}
-    for iteration in range(5):
+    for iteration in range(3):
         get_cur_mem(gpu_id, results, f"iter {iteration}: start")
 
         out = model(batch)
@@ -143,16 +143,97 @@ def _distributed_worker(gpu_id, world_size, with_fsdp, with_checkpoint, filename
             p.grad = None
         get_cur_mem(gpu_id, results, f"iter {iteration}: done")
 
-    assert results == expected
+    assert results == expected, f"{results} but expected {expected}"
 
     teardown()
 
 
 @skip_if_single_gpu
-@pytest.mark.parametrize("fsdp", ["ddp", "fsdp"])
 @pytest.mark.parametrize("ckpt", ["no_ckpt", "ckpt"])
+@pytest.mark.parametrize("fsdp", ["ddp", "fsdp"])
 def test_fsdp_memory(fsdp, ckpt):
-    expected = {("ddp", "no_ckpt"): {}, ("ddp", "ckpt"): {}, ("fsdp", "no_ckpt"): {}, ("fsdp", "ckpt"): {}}[(ddp, ckpt)]
+    expected = {
+        ("ddp", "no_ckpt"): {
+            "iter 0: start": 9,
+            "iter 0: after fwd": 346,
+            "iter 0: after loss": 346,
+            "iter 0: after bwd": 14,
+            "iter 0: after step": 14,
+            "iter 0: done": 9,
+            "iter 1: start": 9,
+            "iter 1: after fwd": 346,
+            "iter 1: after loss": 346,
+            "iter 1: after bwd": 14,
+            "iter 1: after step": 14,
+            "iter 1: done": 9,
+            "iter 2: start": 9,
+            "iter 2: after fwd": 346,
+            "iter 2: after loss": 346,
+            "iter 2: after bwd": 14,
+            "iter 2: after step": 14,
+            "iter 2: done": 9,
+        },
+        ("fsdp", "no_ckpt"): {
+            "iter 0: start": 3,
+            "iter 0: after fwd": 340,
+            "iter 0: after loss": 340,
+            "iter 0: after bwd": 66,
+            "iter 0: after step": 66,
+            "iter 0: done": 3,
+            "iter 1: start": 3,
+            "iter 1: after fwd": 340,
+            "iter 1: after loss": 340,
+            "iter 1: after bwd": 66,
+            "iter 1: after step": 66,
+            "iter 1: done": 3,
+            "iter 2: start": 3,
+            "iter 2: after fwd": 340,
+            "iter 2: after loss": 340,
+            "iter 2: after bwd": 66,
+            "iter 2: after step": 66,
+            "iter 2: done": 3,
+        },
+        ("ddp", "ckpt"): {
+            "iter 0: start": 9,
+            "iter 0: after fwd": 57,
+            "iter 0: after loss": 57,
+            "iter 0: after bwd": 14,
+            "iter 0: after step": 14,
+            "iter 0: done": 9,
+            "iter 1: start": 9,
+            "iter 1: after fwd": 57,
+            "iter 1: after loss": 57,
+            "iter 1: after bwd": 14,
+            "iter 1: after step": 14,
+            "iter 1: done": 9,
+            "iter 2: start": 9,
+            "iter 2: after fwd": 57,
+            "iter 2: after loss": 57,
+            "iter 2: after bwd": 14,
+            "iter 2: after step": 14,
+            "iter 2: done": 9,
+        },
+        ("fsdp", "ckpt"): {
+            "iter 0: start": 3,
+            "iter 0: after fwd": 51,
+            "iter 0: after loss": 51,
+            "iter 0: after bwd": 66,
+            "iter 0: after step": 66,
+            "iter 0: done": 3,
+            "iter 1: start": 3,
+            "iter 1: after fwd": 51,
+            "iter 1: after loss": 51,
+            "iter 1: after bwd": 66,
+            "iter 1: after step": 66,
+            "iter 1: done": 3,
+            "iter 2: start": 3,
+            "iter 2: after fwd": 51,
+            "iter 2: after loss": 51,
+            "iter 2: after bwd": 66,
+            "iter 2: after step": 66,
+            "iter 2: done": 3,
+        },
+    }[(fsdp, ckpt)]
     fsdp = fsdp == "fsdp"
     ckpt = ckpt == "ckpt"
     world_size = 2
