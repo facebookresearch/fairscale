@@ -93,8 +93,8 @@ class PipelineModulesGraph(nn.Module):
         return DataSource(self._find_node(spec[0]), spec[1])
 
     def add_layer(self, module: RemoteModule, inputs: List[DataSourceSpec], num_outputs: Optional[int] = None) -> None:
-        """Adds a module with specifieds inputs to the graph. The modules that provide inputs to this module
-        must have been added previously to the graph and are listed with argument inputs. If the module output is a tuple,
+        """Adds a module with specified inputs to the graph. The modules that provide inputs to this module must have
+        been added previously to the graph and are listed with argument inputs. If the module output is a tuple,
         num_outputs specifies the number of elements in the tuple.
         """
         node = Node(module)
