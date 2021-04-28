@@ -22,7 +22,7 @@ import torch.optim as optim
 from fairscale.nn import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import auto_wrap_bn
-from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
+from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx, torch_version
 
 
 def get_global_group():
@@ -139,7 +139,11 @@ def _distributed_worker(gpu_id, world_size, with_fsdp, with_checkpoint, filename
         get_cur_mem(gpu_id, results, f"iter {iteration}: after step")
 
         # It is important to use `set_to_none` below, not optimizer.zero_grad() to reclaim memory.
-        model.zero_grad(set_to_none=True)
+        if torch_version() >= (1, 7, 0):
+            model.zero_grad(set_to_none=True)
+        else:
+            for p in model.parameters():
+                p.grad = None
         get_cur_mem(gpu_id, results, f"iter {iteration}: done")
 
     assert results == expected, f"{results} but expected {expected}"
