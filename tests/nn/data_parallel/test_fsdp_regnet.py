@@ -146,7 +146,8 @@ class Model(Module):
 #   - model state_dict after training
 @pytest.fixture(scope="module")
 def ddp_ref():
-    # Cover different bias flavors.
+    # Cover different bias flavors. Use random instead of parameterize them to reduce
+    # the test runtime. Otherwise, we would have covered all cases exhaustively.
     conv_bias = True
     if random.randint(0, 1) == 0:
         conv_bias = False
