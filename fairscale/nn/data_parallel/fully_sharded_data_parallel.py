@@ -155,10 +155,30 @@ class FullyShardedDataParallel(nn.Module):
             *``cpu_offload``*.
         bucket_cap_mb (int, Optional):
             FSDP will bucket parameters so that gradient reduction can
-            potentially overlap with backward computation. bucket_cap_mb
-            controls the bucket size in MegaBytes (MB). Buckets are sub-divided
-            based on world_size, so the max shard size is roughly
-            ``bucket_cap_mb / world_size``. Values <= 0 disable bucketing.
+            be more efficient for small parameters.
+            ``bucket_cap_mb`` controls the bucket size in MegaBytes (MB). Buckets
+            are sub-divided based on world_size, so the max shard size is roughly
+            ``bucket_cap_mb / world_size``. There is one bucketer (with potentially
+            multiple ``bucket_cap_mb`` sized buffers shared by all FSDP instances.
+            Large gradient tensors are directly reduced without using the buffers.
+            The buffers are there to reduce communication overhead for small tensors.
+            Overlapping with computation happens due to use of a different CUDA stream
+            than the computation CUDA stream. The total memory overhead per buffer is around
+            ``bucket_cap_mb / world_size * (world_size + 1)``.
+            The buffers are allocated during the backward pass and freed at the end
+            of the backward pass to save more memory for other phases of the
+            training process.
+            Note, the memory vs. speed tradeoff of bucket size is very different
+            from that of the DDP engine. In DDP, the buffer size ``1MB + n*cap_mb``,
+            until n is big enough to cover the entire model size. The order
+            of which buffer is ready there is more rigid and DDP requires all
+            gradients to be computed in the backward. In FSDP, the buffer size
+            does not change with model size (it changes based on number of
+            <dtype, device, process_group> tuples) and gradient ready order matters
+            little since FSDP has a final flush call that ensures everything is reduced
+            and not all gradients need to be upfront known. Overlapping with compute is
+            done differently too.
+            Values <= 0 disable bucketing.
             Default: 25.
         compute_device (torch.device, Optional):
             device for computation. If not given and module params are on a CUDA
@@ -1226,15 +1246,6 @@ class FullyShardedDataParallel(nn.Module):
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
 
-        def _remove_shard_bwd_hook(fsdp_module: FullyShardedDataParallel) -> None:
-            """Helper used below on all fsdp modules."""
-            for p in fsdp_module.params:
-                if p.requires_grad:
-                    if hasattr(p, "_shard_bwd_hook"):
-                        assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
-                        p._shard_bwd_hook[1].remove()
-                        delattr(p, "_shard_bwd_hook")
-
         if self._require_backward_grad_sync:
             # Flush any unreduced buckets in the post_backward stream.
             with torch.cuda.stream(self._streams["post_backward"]):
@@ -1244,7 +1255,23 @@ class FullyShardedDataParallel(nn.Module):
             if self.move_grads_to_cpu:
                 # Wait for the non-blocking GPU -> CPU grad transfers to finish.
                 torch.cuda.current_stream().synchronize()
-        # A backward pass is done, update root and nested FSDP's flags.
+
+        # A backward pass is done, clean up below.
+
+        # Free reducer buffers.
+        if self._reducer is not None:
+            self._reducer.teardown()
+
+        def _remove_shard_bwd_hook(fsdp_module: FullyShardedDataParallel) -> None:
+            """Helper used below on all fsdp modules."""
+            for p in fsdp_module.params:
+                if p.requires_grad:
+                    if hasattr(p, "_shard_bwd_hook"):
+                        assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
+                        p._shard_bwd_hook[1].remove()
+                        delattr(p, "_shard_bwd_hook")
+
+        # Update root and nested FSDP's hooks and flags.
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)
@@ -1739,6 +1766,8 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
         # **must** be False because BN's FSDP wrapper's pre-backward callback isn't called
         # within the checkpoint's outer backward when multiple forward passes are used.
         "reshard_after_forward": False,
+        # No bucketing or small bucketing should be enough for BNs.
+        "bucket_cap_mb": 0,
     }
 
     with enable_wrap(wrap_bn_only_policy, **fsdp_config):
