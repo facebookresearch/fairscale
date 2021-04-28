@@ -188,7 +188,6 @@ def update(devices):
     x = torch.randn(8, 4).to(device)
     model = [RemoteModuleParams(nn.Linear, (4, 4), {}), RemoteModuleParams(nn.ReLU, (), {})]
     pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
-    params = pipe.parameter_rrefs()
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []
     for i in range(2):
@@ -244,7 +243,6 @@ def multi_input_multi_output_layers(devices):
 
     pipe = DistributedPipeline(graph, chunks=4)
     assert [[0, 1], [2], [3], [4]] == extract_partitions(graph, pipe)
-    params = pipe.parameter_rrefs()
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []
     for i in range(2):
@@ -295,7 +293,6 @@ def auto_graph_extract(devices):
     pipe = DistributedPipeline(graph, chunks=4)
     partitions = extract_partitions(graph, pipe)
     assert [[0, 1], [2], [3], [4]] == partitions, f"partitions={partitions}"
-    params = pipe.parameter_rrefs()
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []
     for i in range(2):

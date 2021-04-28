@@ -53,7 +53,7 @@ class GraphCreator:
             else:
                 assert False, "Invalid node %s" % node
 
-        # Following dict sotres cardinality of the output for modules: for each module, it stores None if the output
+        # Following dict stores cardinality of the output for modules: for each module, it stores None if the output
         # is a simple tensor, and it stores the number of tensors in the the output if it is a tuple.
         module_to_num_outputs: Dict[nn.Module, Optional[int]] = {}
         for node, _ in remote_module_nodes:
