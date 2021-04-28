@@ -26,6 +26,7 @@ you see fit, but refrain from ad-hoc test utils within the different feature set
 relative imports.
 """
 
+import contextlib
 import functools
 import inspect
 import logging
@@ -35,7 +36,7 @@ import random
 import subprocess
 import sys
 import tempfile
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import numpy
 import pytest
@@ -645,3 +646,15 @@ def rmf(filename: str) -> None:
         os.remove(filename)
     except FileNotFoundError:
         pass
+
+
+@contextlib.contextmanager
+def temp_files_ctx(num: int) -> Generator:
+    """ A context to get tempfiles and ensure they are cleaned up. """
+    files = [tempfile.mkstemp()[1] for _ in range(num)]
+
+    yield tuple(files)
+
+    # temp files could have been removed, so we use rmf.
+    for name in files:
+        rmf(name)
