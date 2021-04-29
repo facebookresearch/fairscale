@@ -9,7 +9,6 @@ Testing ShardedDDP
 
 from contextlib import suppress
 import copy
-import tempfile
 
 import numpy as np
 import pytest
@@ -23,7 +22,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
 from fairscale.optim.grad_scaler import ShardedGradScaler
-from fairscale.utils.testing import check_same_model_params, skip_if_no_cuda, skip_if_single_gpu, torch_version
+from fairscale.utils.testing import (
+    check_same_model_params,
+    skip_if_no_cuda,
+    skip_if_single_gpu,
+    temp_files_ctx,
+    torch_version,
+)
 
 """
 Check that ShardedDDP gets the same results as DDP in a variety of scenarii
@@ -250,24 +255,25 @@ def test_ddp_parity(
 
     world_size = torch.cuda.device_count()
     backend = dist.Backend.NCCL
-    mp.spawn(
-        run_ddp_parity,
-        args=(
-            world_size,
-            backend,
-            tempfile.mkstemp()[1],
-            reduce_buffer_size,
-            grad_accumulation,
-            change_train_graph,
-            fp16_reduction,
-            clip_grad_norm,
-            amp,
-            manual_reduction,
-            multiple_fw,
-        ),
-        nprocs=world_size,
-        join=True,
-    )
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_ddp_parity,
+            args=(
+                world_size,
+                backend,
+                temp_files[0],
+                reduce_buffer_size,
+                grad_accumulation,
+                change_train_graph,
+                fp16_reduction,
+                clip_grad_norm,
+                amp,
+                manual_reduction,
+                multiple_fw,
+            ),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_buffer_size):
@@ -340,9 +346,10 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_b
 def test_ddp_parity_two_optim(reduce_buffer_size):
     world_size = 2
     backend = dist.Backend.NCCL
-    mp.spawn(
-        run_ddp_parity_two_optim,
-        args=(world_size, backend, tempfile.mkstemp()[1], reduce_buffer_size),
-        nprocs=world_size,
-        join=True,
-    )
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_ddp_parity_two_optim,
+            args=(world_size, backend, temp_files[0], reduce_buffer_size),
+            nprocs=world_size,
+            join=True,
+        )
