@@ -72,6 +72,7 @@ def run_one_step(
     grad_accumulation,
     reduce_buffer_size,
     optimizer_type,
+    reduce_fp16=False,
 ):
     dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
     if device == torch.device("cuda"):
@@ -93,7 +94,11 @@ def run_one_step(
 
     optimizer = OSS(params=model.parameters(), optim=optimizer_type, **optimizer_settings)
     ddp_model = ShardedDataParallel(
-        model, optimizer, broadcast_buffers=broadcast_buffers, reduce_buffer_size=reduce_buffer_size
+        model,
+        optimizer,
+        broadcast_buffers=broadcast_buffers,
+        reduce_buffer_size=reduce_buffer_size,
+        reduce_fp16=reduce_fp16,
     )
 
     # The model should be synchronized in between the ranks at ShardedDataParallel construction time, check that
@@ -144,6 +149,7 @@ def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, 
 @pytest.mark.parametrize("grad_accumulation", [True, False])
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 @pytest.mark.parametrize("optimizer_type", [torch.optim.SGD, SGDWithPausingCompute])
+@pytest.mark.parametrize("reduce_fp16", [False, True])
 @pytest.mark.parametrize(
     "setup",
     [
@@ -152,7 +158,7 @@ def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, 
         [dist.Backend.GLOO, torch.device("cuda")],
     ],
 )
-def test_step(broadcast_buffers, grad_accumulation, reduce_buffer_size, optimizer_type, setup):
+def test_step(broadcast_buffers, grad_accumulation, reduce_buffer_size, optimizer_type, reduce_fp16, setup):
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
@@ -167,6 +173,7 @@ def test_step(broadcast_buffers, grad_accumulation, reduce_buffer_size, optimize
             grad_accumulation,
             reduce_buffer_size,
             optimizer_type,
+            reduce_fp16,
         ),
         nprocs=world_size,
         join=True,
@@ -248,6 +255,29 @@ def test_random_attributes():
     dist.destroy_process_group()
 
 
+def test_catch_grad_grad():
+    # Check that ShardedDDP exposes the original module's attributes
+    dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
+
+    model = Sequential(Linear(2, 3), Linear(3, 3))
+    model.train()
+    chained_grad = torch.zeros_like(next(model.parameters()))
+    chained_grad.requires_grad = True
+    next(model.parameters()).grad = chained_grad
+
+    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+    ddp_model = ShardedDataParallel(model, optimizer)
+
+    inputs = torch.rand(100, 2)
+    try:
+        _ = ddp_model(inputs)
+        assert False, "An exception should have been raised"
+    except RuntimeError:
+        pass
+
+    dist.destroy_process_group()
+
+
 def test_mixed_types():
     # Check that ShardedDDP exposes the original module's attributes
     dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
@@ -311,6 +341,9 @@ def run_test_device_change(rank, world_size, backend, device, temp_file_name, re
         assert False, "Changing devices should be caught and not supported"
     except AssertionError:
         pass
+
+    # Check that we can change the data type
+    ddp_model.to(device=torch.device("cpu"), dtype=torch.float16)
 
     dist.destroy_process_group()
 

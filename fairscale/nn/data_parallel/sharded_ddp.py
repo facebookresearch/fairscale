@@ -256,9 +256,11 @@ class ShardedDataParallel(nn.Module):
             Module: self.
         """
 
-        assert device in self._buckets.keys(), "Changing devices is not supported, because this would break OSSs state"
         assert (
-            len(self._buckets.keys()) == 1
+            len(self._buckets.keys()) == 0 or device in self._buckets.keys()
+        ), "Changing devices is not supported, because this would break OSSs state"
+        assert (
+            len(self._buckets.keys()) < 2
         ), "Several devices specified to begin with, incompatible with setting a single device here"
 
         for _device in self._buckets.keys():
