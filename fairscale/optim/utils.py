@@ -3,7 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-import collections
+from collections import abc
 import io
 from math import inf
 from typing import Any, Callable, Dict, List, Optional
@@ -46,7 +46,7 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
 
         return values if isinstance(value, list) else tuple(values)
 
-    if isinstance(value, collections.abc.Mapping):
+    if isinstance(value, abc.Mapping):
         device_val: Dict[str, Any] = {}
         for key, val in value.items():
             device_val[key] = recursive_copy_to_device(val, non_blocking=non_blocking, device=device)
