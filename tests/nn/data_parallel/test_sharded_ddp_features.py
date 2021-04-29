@@ -269,11 +269,8 @@ def test_catch_grad_grad():
     ddp_model = ShardedDataParallel(model, optimizer)
 
     inputs = torch.rand(100, 2)
-    try:
+    with pytest.raises(RuntimeError):
         _ = ddp_model(inputs)
-        assert False, "An exception should have been raised"
-    except RuntimeError:
-        pass
 
     dist.destroy_process_group()
 
