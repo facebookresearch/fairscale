@@ -509,8 +509,7 @@ class FullyShardedDataParallel(nn.Module):
         del self.orig_sizes
         self._reset_lazy_init()
 
-    # TODO (Min): figuring out how to do typing for this overloaded function.
-    def _state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
+    def _state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":
         """
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
@@ -548,11 +547,12 @@ class FullyShardedDataParallel(nn.Module):
             self._cast_buffers()
         return state_dict
 
+    # TODO (Min): figuring out how to do typing for this overloaded function.
     def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
         return self._state_dict(*args, **kwargs)
 
-    # TODO (Min): figuring out how to do typing for this overloaded function.
-    def local_state_dict(self, *args, **kwargs):  # type: ignore
+    # TODO (Min): type: ignore because mypy complains "Missing return statement" below.
+    def local_state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
         """
         Returns the local (sharded) state of the module. Parameters are sharded,
         so the resulting state_dict can only be loaded after the Module has been
