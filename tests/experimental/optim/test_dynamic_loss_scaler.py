@@ -70,3 +70,6 @@ def test_dls():
                 assert (param.data.item() - 2) <= 0.05
             if name == "linear.bias":
                 assert (param.data.item() - 1) <= 0.03
+
+
+# TODO: add test case covering check_overflow function
