@@ -305,10 +305,10 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
             error_queue = multiprocessing.get_context("spawn").SimpleQueue()
             if "OMPI_COMM_WORLD_RANK" in os.environ:
                 # TODO (Min): this global used to be assigned every time this file is imported.
-                # I changed it to be assigned on first use. Should be the same, but I am not
-                # sure this is used or is correct since different processes would have different
-                # file names to init_process_group below. By initing, here, we don't leave
-                # a temp file behind on importing time.
+                #     I changed it to be assigned on first use. Should be the same, but I am not
+                #     sure this is used or is correct since different processes would have different
+                #     file names to init_process_group below. By initing, here, we don't leave
+                #     a temp file behind on importing time.
                 global filename_mpi
                 if filename_mpi is None:
                     filename_mpi = tempfile.mkstemp()[1]
