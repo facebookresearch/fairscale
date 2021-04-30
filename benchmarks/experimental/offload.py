@@ -120,7 +120,7 @@ def train_seq(model_config, benchmark_config, model_specs, args):
     optimizer = model_config["optimizer"](model.parameters(), lr=benchmark_config["lr"])
     dataloader, _, _ = model_config["data"]
 
-    def train_epoch(args):
+    def train_epoch(args, num_iters):
         model.train()
         for batch_inputs, batch_outputs in dataloader:
             batch_inputs, batch_outputs = batch_inputs.to("cuda"), batch_outputs.to("cuda")
@@ -131,7 +131,6 @@ def train_seq(model_config, benchmark_config, model_specs, args):
                 with _get_profiler_record_context("model_training", args.use_profiler):
                     with _get_fp16_context(use_fp16=args.use_fp16):
                         output = model(inputs)
-                        print(f"output grad_fn {output.grad_fn}")
                         loss = criterion(output, target=batch_outputs)
                         loss.backward()
                     optimizer.step()
@@ -143,10 +142,13 @@ def train_seq(model_config, benchmark_config, model_specs, args):
                     loss.item(), benchmark_config["batch_size"] / (time.time_ns() - start) * 10 ** 9
                 )
             )
+            num_iters -= 1
+            if num_iters == 0:
+                break
         if args.use_profiler:
             prof.export_chrome_trace("/tmp/offload_prof")
 
-    train_epoch(args)
+    train_epoch(args, num_iters=5)
 
 
 def train(model_config, model, benchmark_config, model_specs, args):
@@ -179,6 +181,10 @@ def train(model_config, model, benchmark_config, model_specs, args):
         return data, target
 
     for i, batch in enumerate(lm_dataloader):
+        # TODO(anj): Make this a flag for both "lm" and "seq" models.
+        if i == 5:
+            break
+
         if i == 1:
             epoch_start_time = time.time()
 
@@ -226,38 +232,27 @@ def train(model_config, model, benchmark_config, model_specs, args):
     return wps, loss.item()
 
 
-def verify_peak_memory(rank, golden_config, std_dev):
-    print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]))
-    current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
-    golden_ref = golden_config["peak_mem_usage"][rank]
+def verify_peak_memory(golden_config, std_dev):
+
+    current_device_usage = torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]
+    golden_ref = golden_config["peak_mem_usage"]
     if not current_device_usage < golden_ref * std_dev:
         raise RuntimeError(
             "Peak memory usage for cuda device {:d} is {:d} which"
-            "is less than golden reference value of {:d}".format(rank, current_device_usage, golden_ref)
+            "is less than golden reference value of {:d}".format(0, current_device_usage, golden_ref)
         )
 
 
-def verify_lm_run(wps, golden_config, args):
+def verify_lm_throughput(wps, golden_config, args):
     """Verify that words per second for a given benchmark run matches the golden data."""
 
-    # Verify wps only on the last rank in multiprocess pipe
-    if not args.multiprocess or dist.get_rank() == dist.get_world_size() - 1:
-        # Assert that words per second is within 3 standard deviations of the average
-        # of five golden runs
-        print("Throughput(wps) is {:.2f}.".format(wps))
-        if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
-            raise RuntimeError(
-                "Throughput(wps):{:.2f} is below the golden threshold of an "
-                "average value of {:.2f} and standard dev of {:.2f}.".format(
-                    wps, golden_config["avg_wps"], golden_config["std_dev_wps"]
-                )
+    if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
+        raise RuntimeError(
+            "Throughput(wps):{:.2f} is below the golden threshold of an "
+            "average value of {:.2f} and standard dev of {:.2f}.".format(
+                wps, golden_config["avg_wps"], golden_config["std_dev_wps"]
             )
-
-    if args.multiprocess:
-        verify_peak_memory(dist.get_rank(), golden_config, 1.5)
-    else:
-        for i in range(4):
-            verify_peak_memory(i, golden_config, 1.1)
+        )
 
 
 def benchmark_language_model(model_config, model, benchmark_config, model_specs, args):
@@ -271,9 +266,17 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
     print("-" * 110)
     print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
     print("-" * 110)
+
+    if args.model_name == "seq":
+        raise RuntimeError(
+            f"Golden data verification is only supported for the Transformer(lm) model and not {args.model_name}"
+        )
     print("Throughput(wps) is {:.2f}.".format(wps))
     print("Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]))
-    # TODO(anj-s): Enable golden config data verification.
+    if not args.dry_run:
+        golden_config = get_golden_config(args.model_name, args)
+        verify_lm_throughput(wps, golden_config, args)
+        verify_peak_memory(golden_config, 1.1)
 
 
 def get_synthetic_dataloaders(args, device, benchmark_config, model_specs):
@@ -342,11 +345,11 @@ def create_model_config(args, benchmark_config=None, model_specs=None):
         raise RuntimeError(f"Unrecognized args.model_mame {args.model_name}")
 
 
-def create_benchmark_config(model_name):
+def create_benchmark_config(args):
     """Return a dict with configurations required for benchmarking `model_name` model."""
 
     if args.model_name == "lm":
-        return lm_wikitext2.get_benchmark_config()
+        return lm_wikitext2.get_benchmark_config(checkpoint_activation=args.checkpoint_activation)
     elif args.model_name == "seq":
         return offload_seq.get_benchmark_config()
     else:
@@ -357,7 +360,7 @@ def get_golden_config(model_name, args):
     """Return a dict with the golden data for throughput and memory usage."""
 
     if model_name == "lm":
-        return lm_wikitext2.get_golden_real_stats(False)
+        return lm_wikitext2.get_golden_real_stats()
     else:
         raise RuntimeError(f"Unrecognized args.model_mame {args.model_name}")
 
@@ -382,17 +385,15 @@ def run_benchmark(args):
     init_random_seed(0)
 
     if args.model_name == "lm":
-        benchmark_config = create_benchmark_config(args.model_name)
+        benchmark_config = create_benchmark_config(args)
         model_specs = get_model_specs(args.model_name)
         model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
         model = model_config["model"]
 
-        if args.dry_run:
-            train(model_config, model, benchmark_config, model_specs, args)
-        else:
-            benchmark_language_model(model_config, model, benchmark_config, model_specs, args)
+        benchmark_language_model(model_config, model, benchmark_config, model_specs, args)
+
     elif args.model_name == "seq":
-        benchmark_config = create_benchmark_config(args.model_name)
+        benchmark_config = create_benchmark_config(args)
         model_specs = get_model_specs(args.model_name)
         model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
         model = model_config["model"]
@@ -403,7 +404,7 @@ def run_benchmark(args):
 
 parser = argparse.ArgumentParser(description="benchmark")
 parser.add_argument(
-    "--dry_run", default=True, action="store_true", help="Run a sample training run without regression testing."
+    "--dry_run", default=False, action="store_true", help="Run a sample training run without regression testing."
 )
 parser.add_argument(
     "--debug",
@@ -418,7 +419,7 @@ parser.add_argument(
     "--use_synthetic_data", default=True, action="store_true", help="Uses synthetic data for running benchmarks."
 )
 parser.add_argument("--use_fp16", action="store_true", default=False)
-parser.add_argument("--checkpoint_activation", action="store_true", default=True)
+parser.add_argument("--checkpoint_activation", action="store_true", default=False)
 parser.add_argument("--use_profiler", action="store_true", default=False)
 
 

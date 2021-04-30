@@ -27,7 +27,6 @@ def patch_batchnorm(module: nn.Module) -> List:
         (list):
             A list of hook handles, late can be freed.
     """
-    hooks = []
 
     def pre_forward(module: _BatchNorm, input: Tensor) -> None:
         if torch.is_grad_enabled():
@@ -40,6 +39,7 @@ def patch_batchnorm(module: nn.Module) -> List:
             return
         module.track_running_stats = module._track_running_stats_backup
 
+    hooks = []
     for name, child in module.named_modules():
         # _BatchNorm is base for bn1d, bn2d, bn3d and sync_bn, apex_sync_bn, etc.
         if isinstance(child, _BatchNorm):
@@ -48,3 +48,28 @@ def patch_batchnorm(module: nn.Module) -> List:
             post_handle = child.register_forward_hook(post_forward)
             hooks += [pre_handle, post_handle]
     return hooks
+
+
+def init_counter(module: nn.Module) -> None:
+    """Add a checkpoint forward pass counter to a module and all its child FSDP modules.
+
+       ``inc_counter`` and ``dec_counter`` are used together with this to maintain counters
+       for FSDP to use in case of multiple forward pass and checkpoint being used at the same time.
+    """
+    for mod in module.modules():
+        mod._checkpoint_fwd_counter = 0
+
+
+def _add_counter(module: nn.Module, value: int) -> None:
+    if not hasattr(module, "_checkpoint_fwd_counter"):
+        return
+    for mod in module.modules():
+        mod._checkpoint_fwd_counter += value
+
+
+def inc_counter(module: nn.Module) -> None:
+    _add_counter(module, 1)
+
+
+def dec_counter(module: nn.Module) -> None:
+    _add_counter(module, -1)

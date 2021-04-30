@@ -55,7 +55,9 @@ def get_phony(device: torch.device, *, requires_grad: bool) -> Tensor:
         phony = _phonies[key]
     except KeyError:
         with use_stream(default_stream(device)):
-            phony = torch.empty(0, device=device, requires_grad=requires_grad)
+            # Creating phony with size 1 instead of zero, since currently
+            # tensorpipe does not work with tensors of size zero.
+            phony = torch.empty(1, device=device, requires_grad=requires_grad)
 
         _phonies[key] = phony
 

@@ -20,16 +20,23 @@ class Offload_Transformer:
             "seq_len": 32,
         }
 
-    def get_benchmark_config():
+    def get_benchmark_config(checkpoint_activation=True):
 
         return {
             "epochs": 1,
             "lr": 0.001,  # learning rate
             "batch_size": 8,
             "criterion": nn.CrossEntropyLoss(),
-            "checkpoint_activation": True,
+            "checkpoint_activation": checkpoint_activation,
             "num_microbatches": 1,
             "slices": 3,
+        }
+
+    def get_golden_real_stats():
+        return {
+            "avg_wps": 192.105,
+            "std_dev_wps": 39.56,
+            "peak_mem_usage": 1180848128,
         }
 
 
@@ -52,7 +59,7 @@ class Offload_Sequential:
             "criterion": nn.CrossEntropyLoss(),
             "slices": 3,
             "checkpoint_activation": True,
-            "num_microbatches": 4,
+            "num_microbatches": 1,
         }
 
 

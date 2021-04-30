@@ -24,7 +24,7 @@ from fairscale.nn.pipe.phony import get_phony
 
 def test_phony_size():
     p = get_phony(torch.device("cpu"), requires_grad=False)
-    assert p.size() == (0,)
+    assert p.size() == (1,)
 
 
 def test_phony_requires_grad():

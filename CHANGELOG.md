@@ -5,8 +5,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## NEXT - TBD
-### Added
 ### Fixed
+- setup.py: hide CUDA extensions behind BUILD_CUDA_EXTENSIONS envvar
+### Added
+- FSDP: better memory usage for reduce bucket ([#633](https://github.com/facebookresearch/fairscale/pull/633))
+
+## [0.3.6] - 2021-04-26
+### Added
+- FSDP: Consolidate cpu_adam optimizer state dict ([#607](https://github.com/facebookresearch/fairscale/pull/607))
+
+### Fixed
+- FSDP: handle model with multiple forward pass and checkpoint ([#621](https://github.com/facebookresearch/fairscale/pull/621))
+- FSDP & SDP: check before calling `_specify_ddp_gpu_num` ([#626](https://github.com/facebookresearch/fairscale/pull/626))
+- FSDP: relax checking root condition ([#620](https://github.com/facebookresearch/fairscale/pull/620))
+- SDP: removing an assert which does not seem always accurate ([#625](https://github.com/facebookresearch/fairscale/pull/625))
+- FSDP: changing FSDP init to by pass pg validation ([#619](https://github.com/facebookresearch/fairscale/pull/619))
+- OSS: to 100% coverage ([#618](https://github.com/facebookresearch/fairscale/pull/618))
+
+## [0.3.5] - 2021-04-19
+### Added
+- [offload] Add API, tutorial and smaller doc string changes. ([#576](https://github.com/facebookresearch/fairscale/pull/576))
+
+### Fixed
+- FSDP: fixing training with freezing weights ([#614](https://github.com/facebookresearch/fairscale/pull/614))
+- SDP: privatizing all the things ([#611](https://github.com/facebookresearch/fairscale/pull/611))
+- FSDP: Make `_get_default_cuda_device` more robust to modules without params ([#606](https://github.com/facebookresearch/fairscale/pull/606))
+- OffloadModel: Add prev codepath of using OffloadModel without activation checkpointing ([#608](https://github.com/facebookresearch/fairscale/pull/608))
+
+## [0.3.4] - 2021-04-13
+### Added
+- FSDP: Add no broadcast optim state option ([#560](https://github.com/facebookresearch/fairscale/pull/560))
+
+### Fixed
+- ShardedDDP: Properly handle .eval() mode ([#587](https://github.com/facebookresearch/fairscale/pull/587))
+- ShardedDDP: Handle model being moved back to CPU prior to state consolidation ([#573](https://github.com/facebookresearch/fairscale/pull/573))
+- FSDP: much faster state consolidation ([#595](https://github.com/facebookresearch/fairscale/pull/595))
+- FSDP: Add gradient pre-dedivide to prevent overflow with large world sizes ([#565](https://github.com/facebookresearch/fairscale/pull/565))
+- Offload: (experimental) Fix activation offloading to CPU ([#588]((https://github.com/facebookresearch/fairscale/pull/588) )
 
 ## [0.3.3] - 2021-04-1
 ### Added
