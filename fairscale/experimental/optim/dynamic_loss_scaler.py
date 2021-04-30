@@ -4,14 +4,13 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-To prevent underflow or overflow of gradients, Dynamic Loss Scaler is used to
+To prevent underflow or overflow of gradients, DynamicLossScaler is used to
 dynamically scale up and down gradients by scaling the loss.
 """
 
 
 from collections import defaultdict
 from enum import Enum
-
 
 import torch
 
@@ -49,11 +48,11 @@ class DynamicLossScaler(object):
         self.scale_window = scale_window
         self.tolerance = tolerance
         self.threshold = threshold
+        self.min_loss_scale = min_loss_scale
         self._iter = 0
         self._last_overflow_iter = -1
         self._last_rescale_iter = -1
         self._overflows_since_rescale = 0
-        self.min_loss_scale = min_loss_scale
         self._per_optimizer_states = defaultdict(_refresh_per_optimizer_state)
         self._scale = None
 
@@ -65,6 +64,9 @@ class DynamicLossScaler(object):
 
         Args:
             outputs (Tensor or iterable of Tensors):  Outputs to scale.
+
+        Returns:
+            Tensor or iterable of Tensors: Scaled outputs.
         """
         return self.loss_scale * outputs
 
@@ -146,20 +148,21 @@ class DynamicLossScaler(object):
             kwargs:  Any keyword arguments.
         """
         if "closure" in kwargs:
-            raise RuntimeError("Closure use is not currently supported if GradScaler is enabled.")
+            raise RuntimeError("Closure use is not currently supported if DynamicLossScaler is enabled.")
 
         optimizer_state = self._per_optimizer_states[id(optimizer)]
 
         if optimizer_state is OptState.STEPPED:
             raise RuntimeError("step() has already been called since the last update().")
 
-        # check gradient norm. If gradient norm is nan or inf, adjust scale here.
+        # check gradient norm. If gradient norm is nan or inf, adjust scale here, and skip step.
         # clip_grads_norm can happen before this step
         for group in optimizer.param_groups:
             grad_norm = self._get_gradients_norm(group["params"])
-            self._check_overflow(grad_norm)
-
-        retval = None
+            try:
+                self._check_overflow(grad_norm)
+            except OverflowError:
+                return None
 
         if optimizer_state is OptState.READY:
             self.unscale_(optimizer)
