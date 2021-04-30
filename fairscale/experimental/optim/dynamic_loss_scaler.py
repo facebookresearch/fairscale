@@ -11,6 +11,7 @@ dynamically scale up and down gradients by scaling the loss.
 
 from collections import defaultdict
 from enum import Enum
+from typing import Dict, List, Optional
 
 import torch
 
@@ -21,7 +22,7 @@ class OptState(Enum):
     STEPPED = 2
 
 
-def _refresh_per_optimizer_state():
+def _refresh_per_optimizer_state() -> OptState:
     return OptState.READY
 
 
@@ -36,12 +37,12 @@ class DynamicLossScaler(object):
 
     def __init__(
         self,
-        init_scale=2.0 ** 15,
-        scale_factor=2.0,
-        scale_window=2000,
-        tolerance=0.0,
-        threshold=None,
-        min_loss_scale=1e-4,
+        init_scale: float = 2.0 ** 15,
+        scale_factor: float = 2.0,
+        scale_window: int = 2000,
+        tolerance: float = 0.0,
+        threshold: float = None,
+        min_loss_scale: float = 1e-4,
     ):
         self.loss_scale = init_scale
         self.scale_factor = scale_factor
@@ -53,10 +54,10 @@ class DynamicLossScaler(object):
         self._last_overflow_iter = -1
         self._last_rescale_iter = -1
         self._overflows_since_rescale = 0
-        self._per_optimizer_states = defaultdict(_refresh_per_optimizer_state)
+        self._per_optimizer_states: Dict[int, OptState] = defaultdict(_refresh_per_optimizer_state)
         self._scale = None
 
-    def scale(self, outputs):
+    def scale(self, outputs):  # type: ignore
         """
         Multiplies ('scales') a tensor or list of tensors by the scale factor.
 
@@ -71,7 +72,7 @@ class DynamicLossScaler(object):
         return self.loss_scale * outputs
 
     @torch.no_grad()
-    def _get_gradients_norm(self, params) -> float:
+    def _get_gradients_norm(self, params: List[torch.nn.Parameter]) -> float:
         grads = []
         for p in params:
             if p.grad is None:
@@ -80,20 +81,20 @@ class DynamicLossScaler(object):
                 grads.append(p.grad.detach())
 
         if len(grads) == 0:
-            return torch.tensor(0.0)
+            return 0.0
 
         if len(grads) == 1:
-            total_norm = torch.norm(grads[0], p=2, dtype=torch.float32)
+            total_norm = torch.norm(grads[0], p=2, dtype=torch.float32)  # type: ignore
         else:
-            total_norm = torch.norm(torch.stack([torch.norm(g, p=2, dtype=torch.float32) for g in grads]))
+            total_norm = torch.norm(torch.stack([torch.norm(g, p=2, dtype=torch.float32) for g in grads]))  # type: ignore
         return total_norm.item()
 
-    def _decrease_loss_scale(self):
+    def _decrease_loss_scale(self) -> None:
         self.loss_scale /= self.scale_factor
         if self.threshold is not None:
             self.loss_scale = max(self.loss_scale, self.threshold)
 
-    def _check_overflow(self, grad_norm):
+    def _check_overflow(self, grad_norm: float) -> None:
         # detect inf and nan
         if grad_norm == float("inf") or grad_norm != grad_norm:
             # overflow has occured
@@ -123,7 +124,7 @@ class DynamicLossScaler(object):
             self._iter += 1
             raise OverflowError("setting loss scale to: " + str(self.loss_scale))
 
-    def update(self):
+    def update(self) -> None:
         """
         Updates the scale factor.
         """
@@ -134,7 +135,7 @@ class DynamicLossScaler(object):
         self._iter += 1
         self._per_optimizer_states = defaultdict(_refresh_per_optimizer_state)
 
-    def step(self, optimizer, *args, **kwargs):
+    def step(self, optimizer, *args, **kwargs):  # type: ignore
         """
         :meth:`step` unscale the gradients and step the optimizer.
 
@@ -175,7 +176,7 @@ class DynamicLossScaler(object):
 
         return retval
 
-    def unscale_(self, optimizer):
+    def unscale_(self, optimizer: torch.optim.Optimizer) -> None:
 
         optimizer_state = self._per_optimizer_states[id(optimizer)]
 
@@ -197,10 +198,10 @@ class DynamicLossScaler(object):
 
         optimizer_state = OptState.UNSCALED
 
-    def state_dict(self):
-        if self.scaler is not None:
+    def state_dict(self) -> Optional[Dict[str, float]]:
+        if self.loss_scale is not None:
             return {"loss_scale": self.loss_scale}
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict: Dict[str, float]) -> None:
         if "loss_scale" in state_dict:
             self.loss_scale = state_dict["loss_scale"]
