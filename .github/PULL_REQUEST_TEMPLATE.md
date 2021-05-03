@@ -4,6 +4,8 @@
 - [ ] Did you read the [contributor guideline](https://github.com/facebookresearch/fairscale/blob/master/CONTRIBUTING.md)?
 - [ ] Did you make sure to update the docs?
 - [ ] Did you write any new necessary tests?
+- [ ] Did you update the [changelog](https://github.com/facebookresearch/fairscale/blob/master/CHANGELOG.md)? (if needed)
+
 
 ## What does this PR do?
 Fixes # (issue).

@@ -115,9 +115,15 @@ class FullyShardedDataParallel(nn.Module):
         an assert on the backward pass. The solution is to leave some parameters
         to the outer FSDP.
 
+    .. warning::
+
+        If activation checkpointing is used with FSDP, it is strongly encouraged
+        to use ``checkpoint_wrapper`` function from FairScale instead of the
+        ``checkpoint`` function from PyTorch.
+
     Args:
         module (nn.Module):
-            module to checkpoint
+            module to be wrapped with FullyShardedDataParallel.
         process_group (Optional):
             process group for sharding
         reshard_after_forward (bool, Optional):
@@ -149,10 +155,30 @@ class FullyShardedDataParallel(nn.Module):
             *``cpu_offload``*.
         bucket_cap_mb (int, Optional):
             FSDP will bucket parameters so that gradient reduction can
-            potentially overlap with backward computation. bucket_cap_mb
-            controls the bucket size in MegaBytes (MB). Buckets are sub-divided
-            based on world_size, so the max shard size is roughly
-            ``bucket_cap_mb / world_size``. Values <= 0 disable bucketing.
+            be more efficient for small parameters.
+            ``bucket_cap_mb`` controls the bucket size in MegaBytes (MB). Buckets
+            are sub-divided based on world_size, so the max shard size is roughly
+            ``bucket_cap_mb / world_size``. There is one bucketer (with potentially
+            multiple ``bucket_cap_mb`` sized buffers shared by all FSDP instances.
+            Large gradient tensors are directly reduced without using the buffers.
+            The buffers are there to reduce communication overhead for small tensors.
+            Overlapping with computation happens due to use of a different CUDA stream
+            than the computation CUDA stream. The total memory overhead per buffer is around
+            ``bucket_cap_mb / world_size * (world_size + 1)``.
+            The buffers are allocated during the backward pass and freed at the end
+            of the backward pass to save more memory for other phases of the
+            training process.
+            Note, the memory vs. speed tradeoff of bucket size is very different
+            from that of the DDP engine. In DDP, the buffer size ``1MB + n*cap_mb``,
+            until n is big enough to cover the entire model size. The order
+            of which buffer is ready there is more rigid and DDP requires all
+            gradients to be computed in the backward. In FSDP, the buffer size
+            does not change with model size (it changes based on number of
+            <dtype, device, process_group> tuples) and gradient ready order matters
+            little since FSDP has a final flush call that ensures everything is reduced
+            and not all gradients need to be upfront known. Overlapping with compute is
+            done differently too.
+            Values <= 0 disable bucketing.
             Default: 25.
         compute_device (torch.device, Optional):
             device for computation. If not given and module params are on a CUDA
@@ -207,7 +233,7 @@ class FullyShardedDataParallel(nn.Module):
         self.no_broadcast_optim_state = no_broadcast_optim_state
         self.state_dict_device = state_dict_device or self.compute_device
 
-        self.gradient_predivide_factor: int = self.get_gradient_predivide_factor(self.world_size)
+        self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
 
         self.numel_padded_per_param: List[int] = []
@@ -275,11 +301,31 @@ class FullyShardedDataParallel(nn.Module):
             f"FSDP.__init__(done): total_init_time: {(init_end - init_start): .4f} num_params: {(sum(p.numel() for p in self.params))}"
         )
 
-    def get_gradient_predivide_factor(self, world_size: int) -> int:
-        factor = 1
+        # Flag to guard multiple pre-forward hook being executed per iteration.
+        # This is reset at the end of the backward pass.
+        self._pre_backward_hook_has_run = False
+
+    def _get_gradient_predivide_factor(self, world_size: int) -> float:
+        factor: int = 1
         while world_size % factor == 0 and world_size / factor > factor:
-            factor = factor * 2
-        return factor
+            factor *= 2
+        return float(factor)
+
+    def set_gradient_divide_factors(self, pre: float, post: float, recursive: bool) -> None:
+        """Allowing user to override the pre and post divide factors.
+
+        Args:
+            pre (float): divide factor before the reduction.
+            post (float): divide factor after the reduction.
+            recursive (bool): recursively set it for all child FSDP instances or not.
+        """
+        self.assert_state(TrainingState.IDLE)
+        if recursive:
+            for module in self.modules():
+                if isinstance(module, FullyShardedDataParallel) and module != self:
+                    module.set_gradient_divide_factors(pre, post, False)
+        self.gradient_predivide_factor = pre
+        self.gradient_postdivide_factor = post
 
     @property
     def module(self) -> nn.Module:
@@ -943,7 +989,13 @@ class FullyShardedDataParallel(nn.Module):
         self._use_fp32_param_shard()
 
         # Register pre-backward hooks to all-gather the params for the backward
-        # pass (if needed).
+        # pass (if output's grad was needed). This won't register anything if
+        # we are in eval mode.
+        #
+        # Some model does forward pass multiple times, we need to register the
+        # pre-backward hook on every output since the last output's hook has to
+        # fire first to setup for backward. However, we use ``self._pre_backward_hook_has_run``
+        # to prevent repeated overhead from multiple hook callbacks.
         outputs = self._register_pre_backward_hooks(outputs)
 
         # Done with a forward pass.
@@ -953,16 +1005,18 @@ class FullyShardedDataParallel(nn.Module):
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
         """Register pre-backward hook to run before the wrapped module's
-        backward. Hooks should be attached to all outputs from the forward."""
+        backward. Hooks should be attached to all outputs from the forward.
+
+        Returns:
+            outputs: new outputs with hooks registered if they requires gradient.
+        """
         if not torch.is_grad_enabled():
             return outputs  # don't register hooks if grad isn't enabled
 
-        pre_backward_hook_has_run = [False]
-
         def _pre_backward_hook(*unused: Any) -> None:
-            if pre_backward_hook_has_run[0]:
-                return  # only run once
-            pre_backward_hook_has_run[0] = True
+            if self._pre_backward_hook_has_run:
+                return  # only run once (from multiple outputs or multiple forward passes)
+            self._pre_backward_hook_has_run = True
 
             # Start of a backward pass.
             self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
@@ -1062,13 +1116,27 @@ class FullyShardedDataParallel(nn.Module):
         the local optimizer only sees the relevant parameter shard.
         """
         # First hook callback will see PRE state. If we have multiple params,
-        # then subsequent hook callbacks will see POST state.
-        self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
+        # then subsequent hook callbacks will see POST state. When checkpoint
+        # fwd counter is used, IDLE is also possible since the pre-backward hook
+        # is not triggered (see ``auto_wrap_bn`` below, we have to use
+        # FSDP(checkpoint(conv, FSDP(bn), ...)), with reshard_after_forward=False).
+        if hasattr(self, "_checkpoint_fwd_counter"):
+            self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST, TrainingState.IDLE])
+        else:
+            self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         self.training_state = TrainingState.BACKWARD_POST
         if param.grad is None:
             return
+
         if param.grad.requires_grad:
-            raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require grad")
+            raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require gradients")
+
+        # If this is a checkpointed module, we check if the following
+        # counter reaches 0. If not, it is not the final backward call
+        # for this module yet. Therefore, we early return in that case.
+        if hasattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter"):
+            if self._fsdp_wrapped_module._checkpoint_fwd_counter != 0:
+                return
 
         if self._require_backward_grad_sync or self.reshard_after_forward:
             # Free full params. As a special case, we don't free the full params
@@ -1178,15 +1246,6 @@ class FullyShardedDataParallel(nn.Module):
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
 
-        def _remove_shard_bwd_hook(fsdp_module: FullyShardedDataParallel) -> None:
-            """Helper used below on all fsdp modules."""
-            for p in fsdp_module.params:
-                if p.requires_grad:
-                    if hasattr(p, "_shard_bwd_hook"):
-                        assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
-                        p._shard_bwd_hook[1].remove()
-                        delattr(p, "_shard_bwd_hook")
-
         if self._require_backward_grad_sync:
             # Flush any unreduced buckets in the post_backward stream.
             with torch.cuda.stream(self._streams["post_backward"]):
@@ -1196,10 +1255,27 @@ class FullyShardedDataParallel(nn.Module):
             if self.move_grads_to_cpu:
                 # Wait for the non-blocking GPU -> CPU grad transfers to finish.
                 torch.cuda.current_stream().synchronize()
-        # A backward pass is done, update root and nested FSDP's flags.
+
+        # A backward pass is done, clean up below.
+
+        # Free reducer buffers.
+        if self._reducer is not None:
+            self._reducer.teardown()
+
+        def _remove_shard_bwd_hook(fsdp_module: FullyShardedDataParallel) -> None:
+            """Helper used below on all fsdp modules."""
+            for p in fsdp_module.params:
+                if p.requires_grad:
+                    if hasattr(p, "_shard_bwd_hook"):
+                        assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
+                        p._shard_bwd_hook[1].remove()
+                        delattr(p, "_shard_bwd_hook")
+
+        # Update root and nested FSDP's hooks and flags.
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)
+                m._pre_backward_hook_has_run = False
                 if m._has_params:
                     if any(p.requires_grad for p in m.params):
                         m.assert_state(TrainingState.BACKWARD_POST)
@@ -1395,8 +1471,8 @@ class FullyShardedDataParallel(nn.Module):
             # In case we are failing in the context of autograd hook, asserting
             # may not generate useful msg. So, let's print it to be sure.
             if self.rank == 0:
-                print(self)
-                print(msg)
+                print(f"Asserting FSDP instance is: {self}")
+                print(f"ERROR: {msg}")
                 traceback.print_stack()
             raise ValueError(msg)
 
@@ -1543,7 +1619,7 @@ class FullyShardedDataParallel(nn.Module):
                     v_shard = v[0] if self.rank >= len(v) else v[self.rank]
                     assert ou.is_singleton_tensor(v_shard)
                 else:
-                    v_shard = v  # dont shard entries that are not tensors
+                    v_shard = v  # don't shard entries that are not tensors
                 full_optim_state_dict["state"][id][k] = v_shard
 
         return full_optim_state_dict
@@ -1686,6 +1762,12 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
         "process_group": pg,
         "mixed_precision": False,  # Keep the weights in FP32.
         "flatten_parameters": False,  # Do not flatten.
+        # Reshard==False is good for performance. When FSDP(checkpoint(FSDP(bn))) is used, this
+        # **must** be False because BN's FSDP wrapper's pre-backward callback isn't called
+        # within the checkpoint's outer backward when multiple forward passes are used.
+        "reshard_after_forward": False,
+        # No bucketing or small bucketing should be enough for BNs.
+        "bucket_cap_mb": 0,
     }
 
     with enable_wrap(wrap_bn_only_policy, **fsdp_config):
