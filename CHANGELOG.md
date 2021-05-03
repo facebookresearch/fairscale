@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## NEXT - TBD
 ### Fixed
 - setup.py: hide CUDA extensions behind BUILD_CUDA_EXTENSIONS envvar
+- SDP: re-expose the module property ([#647](https://github.com/facebookresearch/fairscale/pull/647))
+
 ### Added
 - FSDP: better memory usage for reduce bucket ([#633](https://github.com/facebookresearch/fairscale/pull/633))
 
