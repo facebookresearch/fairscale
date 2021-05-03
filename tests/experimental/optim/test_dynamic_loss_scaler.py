@@ -60,7 +60,7 @@ def _train_with_dls(x, y):
     return model
 
 
-def test_dls():
+def test_dls_without_overflow():
     x, y = _init_dataset()
     model = _train_with_dls(x, y)
     for name, param in model.named_parameters():
@@ -72,4 +72,5 @@ def test_dls():
                 assert (param.data.item() - 1) <= 0.03
 
 
-# TODO: add test case covering check_overflow function
+# TODO(tmarkstrum): add test case covering check_overflow function
+# TODO(tmarkstrum): add test case covering the state_dict, FP16

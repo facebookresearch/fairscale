@@ -5,7 +5,10 @@
 
 """
 To prevent underflow or overflow of gradients, DynamicLossScaler is used to
-dynamically scale up and down gradients by scaling the loss.
+dynamically scale up and down gradients by scaling the loss. The usage of the
+DynamicLossScaler is similar with the GradScaler except that DynamicLossScaler
+can be used for updates on a CPU device.
+https://pytorch.org/docs/stable/_modules/torch/cuda/amp/grad_scaler.html#GradScaler
 """
 
 
@@ -29,10 +32,6 @@ def _refresh_per_optimizer_state() -> OptState:
 class DynamicLossScaler(object):
     """An instance ``scaler`` helps perform the steps of gradient scaling
     conveniently.
-
-    * ``scaler.scale(loss)`` multiplies a given loss by ``scaler``'s current scale factor.
-    * ``scaler.step(optimizer)`` safely unscales gradients and calls ``optimizer.step()``.
-    * ``scaler.update()`` updates ``scaler``'s scale factor.
     """
 
     def __init__(
@@ -141,12 +140,14 @@ class DynamicLossScaler(object):
 
         ``*args`` and ``**kwargs`` are forwarded to ``optimizer.step()``.
 
-        Returns the return value of ``optimizer.step(*args, **kwargs)``.
-
         Args:
             optimizer (torch.optim.Optimizer):  Optimizer that applies the gradients.
             args:  Any arguments.
             kwargs:  Any keyword arguments.
+
+        Returns:
+            The return value of ``optimizer.step(*args, **kwargs)``.  None when overflow or underflow
+            gradients occur and optimizer.step() is skipped.
         """
         if "closure" in kwargs:
             raise RuntimeError("Closure use is not currently supported if DynamicLossScaler is enabled.")
@@ -177,6 +178,7 @@ class DynamicLossScaler(object):
         return retval
 
     def unscale_(self, optimizer: torch.optim.Optimizer) -> None:
+        # uncale the gradients.
 
         optimizer_state = self._per_optimizer_states[id(optimizer)]
 
