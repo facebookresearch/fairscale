@@ -195,6 +195,16 @@ class FullyShardedDataParallel(nn.Module):
             device for parameters returned by :func:`state_dict`. If not given,
             this will default to ``compute_dtype``. Note that only the device
             type will be respected (e.g., "cuda:0" and "cuda:1" are the same).
+        clear_autocast_cache (bool):
+            When using mixed precision training with `torch.amp.autocast`, if the model weights
+            are in FP32, autocast maintains a cache for downcasted weights. The cache can cause
+            GPU OOM during the forward pass. Setting this flag to true will help clearing this
+            cache as inner FSDP instances finishes part of the forward pass to save GPU memory.
+            Future PyTorch versions may provide a way to completely disable this cache.
+            Default: False
+        verbose (bool):
+            Setting this ``True`` to turn on verbose output for model's string representation.
+            Default: False
     """
 
     def __init__(
@@ -213,6 +223,8 @@ class FullyShardedDataParallel(nn.Module):
         compute_device: Optional[torch.device] = None,
         no_broadcast_optim_state: Optional[bool] = False,
         state_dict_device: Optional[torch.device] = None,
+        clear_autocast_cache: bool = False,
+        verbose: bool = False,
     ):
         init_start = time.time()
         super().__init__()
@@ -232,6 +244,8 @@ class FullyShardedDataParallel(nn.Module):
         self.uncollected_opt_state: Dict[int, Dict] = {}
         self.no_broadcast_optim_state = no_broadcast_optim_state
         self.state_dict_device = state_dict_device or self.compute_device
+        self.clear_autocast_cache = clear_autocast_cache
+        self.verbose = verbose
 
         self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
@@ -248,6 +262,7 @@ class FullyShardedDataParallel(nn.Module):
         if process_group:
             validate_process_group(self.compute_device, self.process_group)
 
+        # enable pytorch sync_bn just in case model contains sync_bn layers.
         enable_pytorch_sync_bn(module)
 
         # Only handle params which are not already sharded. This enables
@@ -301,7 +316,7 @@ class FullyShardedDataParallel(nn.Module):
             f"FSDP.__init__(done): total_init_time: {(init_end - init_start): .4f} num_params: {(sum(p.numel() for p in self.params))}"
         )
 
-        # Flag to guard multiple pre-forward hook being executed per iteration.
+        # Flag to guard multiple pre-backward hook being executed per iteration.
         # This is reset at the end of the backward pass.
         self._pre_backward_hook_has_run = False
 
@@ -531,19 +546,24 @@ class FullyShardedDataParallel(nn.Module):
         return shard, num_to_pad
 
     def extra_repr(self) -> str:
-        return (
-            f"rank={self.rank}, world_size={self.world_size}, "
-            f"reshard_after_forward={self.reshard_after_forward}, "
-            f"mixed_precision={self.mixed_precision}, "
-            f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
+        repr = (
+            f"world_size={self.world_size}, "
             f"flatten_parameters={self.flatten_parameters}, "
-            f"cpu_offload={self.cpu_offload}, "
-            f"compute_dtype={self.compute_dtype}, "
-            f"buffer_dtype={self.buffer_dtype}, "
-            f"move_grads_to_cpu={self.move_grads_to_cpu}, "
-            f"bucket_cap_mb={self.bucket_cap_mb}, "
-            f"compute_device={self.compute_device}"
+            f"mixed_precision={self.mixed_precision}, "
         )
+        if self.verbose:
+            repr = (
+                f"rank={self.rank}, " + repr + f"reshard_after_forward={self.reshard_after_forward}, "
+                f"compute_dtype={self.compute_dtype}, "
+                f"buffer_dtype={self.buffer_dtype}, "
+                f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
+                f"compute_device={self.compute_device}"
+                f"cpu_offload={self.cpu_offload}, "
+                f"move_grads_to_cpu={self.move_grads_to_cpu}, "
+                f"bucket_cap_mb={self.bucket_cap_mb}, "
+                f"clear_autocast_cache={self.clear_autocast_cache}"
+            )
+        return repr
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -1001,6 +1021,10 @@ class FullyShardedDataParallel(nn.Module):
         # Done with a forward pass.
         self.training_state = TrainingState.IDLE
 
+        # Only need to clear cache during forward. During backward, the cache is not used.
+        if self.clear_autocast_cache:
+            torch.clear_autocast_cache()
+
         return outputs
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
@@ -1454,7 +1478,7 @@ class FullyShardedDataParallel(nn.Module):
         current_stream = torch.cuda.current_stream()
         for p in params:
             if p._fp16_shard is not None:
-                # _fp16_shard is allocated in _fp32_to_fp16_stream, so we can't
+                # _fp16_shard is allocated in "fp32_to_fp16" stream, so we can't
                 # free it until the work in the current stream completes.
                 p._fp16_shard.record_stream(current_stream)
                 free_storage_(p._fp16_shard)
