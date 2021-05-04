@@ -124,9 +124,7 @@ class DynamicLossScaler(object):
             raise OverflowError("setting loss scale to: " + str(self.loss_scale))
 
     def update(self) -> None:
-        """
-        Updates the scale factor.
-        """
+        """Updates the scale factor."""
 
         if (self._iter - self._last_overflow_iter) % self.scale_window == 0:
             self.loss_scale *= self.scale_factor
@@ -179,7 +177,6 @@ class DynamicLossScaler(object):
 
     def unscale_(self, optimizer: torch.optim.Optimizer) -> None:
         # uncale the gradients.
-
         optimizer_state = self._per_optimizer_states[id(optimizer)]
 
         if optimizer_state is OptState.UNSCALED:
