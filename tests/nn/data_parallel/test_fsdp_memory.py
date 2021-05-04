@@ -331,8 +331,8 @@ def test_fsdp_memory(fsdp, ckpt):
     # Using bigger hidden dimension for AMP to increase the model size
     # so that bug in handling params will show up but we don't do that
     # in the base case to keep the test fast.
-    #   hidden_dim 128: model size 4MB
-    #   hidden_dim 1024: model size 200MB
+    #   - hidden_dim 128: model size 4MB
+    #   - hidden_dim 1024: model size 200MB
     model_hidden_dim = 128
     if "amp" in fsdp:
         model_hidden_dim = 1024
