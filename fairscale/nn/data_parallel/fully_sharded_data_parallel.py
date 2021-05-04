@@ -199,11 +199,10 @@ class FullyShardedDataParallel(nn.Module):
             When using mixed precision training with `torch.amp.autocast`, if the model weights
             are in FP32, autocast maintains a cache for downcasted weights. The cache can cause
             GPU OOM during the forward pass. Setting this flag to true will help clearing this
-            cache as inner FSDP instances finishes part of the forward pass to save GPU memory.
-            Future PyTorch versions may provide a way to completely disable this cache.
+            cache as inner FSDP instances finish part of the forward pass to save GPU memory.
             Default: False
         verbose (bool):
-            Setting this ``True`` to turn on verbose output for model's string representation.
+            Set this to ``True`` to turn on verbose output for model's string representation.
             Default: False
     """
 
@@ -1022,6 +1021,8 @@ class FullyShardedDataParallel(nn.Module):
         self.training_state = TrainingState.IDLE
 
         # Only need to clear cache during forward. During backward, the cache is not used.
+        # TODO (Min): Future PyTorch versions may provide a way to completely disable this
+        #     cache. Update this when that's available.
         if self.clear_autocast_cache:
             torch.clear_autocast_cache()
 

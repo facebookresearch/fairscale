@@ -60,11 +60,11 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
 
 def get_global_group() -> None:
     """
-    Singleton pytorch distributed group.
+    Singleton PyTorch distributed group.
     Inspired by https://github.com/pytorch/fairseq
 
     For FSDP, it is important to use a global group, otherwise, inner FSDP instances
-    will not share the gradient reduction buffer with the root instance, end up using
+    will not share the gradient reduction bucket buffer with the root instance, end up using
     more GPU memory.
     """
     if dist.is_initialized():
