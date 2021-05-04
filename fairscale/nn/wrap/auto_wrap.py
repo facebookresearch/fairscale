@@ -229,7 +229,6 @@ class ConfigAutoWrap:
             auto_wrap_policy = ConfigAutoWrap.auto_wrap_policy
 
         # Make sure no child is not already wrapped.
-        # TODO (Min): bug #649
         for _, child in module.named_modules():
             assert not isinstance(child, cast(type, ConfigAutoWrap.wrapper_cls))
 

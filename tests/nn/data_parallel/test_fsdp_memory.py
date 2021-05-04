@@ -44,6 +44,10 @@ def get_cur_mem(rank, result, prefix):
 class Model(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
+        # TODO (Min): for both fast and memory efficient conv kernels, we should be using
+        #     AMP/fp16 + channel_last input format. Otherwise, cudnn internally does conversion
+        #     to channel_last when it is fp16 weights. Leave this knowledge here and perhaps
+        #     future test can cover it.
         self.stem = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True))
         self.blocks = nn.Sequential(
             nn.Conv2d(64, hidden_dim, kernel_size=5, padding=2),
