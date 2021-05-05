@@ -12,7 +12,7 @@ from torch.utils.checkpoint import checkpoint as torch_checkpoint_wrapper
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.utils.testing import skip_if_no_cuda, torch_version
-
+from fairscale.nn.misc import checkpoint_wrapper as deprecated_checkpoint_wrapper
 
 def get_cuda_mem_allocated():
     """Helper to get cuda memory allocated if possible."""
@@ -252,3 +252,14 @@ def test_multiin_multiout(device, multiout, checkpoint_config):
         if no_cpt[key] != cpt[key]:
             print(no_cpt, cpt)
             assert 0
+
+def test_deprecated_path():
+
+    ffn = nn.Sequential(
+        nn.Linear(32, 128),
+        nn.Dropout(p=0.5),
+        nn.Linear(128, 32),
+    )
+    ffn = deprecated_checkpoint_wrapper(ffn, {})
+
+
