@@ -11,5 +11,3 @@ tests/nn/data_parallel/test_fsdp_input.py
 tests/nn/data_parallel/test_fsdp_multiple_forward.py
 tests/nn/data_parallel/test_fsdp_optimizer_utils.py
 tests/nn/data_parallel/test_fsdp.py
-tests/nn/misc/test_flatten_params_wrapper.py
-tests/nn/pipe/test_parity.py

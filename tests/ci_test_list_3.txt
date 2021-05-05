@@ -1,5 +1,7 @@
+tests/nn/misc/test_flatten_params_wrapper.py
 tests/nn/data_parallel/test_sharded_ddp_features.py
 tests/nn/data_parallel/test_sharded_ddp_pytorch_parity.py
+tests/nn/pipe/test_parity.py
 tests/nn/pipe/skip/test_gpipe.py
 tests/nn/pipe/skip/test_verify_skippables.py
 tests/nn/pipe/skip/test_stash_pop.py
