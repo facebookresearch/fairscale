@@ -224,10 +224,7 @@ class ShardedDataParallel(nn.Module):
             return self.module(*inputs, **kwargs)
 
     def to(  # type: ignore
-        self,
-        device: Optional[Union[int, torch.device]],
-        dtype: Optional[torch.dtype] = None,
-        non_blocking: bool = False,
+        self, device: Optional[torch.device], dtype: Optional[torch.dtype] = None, non_blocking: bool = False,
     ) -> "ShardedDataParallel":
         """
         Moves and/or casts the parameters and buffers.
@@ -257,19 +254,23 @@ class ShardedDataParallel(nn.Module):
         Returns:
             Module: self.
         """
+        if isinstance(device, str):
+            device = torch.device(device)
 
         assert (
-            len(self._buckets.keys()) == 0 or device in self._buckets.keys()
+            device is None
+            or len(self._buckets.keys()) == 0
+            or device.type in map(lambda x: x.type, self._buckets.keys())
         ), "Changing devices is not supported, because this would break OSSs state"
+
         assert (
             len(self._buckets.keys()) < 2
         ), "Several devices specified to begin with, incompatible with setting a single device here"
 
-        for _device in self._buckets.keys():
-            for bucket in self._buckets[_device].values():
-                bucket.to(device=_device, dtype=dtype, non_blocking=non_blocking)
-
         self.module.to(device=device, dtype=dtype, non_blocking=non_blocking)
+
+        # Re-build the buckets, hooks, etc..
+        self.refresh_trainable()
 
     def refresh_trainable(self) -> None:
         """ If the module trainability has changed, update all the assumptions """
@@ -350,8 +351,8 @@ class ShardedDataParallel(nn.Module):
                 See :meth:`torch.optim.Optimizer.zero_grad` for details.
         """
 
-        for index, trainable_param in enumerate(self._all_params):
-            if set_to_none and not self._should_bucket_grad[index]:
+        for index, trainable_param in enumerate(self._trainable_params):
+            if set_to_none and (len(self._should_bucket_grad) == 0 or not self._should_bucket_grad[index]):
                 trainable_param.grad = None
             elif trainable_param.grad is not None:
                 trainable_param.grad.zero_()
