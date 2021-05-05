@@ -15,7 +15,7 @@ import torch.utils.checkpoint as torch_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
-from .misc import dec_counter, inc_counter, init_counter, patch_batchnorm
+from .checkpoint_utils import dec_counter, inc_counter, init_counter, patch_batchnorm
 
 
 def checkpoint_wrapper(
