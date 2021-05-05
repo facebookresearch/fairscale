@@ -212,7 +212,7 @@ def _distributed_worker(
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
 @pytest.mark.parametrize("wrap_bn", ["auto_wrap_bn", "no_auto_wrap_bn"])
 @pytest.mark.parametrize("model_type", ["model1", "model2"])
-def test_multiple_forward_checkpoint(precision, flatten, wrap_bn):
+def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type):
     mixed_precision = precision == "mixed"
     flatten = flatten == "flatten"
     wrap_bn = wrap_bn == "auto_wrap_bn"
