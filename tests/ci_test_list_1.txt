@@ -1,5 +1,4 @@
 tests/nn/data_parallel/test_fsdp_memory.py
-tests/nn/data_parallel/test_fsdp_multiple_forward_checkpoint.py
 tests/nn/data_parallel/test_fsdp_multiple_wrapping.py
 tests/nn/data_parallel/test_fsdp_freezing_weights.py
 tests/nn/data_parallel/test_fsdp_regnet.py
@@ -8,6 +7,5 @@ tests/nn/data_parallel/test_fsdp_grad_scaler.py
 tests/nn/data_parallel/test_fsdp_no_sync.py
 tests/nn/data_parallel/test_fsdp_summon_full_params.py
 tests/nn/data_parallel/test_fsdp_input.py
-tests/nn/data_parallel/test_fsdp_multiple_forward.py
 tests/nn/data_parallel/test_fsdp_optimizer_utils.py
 tests/nn/data_parallel/test_fsdp.py

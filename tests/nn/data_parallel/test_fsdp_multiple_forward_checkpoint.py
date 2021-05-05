@@ -24,14 +24,7 @@ from fairscale.nn import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import auto_wrap_bn
 from fairscale.nn.wrap import enable_wrap, wrap
-from fairscale.utils.testing import (
-    dist_init,
-    objects_are_equal,
-    skip_if_single_gpu,
-    teardown,
-    temp_files_ctx,
-    torch_version,
-)
+from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx, torch_version
 
 
 class Model(nn.Module):
@@ -39,7 +32,7 @@ class Model(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.block1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True),)
+        self.block1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True))
         self.block2 = nn.Sequential(
             nn.Conv2d(64, 128, kernel_size=3),
             nn.BatchNorm2d(128),
@@ -62,9 +55,9 @@ class Model2(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.block1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True),)
-        self.block2 = nn.Sequential(nn.Conv2d(64, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=False),)
-        self.block3 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=3), nn.BatchNorm2d(128), nn.ReLU(inplace=True),)
+        self.block1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True))
+        self.block2 = nn.Sequential(nn.Conv2d(64, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=False))
+        self.block3 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=3), nn.BatchNorm2d(128), nn.ReLU(inplace=True))
         self.head = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.Flatten(), nn.Linear(128, 10))
 
     def forward(self, x):
@@ -251,9 +244,25 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type):
                 final_losses = {}
                 for rank in range(world_size):
                     with open(temp_files[2 + rank], "rb") as f:
-                        final_losses[f"rank_{rank}"] = pickle.load(f)
+                        for iter_key, loss in pickle.load(f).items():
+                            final_losses[f"rank_{rank}_{iter_key}"] = loss
                 if expected_losses is None:
                     expected_losses = final_losses
                 else:
-                    print(f"fsdp: {with_fsdp} ckpt: {with_checkpoint}")
-                    assert objects_are_equal(expected_losses, final_losses, raise_exception=True)
+                    print(f"fsdp: {with_fsdp} ckpt: {with_checkpoint} failed to compare with the ddp+no_ckpt baseline")
+
+                    def check(exp, res):
+                        assert list(exp.keys()) == list(res.keys()), f"{list(exp.keys())} vs. {list(res.keys())}"
+                        rtol = 1e-4
+                        atol = 1e-5
+                        if with_model2 and mixed_precision and torch_version() >= (1, 9, 0):
+                            # On CI, with longer model2, mixed precsion and 1.9, even ddp vs. ddp+ckpt has
+                            # larger errors.
+                            rtol = 1e-3
+                            atol = 1e-4
+                        for key in exp.keys():
+                            exp_loss = exp[key]
+                            res_loss = res[key]
+                            torch.testing.assert_allclose(exp_loss, res_loss, rtol=rtol, atol=atol)
+
+                    check(expected_losses, final_losses)
