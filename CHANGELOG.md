@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FSDP: workaround AMP autocast cache issue with clear\_autocast\_cache flag
 - setup.py: hide CUDA extensions behind BUILD_CUDA_EXTENSIONS envvar
 - SDP: re-expose the module property ([#647](https://github.com/facebookresearch/fairscale/pull/647))
+- Cleanup - rename and move the checkpoint_activations wrapper ([654]https://github.com/facebookresearch/fairscale/pull/654)
 
 ### Added
 - FSDP: better memory usage for reduce bucket ([#633](https://github.com/facebookresearch/fairscale/pull/633))
