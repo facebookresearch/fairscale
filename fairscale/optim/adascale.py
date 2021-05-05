@@ -72,9 +72,9 @@ class AdaScale(Optimizer):
         scheduler = LambdaLR(optim, lr_lambda=...)
 
         last_epoch = 0
-        done = False
+        done = True
         step = 0
-        while True:
+        while done:
             for batch in dataset:
                 optim.zero_grad()
                 logits = model()
@@ -86,8 +86,8 @@ class AdaScale(Optimizer):
                 if epoch > last_epoch:
                     scheduler.step()
                     last_epoch = epoch
-                if epoch >= max_epochs:
-                    done = True
+                if epoch >= MAX_EPOCHS:
+                    done = False
 
     Example 2: using a custom `update_lr()` function that update the learning
     rate based on the current step count per epoch.
