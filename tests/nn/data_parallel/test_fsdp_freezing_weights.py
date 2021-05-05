@@ -10,6 +10,7 @@
 """ Test FSDP with some params frozen. """
 
 
+from enum import Enum
 import tempfile
 
 import pytest
@@ -68,6 +69,11 @@ def _create_model(with_fsdp, with_nested_trunk):
     return model
 
 
+class FreezingMethod(str, Enum):
+    GradToNone = "grad_to_none"
+    RequiresGrad = "requires_grad"
+
+
 def _distributed_worker(
     gpu_id,
     world_size,
@@ -93,8 +99,7 @@ def _distributed_worker(
     model = model.cuda()
 
     # freezing the trunk using requires_grad.
-    assert freezing_method in ["requires_grad", "grad_to_none"]
-    if freezing_method == "requires_grad":
+    if freezing_method == FreezingMethod.RequiresGrad:
         for param in model.trunk.parameters():
             param.requires_grad = False
 
@@ -116,7 +121,7 @@ def _distributed_worker(
         print("Loss", iteration, ":", fake_loss.item())
         optimizer.zero_grad()
         fake_loss.backward()
-        if freezing_method == "grad_to_none":
+        if freezing_method == FreezingMethod.GradToNone:
             for param in model.trunk.parameters():
                 param.grad = None
         optimizer.step()
@@ -155,7 +160,7 @@ def test_freezing_weights(temp_files, nested_trunk):
     world_size = 2
     # DDP
     with_fsdp = False
-    freezing_method = "requires_grad"
+    freezing_method = FreezingMethod.RequiresGrad
     mp.spawn(
         _distributed_worker,
         (world_size, with_fsdp, with_nested_trunk, freezing_method) + temp_files[0:3] + (None,),
@@ -165,7 +170,7 @@ def test_freezing_weights(temp_files, nested_trunk):
     with_fsdp = True
     expected_state = torch.load(temp_files[2])
     temp_file_idx = 3
-    for freezing_method in ["requires_grad", "grad_to_none"]:
+    for freezing_method in [FreezingMethod.RequiresGrad, FreezingMethod.GradToNone]:
         print(f"Testing FSDP with freezing method {freezing_method}")
         mp.spawn(
             _distributed_worker,
