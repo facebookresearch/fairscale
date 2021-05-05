@@ -108,7 +108,7 @@ def run_one_step(
 
     # Optim loop
     def closure():
-        optimizer.zero_grad()
+        ddp_model.zero_grad(set_to_none=True)
 
         with ddp_model.no_sync() if grad_accumulation else suppress():
             input_tensor = torch.rand((64, 2)).to(device)
@@ -193,7 +193,7 @@ def run_test_two_inputs(rank, world_size, backend, device, temp_file_name, reduc
 
     # Optim loop
     def closure():
-        optimizer.zero_grad()
+        ddp_model.zero_grad(set_to_none=True)
         input_tensor = torch.rand((64, 2)).to(device)
         loss = ddp_model(input_tensor, input_tensor).abs().sum()
         loss.backward()
@@ -477,7 +477,7 @@ def test_two_optimizers():
         )
 
 
-def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
+def run_test_gpt2(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
     INPUT_DIM = 16
     BACH_SIZE = 10
     STEPS = 10
@@ -492,14 +492,19 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
         embed_dim=256, num_heads=2, num_layers=12, num_positions=INPUT_DIM * INPUT_DIM, num_vocab=512, num_classes=2
     )
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
-    ddp_model = ShardedDataParallel(model, optimizer)
+    ddp_model = ShardedDataParallel(model, optimizer, reduce_buffer_size=reduce_buffer_size)
 
     # Move the model to another device post-construction
     model = model.to(device)
 
     # Optim loop
+    set_to_none = True
+
     def closure():
-        optimizer.zero_grad()
+        nonlocal set_to_none
+        ddp_model.zero_grad(set_to_none=set_to_none)
+        set_to_none = not set_to_none
+
         # Force int inputs to prevent the first grad from firing
         input_tensor = torch.randint(10, (BACH_SIZE, INPUT_DIM)).to(device)
         loss = ddp_model(input_tensor).abs().sum()
@@ -510,18 +515,28 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
     for i in range(STEPS):
         _ = optimizer.step(closure=closure)
 
+        # Stress test the .to() method
+        ddp_model.to(device=device, dtype=torch.float16)
+        ddp_model.to(device=device, dtype=torch.float32)
+
     dist.destroy_process_group()
 
 
 @skip_if_no_cuda
 @skip_if_single_gpu
 @pytest.mark.parametrize("world_size", [1, 2])
-def test_gpt2(world_size):
+@pytest.mark.parametrize("reduce_buffer", [2 ** 23, 2 ** 40])
+def test_gpt2(world_size, reduce_buffer):
     # Check that having trainable unused params is fine
     backend = "gloo"
     device = "cuda"
     with temp_files_ctx(num=1) as temp_files:
-        mp.spawn(run_test_gpt2, args=(world_size, backend, device, temp_files[0]), nprocs=world_size, join=True)
+        mp.spawn(
+            run_test_gpt2,
+            args=(world_size, backend, device, temp_files[0], reduce_buffer),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 def run_test_multiple_groups(rank, world_size, tempfile_name, backend, reduce_buffer_size):
