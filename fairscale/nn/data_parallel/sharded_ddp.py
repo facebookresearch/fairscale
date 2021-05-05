@@ -254,9 +254,13 @@ class ShardedDataParallel(nn.Module):
         Returns:
             Module: self.
         """
+        if isinstance(device, str):
+            device = torch.device(device)
 
         assert (
-            device is None or len(self._buckets.keys()) == 0 or device in map(lambda x: x, self._buckets.keys())
+            device is None
+            or len(self._buckets.keys()) == 0
+            or device.type in map(lambda x: x.type, self._buckets.keys())
         ), "Changing devices is not supported, because this would break OSSs state"
 
         assert (
