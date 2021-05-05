@@ -28,6 +28,7 @@ relative imports.
 
 import contextlib
 import functools
+import gc
 import inspect
 import logging
 import multiprocessing
@@ -666,3 +667,17 @@ def temp_files_ctx(num: int) -> Generator:
     # temp files could have been removed, so we use rmf.
     for name in files:
         rmf(name)
+
+
+def dump_all_tensors(rank: int) -> None:
+    """Useful tool for debugging memory issues from the python side."""
+    if rank != 0:
+        return
+    for obj in gc.get_objects():
+        try:
+            ttype = str(type(obj))
+            if torch.is_tensor(obj) or (hasattr(obj, "data") and torch.is_tensor(obj.data)):
+                print(ttype, obj.shape, obj.dtype, obj.device, obj.storage().size())
+        except Exception as e:
+            pass
+    print(torch.cuda.memory_summary())

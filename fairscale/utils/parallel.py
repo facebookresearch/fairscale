@@ -56,3 +56,20 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
             # used, but this call needs to be made to avoid an exception.
             # This function is removed from pytorch since 1.9.
             layer._specify_ddp_gpu_num(1)  # type: ignore
+
+
+def get_global_group() -> None:
+    """
+    Singleton PyTorch distributed group.
+    Inspired by https://github.com/pytorch/fairseq
+
+    For FSDP, it is important to use a global group, otherwise, inner FSDP instances
+    will not share the gradient reduction bucket buffer with the root instance, end up using
+    more GPU memory.
+    """
+    if dist.is_initialized():
+        if not hasattr(get_global_group, "_global_group"):
+            get_global_group._global_group = dist.new_group()  # type: ignore
+        return get_global_group._global_group  # type: ignore
+    else:
+        return None
