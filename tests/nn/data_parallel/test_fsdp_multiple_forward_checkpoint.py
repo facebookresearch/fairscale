@@ -35,6 +35,8 @@ from fairscale.utils.testing import (
 
 
 class Model(nn.Module):
+    """Model to test FSDP(checkpoint())."""
+
     def __init__(self):
         super().__init__()
         self.block1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True),)
@@ -55,14 +57,36 @@ class Model(nn.Module):
             return torch.cat(ys, dim=0)
 
 
-def create_model(with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter):
-    model = Model()
+class Model2(nn.Module):
+    """Model to test FSDP(checkpoint(), checkpoint())."""
+
+    def __init__(self):
+        super().__init__()
+        self.block1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True),)
+        self.block2 = nn.Sequential(nn.Conv2d(64, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=False),)
+        self.block3 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=3), nn.BatchNorm2d(128), nn.ReLU(inplace=True),)
+        self.head = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.Flatten(), nn.Linear(128, 10))
+
+    def forward(self, x):
+        if isinstance(x, torch.Tensor):
+            return self.head(self.block3(self.block2(self.block1(x))))
+        elif isinstance(x, list):
+            ys = [self.head(self.block3(self.block2(self.block1(e)))) for e in x]
+            return torch.cat(ys, dim=0)
+
+
+def create_model(with_model2, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter):
+    model = Model2() if with_model2 else Model()
     if with_fsdp:
         if wrap_bn:
             model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False)
             model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False)
+            if with_model2:
+                model.block3 = auto_wrap_bn(model.block3, single_rank_pg=False)
         if with_checkpoint:
             model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=True)
+            if with_model2:
+                model.block3 = checkpoint_wrapper(model.block3, maintain_forward_counter=True)
         with enable_wrap(
             wrapper_cls=FSDP,
             flatten_parameters=flatten,
@@ -72,15 +96,28 @@ def create_model(with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, 
         ):
             model.block1 = wrap(model.block1)
             model.block2 = wrap(model.block2)
+            if with_model2:
+                model.block3 = wrap(model.block3)
             model.head = wrap(model.head)
     else:
         if with_checkpoint:
             model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=False)
+            if with_model2:
+                model.block3 = checkpoint_wrapper(model.block3, maintain_forward_counter=False)
     return model
 
 
 def _distributed_worker(
-    gpu_id, world_size, with_fsdp, with_checkpoint, files, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
+    gpu_id,
+    world_size,
+    with_model2,
+    with_fsdp,
+    with_checkpoint,
+    files,
+    mixed_precision,
+    flatten,
+    wrap_bn,
+    fp32_reduce_scatter,
 ):
     filename, filename_rpc = files[:2]
     filename_loss = files[2:]
@@ -109,7 +146,9 @@ def _distributed_worker(
     if mixed_precision and not with_fsdp:
         batch = [x.half() for x in batch]
 
-    model = create_model(with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter)
+    model = create_model(
+        with_model2, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
+    )
     model = model.cuda()
 
     if with_fsdp:
@@ -172,11 +211,13 @@ def _distributed_worker(
 @pytest.mark.parametrize("precision", ["full", "mixed"])
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
 @pytest.mark.parametrize("wrap_bn", ["auto_wrap_bn", "no_auto_wrap_bn"])
+@pytest.mark.parametrize("model_type", ["model1", "model2"])
 def test_multiple_forward_checkpoint(precision, flatten, wrap_bn):
     mixed_precision = precision == "mixed"
     flatten = flatten == "flatten"
     wrap_bn = wrap_bn == "auto_wrap_bn"
     fp32_reduce_scatter = True if mixed_precision else None
+    with_model2 = model_type == "model2"
 
     if torch_version() < (1, 8, 0) and flatten:
         # 1.6 and 1.7 throws this error:
@@ -196,6 +237,7 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn):
                     _distributed_worker,
                     (
                         world_size,
+                        with_model2,
                         with_fsdp,
                         with_checkpoint,
                         temp_files,

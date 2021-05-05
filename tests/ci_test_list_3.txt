@@ -1,11 +1,3 @@
-tests/nn/data_parallel/test_fsdp_regnet.py
-tests/nn/data_parallel/test_fsdp_uneven.py
-tests/nn/data_parallel/test_fsdp_grad_scaler.py
-tests/nn/data_parallel/test_fsdp_no_sync.py
-tests/nn/data_parallel/test_fsdp_summon_full_params.py
-tests/nn/data_parallel/test_fsdp_input.py
-tests/nn/data_parallel/test_fsdp_multiple_forward.py
-tests/nn/data_parallel/test_fsdp_optimizer_utils.py
 tests/nn/data_parallel/test_sharded_ddp_features.py
 tests/nn/data_parallel/test_sharded_ddp_pytorch_parity.py
 tests/nn/pipe/skip/test_gpipe.py
