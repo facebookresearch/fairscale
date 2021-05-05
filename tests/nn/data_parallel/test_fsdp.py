@@ -17,7 +17,7 @@ import torch
 from torch import nn
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
-from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
+from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,

@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint_wrapper
 
-from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
+from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.utils.testing import skip_if_no_cuda, torch_version
 
 

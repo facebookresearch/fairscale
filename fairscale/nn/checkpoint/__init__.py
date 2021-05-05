@@ -5,7 +5,6 @@
 
 from typing import List
 
-from .flatten_params_wrapper import FlattenParamsWrapper
-from .param_bucket import GradBucket, ParamBucket
+from .checkpoint_activations import checkpoint_wrapper
 
 __all__: List[str] = []
