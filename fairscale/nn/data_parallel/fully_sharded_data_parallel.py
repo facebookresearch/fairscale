@@ -1301,15 +1301,19 @@ class FullyShardedDataParallel(nn.Module):
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)
                 m._pre_backward_hook_has_run = False
-                if m._has_params:
-                    if any(p.requires_grad for p in m.params):
+                # Note: m.parameters() should not be an empty list. FSDP
+                # wrapping modules without weights is not tested at the moment.
+                if any(p.requires_grad for p in m.parameters()):
+                    if m._has_params:
                         m.assert_state(TrainingState.BACKWARD_POST)
                     else:
-                        # Unlikely case, should only happens if `m` has params but none of the
-                        # params has `requires_grad==True`.
-                        m.assert_state(TrainingState.IDLE)
+                        m.assert_state(TrainingState.BACKWARD_PRE)
                 else:
-                    m.assert_state(TrainingState.BACKWARD_PRE)
+                    # Unlikely case. When m and its children has no params
+                    # with `requires_grad==True`, then m's pre-backward and
+                    # post-backward hooks aren't called by autograd. Therefore,
+                    # it is in IDLE state.
+                    m.assert_state(TrainingState.IDLE)
                 m.training_state = TrainingState.IDLE
 
     @torch.no_grad()
