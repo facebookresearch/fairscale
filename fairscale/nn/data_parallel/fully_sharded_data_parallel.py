@@ -202,7 +202,9 @@ class FullyShardedDataParallel(nn.Module):
             cache as inner FSDP instances finish part of the forward pass to save GPU memory.
             Default: False
         force_input_to_fp32 (bool):
-            XXX
+            Set to ``True`` to force input type to be FP32 when the FSDP instance is in
+            full precision mode. This helps avoid issues running SyncBatchNorm with AMP
+            and checkpoint_wrapper.
             Default: False
         verbose (bool):
             Set this to ``True`` to turn on verbose output for model's string representation.
@@ -988,9 +990,14 @@ class FullyShardedDataParallel(nn.Module):
         # Start of a forward pass.
         self.training_state = TrainingState.FORWARD
 
+        # For root and mixed precision, we convert the input to FP16 (no_grad is needed for
+        # the conversion).
         if self._is_root and self.mixed_precision:
             args, kwargs = cast_inputs_to_dtype(True, True, *args, **kwargs)
 
+        # If enabled, convert the input to FP32 if we are in full precision.
+        # no_grad is not used because the input might be for a non-root instance,
+        # which mean autograd needs to go through the conversion.
         if self.force_input_to_fp32 and not self.mixed_precision:
             args, kwargs = cast_inputs_to_dtype(False, False, *args, **kwargs)
 
@@ -1702,7 +1709,7 @@ def cast_inputs_to_dtype(to_fp16: bool, no_grad: bool, *args: Any, **kwargs: Any
 
     fn = fn_fp16 if to_fp16 else fn_fp32
     context = torch.no_grad() if no_grad else contextlib.suppress()
-    with context:
+    with context:  # type: ignore
         return apply_to_tensors(fn, args), apply_to_tensors(fn, kwargs)
 
 
@@ -1823,6 +1830,9 @@ def auto_wrap_bn(
             "reshard_after_forward": False,
             # No bucketing or small bucketing should be enough for BNs.
             "bucket_cap_mb": 0,
+            # Setting this for SyncBatchNorm. This may have a performance impact. If
+            # SyncBatchNorm is not used, this can be disabled by using passing in
+            # the `fsdp_config` argument to `auto_wrap_bn`.
             "force_input_to_fp32": True,
         }
 

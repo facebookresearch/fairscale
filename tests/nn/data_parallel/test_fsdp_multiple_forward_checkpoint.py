@@ -68,9 +68,12 @@ class Model2(nn.Module):
             return torch.cat(ys, dim=0)
 
 
-def create_model(with_model2, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter):
+def _create_model(
+    with_model2, with_sync_bn, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
+):
     model = Model2() if with_model2 else Model()
-    model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    if with_sync_bn:
+        model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     if with_fsdp:
         if wrap_bn:
             model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False)
@@ -105,6 +108,7 @@ def _distributed_worker(
     gpu_id,
     world_size,
     with_model2,
+    with_sync_bn,
     with_fsdp,
     with_checkpoint,
     files,
@@ -140,8 +144,8 @@ def _distributed_worker(
     if mixed_precision and not with_fsdp:
         batch = [x.half() for x in batch]
 
-    model = create_model(
-        with_model2, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
+    model = _create_model(
+        with_model2, with_sync_bn, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
     )
     model = model.cuda()
 
@@ -204,8 +208,16 @@ def _distributed_worker(
 _result_cache = {}
 
 
-def get_cached_results(
-    world_size, with_model2, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter,
+def _get_cached_results(
+    world_size,
+    with_model2,
+    with_sync_bn,
+    with_fsdp,
+    with_checkpoint,
+    mixed_precision,
+    flatten,
+    wrap_bn,
+    fp32_reduce_scatter,
 ):
     """ Cache the training to save time. For DDP, flatten, wrap_bn etc. doesn't matter, so
         the results can be cached.
@@ -218,6 +230,7 @@ def get_cached_results(
     key = (
         world_size,
         with_model2,
+        with_sync_bn,
         with_fsdp,
         with_checkpoint,
         mixed_precision,
@@ -234,6 +247,7 @@ def get_cached_results(
                 (
                     world_size,
                     with_model2,
+                    with_sync_bn,
                     with_fsdp,
                     with_checkpoint,
                     temp_files,
@@ -258,12 +272,17 @@ def get_cached_results(
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
 @pytest.mark.parametrize("wrap_bn", ["auto_wrap_bn", "no_auto_wrap_bn"])
 @pytest.mark.parametrize("model_type", ["model1", "model2"])
-def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type):
+@pytest.mark.parametrize("bn_type", ["bn", "sync_bn"])
+def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type, bn_type):
     mixed_precision = precision == "mixed"
     flatten = flatten == "flatten"
     wrap_bn = wrap_bn == "auto_wrap_bn"
     fp32_reduce_scatter = True if mixed_precision else None
     with_model2 = model_type == "model2"
+    with_sync_bn = bn_type == "sync_bn"
+
+    if with_sync_bn and not wrap_bn:
+        pytest.skip("SyncBatchNorm requires auto_wrap_bn")
 
     if torch_version() < (1, 8, 0) and flatten:
         # 1.6 and 1.7 throws this error:
@@ -279,9 +298,10 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type):
         for with_checkpoint in [False, True]:
             if not with_fsdp and with_checkpoint:
                 continue
-            final_losses = get_cached_results(
+            final_losses = _get_cached_results(
                 world_size,
                 with_model2,
+                with_sync_bn,
                 with_fsdp,
                 with_checkpoint,
                 mixed_precision,
