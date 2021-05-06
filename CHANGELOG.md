@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SDP: re-expose the module property ([#647](https://github.com/facebookresearch/fairscale/pull/647))
 
 ### Added
+- FSDP: added `force\_input\_to\_fp32` flag for SyncBatchNorm
 - FSDP: better memory usage for reduce bucket ([#633](https://github.com/facebookresearch/fairscale/pull/633))
 
 ## [0.3.6] - 2021-04-26
