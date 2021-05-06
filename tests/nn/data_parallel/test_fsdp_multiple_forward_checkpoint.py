@@ -32,15 +32,15 @@ class Model(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.block1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True))
+        self.block1 = nn.Sequential(nn.Conv2d(3, 4, kernel_size=3), nn.BatchNorm2d(4), nn.ReLU(inplace=True))
         self.block2 = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=3),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(4, 8, kernel_size=3),
+            nn.BatchNorm2d(8),
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool2d(output_size=(1, 1)),
             nn.Flatten(),
         )
-        self.head = nn.Linear(128, 10)
+        self.head = nn.Linear(8, 10)
 
     def forward(self, x):
         if isinstance(x, torch.Tensor):
@@ -55,10 +55,10 @@ class Model2(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.block1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True))
-        self.block2 = nn.Sequential(nn.Conv2d(64, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=False))
-        self.block3 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=3), nn.BatchNorm2d(128), nn.ReLU(inplace=True))
-        self.head = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.Flatten(), nn.Linear(128, 10))
+        self.block1 = nn.Sequential(nn.Conv2d(3, 4, kernel_size=3), nn.BatchNorm2d(4), nn.ReLU(inplace=True))
+        self.block2 = nn.Sequential(nn.Conv2d(4, 4, kernel_size=3), nn.BatchNorm2d(4), nn.ReLU(inplace=False))
+        self.block3 = nn.Sequential(nn.Conv2d(4, 8, kernel_size=3), nn.BatchNorm2d(8), nn.ReLU(inplace=True))
+        self.head = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.Flatten(), nn.Linear(8, 10))
 
     def forward(self, x):
         if isinstance(x, torch.Tensor):
@@ -131,9 +131,9 @@ def _distributed_worker(
 
     # Ensure we have multiple forward passes.
     batch = [
-        torch.randn(size=(2, 3, 224, 224)).cuda(),
-        torch.randn(size=(2, 3, 96, 96)).cuda(),
-        torch.randn(size=(2, 3, 96, 96)).cuda(),
+        torch.randn(size=(2, 3, 16, 16)).cuda(),
+        torch.randn(size=(2, 3, 9, 9)).cuda(),
+        torch.randn(size=(2, 3, 9, 9)).cuda(),
     ]
 
     if mixed_precision and not with_fsdp:
@@ -167,7 +167,7 @@ def _distributed_worker(
     if gpu_id == 0:
         print(model)
 
-    target = torch.LongTensor([0, 1, 2, 3, 4, 5]).cuda()
+    target = torch.tensor([0, 1, 2, 3, 4, 5], dtype=torch.long).cuda()
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
 
@@ -249,7 +249,7 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type):
                 if expected_losses is None:
                     expected_losses = final_losses
                 else:
-                    print(f"fsdp: {with_fsdp} ckpt: {with_checkpoint} failed to compare with the ddp+no_ckpt baseline")
+                    print(f"fsdp: {with_fsdp} ckpt: {with_checkpoint} checking with the ddp (ckpt) baseline")
 
                     def check(exp, res):
                         assert list(exp.keys()) == list(res.keys()), f"{list(exp.keys())} vs. {list(res.keys())}"

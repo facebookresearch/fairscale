@@ -111,7 +111,7 @@ def _distributed_worker(
     if gpu_id == 0:
         print(model)
 
-    target = torch.LongTensor([0, 1]).cuda()
+    target = torch.tensor([0, 1], dtype=torch.long).cuda()
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
 
