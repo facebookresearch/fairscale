@@ -36,11 +36,18 @@ def pg_test(world_size=torch.cuda.device_count()):
 
 
 def check_parity(torch_bn, fs_bn, x):
+    yh = torch.ones_like(x)
     torch_y = torch_bn(x)
     fs_y = fs_bn(x)
-    assert torch.allclose(torch_y, fs_y)
-    assert torch.allclose(torch_bn.running_mean, fs_bn.running_mean)
-    assert torch.allclose(torch_bn.running_var, fs_bn.running_var)
+    torch_y.backward(yh)
+    fs_y.backward(yh)
+    assert torch.allclose(torch_y, fs_y), f"{torch_y} != {fs_y}"
+    assert torch.allclose(torch_bn.running_mean, fs_bn.running_mean), f"{torch_bn.running_mean} != {fs_bn.running_mean}"
+    assert torch.allclose(torch_bn.running_var, fs_bn.running_var), f"{torch_bn.running_var} != {fs_bn.running_var}"
+    assert torch.allclose(torch_bn.weight, fs_bn.weight), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
+    assert torch.allclose(torch_bn.bias, fs_bn.bias), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
+    assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
+    assert torch.allclose(torch_bn.bias.grad, fs_bn.bias.grad), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
 
 
 def check_parity_ddp(torch_bn, fs_bn, x):
@@ -54,11 +61,13 @@ def check_parity_ddp(torch_bn, fs_bn, x):
     fs_y = fs_ddp(x)
     torch_y.backward(yh)
     fs_y.backward(yh)
-    assert torch.allclose(torch_y, fs_y)
-    assert torch.allclose(torch_bn.running_mean, fs_bn.running_mean)
-    assert torch.allclose(torch_bn.running_var, fs_bn.running_var)
+    assert torch.allclose(torch_y, fs_y), f"{torch_y} != {fs_y}"
+    assert torch.allclose(torch_bn.running_mean, fs_bn.running_mean), f"{torch_bn.running_mean} != {fs_bn.running_mean}"
+    assert torch.allclose(torch_bn.running_var, fs_bn.running_var), f"{torch_bn.running_var} != {fs_bn.running_var}"
+    assert torch.allclose(torch_bn.weight, fs_bn.weight), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
+    assert torch.allclose(torch_bn.bias, fs_bn.bias), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
     assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
-    assert torch.allclose(torch_bn.bias.grad, fs_bn.bias.grad)
+    assert torch.allclose(torch_bn.bias.grad, fs_bn.bias.grad), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
 
 
 @pg_test(world_size=1)

@@ -44,11 +44,13 @@ def _forward(
     running_var: torch.Tensor,
     total_count: torch.Tensor,
 ) -> torch.Tensor:
-    scale = torch.rsqrt(var + eps)
-    bias = -mean * scale
+    invstd = torch.rsqrt(var + eps)
     if affine:
-        scale = scale * weight_param.reshape(mean.shape)
-        bias = bias + bias_param.reshape(mean.shape)
+        scale = weight_param.reshape(mean.shape) * invstd
+        bias = bias_param.reshape(mean.shape) - mean * scale
+    else:
+        scale = invstd
+        bias = -mean * scale
 
     if track_running_stats:
         with torch.no_grad():
@@ -67,7 +69,7 @@ class SyncBatchNorm(torch.nn.BatchNorm2d):
     """
     Fast re-implementation of ``torch.nn.SyncBatchNorm`` that can achieve a speedup
     of 5x or more over the default implementation depending on size of the input
-    and number of distributed world.
+    and number of distributed workers.
     """
 
     def __init__(
