@@ -70,6 +70,7 @@ class Model2(nn.Module):
 
 def create_model(with_model2, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter):
     model = Model2() if with_model2 else Model()
+    model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     if with_fsdp:
         if wrap_bn:
             model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False)
@@ -200,6 +201,58 @@ def _distributed_worker(
     teardown()
 
 
+_result_cache = {}
+
+
+def get_cached_results(
+    world_size, with_model2, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter,
+):
+    """ Cache the training to save time. For DDP, flatten, wrap_bn etc. doesn't matter, so
+        the results can be cached.
+    """
+    if not with_fsdp:
+        flatten = None
+        wrap_bn = None
+        fp32_reduce_scatter = None
+
+    key = (
+        world_size,
+        with_model2,
+        with_fsdp,
+        with_checkpoint,
+        mixed_precision,
+        flatten,
+        wrap_bn,
+        fp32_reduce_scatter,
+    )
+    global _result_cache
+    if key not in _result_cache:
+        # Get 4 files: 2 for dist_init and 2 for each rank to save the losses.
+        with temp_files_ctx(num=2 + world_size) as temp_files:
+            mp.spawn(
+                _distributed_worker,
+                (
+                    world_size,
+                    with_model2,
+                    with_fsdp,
+                    with_checkpoint,
+                    temp_files,
+                    mixed_precision,
+                    flatten,
+                    wrap_bn,
+                    fp32_reduce_scatter,
+                ),
+                nprocs=world_size,
+            )
+            final_losses = {}
+            for rank in range(world_size):
+                with open(temp_files[2 + rank], "rb") as f:
+                    for iter_key, loss in pickle.load(f).items():
+                        final_losses[f"rank_{rank}_{iter_key}"] = loss
+            _result_cache[key] = final_losses
+    return _result_cache[key]
+
+
 @skip_if_single_gpu
 @pytest.mark.parametrize("precision", ["full", "mixed"])
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
@@ -224,45 +277,35 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type):
     # Ensure ddp == ddp+ckpt == fsdp == fsdp+ckpt.
     for with_fsdp in [False, True]:
         for with_checkpoint in [False, True]:
-            # Get 4 files: 2 for dist_init and 2 for each rank to save the losses.
-            with temp_files_ctx(num=2 + world_size) as temp_files:
-                mp.spawn(
-                    _distributed_worker,
-                    (
-                        world_size,
-                        with_model2,
-                        with_fsdp,
-                        with_checkpoint,
-                        temp_files,
-                        mixed_precision,
-                        flatten,
-                        wrap_bn,
-                        fp32_reduce_scatter,
-                    ),
-                    nprocs=world_size,
-                )
-                final_losses = {}
-                for rank in range(world_size):
-                    with open(temp_files[2 + rank], "rb") as f:
-                        for iter_key, loss in pickle.load(f).items():
-                            final_losses[f"rank_{rank}_{iter_key}"] = loss
-                if expected_losses is None:
-                    expected_losses = final_losses
-                else:
-                    print(f"fsdp: {with_fsdp} ckpt: {with_checkpoint} checking with the ddp (ckpt) baseline")
+            if not with_fsdp and with_checkpoint:
+                continue
+            final_losses = get_cached_results(
+                world_size,
+                with_model2,
+                with_fsdp,
+                with_checkpoint,
+                mixed_precision,
+                flatten,
+                wrap_bn,
+                fp32_reduce_scatter,
+            )
+            if expected_losses is None:
+                expected_losses = final_losses
+            else:
+                print(f"checking: fsdp {with_fsdp} ckpt {with_checkpoint} with ddp+no_ckpt")
 
-                    def check(exp, res):
-                        assert list(exp.keys()) == list(res.keys()), f"{list(exp.keys())} vs. {list(res.keys())}"
-                        rtol = 1e-4
-                        atol = 1e-5
-                        if with_model2 and mixed_precision and torch_version() >= (1, 9, 0):
-                            # On CI, with longer model2, mixed precsion and 1.9, even ddp vs. ddp+ckpt has
-                            # larger errors.
-                            rtol = 1e-3
-                            atol = 1e-4
-                        for key in exp.keys():
-                            exp_loss = exp[key]
-                            res_loss = res[key]
-                            torch.testing.assert_allclose(exp_loss, res_loss, rtol=rtol, atol=atol)
+                def check(exp, res):
+                    assert list(exp.keys()) == list(res.keys()), f"{list(exp.keys())} vs. {list(res.keys())}"
+                    rtol = 1e-4
+                    atol = 1e-5
+                    if with_model2 and mixed_precision and torch_version() >= (1, 9, 0):
+                        # On CI, with longer model2, mixed precsion and 1.9, even ddp vs. ddp+ckpt has
+                        # larger errors.
+                        rtol = 1e-3
+                        atol = 1e-4
+                    for key in exp.keys():
+                        exp_loss = exp[key]
+                        res_loss = res[key]
+                        torch.testing.assert_allclose(exp_loss, res_loss, rtol=rtol, atol=atol)
 
-                    check(expected_losses, final_losses)
+                check(expected_losses, final_losses)

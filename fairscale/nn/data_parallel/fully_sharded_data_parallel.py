@@ -201,6 +201,9 @@ class FullyShardedDataParallel(nn.Module):
             GPU OOM during the forward pass. Setting this flag to true will help clearing this
             cache as inner FSDP instances finish part of the forward pass to save GPU memory.
             Default: False
+        force_input_to_fp32 (bool):
+            XXX
+            Default: False
         verbose (bool):
             Set this to ``True`` to turn on verbose output for model's string representation.
             Default: False
@@ -223,6 +226,7 @@ class FullyShardedDataParallel(nn.Module):
         no_broadcast_optim_state: Optional[bool] = False,
         state_dict_device: Optional[torch.device] = None,
         clear_autocast_cache: bool = False,
+        force_input_to_fp32: bool = False,
         verbose: bool = False,
     ):
         init_start = time.time()
@@ -244,6 +248,7 @@ class FullyShardedDataParallel(nn.Module):
         self.no_broadcast_optim_state = no_broadcast_optim_state
         self.state_dict_device = state_dict_device or self.compute_device
         self.clear_autocast_cache = clear_autocast_cache
+        self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
 
         self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
@@ -561,6 +566,7 @@ class FullyShardedDataParallel(nn.Module):
                 f"move_grads_to_cpu={self.move_grads_to_cpu}, "
                 f"bucket_cap_mb={self.bucket_cap_mb}, "
                 f"clear_autocast_cache={self.clear_autocast_cache}"
+                f"force_input_to_fp32={self.force_input_to_fp32}"
             )
         return repr
 
@@ -983,7 +989,10 @@ class FullyShardedDataParallel(nn.Module):
         self.training_state = TrainingState.FORWARD
 
         if self._is_root and self.mixed_precision:
-            args, kwargs = cast_inputs_to_fp16(*args, **kwargs)
+            args, kwargs = cast_inputs_to_dtype(True, True, *args, **kwargs)
+
+        if self.force_input_to_fp32 and not self.mixed_precision:
+            args, kwargs = cast_inputs_to_dtype(False, False, *args, **kwargs)
 
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
@@ -1676,18 +1685,25 @@ def _get_default_cuda_device(module: nn.Module) -> torch.device:
     return torch.device("cuda")
 
 
-@torch.no_grad()
-def cast_inputs_to_fp16(*args: Any, **kwargs: Any) -> Tuple[Any, Any]:
+def cast_inputs_to_dtype(to_fp16: bool, no_grad: bool, *args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     """
-    Cast any Tensors in *args or **kwargs to FP16.
+    Cast any Tensors in *args or **kwargs to FP16 or FP32.
     """
 
-    def fn(x: torch.Tensor) -> torch.Tensor:
+    def fn_fp16(x: torch.Tensor) -> torch.Tensor:
         if x.dtype is torch.float32:
             return x.half()
         return x
 
-    return apply_to_tensors(fn, args), apply_to_tensors(fn, kwargs)
+    def fn_fp32(x: torch.Tensor) -> torch.Tensor:
+        if x.dtype is torch.float16:
+            return x.float()
+        return x
+
+    fn = fn_fp16 if to_fp16 else fn_fp32
+    context = torch.no_grad() if no_grad else contextlib.suppress()
+    with context:
+        return apply_to_tensors(fn, args), apply_to_tensors(fn, kwargs)
 
 
 def free_storage_(data: torch.Tensor) -> None:
@@ -1745,7 +1761,12 @@ def _pre_load_state_dict_hook(
 ########################################################################################
 
 
-def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group: ProcessGroup = None) -> nn.Module:
+def auto_wrap_bn(
+    module: nn.Module,
+    single_rank_pg: bool = False,
+    process_group: Optional[ProcessGroup] = None,
+    fsdp_config: Optional[Dict[str, Any]] = None,
+) -> nn.Module:
     """
     Auto wrap all BatchNorm (BN) instances with a safer FSDP, esp. when convert
     to sync BN is used and the outer FSDP is flattening.
@@ -1762,6 +1783,10 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
         single_rank_pg (bool):
             If true, put BNs in a single-rank process group. Default False.
             This might be needed for Apex sync BN support. Still under construction.
+        process_group (ProcessGroup):
+            Optional process group to be used.
+        fsdp_config (Dict):
+            Optional fsdp_config to be used.
 
     Returns:
         Processed module, where BNs are wrapped with a special FSDP instance.
@@ -1786,18 +1811,20 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
     else:
         pg = process_group
 
-    fsdp_config = {
-        "wrapper_cls": FullyShardedDataParallel,
-        "process_group": pg,
-        "mixed_precision": False,  # Keep the weights in FP32.
-        "flatten_parameters": False,  # Do not flatten.
-        # Reshard==False is good for performance. When FSDP(checkpoint(FSDP(bn))) is used, this
-        # **must** be False because BN's FSDP wrapper's pre-backward callback isn't called
-        # within the checkpoint's outer backward when multiple forward passes are used.
-        "reshard_after_forward": False,
-        # No bucketing or small bucketing should be enough for BNs.
-        "bucket_cap_mb": 0,
-    }
+    if fsdp_config is None:
+        fsdp_config = {
+            "wrapper_cls": FullyShardedDataParallel,
+            "process_group": pg,
+            "mixed_precision": False,  # Keep the weights in FP32.
+            "flatten_parameters": False,  # Do not flatten.
+            # Reshard==False is good for performance. When FSDP(checkpoint(FSDP(bn))) is used, this
+            # **must** be False because BN's FSDP wrapper's pre-backward callback isn't called
+            # within the checkpoint's outer backward when multiple forward passes are used.
+            "reshard_after_forward": False,
+            # No bucketing or small bucketing should be enough for BNs.
+            "bucket_cap_mb": 0,
+            "force_input_to_fp32": True,
+        }
 
     with enable_wrap(wrap_bn_only_policy, **fsdp_config):
         return auto_wrap(module)
