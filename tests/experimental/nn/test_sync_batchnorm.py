@@ -44,6 +44,7 @@ def check_parity(torch_bn, fs_bn, x):
 
 
 def check_parity_ddp(torch_bn, fs_bn, x):
+    yh = torch.ones_like(x)
     rank = dist.get_rank()
     torch_ddp = DDP(torch_bn, device_ids=[rank])
     fs_ddp = DDP(fs_bn, device_ids=[rank])
@@ -51,9 +52,13 @@ def check_parity_ddp(torch_bn, fs_bn, x):
     fs_bn = fs_ddp.module
     torch_y = torch_ddp(x)
     fs_y = fs_ddp(x)
+    torch_y.backward(yh)
+    fs_y.backward(yh)
     assert torch.allclose(torch_y, fs_y)
     assert torch.allclose(torch_bn.running_mean, fs_bn.running_mean)
     assert torch.allclose(torch_bn.running_var, fs_bn.running_var)
+    assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
+    assert torch.allclose(torch_bn.bias.grad, fs_bn.bias.grad)
 
 
 @pg_test(world_size=1)

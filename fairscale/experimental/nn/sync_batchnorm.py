@@ -10,7 +10,7 @@ import torch.distributed as dist
 from torch.distributed import ProcessGroup
 
 if torch.__version__.split(".")[:2] >= ["1", "8"]:
-    from torch.distributed import all_reduce
+    from torch.distributed.nn.functional import all_reduce as differentiable_all_reduce
 else:
     # Copied from https://github.com/pytorch/pytorch/blob/v1.8.1/torch/distributed/nn/functional.py
     class _AllReduce(torch.autograd.Function):
@@ -26,7 +26,7 @@ else:
         def backward(ctx, grad_output):  # type: ignore
             return (None, None) + (_AllReduce.apply(ctx.op, ctx.group, grad_output),)
 
-    def all_reduce(tensor, op=dist.ReduceOp.SUM, group=dist.group.WORLD):  # type: ignore
+    def differentiable_all_reduce(tensor, op=dist.ReduceOp.SUM, group=dist.group.WORLD):  # type: ignore
         return _AllReduce.apply(op, group, tensor)
 
 
@@ -83,14 +83,13 @@ class SyncBatchNorm(torch.nn.BatchNorm2d):
         dim = [d for d in range(input.ndim) if d != 1]
         count = torch.full((1,), input.numel() // input.size(1), device=input.device, dtype=input.dtype)
         total_count = count.clone()
-        handle = all_reduce(total_count, group=self._process_group, async_op=True)
+        handle = dist.all_reduce(total_count, group=self._process_group, async_op=True)
         mean = torch.mean(input, dim=dim, keepdim=True)
         meansqr = torch.mean(input * input, dim=dim, keepdim=True)
         vec = torch.cat([mean, meansqr])
         handle.wait()
         vec = vec * (count / total_count)
-        all_reduce(vec, group=self._process_group)
-        mean, meansqr = vec.chunk(2)
+        mean, meansqr = differentiable_all_reduce(vec, group=self._process_group).chunk(2)
         var = meansqr - mean * mean
 
         return _forward(
