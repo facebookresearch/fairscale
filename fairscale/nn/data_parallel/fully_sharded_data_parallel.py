@@ -1831,9 +1831,8 @@ def auto_wrap_bn(
             # No bucketing or small bucketing should be enough for BNs.
             "bucket_cap_mb": 0,
             # Setting this for SyncBatchNorm. This may have a performance impact. If
-            # SyncBatchNorm is not used, this can be disabled by using passing in
-            # the `fsdp_config` argument to `auto_wrap_bn`.
-            "force_input_to_fp32": True,
+            # SyncBatchNorm is used, this can be enabled by passing in the `fsdp_config` argument.
+            "force_input_to_fp32": False,
         }
 
     with enable_wrap(wrap_bn_only_policy, **fsdp_config):

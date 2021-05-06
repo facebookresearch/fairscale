@@ -72,14 +72,24 @@ def _create_model(
     with_model2, with_sync_bn, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
 ):
     model = Model2() if with_model2 else Model()
+    fsdp_config = None
     if with_sync_bn:
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        fsdp_config = {
+            "wrapper_cls": FSDP,
+            "mixed_precision": False,
+            "flatten_parameters": False,
+            "reshard_after_forward": False,
+            "bucket_cap_mb": 0,
+            "force_input_to_fp32": True,  # SyncBN needs this.
+        }
+
     if with_fsdp:
         if wrap_bn:
-            model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False)
-            model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False)
+            model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False, fsdp_config=fsdp_config)
+            model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False, fsdp_config=fsdp_config)
             if with_model2:
-                model.block3 = auto_wrap_bn(model.block3, single_rank_pg=False)
+                model.block3 = auto_wrap_bn(model.block3, single_rank_pg=False, fsdp_config=fsdp_config)
         if with_checkpoint:
             model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=True)
             if with_model2:
