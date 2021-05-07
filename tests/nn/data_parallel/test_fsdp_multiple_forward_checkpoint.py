@@ -291,6 +291,13 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type, bn
     with_model2 = model_type == "model2"
     with_sync_bn = bn_type == "sync_bn"
 
+    if torch_version() >= (1, 7, 0) and torch_version() < (1, 8, 0) and with_sync_bn:
+        # SyncBN is buggy in 1.7, errors like:
+        # E         File "/home/circleci/venv/lib/python3.8/site-packages/torch/nn/modules/_functions.py", line 13, in forward
+        # E           dtype=running_mean.dtype,
+        # E       AttributeError: 'NoneType' object has no attribute 'dtype'
+        pytest.skip("SyncBatchNorm in 1.7 is buggy")
+
     if with_sync_bn and not wrap_bn:
         pytest.skip("SyncBatchNorm requires auto_wrap_bn")
 
