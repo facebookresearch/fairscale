@@ -202,9 +202,9 @@ class FullyShardedDataParallel(nn.Module):
             cache as inner FSDP instances finish part of the forward pass to save GPU memory.
             Default: False
         force_input_to_fp32 (bool):
-            Set to ``True`` to force input type to be FP32 when the FSDP instance is in
-            full precision mode. This helps avoid issues running SyncBatchNorm with AMP
-            and checkpoint_wrapper.
+            Set to ``True`` to force input floating point tensors to be FP32 (if they are FP16)
+            when the FSDP instance is in full precision mode. This helps avoid issues of running
+            SyncBatchNorm with AMP and checkpoint_wrapper.
             Default: False
         verbose (bool):
             Set this to ``True`` to turn on verbose output for model's string representation.
@@ -993,13 +993,13 @@ class FullyShardedDataParallel(nn.Module):
         # For root and mixed precision, we convert the input to FP16 (no_grad is needed for
         # the conversion).
         if self._is_root and self.mixed_precision:
-            args, kwargs = cast_inputs_to_dtype(True, True, *args, **kwargs)
+            args, kwargs = cast_floats_to_right_precision(True, True, *args, **kwargs)
 
         # If enabled, convert the input to FP32 if we are in full precision.
         # no_grad is not used because the input might be for a non-root instance,
         # which mean autograd needs to go through the conversion.
         if self.force_input_to_fp32 and not self.mixed_precision:
-            args, kwargs = cast_inputs_to_dtype(False, False, *args, **kwargs)
+            args, kwargs = cast_floats_to_right_precision(False, False, *args, **kwargs)
 
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
@@ -1692,9 +1692,9 @@ def _get_default_cuda_device(module: nn.Module) -> torch.device:
     return torch.device("cuda")
 
 
-def cast_inputs_to_dtype(to_fp16: bool, no_grad: bool, *args: Any, **kwargs: Any) -> Tuple[Any, Any]:
+def cast_floats_to_right_precision(to_fp16: bool, no_grad: bool, *args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     """
-    Cast any Tensors in *args or **kwargs to FP16 or FP32.
+    Cast floating point Tensors in *args or **kwargs to FP16 or FP32 if they are not.
     """
 
     def fn_fp16(x: torch.Tensor) -> torch.Tensor:
