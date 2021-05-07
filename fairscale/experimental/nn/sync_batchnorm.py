@@ -88,7 +88,7 @@ class SyncBatchNorm(torch.nn.BatchNorm2d):
         vec = torch.cat([mean, meansqr])
         handle.wait()
         vec = vec * (count / total_count)
-        mean, meansqr = differentiable_all_reduce(vec, group=self._process_group).chunk(2)
+        mean, meansqr = differentiable_all_reduce(vec, group=self._process_group).chunk(2)  # type: ignore
 
         return _forward(
             input,
