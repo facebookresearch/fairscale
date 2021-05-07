@@ -6,5 +6,6 @@
 from typing import List
 
 from .offload import OffloadModel
+from .sync_batchnorm import SyncBatchNorm
 
 __all__: List[str] = []

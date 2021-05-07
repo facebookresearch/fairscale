@@ -5,3 +5,4 @@ tests/nn/data_parallel/test_fsdp_freezing_weights.py
 tests/nn/data_parallel/test_fsdp.py
 tests/nn/misc/test_flatten_params_wrapper.py
 tests/nn/pipe/test_parity.py
+tests/experimental/nn/test_sync_batchnorm.py
