@@ -257,5 +257,13 @@ def test_multiin_multiout(device, multiout, checkpoint_config):
 
 def test_deprecated_path():
 
+    # Check if import works as before.
+    # from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
+    from fairscale.nn import checkpoint_wrapper
+
+    ffn = nn.Sequential(nn.Linear(32, 128), nn.Dropout(p=0.5), nn.Linear(128, 32),)
+    ffn = checkpoint_wrapper(ffn, {})
+
+    # Check if direct import works as before.
     ffn = nn.Sequential(nn.Linear(32, 128), nn.Dropout(p=0.5), nn.Linear(128, 32),)
     ffn = deprecated_checkpoint_wrapper(ffn, {})
