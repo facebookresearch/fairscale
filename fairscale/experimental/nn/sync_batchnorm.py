@@ -35,30 +35,27 @@ def _forward(
     affine: bool,
     track_running_stats: bool,
     mean: torch.Tensor,
-    var: torch.Tensor,
+    meansqr: torch.Tensor,
     momentum: float,
     eps: float,
-    weight_param: torch.Tensor,
-    bias_param: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
     running_mean: torch.Tensor,
     running_var: torch.Tensor,
     total_count: torch.Tensor,
 ) -> torch.Tensor:
-    invstd = torch.rsqrt(var + eps)
-    if affine:
-        scale = weight_param.reshape(mean.shape) * invstd
-        bias = bias_param.reshape(mean.shape) - mean * scale
-    else:
-        scale = invstd
-        bias = -mean * scale
-
+    var = meansqr - mean * mean
     if track_running_stats:
         with torch.no_grad():
             unbiased_var = var * (total_count / (total_count - 1))
             running_mean += momentum * (mean.reshape(-1) - running_mean)
             running_var += momentum * (unbiased_var.reshape(-1) - running_var)
 
-    return input * scale + bias
+    invstd = torch.rsqrt(var + eps)
+    if affine:
+        return (input - mean) * invstd * weight.reshape(mean.shape) + bias.reshape(mean.shape)
+    else:
+        return (input - mean) * invstd
 
 
 if torch.__version__.split(".")[:2] >= ["1", "7"]:
@@ -92,14 +89,13 @@ class SyncBatchNorm(torch.nn.BatchNorm2d):
         handle.wait()
         vec = vec * (count / total_count)
         mean, meansqr = differentiable_all_reduce(vec, group=self._process_group).chunk(2)
-        var = meansqr - mean * mean
 
         return _forward(
             input,
             self.affine,
             self.track_running_stats,
             mean,
-            var,
+            meansqr,
             self.momentum,
             self.eps,
             self.weight,
