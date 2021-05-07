@@ -50,21 +50,18 @@ def test_forward_cuda():
 
 
 # Verify that top gate is allocated capacity as per Algorithm 1 in GShard paper.
-def test_top1s():
+def test_expert1_overflow():
     num_tokens = 8
     num_experts = 4
     logits = torch.randn(num_tokens, num_experts)
     logits[:, 0] = torch.max(logits, dim=1).values + 1  # Force overflow
     top1s = torch.argmax(logits, dim=1)
-    assert top1s.eq(0).all().item(), top1s
-    l_aux, _, dispatch_mask = top2gating(logits)
+    assert top1s.eq(0).all(), top1s
+    _, __, dispatch_mask = top2gating(logits)
     capacity = 2 * num_tokens // num_experts
-    n_sent_to_expert = [0] * num_experts
-    for i, s in enumerate(top1s):
-        e = s.item()
-        loc = n_sent_to_expert[e]
-        n_sent_to_expert[e] = loc + 1
-        if n_sent_to_expert[e] <= capacity:
-            assert dispatch_mask[i][e][loc]
+
+    for i in range(num_tokens):
+        if i < capacity:
+            assert dispatch_mask[i][0][i]
         else:
-            assert not dispatch_mask[i][e].any()
+            assert not dispatch_mask[i][0].any()
