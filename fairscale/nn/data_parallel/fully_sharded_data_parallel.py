@@ -23,9 +23,9 @@ import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
-from fairscale.optim.utils import broadcast_object, calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
+from fairscale.utils.params import broadcast_object, calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
 

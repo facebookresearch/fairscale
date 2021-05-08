@@ -17,8 +17,7 @@ from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
 from fairscale.nn.misc import ParamBucket
-
-from .utils import broadcast_object, calc_grad_norm, get_global_rank, recursive_copy_to_device
+from fairscale.utils.params import broadcast_object, calc_grad_norm, get_global_rank, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
