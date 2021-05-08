@@ -23,7 +23,7 @@ import torch.distributed as dist
 
 from fairscale.nn.misc import GradBucket
 from fairscale.optim import OSS
-from fairscale.optim.utils import Workhandle, get_global_rank
+from fairscale.utils.params import Workhandle, get_global_rank
 
 
 def _trainable(param: torch.Tensor) -> bool:
