@@ -155,7 +155,8 @@ def _distributed_worker(
     e2 = run(0, data_mb)  # no compute, only all-gather
     e3 = run(compute_cycles, 0)  # only compute, no all-gather
     e4 = run(compute_cycles, data_mb)  # both compute and all-gather
-    print(f"rank{rank}:\n  {e1}\n  {e2}\n  {e3}\n  {e4}")
+    debug_string = f"rank{rank}:\n  {e1}\n  {e2}\n  {e3}\n  {e4}"
+    print(debug_string)
 
     # Check the cpu/gpu timing. CPU should run ahead of GPU. Therefore, cpu-gpu
     # wait should be long, except when there is no real work on GPU.
@@ -171,7 +172,7 @@ def _distributed_worker(
         for l in long:
             # 10X longer is a safe margin, since the GPU work timing is around 100X more
             # of that of the CPU.
-            assert s * 10 < l, f"{s} and {l}"
+            assert s * 10 < l, f"{s} * 10 < {l} in" + debug_string
 
     # Check the GPU timing.
     short = [e1[2], e1[3], e2[2]]
@@ -184,26 +185,28 @@ def _distributed_worker(
         for l in long:
             # 10X longer is a safe margin, since the time is around 100X longer
             # when there is work on GPU vs. no work.
-            assert s * 10 < l, f"{s} and {l}"
+            assert s * 10 < l, f"{s} * 10 < {l}" + debug_string
 
     # Check the GPU overlapping when there is all-gather.
     if world_size > 1:
         compute_only = e3[2]
         all_gather_only = e2[3]
         both = e4[3]
-        assert compute_only + all_gather_only > 1.1 * both, f"{compute_only} {all_gather_only} > 1.1 {both}"
+        assert compute_only + all_gather_only > 1.1 * both, (
+            f"{compute_only} + {all_gather_only} > 1.1 * {both} in " + debug_string
+        )
 
     teardown()
 
 
 @skip_if_single_gpu
 @pytest.mark.parametrize("world_size", [1, 2])
-@pytest.mark.parametrize("flatten", [True, False])
-@pytest.mark.parametrize("mixed", [True, False])
+@pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
+@pytest.mark.parametrize("mixed", ["mixed", "full"])
 def test_forward_overlap(world_size, flatten, mixed):
     fsdp_config = {
-        "flatten_parameters": flatten,
-        "mixed_precision": mixed,
+        "flatten_parameters": flatten == "flatten",
+        "mixed_precision": mixed == "mixed",
     }
     with temp_files_ctx(2) as temp_files:
         mp.spawn(
