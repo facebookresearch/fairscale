@@ -115,11 +115,11 @@ def _distributed_worker(
 
             # backward
             out.backward()
-            if torch_version >= (1, 7, 0):
-                model.zero_grad(set_to_none=True)
-            else:
+            if torch_version < (1, 7, 0):
                 for p in model.parameters():
                     p.grad = None
+            else:
+                model.zero_grad(set_to_none=True)
 
             cpu_iter_time = time.process_time() - cpu_start
 
