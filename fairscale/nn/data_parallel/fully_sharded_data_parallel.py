@@ -1451,7 +1451,8 @@ class FullyShardedDataParallel(nn.Module):
         if params is None:
             params = self.params
         self.has_full_params = False
-        self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
+        # XXX: testing
+        # self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self._streams["all_gather"]):
             for p in params:
                 if not p._is_sharded:  # e.g., world_size == 1
@@ -1695,16 +1696,21 @@ def _get_default_cuda_device(module: nn.Module) -> torch.device:
 def cast_floats_to_right_precision(to_fp16: bool, no_grad: bool, *args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     """
     Cast floating point Tensors in *args or **kwargs to FP16 or FP32 if they are not.
+    We also retain the requires_grad flag so that casting doesn't affect the autograd graph.
     """
 
     def fn_fp16(x: torch.Tensor) -> torch.Tensor:
         if x.dtype is torch.float32:
-            return x.half()
+            y = x.half()
+            y.requires_grad = x.requires_grad
+            return y
         return x
 
     def fn_fp32(x: torch.Tensor) -> torch.Tensor:
         if x.dtype is torch.float16:
-            return x.float()
+            y = x.float()
+            y.requires_grad = x.requires_grad
+            return y
         return x
 
     fn = fn_fp16 if to_fp16 else fn_fp32
