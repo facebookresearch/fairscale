@@ -1452,7 +1452,7 @@ class FullyShardedDataParallel(nn.Module):
             params = self.params
         self.has_full_params = False
         # XXX: testing
-        # self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
+        self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self._streams["all_gather"]):
             for p in params:
                 if not p._is_sharded:  # e.g., world_size == 1
@@ -1702,14 +1702,16 @@ def cast_floats_to_right_precision(to_fp16: bool, no_grad: bool, *args: Any, **k
     def fn_fp16(x: torch.Tensor) -> torch.Tensor:
         if x.dtype is torch.float32:
             y = x.half()
-            y.requires_grad = x.requires_grad
+            if x.is_leaf:
+                y.requires_grad = x.requires_grad
             return y
         return x
 
     def fn_fp32(x: torch.Tensor) -> torch.Tensor:
         if x.dtype is torch.float16:
             y = x.float()
-            y.requires_grad = x.requires_grad
+            if x.is_leaf:
+                y.requires_grad = x.requires_grad
             return y
         return x
 

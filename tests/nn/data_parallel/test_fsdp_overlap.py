@@ -20,7 +20,7 @@ import torch.nn as nn
 
 from fairscale.nn import enable_wrap, wrap
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
+from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx, torch_version
 
 
 class Layer(nn.Module):
@@ -115,7 +115,11 @@ def _distributed_worker(
 
             # backward
             out.backward()
-            model.zero_grad(set_to_none=True)
+            if torch_version >= (1, 7, 0):
+                model.zero_grad(set_to_none=True)
+            else:
+                for p in model.parameters():
+                    p.grad = None
 
             cpu_iter_time = time.process_time() - cpu_start
 
