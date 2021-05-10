@@ -960,6 +960,8 @@ class FullyShardedDataParallel(nn.Module):
         self._streams["fp32_to_fp16"] = torch.cuda.Stream()
         # Stream for all-gathering parameters.
         self._streams["all_gather"] = torch.cuda.Stream()
+        # Stream for freeing full parameters.
+        self._streams["free_full_params"] = torch.cuda.Stream()
         # Stream for overlapping grad reduction with the backward pass.
         self._streams["post_backward"] = torch.cuda.Stream()
         # Helper for bucketing reduce-scatter ops. This is also shared with
@@ -1451,9 +1453,8 @@ class FullyShardedDataParallel(nn.Module):
         if params is None:
             params = self.params
         self.has_full_params = False
-        # XXX: testing
-        self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(self._streams["all_gather"]):
+        self._streams["free_full_params"].wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(self._streams["free_full_params"]):
             for p in params:
                 if not p._is_sharded:  # e.g., world_size == 1
                     if self.mixed_precision:
