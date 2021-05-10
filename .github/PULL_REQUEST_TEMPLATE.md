@@ -1,4 +1,7 @@
-# Before submitting
+## What does this PR do?
+Fixes # (issue).
+
+## Before submitting
 
 - [ ] Did you have fun?
   - Make sure you had fun coding 🙃
@@ -12,9 +15,6 @@
 - [ ] Did you update the [changelog](https://github.com/facebookresearch/fairscale/blob/master/CHANGELOG.md)? (if needed)
   - [ ] N/A
 
-
-## What does this PR do?
-Fixes # (issue).
 
 ## PR review
 Anyone in the community is free to review the PR once the tests have passed.
