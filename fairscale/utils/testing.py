@@ -698,3 +698,15 @@ def dump_all_tensors(rank: int) -> None:
         except Exception as e:
             pass
     print(torch.cuda.memory_summary())
+
+
+def get_smi_memory() -> float:
+    """Return process's GPU memory in MB."""
+    pid = os.getpid()
+    info_string = torch.cuda.list_gpu_processes()
+    for line in info_string.splitlines():
+        if str(pid) in line:
+            toks = line.split()
+            return float(toks[3])
+    # If the process is not in the list, we are not using the GPU.
+    return 0.0
