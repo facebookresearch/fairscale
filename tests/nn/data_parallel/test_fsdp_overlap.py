@@ -109,6 +109,8 @@ def _distributed_worker(
             cpu_start = time.process_time()
 
             # forward
+            # Even though both e1 & e2 are on the compute stream, since
+            # compute depends on all_gather, e2-e1 includes all_gather time.
             e1.record()
             out = model(batch)
             e2.record()
@@ -145,8 +147,11 @@ def _distributed_worker(
 
         return [cpu_iter.avg(), cpu_wait.avg(), gpu_compute.avg(), gpu_total.avg()]
 
+    # These values are tuned for CI GPUs. For you local GPU is better to tune the gpu_compute
+    # and gpu_total (all_gather only) times to be roughly equal. Otherwise, the 110% percent
+    # assertion below would fire incorrectly even when overlap is happening.
     compute_cycles = 100_000_000
-    data_mb = 10
+    data_mb = 80
     if fsdp_config["mixed_precision"]:
         # make sure all-gather amount are the same in both mixed and full.
         data_mb *= 2
@@ -172,7 +177,7 @@ def _distributed_worker(
         for l in long:
             # 10X longer is a safe margin, since the GPU work timing is around 100X more
             # of that of the CPU.
-            assert s * 10 < l, f"{s} * 10 < {l} in" + debug_string
+            assert s * 10 < l, f"{s} * 10 < {l} in " + debug_string
 
     # Check the GPU timing.
     short = [e1[2], e1[3], e2[2]]
@@ -185,7 +190,7 @@ def _distributed_worker(
         for l in long:
             # 10X longer is a safe margin, since the time is around 100X longer
             # when there is work on GPU vs. no work.
-            assert s * 10 < l, f"{s} * 10 < {l}" + debug_string
+            assert s * 10 < l, f"{s} * 10 < {l} in " + debug_string
 
     # Check the GPU overlapping when there is all-gather.
     if world_size > 1:
