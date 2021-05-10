@@ -11,6 +11,8 @@
 
 from statistics import mean
 import time
+from typing import Optional
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -20,15 +22,23 @@ import torch.nn as nn
 
 from fairscale.nn import enable_wrap, wrap
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx, torch_version
+from fairscale.utils.testing import (
+    dist_init,
+    get_cycles_per_ms,
+    skip_if_single_gpu,
+    teardown,
+    temp_files_ctx,
+    torch_version,
+)
 
 
 class Layer(nn.Module):
-    def __init__(self, compute_cycles, all_gather_mb):
+    def __init__(self, compute_cycles, has_params: bool):
         super().__init__()
         self.sleep_cycles = compute_cycles
-        if all_gather_mb > 0:
-            self.l = nn.Linear(all_gather_mb * 1024 * 1024 // 4, 1)
+        self.l: Optional[nn.Parameter] = None
+        if has_params:
+            self.l = nn.Parameter(torch.rand(1))
 
     def forward(self, x):
         # Get 2 events.
@@ -37,7 +47,10 @@ class Layer(nn.Module):
 
         # Record the fake forward compute time.
         self.e1.record()
-        torch.cuda._sleep(self.sleep_cycles)
+        if self.sleep_cycles > 0:
+            torch.cuda._sleep(self.sleep_cycles)
+        if self.l is not None:
+            x = x + self.l  # force params to be part of the graph
         self.e2.record()
         return x
 
@@ -46,14 +59,14 @@ class Layer(nn.Module):
         return self.e1.elapsed_time(self.e2)
 
 
-def _create_model(fsdp_config, compute_cycles, all_gather_mb):
+def _create_model(fsdp_config, compute_cycles, has_params: bool):
     with enable_wrap(wrapper_cls=FSDP, **fsdp_config):
         model = wrap(
             nn.Sequential(
-                wrap(Layer(compute_cycles, all_gather_mb)),
-                wrap(Layer(compute_cycles, all_gather_mb)),
-                wrap(Layer(compute_cycles, all_gather_mb)),
-                wrap(Layer(compute_cycles, all_gather_mb)),
+                wrap(Layer(compute_cycles, has_params)),
+                wrap(Layer(compute_cycles, has_params)),
+                wrap(Layer(compute_cycles, has_params)),
+                wrap(Layer(compute_cycles, has_params)),
             )
         ).cuda()
     return model
@@ -84,19 +97,24 @@ def _distributed_worker(
     result = dist_init(rank, world_size, tempfile, tempfile_rpc)
     assert result, "Dist init failed"
 
-    def run(compute_cycles, all_gather_mb):
-        model = _create_model(fsdp_config, compute_cycles, all_gather_mb)
+    def run(compute_cycles, all_gather_cycles):
+        has_params = all_gather_cycles > 0
+        model = _create_model(fsdp_config, compute_cycles, has_params)
 
-        if gpu_id == 0:
-            print(model)
+        # if gpu_id == 0:
+        #    print(model)
 
         # Get the input and sets the input's requires_grad to True because
         # we have a fake compute in the forward pass.
         batch = torch.rand(1).cuda()
         batch.requires_grad = True
 
+        # Save the original torch.distributed.all_gather function since we will
+        # patch it to include an artificial delay.
+        orig_all_gather = torch.distributed.all_gather
+
         # We run 20 iterations but only collect timing data from the minimal 10
-        # data points because nondeterministic system events can disturbe the timing.
+        # data points because nondeterministic system events can disturb the timing.
         cpu_iter = Min10()
         cpu_wait = Min10()
         gpu_compute = Min10()
@@ -108,11 +126,24 @@ def _distributed_worker(
 
             cpu_start = time.process_time()
 
+            all_gather_called = False
+
+            def _delayed_all_gather(*args, **kwargs):
+                nonlocal all_gather_called
+                all_gather_called = True
+                torch.cuda._sleep(all_gather_cycles)
+                return orig_all_gather(*args, **kwargs)
+
             # forward
             # Even though both e1 & e2 are on the compute stream, since
             # compute depends on all_gather, e2-e1 includes all_gather time.
             e1.record()
-            out = model(batch)
+            with patch("torch.distributed.all_gather", _delayed_all_gather):
+                out = model(batch)
+                if has_params and world_size > 1:
+                    assert all_gather_called
+                else:
+                    assert not all_gather_called
             e2.record()
 
             # backward
@@ -143,40 +174,35 @@ def _distributed_worker(
             cpu_iter.add(cpu_iter_time)
             cpu_wait.add(cpu_wait_for_gpu_time)
             gpu_compute.add(sum(times))
-            gpu_total.add(e1.elapsed_time(e2))
+            gpu_total.add(overall_gpu_time)
 
         del model
-        return [cpu_iter.avg(), cpu_wait.avg(), gpu_compute.avg(), gpu_total.avg()]
+        return {
+            "cpu_iter": cpu_iter.avg(),
+            "cpu_wait": cpu_wait.avg(),
+            "gpu_compute": gpu_compute.avg(),
+            "gpu_total": gpu_total.avg(),
+        }
 
-    # These values are tuned for CI GPUs. For you local GPU is better to tune the gpu_compute
-    # and gpu_total (all_gather only) times to be roughly equal. Otherwise, the 110% percent
-    # assertion below would fire incorrectly even when overlap is happening.
-    compute_cycles = 100_000_000
-    data_mb = 40
-    if fsdp_config["mixed_precision"]:
-        # make sure all-gather amount are the same in both mixed and full.
-        data_mb *= 2
-    if not fsdp_config["flatten_parameters"]:
-        # TODO (Min): figure why non-flatten is faster in the test.
-        data_mb *= 6
+    sleep_cycles = int(100 * get_cycles_per_ms())
 
     e1 = run(0, 0)  # no compute, no all-gather
-    e2 = run(0, data_mb)  # no compute, only all-gather
-    e3 = run(compute_cycles, 0)  # only compute, no all-gather
-    e4 = run(compute_cycles, data_mb)  # both compute and all-gather
-    debug_string = f"rank{rank}:\n  {e1}\n  {e2}\n  {e3}\n  {e4}"
+    e2 = run(0, sleep_cycles)  # no compute, only all-gather
+    e3 = run(sleep_cycles, 0)  # only compute, no all-gather
+    e4 = run(sleep_cycles, sleep_cycles)  # both compute and all-gather
+    debug_string = f"\nrank{rank}:\n  e1: {e1}\n  e2: {e2}\n  e3: {e3}\n  e4: {e4}"
     print(debug_string)
 
     # Check the cpu/gpu timing. CPU should run ahead of GPU. Therefore, cpu-gpu
     # wait should be long, except when there is no real work on GPU.
     #
     # If the assertions fail below, we likely have a cpu-gpu wait in the forward/backward pass.
-    short = [e1[0], e2[0], e3[0], e4[0], e1[1]]
-    long = [e3[1], e4[1]]
+    short = [e1["cpu_iter"], e2["cpu_iter"], e3["cpu_iter"], e4["cpu_iter"], e1["cpu_wait"]]
+    long = [e3["cpu_wait"], e4["cpu_wait"]]
     if world_size == 1:
-        short.append(e2[1])  # all gather should not be happening.
+        short.append(e2["cpu_wait"])  # all gather should not be happening.
     else:
-        long.append(e2[1])  # all gather should happen and prolong the cpu-gpu wait.
+        long.append(e2["cpu_wait"])  # all gather should happen and prolong the cpu-gpu wait.
     for s in short:
         for l in long:
             # 10X longer is a safe margin, since the GPU work timing is around 100X more
@@ -184,12 +210,12 @@ def _distributed_worker(
             assert s * 10 < l, f"{s} * 10 < {l} in " + debug_string
 
     # Check the GPU timing.
-    short = [e1[2], e1[3], e2[2]]
-    long = [e3[2], e3[3], e4[2], e4[3]]
+    short = [e1["gpu_compute"], e1["gpu_total"], e2["gpu_compute"]]
+    long = [e3["gpu_compute"], e3["gpu_total"], e4["gpu_compute"], e4["gpu_total"]]
     if world_size == 1:
-        short.append(e2[3])  # all gather should not be happening.
+        short.append(e2["gpu_total"])  # all gather should not be happening.
     else:
-        long.append(e2[3])  # all gather should happen and prolong the cpu-gpu wait.
+        long.append(e2["gpu_total"])  # all gather should happen and prolong the cpu-gpu wait.
     for s in short:
         for l in long:
             # 10X longer is a safe margin, since the time is around 100X longer
@@ -198,9 +224,9 @@ def _distributed_worker(
 
     # Check the GPU overlapping when there is all-gather.
     if world_size > 1:
-        compute_only = e3[2]
-        all_gather_only = e2[3]
-        both = e4[3]
+        compute_only = e3["gpu_compute"]
+        all_gather_only = e2["gpu_total"]
+        both = e4["gpu_total"]
         assert compute_only + all_gather_only > 1.1 * both, (
             f"{compute_only} + {all_gather_only} > 1.1 * {both} in " + debug_string
         )
