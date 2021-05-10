@@ -24,28 +24,23 @@ from fairscale.nn import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import auto_wrap_bn
 from fairscale.nn.wrap import enable_wrap, wrap
-from fairscale.utils.testing import (
-    dist_init,
-    objects_are_equal,
-    skip_if_single_gpu,
-    teardown,
-    temp_files_ctx,
-    torch_version,
-)
+from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx, torch_version
 
 
 class Model(nn.Module):
+    """Model to test FSDP(checkpoint())."""
+
     def __init__(self):
         super().__init__()
-        self.block1 = nn.Sequential(nn.Conv2d(3, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True),)
+        self.block1 = nn.Sequential(nn.Conv2d(3, 4, kernel_size=3), nn.BatchNorm2d(4), nn.ReLU(inplace=True))
         self.block2 = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=3),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(4, 8, kernel_size=3),
+            nn.BatchNorm2d(8),
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool2d(output_size=(1, 1)),
             nn.Flatten(),
         )
-        self.head = nn.Linear(128, 10)
+        self.head = nn.Linear(8, 10)
 
     def forward(self, x):
         if isinstance(x, torch.Tensor):
@@ -55,14 +50,50 @@ class Model(nn.Module):
             return torch.cat(ys, dim=0)
 
 
-def create_model(with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter):
-    model = Model()
+class Model2(nn.Module):
+    """Model to test FSDP(checkpoint(), checkpoint())."""
+
+    def __init__(self):
+        super().__init__()
+        self.block1 = nn.Sequential(nn.Conv2d(3, 4, kernel_size=3), nn.BatchNorm2d(4), nn.ReLU(inplace=True))
+        self.block2 = nn.Sequential(nn.Conv2d(4, 4, kernel_size=3), nn.BatchNorm2d(4), nn.ReLU(inplace=False))
+        self.block3 = nn.Sequential(nn.Conv2d(4, 8, kernel_size=3), nn.BatchNorm2d(8), nn.ReLU(inplace=True))
+        self.head = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.Flatten(), nn.Linear(8, 10))
+
+    def forward(self, x):
+        if isinstance(x, torch.Tensor):
+            return self.head(self.block3(self.block2(self.block1(x))))
+        elif isinstance(x, list):
+            ys = [self.head(self.block3(self.block2(self.block1(e)))) for e in x]
+            return torch.cat(ys, dim=0)
+
+
+def _create_model(
+    with_model2, with_sync_bn, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
+):
+    model = Model2() if with_model2 else Model()
+    fsdp_config = None
+    if with_sync_bn:
+        model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        fsdp_config = {
+            "wrapper_cls": FSDP,
+            "mixed_precision": False,
+            "flatten_parameters": False,
+            "reshard_after_forward": False,
+            "bucket_cap_mb": 0,
+            "force_input_to_fp32": True,  # SyncBN needs this.
+        }
+
     if with_fsdp:
         if wrap_bn:
-            model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False)
-            model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False)
+            model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False, fsdp_config=fsdp_config)
+            model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False, fsdp_config=fsdp_config)
+            if with_model2:
+                model.block3 = auto_wrap_bn(model.block3, single_rank_pg=False, fsdp_config=fsdp_config)
         if with_checkpoint:
             model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=True)
+            if with_model2:
+                model.block3 = checkpoint_wrapper(model.block3, maintain_forward_counter=True)
         with enable_wrap(
             wrapper_cls=FSDP,
             flatten_parameters=flatten,
@@ -72,15 +103,29 @@ def create_model(with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, 
         ):
             model.block1 = wrap(model.block1)
             model.block2 = wrap(model.block2)
+            if with_model2:
+                model.block3 = wrap(model.block3)
             model.head = wrap(model.head)
     else:
         if with_checkpoint:
             model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=False)
+            if with_model2:
+                model.block3 = checkpoint_wrapper(model.block3, maintain_forward_counter=False)
     return model
 
 
 def _distributed_worker(
-    gpu_id, world_size, with_fsdp, with_checkpoint, files, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
+    gpu_id,
+    world_size,
+    with_model2,
+    with_sync_bn,
+    with_fsdp,
+    with_checkpoint,
+    files,
+    mixed_precision,
+    flatten,
+    wrap_bn,
+    fp32_reduce_scatter,
 ):
     filename, filename_rpc = files[:2]
     filename_loss = files[2:]
@@ -101,15 +146,17 @@ def _distributed_worker(
 
     # Ensure we have multiple forward passes.
     batch = [
-        torch.randn(size=(2, 3, 224, 224)).cuda(),
-        torch.randn(size=(2, 3, 96, 96)).cuda(),
-        torch.randn(size=(2, 3, 96, 96)).cuda(),
+        torch.randn(size=(2, 3, 16, 16)).cuda(),
+        torch.randn(size=(2, 3, 9, 9)).cuda(),
+        torch.randn(size=(2, 3, 9, 9)).cuda(),
     ]
 
     if mixed_precision and not with_fsdp:
         batch = [x.half() for x in batch]
 
-    model = create_model(with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter)
+    model = _create_model(
+        with_model2, with_sync_bn, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
+    )
     model = model.cuda()
 
     if with_fsdp:
@@ -135,7 +182,7 @@ def _distributed_worker(
     if gpu_id == 0:
         print(model)
 
-    target = torch.LongTensor([0, 1, 2, 3, 4, 5]).cuda()
+    target = torch.tensor([0, 1, 2, 3, 4, 5], dtype=torch.long).cuda()
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
 
@@ -168,15 +215,91 @@ def _distributed_worker(
     teardown()
 
 
+_result_cache = {}
+
+
+def _get_cached_results(
+    world_size,
+    with_model2,
+    with_sync_bn,
+    with_fsdp,
+    with_checkpoint,
+    mixed_precision,
+    flatten,
+    wrap_bn,
+    fp32_reduce_scatter,
+):
+    """ Cache the training to save time. For DDP, flatten, wrap_bn etc. doesn't matter, so
+        the results can be cached.
+    """
+    if not with_fsdp:
+        flatten = None
+        wrap_bn = None
+        fp32_reduce_scatter = None
+
+    key = (
+        world_size,
+        with_model2,
+        with_sync_bn,
+        with_fsdp,
+        with_checkpoint,
+        mixed_precision,
+        flatten,
+        wrap_bn,
+        fp32_reduce_scatter,
+    )
+    global _result_cache
+    if key not in _result_cache:
+        # Get 4 files: 2 for dist_init and 2 for each rank to save the losses.
+        with temp_files_ctx(num=2 + world_size) as temp_files:
+            mp.spawn(
+                _distributed_worker,
+                (
+                    world_size,
+                    with_model2,
+                    with_sync_bn,
+                    with_fsdp,
+                    with_checkpoint,
+                    temp_files,
+                    mixed_precision,
+                    flatten,
+                    wrap_bn,
+                    fp32_reduce_scatter,
+                ),
+                nprocs=world_size,
+            )
+            final_losses = {}
+            for rank in range(world_size):
+                with open(temp_files[2 + rank], "rb") as f:
+                    for iter_key, loss in pickle.load(f).items():
+                        final_losses[f"rank_{rank}_{iter_key}"] = loss
+            _result_cache[key] = final_losses
+    return _result_cache[key]
+
+
 @skip_if_single_gpu
 @pytest.mark.parametrize("precision", ["full", "mixed"])
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
 @pytest.mark.parametrize("wrap_bn", ["auto_wrap_bn", "no_auto_wrap_bn"])
-def test_multiple_forward_checkpoint(precision, flatten, wrap_bn):
+@pytest.mark.parametrize("model_type", ["model1", "model2"])
+@pytest.mark.parametrize("bn_type", ["bn", "sync_bn"])
+def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type, bn_type):
     mixed_precision = precision == "mixed"
     flatten = flatten == "flatten"
     wrap_bn = wrap_bn == "auto_wrap_bn"
     fp32_reduce_scatter = True if mixed_precision else None
+    with_model2 = model_type == "model2"
+    with_sync_bn = bn_type == "sync_bn"
+
+    if torch_version() >= (1, 7, 0) and torch_version() < (1, 8, 0) and with_sync_bn:
+        # SyncBN is buggy in 1.7, errors like:
+        # E         File "/home/circleci/venv/lib/python3.8/site-packages/torch/nn/modules/_functions.py", line 13, in forward
+        # E           dtype=running_mean.dtype,
+        # E       AttributeError: 'NoneType' object has no attribute 'dtype'
+        pytest.skip("SyncBatchNorm in 1.7 is buggy")
+
+    if with_sync_bn and not wrap_bn:
+        pytest.skip("SyncBatchNorm requires auto_wrap_bn")
 
     if torch_version() < (1, 8, 0) and flatten:
         # 1.6 and 1.7 throws this error:
@@ -190,28 +313,36 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn):
     # Ensure ddp == ddp+ckpt == fsdp == fsdp+ckpt.
     for with_fsdp in [False, True]:
         for with_checkpoint in [False, True]:
-            # Get 4 files: 2 for dist_init and 2 for each rank to save the losses.
-            with temp_files_ctx(num=2 + world_size) as temp_files:
-                mp.spawn(
-                    _distributed_worker,
-                    (
-                        world_size,
-                        with_fsdp,
-                        with_checkpoint,
-                        temp_files,
-                        mixed_precision,
-                        flatten,
-                        wrap_bn,
-                        fp32_reduce_scatter,
-                    ),
-                    nprocs=world_size,
-                )
-                final_losses = {}
-                for rank in range(world_size):
-                    with open(temp_files[2 + rank], "rb") as f:
-                        final_losses[f"rank_{rank}"] = pickle.load(f)
-                if expected_losses is None:
-                    expected_losses = final_losses
-                else:
-                    print(f"fsdp: {with_fsdp} ckpt: {with_checkpoint}")
-                    assert objects_are_equal(expected_losses, final_losses, raise_exception=True)
+            if not with_fsdp and with_checkpoint:
+                continue
+            final_losses = _get_cached_results(
+                world_size,
+                with_model2,
+                with_sync_bn,
+                with_fsdp,
+                with_checkpoint,
+                mixed_precision,
+                flatten,
+                wrap_bn,
+                fp32_reduce_scatter,
+            )
+            if expected_losses is None:
+                expected_losses = final_losses
+            else:
+                print(f"checking: fsdp {with_fsdp} ckpt {with_checkpoint} with ddp+no_ckpt")
+
+                def check(exp, res):
+                    assert list(exp.keys()) == list(res.keys()), f"{list(exp.keys())} vs. {list(res.keys())}"
+                    rtol = 1e-4
+                    atol = 1e-5
+                    if with_model2 and mixed_precision and torch_version() >= (1, 9, 0):
+                        # On CI, with longer model2, mixed precsion and 1.9, even ddp vs. ddp+ckpt has
+                        # larger errors.
+                        rtol = 1e-3
+                        atol = 1e-4
+                    for key in exp.keys():
+                        exp_loss = exp[key]
+                        res_loss = res[key]
+                        torch.testing.assert_allclose(exp_loss, res_loss, rtol=rtol, atol=atol)
+
+                check(expected_losses, final_losses)

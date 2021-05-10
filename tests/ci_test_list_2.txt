@@ -1,3 +1,8 @@
+tests/nn/misc/test_checkpoint_activations.py
+tests/nn/misc/test_checkpoint_activations_norm.py
+tests/nn/data_parallel/test_fsdp_multiple_forward.py
+tests/nn/data_parallel/test_fsdp_apply.py
+tests/nn/data_parallel/test_fsdp_state_dict.py
 tests/utils/test_reduce_scatter_bucketer.py
 tests/utils/test_containers.py
 tests/utils/test_parallel.py
@@ -32,11 +37,10 @@ tests/nn/pipe/test_phony.py
 tests/nn/pipe/test_deferred_batch_norm.py
 tests/nn/pipe/test_dependency.py
 tests/nn/pipe/test_stream.py
-tests/experimental/nn/test_multiprocess_pipe.py
 tests/nn/moe/test_moe_layer.py
 tests/nn/moe/test_top2gating.py
+tests/experimental/nn/test_multiprocess_pipe.py
+tests/experimental/nn/test_sync_batchnorm.py
 tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
 tests/experimental/nn/test_offload.py
 tests/experimental/optim/test_dynamic_loss_scaler.py
-tests/nn/data_parallel/test_fsdp_apply.py
-tests/nn/data_parallel/test_fsdp_state_dict.py
