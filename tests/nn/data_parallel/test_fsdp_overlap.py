@@ -126,10 +126,11 @@ def _distributed_worker(
 
             cpu_start = time.process_time()
 
-            all_gather_called = [False]
+            all_gather_called = False
 
             def _delayed_all_gather(*args, **kwargs):
-                all_gather_called[0] = True
+                nonlocal all_gather_called
+                all_gather_called = True
                 torch.cuda._sleep(all_gather_cycles)
                 return orig_all_gather(*args, **kwargs)
 
@@ -140,9 +141,9 @@ def _distributed_worker(
             with patch("torch.distributed.all_gather", _delayed_all_gather):
                 out = model(batch)
                 if has_params and world_size > 1:
-                    assert all_gather_called[0]
+                    assert all_gather_called
                 else:
-                    assert not all_gather_called[0]
+                    assert not all_gather_called
             e2.record()
 
             # backward
@@ -190,7 +191,7 @@ def _distributed_worker(
     e3 = run(sleep_cycles, 0)  # only compute, no all-gather
     e4 = run(sleep_cycles, sleep_cycles)  # both compute and all-gather
     debug_string = f"\nrank{rank}:\n  e1: {e1}\n  e2: {e2}\n  e3: {e3}\n  e4: {e4}"
-    # print(debug_string)
+    print(debug_string)
 
     # Check the cpu/gpu timing. CPU should run ahead of GPU. Therefore, cpu-gpu
     # wait should be long, except when there is no real work on GPU.
