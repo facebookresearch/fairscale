@@ -11,7 +11,6 @@
 
 from statistics import mean
 import time
-from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -36,9 +35,9 @@ class Layer(nn.Module):
     def __init__(self, compute_cycles, has_params: bool):
         super().__init__()
         self.sleep_cycles = compute_cycles
-        self.l: Optional[nn.Parameter] = None
+        self.optional_param = None
         if has_params:
-            self.l = nn.Parameter(torch.rand(1))
+            self.optional_param = nn.Parameter(torch.rand(1))
 
     def forward(self, x):
         # Get 2 events.
@@ -49,8 +48,8 @@ class Layer(nn.Module):
         self.e1.record()
         if self.sleep_cycles > 0:
             torch.cuda._sleep(self.sleep_cycles)
-        if self.l is not None:
-            x = x + self.l  # force params to be part of the graph
+        if self.optional_param is not None:
+            x = x + self.optional_param  # force the param to be part of the graph
         self.e2.record()
         return x
 
@@ -97,21 +96,18 @@ def _distributed_worker(
     result = dist_init(rank, world_size, tempfile, tempfile_rpc)
     assert result, "Dist init failed"
 
+    # Save the original torch.distributed.all_gather function since we will
+    # patch it to include an artificial delay.
+    orig_all_gather = torch.distributed.all_gather
+
     def run(compute_cycles, all_gather_cycles):
         has_params = all_gather_cycles > 0
         model = _create_model(fsdp_config, compute_cycles, has_params)
-
-        # if gpu_id == 0:
-        #    print(model)
 
         # Get the input and sets the input's requires_grad to True because
         # we have a fake compute in the forward pass.
         batch = torch.rand(1).cuda()
         batch.requires_grad = True
-
-        # Save the original torch.distributed.all_gather function since we will
-        # patch it to include an artificial delay.
-        orig_all_gather = torch.distributed.all_gather
 
         # We run 20 iterations but only collect timing data from the minimal 10
         # data points because nondeterministic system events can disturb the timing.
@@ -120,7 +116,7 @@ def _distributed_worker(
         gpu_compute = Min10()
         gpu_total = Min10()
         for _ in range(20):
-            # Two events for measuring the overall time.
+            # Get two events for measuring the overall time.
             e1 = Event(enable_timing=True)
             e2 = Event(enable_timing=True)
 
@@ -134,7 +130,8 @@ def _distributed_worker(
                 torch.cuda._sleep(all_gather_cycles)
                 return orig_all_gather(*args, **kwargs)
 
-            # forward
+            # forward pass
+            #
             # Even though both e1 & e2 are on the compute stream, since
             # compute depends on all_gather, e2-e1 includes all_gather time.
             e1.record()
@@ -146,7 +143,7 @@ def _distributed_worker(
                     assert not all_gather_called
             e2.record()
 
-            # backward
+            # backward pass
             out.backward()
             if torch_version() >= (1, 7, 0):
                 model.zero_grad(set_to_none=True)
@@ -160,7 +157,7 @@ def _distributed_worker(
             out.item()
             cpu_wait_for_gpu_time = time.process_time() - cpu_start - cpu_iter_time
 
-            # get sum of compute time
+            # get sum of the compute time
             times = []
             for mod in model.modules():
                 if not isinstance(mod, Layer):
@@ -170,7 +167,6 @@ def _distributed_worker(
             # get gpu compute + all_gather time
             overall_gpu_time = e1.elapsed_time(e2)
 
-            # print(f"rank {rank}", cpu_iter_time, cpu_wait_for_gpu_time, sum(times), "vs", e1.elapsed_time(e2))
             cpu_iter.add(cpu_iter_time)
             cpu_wait.add(cpu_wait_for_gpu_time)
             gpu_compute.add(sum(times))
