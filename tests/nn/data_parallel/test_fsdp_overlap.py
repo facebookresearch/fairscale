@@ -145,13 +145,14 @@ def _distributed_worker(
             gpu_compute.add(sum(times))
             gpu_total.add(e1.elapsed_time(e2))
 
+        del model
         return [cpu_iter.avg(), cpu_wait.avg(), gpu_compute.avg(), gpu_total.avg()]
 
     # These values are tuned for CI GPUs. For you local GPU is better to tune the gpu_compute
     # and gpu_total (all_gather only) times to be roughly equal. Otherwise, the 110% percent
     # assertion below would fire incorrectly even when overlap is happening.
     compute_cycles = 100_000_000
-    data_mb = 80
+    data_mb = 40
     if fsdp_config["mixed_precision"]:
         # make sure all-gather amount are the same in both mixed and full.
         data_mb *= 2
