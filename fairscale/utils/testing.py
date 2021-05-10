@@ -578,21 +578,9 @@ class DeviceAndTypeCheckModule(Base):
 
 @functools.lru_cache()
 def get_cycles_per_ms() -> float:
-    """Approximate number of cycles per millisecond for torch.cuda._sleep
+    """Measure and return approximate number of cycles per millisecond for torch.cuda._sleep
 
     Copied from: github.com/pytorch/pytorch/blob/master/test/test_cuda.py
-
-    ..note::
-        This doesn't seems to return consistent cycles on desktop GPUs likely
-        due to frequency scaling.
-        >>> get_cycles_per_ms()
-        227.6441091140009
-        # new python process
-        >>> get_cycles_per_ms()
-        564.652154766248
-        # new python process
-        >>> get_cycles_per_ms()
-        245.56459442962856
     """
 
     def measure() -> float:
@@ -610,8 +598,9 @@ def get_cycles_per_ms() -> float:
     # the very first cuda call likely does a bunch of init, which takes
     # much longer than subsequent calls.
     #
-    # Tested on both v100 and Quadro GP100 GPUs and seems to return stable
-    # values. Therefore, we enable caching using lru_cache decorator above.
+    # Tested on both Tesla V100, Quadro GP100, Titan RTX, RTX 3090 GPUs
+    # and seems to return stable values. Therefore, we enable caching
+    # using lru_cache decorator above.
     num = 10
     vals = []
     for _ in range(num):
