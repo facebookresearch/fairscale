@@ -1451,8 +1451,6 @@ class FullyShardedDataParallel(nn.Module):
         if params is None:
             params = self.params
         self.has_full_params = False
-        # XXX: testing
-        self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self._streams["all_gather"]):
             for p in params:
                 if not p._is_sharded:  # e.g., world_size == 1

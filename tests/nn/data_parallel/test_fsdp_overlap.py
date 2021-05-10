@@ -155,6 +155,9 @@ def _distributed_worker(
     if fsdp_config["mixed_precision"]:
         # make sure all-gather amount are the same in both mixed and full.
         data_mb *= 2
+    if not fsdp_config["flatten_parameters"]:
+        # TODO (Min): figure why non-flatten is faster in the test.
+        data_mb *= 6
 
     e1 = run(0, 0)  # no compute, no all-gather
     e2 = run(0, data_mb)  # no compute, only all-gather
