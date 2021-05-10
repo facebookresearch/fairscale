@@ -960,8 +960,6 @@ class FullyShardedDataParallel(nn.Module):
         self._streams["fp32_to_fp16"] = torch.cuda.Stream()
         # Stream for all-gathering parameters.
         self._streams["all_gather"] = torch.cuda.Stream()
-        # Stream for freeing full parameters.
-        self._streams["free_full_params"] = torch.cuda.Stream()
         # Stream for overlapping grad reduction with the backward pass.
         self._streams["post_backward"] = torch.cuda.Stream()
         # Helper for bucketing reduce-scatter ops. This is also shared with
@@ -1453,20 +1451,22 @@ class FullyShardedDataParallel(nn.Module):
         if params is None:
             params = self.params
         self.has_full_params = False
-        self._streams["free_full_params"].wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(self._streams["free_full_params"]):
-            for p in params:
-                if not p._is_sharded:  # e.g., world_size == 1
-                    if self.mixed_precision:
-                        self._free_fp16_param_shard([p])
-                    continue
-                # There may be external references to the Tensor Storage that we
-                # can't modify, such as references that are created by
-                # ctx.save_for_backward in the forward pass. Thus when we
-                # unshard parameters, we should reuse the original Tensor
-                # Storage object and unshard it in-place. For now, just resize
-                # the Storage to 0 to save memory.
-                free_storage_(p._full_param_padded)
+        current_stream = torch.cuda.current_stream()
+        for p in params:
+            if not p._is_sharded:  # e.g., world_size == 1
+                if self.mixed_precision:
+                    self._free_fp16_param_shard([p])
+                continue
+            # Don't let PyTorch reuse this memory until all work in the current
+            # stream is complete.
+            p._full_param_padded.record_stream(current_stream)
+            # There may be external references to the Tensor Storage that we
+            # can't modify, such as references that are created by
+            # ctx.save_for_backward in the forward pass. Thus when we
+            # unshard parameters, we should reuse the original Tensor
+            # Storage object and unshard it in-place. For now, just resize
+            # the Storage to 0 to save memory.
+            free_storage_(p._full_param_padded)
 
     @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
