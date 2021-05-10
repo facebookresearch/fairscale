@@ -11,6 +11,7 @@
 
 from statistics import mean
 import time
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -35,10 +36,9 @@ class Layer(nn.Module):
     def __init__(self, compute_cycles, has_params: bool):
         super().__init__()
         self.sleep_cycles = compute_cycles
+        self.l: Optional[nn.Parameter] = None
         if has_params:
             self.l = nn.Parameter(torch.rand(1))
-        else:
-            self.l = None
 
     def forward(self, x):
         # Get 2 events.
