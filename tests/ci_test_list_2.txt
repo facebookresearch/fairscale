@@ -1,5 +1,3 @@
-tests/nn/misc/test_checkpoint_activations.py
-tests/nn/misc/test_checkpoint_activations_norm.py
 tests/nn/data_parallel/test_fsdp_multiple_forward.py
 tests/nn/data_parallel/test_fsdp_apply.py
 tests/nn/data_parallel/test_fsdp_state_dict.py
