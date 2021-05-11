@@ -356,7 +356,7 @@ class FullyShardedDataParallel(nn.Module):
     @property
     def cpu_offload(self) -> bool:
         return self.move_params_to_cpu
-    
+
     @property
     def module(self) -> nn.Module:
         return self._fsdp_wrapped_module  # note: may be a FlattenParamsWrapper instance
