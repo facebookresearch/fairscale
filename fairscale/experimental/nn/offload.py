@@ -117,6 +117,9 @@ class ModelShard(nn.Module):
             # Restore all the parameter buffers
             self.model_shard.to(device=self.device, non_blocking=non_blocking)
 
+    # Ignore the following function for code coverage since the backward pass
+    # is triggered by C++ code and cannot be calculated when overriding
+    # autograd.Function
     def backward_load(self, non_blocking: bool = True) -> None:  # pragma: no cover
         with torch.cuda.stream(self._cpu_to_gpu_stream):
             self.model_shard.to(self.device, non_blocking=non_blocking)
@@ -125,6 +128,9 @@ class ModelShard(nn.Module):
         with torch.cuda.stream(self._gpu_to_cpu_stream):
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
 
+    # Ignore the following function for code coverage since the backward pass
+    # is triggered by C++ code and cannot be calculated when overriding
+    # autograd.Function
     def backward_drop(self, non_blocking: bool = True) -> None:  # pragma: no cover
         with torch.cuda.stream(self._gpu_to_cpu_stream):
             self.model_shard.to(self.offload_device, non_blocking=non_blocking)
@@ -206,6 +212,9 @@ class OffloadFunction(torch.autograd.Function):
             r.requires_grad = True
         return result[0] if len(result) == 1 else result
 
+    # Ignore the following function for code coverage since the backward pass
+    # is triggered by C++ code and cannot be calculated when overriding
+    # autograd.Function
     @staticmethod
     @_conditional_amp_bwd_decorator
     def backward(ctx, *grad_outputs):  # type: ignore # pragma: no cover
@@ -324,6 +333,9 @@ class ShardSyncLayer(torch.autograd.Function):
 
         return inputs if isinstance(inputs, tuple) else (inputs,)
 
+    # Ignore the following function for code coverage since the backward pass
+    # is triggered by C++ code and cannot be calculated when overriding
+    # autograd.Function
     @staticmethod
     @_conditional_amp_bwd_decorator
     def backward(ctx, *grad_outputs):  # type: ignore # pragma: no cover
