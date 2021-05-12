@@ -9,20 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FSDP: fix extra process groups being created by default. Old behavior can cause excessive GPU memory usage. [#678]
 - FSDP: fix forward pass not overlapping compute and allgather [#671]
 - FSDP: improved frozen weight support [#657]
-- FSDP: workaround AMP autocast cache issue with `clear\_autocast\_cache` flag [#650]
+- FSDP: workaround AMP autocast cache issue with `clear_autocast_cache` flag [#650]
 - MoE: several fixes [#666] [#667] [#668]
-- setup.py: hide CUDA extensions behind `BUILD\_CUDA\_EXTENSIONS` envvar [#634]
+- setup.py: hide CUDA extensions behind `BUILD_CUDA_EXTENSIONS` envvar [#634]
 - SDP: re-expose the module property [#647]
-- Cleanup - rename and move the `checkpoint\_activations` wrapper [#654]
+- Cleanup - rename and move the `checkpoint_activations` wrapper [#654]
 
 ### Added
-- FSDP: added `force\_input\_to\_fp32` flag for SyncBatchNorm [#659]
+- FSDP: added `force_input_to_fp32` flag for SyncBatchNorm [#659]
 - FSDP: better memory usage for reduce bucket [#633]
 - Experimental SyncBatchNorm [#662]
 
 ## [0.3.6] - 2021-04-26
 ### Added
-- FSDP: Consolidate cpu_adam optimizer state dict ([#607](https://github.com/facebookresearch/fairscale/pull/607))
+- FSDP: Consolidate cpu\_adam optimizer state dict ([#607](https://github.com/facebookresearch/fairscale/pull/607))
 
 ### Fixed
 - FSDP: handle model with multiple forward pass and checkpoint ([#621](https://github.com/facebookresearch/fairscale/pull/621))
@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.3] - 2021-04-1
 ### Added
-- FSDP: changed auto\_wrap\_bn utility function so that single FSDP group is optional ([#556](https://github.com/facebookresearch/fairscale/pull/556))
+- FSDP: changed `auto_wrap_bn` utility function so that single FSDP group is optional ([#556](https://github.com/facebookresearch/fairscale/pull/556))
 - FSDP: optimizer state load/save ([#537](https://github.com/facebookresearch/fairscale/pull/537))
 - FSDP: fix weight init when using apply() ([#543](https://github.com/facebookresearch/fairscale/pull/543))
 - Multiprocess Pipe: retired old implementation
@@ -68,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Experimental: Add spectrain support ([#372](https://github.com/facebookresearch/fairscale/issues/372))
 - FSDP: enabled pytorch SyncBN (no asserting) ([#527](https://github.com/facebookresearch/fairscale/issues/527))
-- FSDP: added auto\_wrap\_bn utility function ([#531](https://github.com/facebookresearch/fairscale/pull/531))
+- FSDP: added `auto_wrap_bn` utility function ([#531](https://github.com/facebookresearch/fairscale/pull/531))
 
 ### Fixed
 - OSS: fix a compatibily problem with lightning wrt optimizer state dict ([#510](https://github.com/facebookresearch/fairscale/issues/510))
@@ -77,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.1] - 2021-03-09
 ### Added
 - FSDP docs ([#455](https://github.com/facebookresearch/fairscale/issues/455))
-- enable\_wrap and auto\_wrap APIs ([#446](https://github.com/facebookresearch/fairscale/issues/446))
+- `enable_wrap` and `auto_wrap` APIs ([#446](https://github.com/facebookresearch/fairscale/issues/446))
 - Added experimental.nn.OffloadModel API for training large models on a single GPU.([#432](https://github.com/facebookresearch/fairscale/issues/432))
 
 ### Fixed
@@ -94,7 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Catch corner case when the model is too small with respect to the world size, and shards are empty ([#406](https://github.com/facebookresearch/fairscale/pull/406))
-- Memory leak in checkpoint\_wrapper ([#412](https://github.com/facebookresearch/fairscale/pull/412))
+- Memory leak in `checkpoint_wrapper` ([#412](https://github.com/facebookresearch/fairscale/pull/412))
 
 ## [0.1.7] - 2021-02-19
 ### Fixed
@@ -144,9 +144,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - AdaScale:
   . Added gradient accumulation feature (#202)
-  . Added support of torch.lr_scheduler (#229)
-  . Added support for add_param_groups (#266)
-  . Added support for scale != world_size (#266)
+  . Added support of `torch.lr_scheduler` (#229)
+  . Added support for `add_param_groups` (#266)
+  . Added support for `scale != world_size` (#266)
 
 ### Fixed
 - AdaScale: smoothing factor value fixed when using gradient accumulation (#235)
@@ -165,7 +165,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - cpu support for Pipe (#188)
 - ShardedOptim: Distributed Grad Scaler (for torch AMP)  (#182)
 - OSS-aware clip grads, bridge sharded states (#167)
-- oss: add rank_local_state_dict staticmethod (#174)
+- oss: add `rank_local_state_dict` staticmethod (#174)
 - support for PyTorch 1.7.0 (#171)
 - Add implementation of AdaScale (#139)
 
@@ -182,7 +182,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.2] - 2020-08-28
 ### Added
-- add ddp that works with oss with reduce() not all_reduce() (#19)
+- add ddp that works with oss with `reduce()` not `all_reduce()` (#19)
 - support for PyTorch v1.6
 - add mixed precision Adam (#40)
 - Adam optimizer state scaling (#44)
@@ -192,7 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OSS restore state to proper device (#46)
 - optim/oss: support optimizers with additional step kwargs (#53)
 - optim/oss: fix state cast (#56)
-- fix eval for oss_ddp (#55)
+- fix eval for `oss_ddp` (#55)
 - optim/oss: work correctly with LRScheduler (#58)
 
 ## [0.0.1] - 2020-07-31
