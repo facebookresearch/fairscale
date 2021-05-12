@@ -933,8 +933,6 @@ class FullyShardedDataParallel(nn.Module):
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
         for n, m in self.named_modules():
-            # XXX: not be to merged
-            m.minxu_mod_name = n  # type: ignore
             # `n != ""` excludes self.
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 # We relax the assert for non-root instance, when the nested inialized module is wrapped
