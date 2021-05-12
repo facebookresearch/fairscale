@@ -992,16 +992,6 @@ class FullyShardedDataParallel(nn.Module):
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self._lazy_init()
 
-        if False and self.rank == 0:
-            print(
-                "start",
-                self.minxu_mod_name,
-                round(torch.cuda.memory_allocated() / 1024 / 1024),
-                round(torch.cuda.max_memory_allocated() / 1024 / 1024),
-                round(torch.cuda.memory_reserved() / 1024 / 1024),
-                round(torch.cuda.max_memory_reserved() / 1024 / 1024),
-            )
-
         # Start of a forward pass.
         self.training_state = TrainingState.FORWARD
 
