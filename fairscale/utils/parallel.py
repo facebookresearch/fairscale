@@ -73,8 +73,7 @@ def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
     through the PyTorch caching allocator, therefore, you may see GPU OOM even when
     torch.cuda.reserved_memory() is still way below the total amount of GPU memory.
 
-    Separate process groups also reduce the training speed. Quentin reported iteration time
-    going from 500ms to 420ms by not using separate processes groups for a vissl model.
+    Extra process groups can also reduce training speed (observed on VISSL models).
 
     Args:
         ranks (Optional[List[int]]):
