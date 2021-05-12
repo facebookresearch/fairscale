@@ -34,6 +34,7 @@ import logging
 import multiprocessing
 import os
 import random
+from statistics import mean
 import subprocess
 import sys
 import tempfile
@@ -577,30 +578,35 @@ class DeviceAndTypeCheckModule(Base):
 
 @functools.lru_cache()
 def get_cycles_per_ms() -> float:
-    """Approximate number of cycles per millisecond for torch.cuda._sleep
+    """Measure and return approximate number of cycles per millisecond for torch.cuda._sleep
 
     Copied from: github.com/pytorch/pytorch/blob/master/test/test_cuda.py
-
-    ..note::
-        This doesn't seems to return consistent cycles on desktop GPUs likely
-        due to frequency scaling.
-        >>> get_cycles_per_ms()
-        227.6441091140009
-        # new python process
-        >>> get_cycles_per_ms()
-        564.652154766248
-        # new python process
-        >>> get_cycles_per_ms()
-        245.56459442962856
     """
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    start.record()
-    torch.cuda._sleep(1000000)
-    end.record()
-    end.synchronize()
-    cycles_per_ms = 1000000 / start.elapsed_time(end)
-    return cycles_per_ms
+
+    def measure() -> float:
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        torch.cuda._sleep(1000000)
+        end.record()
+        end.synchronize()
+        cycles_per_ms = 1000000 / start.elapsed_time(end)
+        return cycles_per_ms
+
+    # Get 10 values and remove the 2 max and 2 min and return the avg.
+    # This is to avoid system disturbance that skew the results, e.g.
+    # the very first cuda call likely does a bunch of init, which takes
+    # much longer than subsequent calls.
+    #
+    # Tested on both Tesla V100, Quadro GP100, Titan RTX, RTX 3090 GPUs
+    # and seems to return stable values. Therefore, we enable caching
+    # using lru_cache decorator above.
+    num = 10
+    vals = []
+    for _ in range(num):
+        vals.append(measure())
+    vals = sorted(vals)
+    return mean(vals[2 : num - 2])
 
 
 class DummyProcessGroup:
@@ -681,3 +687,15 @@ def dump_all_tensors(rank: int) -> None:
         except Exception as e:
             pass
     print(torch.cuda.memory_summary())
+
+
+def get_smi_memory() -> float:
+    """Return process's GPU memory in MB."""
+    pid = os.getpid()
+    info_string = torch.cuda.list_gpu_processes()
+    for line in info_string.splitlines():
+        if str(pid) in line:
+            toks = line.split()
+            return float(toks[3])
+    # If the process is not in the list, we are not using the GPU.
+    return 0.0
