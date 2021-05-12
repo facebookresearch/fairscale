@@ -14,7 +14,7 @@ import torch
 from torch.nn import BatchNorm2d, LayerNorm, Linear, Sequential
 from torch.optim import SGD
 
-from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
+from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.utils.testing import objects_are_equal, torch_version
 
 NORM_TYPES = [LayerNorm, BatchNorm2d]

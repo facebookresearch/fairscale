@@ -1,5 +1,3 @@
-tests/nn/misc/test_checkpoint_activations.py
-tests/nn/misc/test_checkpoint_activations_norm.py
 tests/nn/data_parallel/test_fsdp_overlap.py
 tests/nn/data_parallel/test_fsdp_multiple_forward.py
 tests/nn/data_parallel/test_fsdp_apply.py
@@ -8,6 +6,10 @@ tests/utils/test_reduce_scatter_bucketer.py
 tests/utils/test_containers.py
 tests/utils/test_parallel.py
 tests/utils/test_state_dict.py
+tests/nn/checkpoint/test_checkpoint_activations.py
+tests/nn/checkpoint/test_checkpoint_activations_norm.py
+tests/nn/misc/test_grad_bucket.py
+tests/nn/misc/test_param_bucket.py
 tests/nn/wrap/test_wrap.py
 tests/nn/pipe_process/test_pipe.py
 tests/nn/pipe_process/test_transparency.py
