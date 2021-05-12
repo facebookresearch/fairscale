@@ -6,17 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
-- FSDP: fix extra process groups being created by default. Old behavior can cause excessive GPU memory usage.
-- FSDP: fix forward pass not overlapping compute and all-gather
-- FSDP: improved frozen weight support
-- FSDP: workaround AMP autocast cache issue with clear\_autocast\_cache flag
-- setup.py: hide CUDA extensions behind BUILD_CUDA_EXTENSIONS envvar
-- SDP: re-expose the module property ([#647](https://github.com/facebookresearch/fairscale/pull/647))
-- Cleanup - rename and move the checkpoint_activations wrapper ([654]https://github.com/facebookresearch/fairscale/pull/654)
+- FSDP: fix extra process groups being created by default. Old behavior can cause excessive GPU memory usage. [#678]
+- FSDP: fix forward pass not overlapping compute and allgather [#671]
+- FSDP: improved frozen weight support [#657]
+- FSDP: workaround AMP autocast cache issue with `clear\_autocast\_cache` flag [#650]
+- MoE: several fixes [#666] [#667] [#668]
+- setup.py: hide CUDA extensions behind `BUILD\_CUDA\_EXTENSIONS` envvar [#634]
+- SDP: re-expose the module property [#647]
+- Cleanup - rename and move the `checkpoint\_activations` wrapper [#654]
 
 ### Added
-- FSDP: added `force\_input\_to\_fp32` flag for SyncBatchNorm
-- FSDP: better memory usage for reduce bucket ([#633](https://github.com/facebookresearch/fairscale/pull/633))
+- FSDP: added `force\_input\_to\_fp32` flag for SyncBatchNorm [#659]
+- FSDP: better memory usage for reduce bucket [#633]
+- Experimental SyncBatchNorm [#662]
 
 ## [0.3.6] - 2021-04-26
 ### Added
