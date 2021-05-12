@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
-from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
+from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group, get_process_group_cached
 from fairscale.utils.params import broadcast_object, calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
@@ -233,7 +233,7 @@ class FullyShardedDataParallel(nn.Module):
     ):
         init_start = time.time()
         super().__init__()
-        self.process_group = process_group or dist.new_group()
+        self.process_group = process_group or get_process_group_cached()
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         self.reshard_after_forward = reshard_after_forward
@@ -928,6 +928,7 @@ class FullyShardedDataParallel(nn.Module):
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
         for n, m in self.named_modules():
+            m.minxu_mod_name = n
             # `n != ""` excludes self.
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 # We relax the assert for non-root instance, when the nested inialized module is wrapped
@@ -986,6 +987,16 @@ class FullyShardedDataParallel(nn.Module):
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self._lazy_init()
+
+        if False and self.rank == 0:
+            print(
+                "start",
+                self.minxu_mod_name,
+                round(torch.cuda.memory_allocated() / 1024 / 1024),
+                round(torch.cuda.max_memory_allocated() / 1024 / 1024),
+                round(torch.cuda.memory_reserved() / 1024 / 1024),
+                round(torch.cuda.max_memory_reserved() / 1024 / 1024),
+            )
 
         # Start of a forward pass.
         self.training_state = TrainingState.FORWARD
@@ -1816,13 +1827,11 @@ def auto_wrap_bn(
                 module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES)  # type: ignore
             )
 
-    pg = None
+    pg = process_group
     if single_rank_pg:
         # No sharding with this single member group.
         my_rank = dist.get_rank()
-        pg = dist.new_group(ranks=[my_rank])
-    else:
-        pg = process_group
+        pg = get_process_group_cached(ranks=[my_rank])
 
     if fsdp_config is None:
         fsdp_config = {

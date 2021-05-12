@@ -21,7 +21,7 @@ import torch.optim as optim
 from fairscale.nn import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import auto_wrap_bn
-from fairscale.utils.parallel import get_global_group
+from fairscale.utils.parallel import get_process_group_cached
 from fairscale.utils.testing import (
     dist_init,
     dump_all_tensors,
@@ -33,7 +33,7 @@ from fairscale.utils.testing import (
 
 
 def to_fsdp(module, fsdp_config):
-    return FSDP(module, process_group=get_global_group(), **fsdp_config)
+    return FSDP(module, process_group=get_process_group_cached(), **fsdp_config)
 
 
 def get_cur_mem(rank, result, prefix):
