@@ -24,7 +24,12 @@ import torch.nn.functional as F
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
-from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group, get_process_group_cached
+from fairscale.utils.parallel import (
+    chunk_and_pad,
+    enable_pytorch_sync_bn,
+    get_process_group_cached,
+    validate_process_group,
+)
 from fairscale.utils.params import broadcast_object, calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
@@ -928,7 +933,8 @@ class FullyShardedDataParallel(nn.Module):
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
         for n, m in self.named_modules():
-            m.minxu_mod_name = n
+            # XXX: not be to merged
+            m.minxu_mod_name = n  # type: ignore
             # `n != ""` excludes self.
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 # We relax the assert for non-root instance, when the nested inialized module is wrapped

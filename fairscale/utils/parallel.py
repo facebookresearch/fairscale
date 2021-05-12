@@ -58,7 +58,7 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
             layer._specify_ddp_gpu_num(1)  # type: ignore
 
 
-def get_process_group_cached(ranks: Optional[List[int]] = None) -> Optional[ProcessGroup]:
+def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
     """
     Singleton PyTorch distributed group cache. Inspired by the code from fairseq.
 
@@ -92,8 +92,8 @@ def get_process_group_cached(ranks: Optional[List[int]] = None) -> Optional[Proc
     if ranks is None:
         ranks = list(range(dist.get_world_size()))
 
-    ranks = frozenset(ranks)  # take care of ordering and duplicates in the ranks list.
-    if ranks not in cache:
-        cache[ranks] = dist.new_group(ranks)
+    ranks_set = frozenset(ranks)  # take care of ordering and duplicates in the ranks list.
+    if ranks_set not in cache:
+        cache[ranks_set] = dist.new_group(list(ranks_set))
 
-    return cache[ranks]
+    return cache[ranks_set]
