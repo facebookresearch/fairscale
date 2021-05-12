@@ -62,7 +62,7 @@ def expert_params(device):
     expert = torch.nn.Linear(model_dim, model_dim)
     moe = MOELayer(gate, expert).to(device)
     for p in expert.parameters():
-        assert p.expert is True
+        assert p.expert is True, str(p.expert)
 
 
 @pg_test()
@@ -77,9 +77,9 @@ def forward(device):
     expert.weight = torch.nn.Parameter(torch.eye(model_dim))
     moe = MOELayer(gate, expert).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     # Re-assembled output should match input due to identity expert.
-    assert torch.allclose(input, output)
+    torch.testing.assert_allclose(input, output)
 
 
 @pg_test()
@@ -99,11 +99,13 @@ def forward_multi(device):
         experts += [expert]
     moe = MOELayer(gate, torch.nn.ModuleList(experts)).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     # 90% of the input should have gone to an expert
-    assert len(output.nonzero(as_tuple=False)) / output.numel() > 0.90
+    assert (
+        len(output.nonzero(as_tuple=False)) / output.numel() > 0.90
+    ), f"{len(output.nonzero(as_tuple=False))} / {output.numel()}"
     # Except for zeros, re-assembled output should match input due to identity expert.
-    assert torch.allclose(input, torch.where(output > 0, output, input))
+    torch.testing.assert_allclose(input, torch.where(output > 0, output, input))
 
 
 # Test Gate which round-robin routes tokens to experts
@@ -115,7 +117,7 @@ class RoundRobinGate(torch.nn.Module):
 
     def forward(self, input):
         s = input.shape[0]
-        assert s % self.num_experts == 0
+        assert s % self.num_experts == 0, f"{s} % {self.num_experts} != 0"
         capacity = 2 * s // self.num_experts
         output = torch.zeros(s, self.num_experts, capacity, dtype=input.dtype, device=input.device)
         for i in range(s):
@@ -136,12 +138,12 @@ def forward_routing(device):
     expert.weight = torch.nn.Parameter(torch.eye(model_dim) * scale)
     moe = MOELayer(gate, expert).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     # Verify that each token was sent to the correct expert by checking its scale.
     t = input.shape[1]
     for i in range(t):
         expert = i % num_experts
-        assert torch.allclose(input[:, i] * (expert + 1), output[:, i])
+        torch.testing.assert_allclose(input[:, i] * (expert + 1), output[:, i])
 
 
 @pg_test()
@@ -161,12 +163,12 @@ def forward_routing_multi(device):
         experts += [expert]
     moe = MOELayer(gate, torch.nn.ModuleList(experts)).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     # Verify that each token was sent to the correct expert by checking its scale.
     t = input.shape[1]
     for i in range(t):
         expert = i % num_experts
-        assert torch.allclose(input[:, i] * (expert + 1), output[:, i])
+        torch.testing.assert_allclose(input[:, i] * (expert + 1), output[:, i])
 
 
 @pg_test()
@@ -182,7 +184,7 @@ def backward(device):
     expert.weight = torch.nn.Parameter(torch.eye(model_dim))
     moe = MOELayer(gate, expert).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     output = loss(output, input)
     output.backward()
-    assert torch.allclose(expert.weight.grad, torch.zeros_like(expert.weight))
+    torch.testing.assert_allclose(expert.weight.grad, torch.zeros_like(expert.weight))
