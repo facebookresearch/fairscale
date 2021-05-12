@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+- FSDP: fix extra process groups
 - FSDP: fix forward pass not overlapping compute and all-gather
 - FSDP: improved frozen weight support
 - FSDP: workaround AMP autocast cache issue with clear\_autocast\_cache flag
