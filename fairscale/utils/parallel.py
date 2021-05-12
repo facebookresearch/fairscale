@@ -64,7 +64,7 @@ def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
 
     For FSDP, it is important to use the same group between outer and inner FSDP instances,
     otherwise, inner FSDP instances will not share the gradient reduction bucket buffer with
-    the root instance, end up using more GPU memory.
+    the root instance. This will result in increased GPU memory utilization.
 
     Each separate process group also uses separate NCCL library instances, which will have
     a significant effect on GPU memory use if too many process groups are created and used.
