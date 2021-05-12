@@ -82,7 +82,7 @@ def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
 
     Returns:
         (ProcessGroup):
-            Return the requested process group. Throws RuntimeError if dist is not yet initialized.
+            Return the requested process group. Throws RuntimeError if torch.distributed module is not yet initialized.
     """
     if not dist.is_initialized():
         raise RuntimeError("Dist not yet initialized but process group is requested.")
