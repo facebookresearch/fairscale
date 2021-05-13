@@ -97,8 +97,12 @@ def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGr
         # Populate with default process group.
         cache = get_process_group_cached._global_group_cache  # type: ignore
         assert dist.group.WORLD is not None
-        cache[None] = dist.group.WORLD
-        cache[frozenset(list(range(dist.get_world_size())))] = dist.group.WORLD
+        default_pg = dist.group.WORLD
+        if type(default_pg) == object:
+            # For PyTorch 1.6 and 1.7, dist.group.WORLD is an object, not a world process group, like that in 1.8 and 1.9.
+            default_pg = dist.new_group()
+        cache[None] = default_pg
+        cache[frozenset(list(range(dist.get_world_size())))] = default_pg
 
     # Lookup and fill the cache if needed.
     cache = get_process_group_cached._global_group_cache  # type: ignore
