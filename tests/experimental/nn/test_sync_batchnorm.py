@@ -45,14 +45,14 @@ def check_parity(torch_bn, fs_bn, x):
     fs_x.requires_grad = True
     fs_y = fs_bn(fs_x)
     fs_y.backward(yh)
-    assert torch.allclose(torch_y, fs_y), f"{torch_y} != {fs_y}"
-    assert torch.allclose(torch_bn.running_mean, fs_bn.running_mean), f"{torch_bn.running_mean} != {fs_bn.running_mean}"
-    assert torch.allclose(torch_bn.running_var, fs_bn.running_var), f"{torch_bn.running_var} != {fs_bn.running_var}"
-    assert torch.allclose(torch_bn.weight, fs_bn.weight), f"{torch_bn.weight} != {fs_bn.weight}"
-    assert torch.allclose(torch_bn.bias, fs_bn.bias), f"{torch_bn.bias} != {fs_bn.bias.grad}"
-    assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
-    assert torch.allclose(torch_bn.bias.grad, fs_bn.bias.grad), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
-    assert torch.allclose(torch_x.grad, fs_x.grad, atol=1e-07), f"{torch_x.grad} != {fs_x.grad}"
+    torch.testing.assert_allclose(torch_y, fs_y)
+    torch.testing.assert_allclose(torch_bn.running_mean, fs_bn.running_mean)
+    torch.testing.assert_allclose(torch_bn.running_var, fs_bn.running_var)
+    torch.testing.assert_allclose(torch_bn.weight, fs_bn.weight)
+    torch.testing.assert_allclose(torch_bn.bias, fs_bn.bias)
+    torch.testing.assert_allclose(torch_bn.weight.grad, fs_bn.weight.grad)
+    torch.testing.assert_allclose(torch_bn.bias.grad, fs_bn.bias.grad)
+    torch.testing.assert_allclose(torch_x.grad, fs_x.grad)
 
 
 def check_parity_ddp(torch_bn, fs_bn, x):
@@ -70,14 +70,14 @@ def check_parity_ddp(torch_bn, fs_bn, x):
     fs_x.requires_grad = True
     fs_y = fs_ddp(fs_x)
     fs_y.backward(yh)
-    assert torch.allclose(torch_y, fs_y), f"{torch_y} != {fs_y}"
-    assert torch.allclose(torch_bn.running_mean, fs_bn.running_mean), f"{torch_bn.running_mean} != {fs_bn.running_mean}"
-    assert torch.allclose(torch_bn.running_var, fs_bn.running_var), f"{torch_bn.running_var} != {fs_bn.running_var}"
-    assert torch.allclose(torch_bn.weight, fs_bn.weight), f"{torch_bn.weight} != {fs_bn.weight}"
-    assert torch.allclose(torch_bn.bias, fs_bn.bias), f"{torch_bn.bias} != {fs_bn.bias.grad}"
-    assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
-    assert torch.allclose(torch_bn.bias.grad, fs_bn.bias.grad), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
-    assert torch.allclose(torch_x.grad, fs_x.grad, atol=1e-06), f"{torch_x.grad} != {fs_x.grad}"
+    torch.testing.assert_allclose(torch_y, fs_y)
+    torch.testing.assert_allclose(torch_bn.running_mean, fs_bn.running_mean)
+    torch.testing.assert_allclose(torch_bn.running_var, fs_bn.running_var)
+    torch.testing.assert_allclose(torch_bn.weight, fs_bn.weight)
+    torch.testing.assert_allclose(torch_bn.bias, fs_bn.bias)
+    torch.testing.assert_allclose(torch_bn.weight.grad, fs_bn.weight.grad)
+    torch.testing.assert_allclose(torch_bn.bias.grad, fs_bn.bias.grad)
+    torch.testing.assert_allclose(torch_x.grad, fs_x.grad)
 
 
 @pg_test(world_size=1)
