@@ -77,7 +77,7 @@ def check_parity_ddp(torch_bn, fs_bn, x):
     assert torch.allclose(torch_bn.bias, fs_bn.bias), f"{torch_bn.bias} != {fs_bn.bias.grad}"
     assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
     assert torch.allclose(torch_bn.bias.grad, fs_bn.bias.grad), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
-    assert torch.allclose(torch_x.grad, fs_x.grad, atol=1e-07), f"{torch_x.grad} != {fs_x.grad}"
+    assert torch.allclose(torch_x.grad, fs_x.grad, atol=1e-06), f"{torch_x.grad} != {fs_x.grad}"
 
 
 @pg_test(world_size=1)
