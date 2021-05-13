@@ -11,7 +11,8 @@ import logging
 from math import inf
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Set, Tuple, Union
+import typing
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
 import torch
 from torch.autograd import Variable
@@ -616,7 +617,18 @@ class FullyShardedDataParallel(nn.Module):
         del self.orig_sizes
         self._reset_lazy_init()
 
-    def _state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":
+    @typing.overload
+    def state_dict(
+        self, destination: Mapping[str, torch.Tensor], prefix: str = ..., keep_vars: bool = ...
+    ) -> Mapping[str, torch.Tensor]:
+        ...
+
+    @typing.overload
+    def state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> "OrderedDict[str, torch.Tensor]":
+        ...
+
+    # Since we have overloads above, we can use Any here.
+    def state_dict(self, *args: Any, **kwargs: Any) -> Any:
         """
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
@@ -635,15 +647,15 @@ class FullyShardedDataParallel(nn.Module):
         if self._return_full_state_dict:
             if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
                 with self.summon_full_params(recurse=False, volatile=True):
-                    state_dict = super(FullyShardedDataParallel, self).state_dict(*args, **kwargs)
+                    state_dict = super().state_dict(*args, **kwargs)
             else:
-                state_dict = super(FullyShardedDataParallel, self).state_dict(*args, **kwargs)
+                state_dict = super().state_dict(*args, **kwargs)
         else:
             if self.flatten_parameters:
                 assert isinstance(self.module, FlattenParamsWrapper)
                 state_dict = self.module.flat_state_dict(*args, **kwargs)
             else:
-                state_dict = super(FullyShardedDataParallel, self).state_dict(*args, **kwargs)
+                state_dict = super().state_dict(*args, **kwargs)
 
         if self.cpu_offload:
             for k in state_dict.keys():
@@ -654,12 +666,18 @@ class FullyShardedDataParallel(nn.Module):
             self._cast_buffers()
         return state_dict
 
-    # TODO (Min): figuring out how to do typing for this overloaded function.
-    def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
-        return self._state_dict(*args, **kwargs)
+    @typing.overload
+    def local_state_dict(
+        self, destination: Mapping[str, torch.Tensor], prefix: str = ..., keep_vars: bool = ...
+    ) -> Mapping[str, torch.Tensor]:
+        ...
 
-    # TODO (Min): type: ignore because mypy complains "Missing return statement" below.
-    def local_state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
+    @typing.overload
+    def local_state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> "OrderedDict[str, torch.Tensor]":
+        ...
+
+    # Since we have overloads above, we can use Any here.
+    def local_state_dict(self, *args: Any, **kwargs: Any) -> Any:
         """
         Returns the local (sharded) state of the module. Parameters are sharded,
         so the resulting state_dict can only be loaded after the Module has been
@@ -670,7 +688,9 @@ class FullyShardedDataParallel(nn.Module):
             for module in self.modules():  # includes self
                 if isinstance(module, FullyShardedDataParallel):
                     stack.enter_context(module._no_return_full_state_dict())
-            return self._state_dict(*args, **kwargs)
+            # We need to specially call FSDP's state_dict function in case
+            # self.state_dict is a function from a child class of FSDP.
+            return FullyShardedDataParallel.state_dict(self, *args, **kwargs)
 
     @contextlib.contextmanager
     def _no_return_full_state_dict(self) -> Generator:
