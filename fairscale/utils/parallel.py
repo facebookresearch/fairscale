@@ -62,6 +62,10 @@ def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
     """
     Singleton PyTorch distributed group cache. Inspired by the code from fairseq.
 
+    Just like torch.distributed.new_group, this needs to be called on all ranks
+    at the same time when a new group is created, no matter the rank is a member of
+    that group of not.
+
     For FSDP, it is important to use the same group between outer and inner FSDP instances,
     otherwise, inner FSDP instances will not share the gradient reduction bucket buffer with
     the root instance. This will result in increased GPU memory utilization.
@@ -87,15 +91,21 @@ def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
     if not dist.is_initialized():
         raise RuntimeError("torch.distributed is not yet initialized but process group is requested.")
 
+    # Init the cache if needed.
     if not hasattr(get_process_group_cached, "_global_group_cache"):
         get_process_group_cached._global_group_cache = {}  # type: ignore
+        # Populate with default process group.
+        cache = get_process_group_cached._global_group_cache  # type: ignore
+        assert dist.group.WORLD is not None
+        cache[None] = dist.group.WORLD
+        cache[list(range(dist.get_world_size()))] = dist.group.WORLD
+
+    # Lookup and fill the cache if needed.
     cache = get_process_group_cached._global_group_cache  # type: ignore
+    if ranks is not None:
+        # take care of ordering and duplicates in the ranks list.
+        ranks = sorted(list(set(ranks)))
+    if ranks not in cache:
+        cache[ranks] = dist.new_group(ranks)
 
-    if ranks is None:
-        ranks = list(range(dist.get_world_size()))
-
-    ranks_set = frozenset(ranks)  # take care of ordering and duplicates in the ranks list.
-    if ranks_set not in cache:
-        cache[ranks_set] = dist.new_group(list(ranks_set))
-
-    return cache[ranks_set]
+    return cache[ranks]
