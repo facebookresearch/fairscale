@@ -23,9 +23,14 @@ import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
-from fairscale.optim.utils import broadcast_object, calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.containers import apply_to_tensors
-from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
+from fairscale.utils.parallel import (
+    chunk_and_pad,
+    enable_pytorch_sync_bn,
+    get_process_group_cached,
+    validate_process_group,
+)
+from fairscale.utils.params import broadcast_object, calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
 
@@ -195,6 +200,20 @@ class FullyShardedDataParallel(nn.Module):
             device for parameters returned by :func:`state_dict`. If not given,
             this will default to ``compute_dtype``. Note that only the device
             type will be respected (e.g., "cuda:0" and "cuda:1" are the same).
+        clear_autocast_cache (bool):
+            When using mixed precision training with `torch.amp.autocast`, if the model weights
+            are in FP32, autocast maintains a cache for downcasted weights. The cache can cause
+            GPU OOM during the forward pass. Setting this flag to true will help clearing this
+            cache as inner FSDP instances finish part of the forward pass to save GPU memory.
+            Default: False
+        force_input_to_fp32 (bool):
+            Set to ``True`` to force input floating point tensors to be FP32 (if they are FP16)
+            when the FSDP instance is in full precision mode. This helps avoid issues of running
+            SyncBatchNorm with AMP and checkpoint_wrapper.
+            Default: False
+        verbose (bool):
+            Set this to ``True`` to turn on verbose output for model's string representation.
+            Default: False
     """
 
     def __init__(
@@ -213,10 +232,13 @@ class FullyShardedDataParallel(nn.Module):
         compute_device: Optional[torch.device] = None,
         no_broadcast_optim_state: Optional[bool] = False,
         state_dict_device: Optional[torch.device] = None,
+        clear_autocast_cache: bool = False,
+        force_input_to_fp32: bool = False,
+        verbose: bool = False,
     ):
         init_start = time.time()
         super().__init__()
-        self.process_group = process_group or dist.new_group()
+        self.process_group = process_group or get_process_group_cached()
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         self.reshard_after_forward = reshard_after_forward
@@ -232,6 +254,9 @@ class FullyShardedDataParallel(nn.Module):
         self.uncollected_opt_state: Dict[int, Dict] = {}
         self.no_broadcast_optim_state = no_broadcast_optim_state
         self.state_dict_device = state_dict_device or self.compute_device
+        self.clear_autocast_cache = clear_autocast_cache
+        self.force_input_to_fp32 = force_input_to_fp32
+        self.verbose = verbose
 
         self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
@@ -248,6 +273,7 @@ class FullyShardedDataParallel(nn.Module):
         if process_group:
             validate_process_group(self.compute_device, self.process_group)
 
+        # enable pytorch sync_bn just in case model contains sync_bn layers.
         enable_pytorch_sync_bn(module)
 
         # Only handle params which are not already sharded. This enables
@@ -301,7 +327,7 @@ class FullyShardedDataParallel(nn.Module):
             f"FSDP.__init__(done): total_init_time: {(init_end - init_start): .4f} num_params: {(sum(p.numel() for p in self.params))}"
         )
 
-        # Flag to guard multiple pre-forward hook being executed per iteration.
+        # Flag to guard multiple pre-backward hook being executed per iteration.
         # This is reset at the end of the backward pass.
         self._pre_backward_hook_has_run = False
 
@@ -531,19 +557,25 @@ class FullyShardedDataParallel(nn.Module):
         return shard, num_to_pad
 
     def extra_repr(self) -> str:
-        return (
-            f"rank={self.rank}, world_size={self.world_size}, "
-            f"reshard_after_forward={self.reshard_after_forward}, "
-            f"mixed_precision={self.mixed_precision}, "
-            f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
+        repr = (
+            f"world_size={self.world_size}, "
             f"flatten_parameters={self.flatten_parameters}, "
-            f"cpu_offload={self.cpu_offload}, "
-            f"compute_dtype={self.compute_dtype}, "
-            f"buffer_dtype={self.buffer_dtype}, "
-            f"move_grads_to_cpu={self.move_grads_to_cpu}, "
-            f"bucket_cap_mb={self.bucket_cap_mb}, "
-            f"compute_device={self.compute_device}"
+            f"mixed_precision={self.mixed_precision}, "
         )
+        if self.verbose:
+            repr = (
+                f"rank={self.rank}, " + repr + f"reshard_after_forward={self.reshard_after_forward}, "
+                f"compute_dtype={self.compute_dtype}, "
+                f"buffer_dtype={self.buffer_dtype}, "
+                f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
+                f"compute_device={self.compute_device}"
+                f"cpu_offload={self.cpu_offload}, "
+                f"move_grads_to_cpu={self.move_grads_to_cpu}, "
+                f"bucket_cap_mb={self.bucket_cap_mb}, "
+                f"clear_autocast_cache={self.clear_autocast_cache}"
+                f"force_input_to_fp32={self.force_input_to_fp32}"
+            )
+        return repr
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -971,8 +1003,16 @@ class FullyShardedDataParallel(nn.Module):
         # Start of a forward pass.
         self.training_state = TrainingState.FORWARD
 
+        # For root and mixed precision, we convert the input to FP16 (no_grad is needed for
+        # the conversion).
         if self._is_root and self.mixed_precision:
-            args, kwargs = cast_inputs_to_fp16(*args, **kwargs)
+            args, kwargs = cast_floats_to_right_precision(True, True, *args, **kwargs)
+
+        # If enabled, convert the input to FP32 if we are in full precision.
+        # no_grad is not used because the input might be for a non-root instance,
+        # which mean autograd needs to go through the conversion.
+        if self.force_input_to_fp32 and not self.mixed_precision:
+            args, kwargs = cast_floats_to_right_precision(False, False, *args, **kwargs)
 
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
@@ -1008,6 +1048,12 @@ class FullyShardedDataParallel(nn.Module):
 
         # Done with a forward pass.
         self.training_state = TrainingState.IDLE
+
+        # Only need to clear cache during forward. During backward, the cache is not used.
+        # TODO (Min): Future PyTorch versions may provide a way to completely disable this
+        #     cache. Update this when that's available.
+        if self.clear_autocast_cache:
+            torch.clear_autocast_cache()
 
         return outputs
 
@@ -1284,15 +1330,16 @@ class FullyShardedDataParallel(nn.Module):
             if isinstance(m, FullyShardedDataParallel):
                 _remove_shard_bwd_hook(m)
                 m._pre_backward_hook_has_run = False
-                if m._has_params:
-                    if any(p.requires_grad for p in m.params):
+                if any(p.requires_grad for p in m.parameters()):
+                    if m._has_params:
                         m.assert_state(TrainingState.BACKWARD_POST)
                     else:
-                        # Unlikely case, should only happens if `m` has params but none of the
-                        # params has `requires_grad==True`.
-                        m.assert_state(TrainingState.IDLE)
+                        m.assert_state(TrainingState.BACKWARD_PRE)
                 else:
-                    m.assert_state(TrainingState.BACKWARD_PRE)
+                    # Unlikely case. When `m` and its children has no params or has params but
+                    # none with `requires_grad==True`, then m's pre-backward and post-backward
+                    # hooks aren't called by autograd. Therefore, it is in IDLE state.
+                    m.assert_state(TrainingState.IDLE)
                 m.training_state = TrainingState.IDLE
 
     @torch.no_grad()
@@ -1414,20 +1461,22 @@ class FullyShardedDataParallel(nn.Module):
         if params is None:
             params = self.params
         self.has_full_params = False
-        self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(self._streams["all_gather"]):
-            for p in params:
-                if not p._is_sharded:  # e.g., world_size == 1
-                    if self.mixed_precision:
-                        self._free_fp16_param_shard([p])
-                    continue
-                # There may be external references to the Tensor Storage that we
-                # can't modify, such as references that are created by
-                # ctx.save_for_backward in the forward pass. Thus when we
-                # unshard parameters, we should reuse the original Tensor
-                # Storage object and unshard it in-place. For now, just resize
-                # the Storage to 0 to save memory.
-                free_storage_(p._full_param_padded)
+        current_stream = torch.cuda.current_stream()
+        for p in params:
+            if not p._is_sharded:  # e.g., world_size == 1
+                if self.mixed_precision:
+                    self._free_fp16_param_shard([p])
+                continue
+            # Don't let PyTorch reuse this memory until all work in the current
+            # stream is complete.
+            p._full_param_padded.record_stream(current_stream)
+            # There may be external references to the Tensor Storage that we
+            # can't modify, such as references that are created by
+            # ctx.save_for_backward in the forward pass. Thus when we
+            # unshard parameters, we should reuse the original Tensor
+            # Storage object and unshard it in-place. For now, just resize
+            # the Storage to 0 to save memory.
+            free_storage_(p._full_param_padded)
 
     @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
@@ -1462,7 +1511,7 @@ class FullyShardedDataParallel(nn.Module):
         current_stream = torch.cuda.current_stream()
         for p in params:
             if p._fp16_shard is not None:
-                # _fp16_shard is allocated in _fp32_to_fp16_stream, so we can't
+                # _fp16_shard is allocated in "fp32_to_fp16" stream, so we can't
                 # free it until the work in the current stream completes.
                 p._fp16_shard.record_stream(current_stream)
                 free_storage_(p._fp16_shard)
@@ -1655,18 +1704,32 @@ def _get_default_cuda_device(module: nn.Module) -> torch.device:
     return torch.device("cuda")
 
 
-@torch.no_grad()
-def cast_inputs_to_fp16(*args: Any, **kwargs: Any) -> Tuple[Any, Any]:
+def cast_floats_to_right_precision(to_fp16: bool, no_grad: bool, *args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     """
-    Cast any Tensors in *args or **kwargs to FP16.
+    Cast floating point Tensors in *args or **kwargs to FP16 or FP32 if they are not.
+    We also retain the requires_grad flag so that casting doesn't affect the autograd graph.
     """
 
-    def fn(x: torch.Tensor) -> torch.Tensor:
+    def fn_fp16(x: torch.Tensor) -> torch.Tensor:
         if x.dtype is torch.float32:
-            return x.half()
+            y = x.half()
+            if x.is_leaf:
+                y.requires_grad = x.requires_grad
+            return y
         return x
 
-    return apply_to_tensors(fn, args), apply_to_tensors(fn, kwargs)
+    def fn_fp32(x: torch.Tensor) -> torch.Tensor:
+        if x.dtype is torch.float16:
+            y = x.float()
+            if x.is_leaf:
+                y.requires_grad = x.requires_grad
+            return y
+        return x
+
+    fn = fn_fp16 if to_fp16 else fn_fp32
+    context = torch.no_grad() if no_grad else contextlib.suppress()
+    with context:  # type: ignore
+        return apply_to_tensors(fn, args), apply_to_tensors(fn, kwargs)
 
 
 def free_storage_(data: torch.Tensor) -> None:
@@ -1724,7 +1787,12 @@ def _pre_load_state_dict_hook(
 ########################################################################################
 
 
-def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group: ProcessGroup = None) -> nn.Module:
+def auto_wrap_bn(
+    module: nn.Module,
+    single_rank_pg: bool = False,
+    process_group: Optional[ProcessGroup] = None,
+    fsdp_config: Optional[Dict[str, Any]] = None,
+) -> nn.Module:
     """
     Auto wrap all BatchNorm (BN) instances with a safer FSDP, esp. when convert
     to sync BN is used and the outer FSDP is flattening.
@@ -1741,6 +1809,10 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
         single_rank_pg (bool):
             If true, put BNs in a single-rank process group. Default False.
             This might be needed for Apex sync BN support. Still under construction.
+        process_group (ProcessGroup):
+            Optional process group to be used.
+        fsdp_config (Dict):
+            Optional fsdp_config to be used.
 
     Returns:
         Processed module, where BNs are wrapped with a special FSDP instance.
@@ -1757,26 +1829,28 @@ def auto_wrap_bn(module: nn.Module, single_rank_pg: bool = False, process_group:
                 module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES)  # type: ignore
             )
 
-    pg = None
+    pg = process_group
     if single_rank_pg:
         # No sharding with this single member group.
         my_rank = dist.get_rank()
-        pg = dist.new_group(ranks=[my_rank])
-    else:
-        pg = process_group
+        pg = get_process_group_cached(ranks=[my_rank])
 
-    fsdp_config = {
-        "wrapper_cls": FullyShardedDataParallel,
-        "process_group": pg,
-        "mixed_precision": False,  # Keep the weights in FP32.
-        "flatten_parameters": False,  # Do not flatten.
-        # Reshard==False is good for performance. When FSDP(checkpoint(FSDP(bn))) is used, this
-        # **must** be False because BN's FSDP wrapper's pre-backward callback isn't called
-        # within the checkpoint's outer backward when multiple forward passes are used.
-        "reshard_after_forward": False,
-        # No bucketing or small bucketing should be enough for BNs.
-        "bucket_cap_mb": 0,
-    }
+    if fsdp_config is None:
+        fsdp_config = {
+            "wrapper_cls": FullyShardedDataParallel,
+            "process_group": pg,
+            "mixed_precision": False,  # Keep the weights in FP32.
+            "flatten_parameters": False,  # Do not flatten.
+            # Reshard==False is good for performance. When FSDP(checkpoint(FSDP(bn))) is used, this
+            # **must** be False because BN's FSDP wrapper's pre-backward callback isn't called
+            # within the checkpoint's outer backward when multiple forward passes are used.
+            "reshard_after_forward": False,
+            # No bucketing or small bucketing should be enough for BNs.
+            "bucket_cap_mb": 0,
+            # Setting this for SyncBatchNorm. This may have a performance impact. If
+            # SyncBatchNorm is used, this can be enabled by passing in the `fsdp_config` argument.
+            "force_input_to_fp32": False,
+        }
 
     with enable_wrap(wrap_bn_only_policy, **fsdp_config):
         return auto_wrap(module)

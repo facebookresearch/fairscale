@@ -22,6 +22,7 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
+import fairscale.utils as utils
 from fairscale.utils.testing import (
     check_same_model_params,
     check_same_models_across_ranks,
@@ -40,7 +41,7 @@ try:
 
     _torch_broadcast_object = True
 except ImportError:
-    from fairscale.optim.utils import broadcast_object  # noqa
+    from fairscale.utils.params import broadcast_object  # noqa
 
     _torch_broadcast_object = False
 
@@ -56,7 +57,7 @@ def sync_object_ranks(something_to_sync: Any, reference_rank: int, device: torch
         dist.broadcast_object_list(package, src=reference_rank, group=dist.group.WORLD)
         package_sync = package[0]
     else:
-        package_sync = optim.utils.broadcast_object(
+        package_sync = utils.params.broadcast_object(
             something_to_sync, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
         )
 
