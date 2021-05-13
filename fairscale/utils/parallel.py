@@ -5,7 +5,7 @@
 
 """Useful functions for parallel training."""
 
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import torch
 import torch.distributed as dist
@@ -58,7 +58,7 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
             layer._specify_ddp_gpu_num(1)  # type: ignore
 
 
-def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
+def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGroup:
     """
     Singleton PyTorch distributed group cache. Inspired by the code from fairseq.
 
@@ -103,9 +103,10 @@ def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
     # Lookup and fill the cache if needed.
     cache = get_process_group_cached._global_group_cache  # type: ignore
     if ranks is not None:
-        # take care of ordering and duplicates in the ranks list.
-        ranks = sorted(list(set(ranks)))
+        # take care of ordering and duplicates in the ranks list. use tuple so that ranks
+        # can be used as a cache index.
+        ranks = tuple(sorted(list(set(ranks))))
     if ranks not in cache:
-        cache[frozenset(ranks) if ranks is not None else ranks] = dist.new_group(ranks)
+        cache[ranks] = dist.new_group(ranks=ranks)
 
-    return cache[frozenset(ranks) if ranks is not None else ranks]
+    return cache[ranks]
