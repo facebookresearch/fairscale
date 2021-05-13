@@ -98,7 +98,7 @@ def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
         cache = get_process_group_cached._global_group_cache  # type: ignore
         assert dist.group.WORLD is not None
         cache[None] = dist.group.WORLD
-        cache[list(range(dist.get_world_size()))] = dist.group.WORLD
+        cache[frozenset(list(range(dist.get_world_size())))] = dist.group.WORLD
 
     # Lookup and fill the cache if needed.
     cache = get_process_group_cached._global_group_cache  # type: ignore
@@ -106,6 +106,6 @@ def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
         # take care of ordering and duplicates in the ranks list.
         ranks = sorted(list(set(ranks)))
     if ranks not in cache:
-        cache[ranks] = dist.new_group(ranks)
+        cache[frozenset(ranks) if ranks is not None else ranks] = dist.new_group(ranks)
 
-    return cache[ranks]
+    return cache[frozenset(ranks) if ranks is not None else ranks]
