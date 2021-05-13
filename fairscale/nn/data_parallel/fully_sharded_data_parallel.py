@@ -638,7 +638,8 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         self._lazy_init()
         if self.mixed_precision:
             # Buffers dtype stays consistent with parameters.
@@ -989,12 +990,15 @@ class FullyShardedDataParallel(nn.Module):
         """Create streams to overlap data transfer and computation."""
         if len(self._streams) > 0 or not self._is_root:
             return
-        # Stream to move main FP32 params (may be on CPU) to FP16 for forward.
-        self._streams["fp32_to_fp16"] = torch.cuda.Stream()
-        # Stream for all-gathering parameters.
-        self._streams["all_gather"] = torch.cuda.Stream()
-        # Stream for overlapping grad reduction with the backward pass.
-        self._streams["post_backward"] = torch.cuda.Stream()
+
+        if torch.cuda.is_available():
+            # Stream to move main FP32 params (may be on CPU) to FP16 for forward.
+            self._streams["fp32_to_fp16"] = torch.cuda.Stream()
+            # Stream for all-gathering parameters.
+            self._streams["all_gather"] = torch.cuda.Stream()
+            # Stream for overlapping grad reduction with the backward pass.
+            self._streams["post_backward"] = torch.cuda.Stream()
+
         # Helper for bucketing reduce-scatter ops. This is also shared with
         # children instances to improve bucket utilization.
         self._reducer = ReduceScatterBucketer(self.bucket_cap_mb)
@@ -1012,6 +1016,8 @@ class FullyShardedDataParallel(nn.Module):
         instance) needs to synchronize with the default stream to ensure the
         previous optimizer step is done.
         """
+        if not torch.cuda.is_available():
+            return
         if self.mixed_precision:
             self._streams["fp32_to_fp16"].wait_stream(torch.cuda.current_stream())
         else:
