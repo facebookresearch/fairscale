@@ -36,40 +36,48 @@ def pg_test(world_size=torch.cuda.device_count()):
 
 
 def check_parity(torch_bn, fs_bn, x):
-    yh = torch.ones_like(x)
-    torch_y = torch_bn(x)
-    fs_y = fs_bn(x)
+    yh = torch.randn_like(x)
+    torch_x = x.detach()
+    torch_x.requires_grad = True
+    torch_y = torch_bn(torch_x)
     torch_y.backward(yh)
+    fs_x = x.detach()
+    fs_x.requires_grad = True
+    fs_y = fs_bn(fs_x)
     fs_y.backward(yh)
     assert torch.allclose(torch_y, fs_y), f"{torch_y} != {fs_y}"
     assert torch.allclose(torch_bn.running_mean, fs_bn.running_mean), f"{torch_bn.running_mean} != {fs_bn.running_mean}"
     assert torch.allclose(torch_bn.running_var, fs_bn.running_var), f"{torch_bn.running_var} != {fs_bn.running_var}"
-    assert torch.allclose(torch_bn.weight, fs_bn.weight), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
-    assert torch.allclose(torch_bn.bias, fs_bn.bias), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
-    # TODO(msb) currently disabled due to PyTorch bug: https://github.com/pytorch/pytorch/issues/57796
-    # assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
+    assert torch.allclose(torch_bn.weight, fs_bn.weight), f"{torch_bn.weight} != {fs_bn.weight}"
+    assert torch.allclose(torch_bn.bias, fs_bn.bias), f"{torch_bn.bias} != {fs_bn.bias.grad}"
+    assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
     assert torch.allclose(torch_bn.bias.grad, fs_bn.bias.grad), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
+    assert torch.allclose(torch_x.grad, fs_x.grad, atol=1e-07), f"{torch_x.grad} != {fs_x.grad}"
 
 
 def check_parity_ddp(torch_bn, fs_bn, x):
-    yh = torch.ones_like(x)
+    yh = torch.randn_like(x)
     rank = dist.get_rank()
     torch_ddp = DDP(torch_bn, device_ids=[rank])
-    fs_ddp = DDP(fs_bn, device_ids=[rank])
     torch_bn = torch_ddp.module
-    fs_bn = fs_ddp.module
-    torch_y = torch_ddp(x)
-    fs_y = fs_ddp(x)
+    torch_x = x.detach()
+    torch_x.requires_grad = True
+    torch_y = torch_ddp(torch_x)
     torch_y.backward(yh)
+    fs_ddp = DDP(fs_bn, device_ids=[rank])
+    fs_bn = fs_ddp.module
+    fs_x = x.detach()
+    fs_x.requires_grad = True
+    fs_y = fs_ddp(fs_x)
     fs_y.backward(yh)
     assert torch.allclose(torch_y, fs_y), f"{torch_y} != {fs_y}"
     assert torch.allclose(torch_bn.running_mean, fs_bn.running_mean), f"{torch_bn.running_mean} != {fs_bn.running_mean}"
     assert torch.allclose(torch_bn.running_var, fs_bn.running_var), f"{torch_bn.running_var} != {fs_bn.running_var}"
-    assert torch.allclose(torch_bn.weight, fs_bn.weight), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
-    assert torch.allclose(torch_bn.bias, fs_bn.bias), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
-    # TODO(msb) currently disabled due to PyTorch bug: https://github.com/pytorch/pytorch/issues/57796
-    # assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
+    assert torch.allclose(torch_bn.weight, fs_bn.weight), f"{torch_bn.weight} != {fs_bn.weight}"
+    assert torch.allclose(torch_bn.bias, fs_bn.bias), f"{torch_bn.bias} != {fs_bn.bias.grad}"
+    assert torch.allclose(torch_bn.weight.grad, fs_bn.weight.grad), f"{torch_bn.weight.grad} != {fs_bn.weight.grad}"
     assert torch.allclose(torch_bn.bias.grad, fs_bn.bias.grad), f"{torch_bn.bias.grad} != {fs_bn.bias.grad}"
+    assert torch.allclose(torch_x.grad, fs_x.grad, atol=1e-07), f"{torch_x.grad} != {fs_x.grad}"
 
 
 @pg_test(world_size=1)
