@@ -76,8 +76,7 @@ def create_sequence_pipeline(
         index = next_index
 
     graph = PipelineModulesGraph()
-    graph.add_sequence(remote_modules)
-    graph.set_model_input(remote_modules[0])
+    graph.add_sequence(remote_modules, [0])
 
     return DistributedPipeline(graph, **kwargs)
 
@@ -189,7 +188,6 @@ def update(devices):
     x = torch.randn(8, 4).to(device)
     model = [RemoteModuleParams(nn.Linear, (4, 4), {}), RemoteModuleParams(nn.ReLU, (), {})]
     pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
-    params = pipe.parameter_rrefs()
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []
     for i in range(2):
@@ -238,14 +236,63 @@ def multi_input_multi_output_layers(devices):
     concatenate = RemoteModule(devices[1], ConcatenateTensors, ())
 
     graph = PipelineModulesGraph()
-    graph.add_sequence([linear_layer_1, split])
-    graph.set_model_input(linear_layer_1)
-    graph.fan_out(split, linear_layers_2)
-    graph.add_multi_input_layer(concatenate, linear_layers_2)
+    graph.add_sequence([linear_layer_1, split], [0], 2)
+    for i, l in enumerate(linear_layers_2):
+        graph.add_layer(l, [(split, i)])
+    graph.add_layer(concatenate, linear_layers_2)
 
     pipe = DistributedPipeline(graph, chunks=4)
     assert [[0, 1], [2], [3], [4]] == extract_partitions(graph, pipe)
-    params = pipe.parameter_rrefs()
+    opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
+    losses = []
+    for i in range(2):
+        with dist_autograd.context() as context_id:
+            y = pipe(x)
+            loss = criterion(y, rpc.RRef(x))
+            losses.append(loss)
+            loss.backward(context_id)
+            opt.step(context_id)
+    losses = [l.to_here() for l in losses]
+    assert losses[0] > losses[1], f"{losses[0]} !> {losses[1]}"
+
+
+# A test for extracting the same graph as in test multi_input_multi_output_layers automatically
+class ShardedLinearLayer(nn.Module):
+    def __init__(self, input_device, shard_devices, output_device):
+        super().__init__()
+        self.split = RemoteModule(input_device, SplitTensors, (), {})
+        self.linear_layers_2 = nn.ModuleList(
+            [
+                RemoteModule(shard_devices[0], nn.Linear, (2, 2), {}),
+                RemoteModule(shard_devices[1], nn.Linear, (2, 2), {}),
+            ]
+        )
+        self.concatenate = RemoteModule(output_device, ConcatenateTensors, ())
+
+    def forward(self, input):
+        shards = self.split(input)
+        shards = [self.linear_layers_2[i](shards[i]) for i in range(2)]
+        return self.concatenate(*shards)
+
+
+@rpc_test(world_size=2)
+@pytest.mark.parametrize("devices", DEVICES)
+def auto_graph_extract(devices):
+    from fairscale.experimental.nn.distributed_pipeline.trace import make_graph
+
+    device = devices[0].split("/")[1]
+    torch.random.manual_seed(3)
+    criterion = DistributedLoss(torch.nn.MSELoss)
+    x = torch.randn(8, 4).to(device)
+
+    # create model
+    model = nn.Sequential(
+        RemoteModule(devices[0], nn.Linear, (4, 4), {}), ShardedLinearLayer(devices[0], devices, devices[1])
+    )
+    graph = make_graph(model)
+    pipe = DistributedPipeline(graph, chunks=4)
+    partitions = extract_partitions(graph, pipe)
+    assert [[0, 1], [2], [3], [4]] == partitions, f"partitions={partitions}"
     opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []
     for i in range(2):

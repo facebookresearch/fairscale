@@ -11,7 +11,7 @@ from torch.optim import SGD, Adadelta, Adam  # type: ignore
 
 from fairscale.nn import FullyShardedDataParallel
 from fairscale.nn.data_parallel.fsdp_optim_utils import is_singleton_tensor
-from fairscale.optim.utils import recursive_copy_to_device
+from fairscale.utils.params import recursive_copy_to_device
 from fairscale.utils.testing import objects_are_equal
 
 from .test_fsdp import (
@@ -92,7 +92,7 @@ class TestOptimizerUtils(DistributedTest):
         tstart = time()
         sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=0)
         duration = time() - tstart
-        # Switching from fairscale.optim.utils.broadcast_object to torch.broadcast_object_list will cause this to raise
+        # Switching from fairscale.utils.params.broadcast_object to torch.broadcast_object_list will cause this to raise
         assert duration < fsdp.world_size, f"gather optim state took {duration} seconds, suspect change in _consolidate"
 
         cuda_gb_after = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024 ** 3

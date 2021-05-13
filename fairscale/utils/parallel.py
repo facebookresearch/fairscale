@@ -5,7 +5,7 @@
 
 """Useful functions for parallel training."""
 
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.distributed as dist
@@ -56,3 +56,46 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
             # used, but this call needs to be made to avoid an exception.
             # This function is removed from pytorch since 1.9.
             layer._specify_ddp_gpu_num(1)  # type: ignore
+
+
+def get_process_group_cached(ranks: Optional[List[int]] = None) -> ProcessGroup:
+    """
+    Singleton PyTorch distributed group cache. Inspired by the code from fairseq.
+
+    For FSDP, it is important to use the same group between outer and inner FSDP instances,
+    otherwise, inner FSDP instances will not share the gradient reduction bucket buffer with
+    the root instance. This will result in increased GPU memory utilization.
+
+    Each separate process group also uses separate NCCL library instances, which will have
+    a significant effect on GPU memory use if too many process groups are created and used.
+    Setting NCCL_BUFFSIZE=102400 env variable is a useful technique to check if the NCCL
+    memory is causing GPU OOM. Note, the NCCL buffers are not allocated
+    through the PyTorch caching allocator, therefore, you may see GPU OOM even when
+    torch.cuda.reserved_memory() is still way below the total amount of GPU memory.
+
+    Extra process groups can also reduce training speed (observed on VISSL models).
+
+    Args:
+        ranks (Optional[List[int]]):
+            Ranks requested in the target group. None for all ranks.
+            Default: None
+
+    Returns:
+        (ProcessGroup):
+            Return the requested process group. Throws RuntimeError if torch.distributed module is not yet initialized.
+    """
+    if not dist.is_initialized():
+        raise RuntimeError("torch.distributed is not yet initialized but process group is requested.")
+
+    if not hasattr(get_process_group_cached, "_global_group_cache"):
+        get_process_group_cached._global_group_cache = {}  # type: ignore
+    cache = get_process_group_cached._global_group_cache  # type: ignore
+
+    if ranks is None:
+        ranks = list(range(dist.get_world_size()))
+
+    ranks_set = frozenset(ranks)  # take care of ordering and duplicates in the ranks list.
+    if ranks_set not in cache:
+        cache[ranks_set] = dist.new_group(list(ranks_set))
+
+    return cache[ranks_set]
