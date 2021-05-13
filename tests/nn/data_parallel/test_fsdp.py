@@ -119,6 +119,9 @@ class DistributedTest(unittest.TestCase):
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
         except (AssertionError, RuntimeError) as e:
             raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
+        if config.get("flatten_parameters", True):
+            metadata = model.shard_reconstruction_info()
+            assert isinstance(metadata, dict)
 
 
 class TestMixedPrecision(DistributedTest):

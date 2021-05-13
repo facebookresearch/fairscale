@@ -1470,6 +1470,17 @@ class FullyShardedDataParallel(nn.Module):
             # the Storage to 0 to save memory.
             free_storage_(p._full_param_padded)
 
+    def shard_reconstruction_info(self, consider_nested: bool = True) -> Dict[str, list]:
+        """Get the information needed to reconstruct the model from shards offline."""
+        _fsdp_instances = self._fsdp_instances if consider_nested else [self._fsdp_instances[0]]
+        assert hasattr(_fsdp_instances[0], "_param_numels"), "This method only supports flatten_parameters=True"
+        return dict(
+            num_padded=[m.numel_padded_per_param for m in _fsdp_instances],
+            numels=[m._param_numels for m in _fsdp_instances],  # Used by flatten_params_wrapper
+            unflat_shapes=[m._param_shapes for m in _fsdp_instances],  # Used by flatten_params_wrapper
+            no_broadcast_optim_state=[m.no_broadcast_optim_state for m in _fsdp_instances],
+        )
+
     @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
         """Use FP32 shard for a list of params."""
