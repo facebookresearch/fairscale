@@ -176,4 +176,4 @@ def memory_allocated():
     mem_final = torch.cuda.memory_stats()["allocated_bytes.all.current"]
     torch_used = mem_after_torch - mem_at_start
     fs_used = mem_final - mem_after_torch
-    assert fs_used < torch_used, f"{fs_used} >= {torch_used}"
+    assert fs_used < (torch_used * 1.01), f"{fs_used} < {torch_used * 1.01}"
