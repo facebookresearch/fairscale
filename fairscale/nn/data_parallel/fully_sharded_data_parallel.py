@@ -1522,6 +1522,9 @@ class FullyShardedDataParallel(nn.Module):
         having to instantiate FSDP wrappers with the world size originally used
         to save the shards
         """
+        assert len(shard_weights) > 0, "Invalid number of shards: 0"
+        assert len(shard_weights) == len(shard_metadata), "Require meta data for each shard"
+
         consolidated_weights = {}
         original_world_size = len(shard_weights)
 

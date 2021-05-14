@@ -120,7 +120,7 @@ class DistributedTest(unittest.TestCase):
         except (AssertionError, RuntimeError) as e:
             raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
         if config.get("flatten_parameters", True):
-            metadata = model.shard_reconstruction_info()
+            metadata = model.local_metadata_dict()
             assert isinstance(metadata, dict)
 
 
