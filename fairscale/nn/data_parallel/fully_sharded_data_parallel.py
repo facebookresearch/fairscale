@@ -11,7 +11,8 @@ import logging
 from math import inf
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Set, Tuple, Union
+import typing
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
 import torch
 from torch.autograd import Variable
@@ -161,14 +162,14 @@ class FullyShardedDataParallel(nn.Module):
             if ``True``, flatten parameters into a single contiguous tensor,
             which improves training speed.
             Default: True
-        cpu_offload (bool, Optional):
-            if ``True``, offload FP32 params to CPU.
-            This is only relevant when *``mixed_precision``* is ``True``.
+        move_params_to_cpu (bool, Optional):
+            if ``True``, offload FP32 params to CPU. This is only relevant when
+            *``mixed_precision``* is ``True``.
             Default: False
         move_grads_to_cpu (bool, Optional):
             move gradient shard to CPU after reduction. This is useful when
             combined with CPU-based optimizers.
-            Default: the value of *``cpu_offload``*.
+            Default: the value of *``move_params_to_cpu``*.
         bucket_cap_mb (int, Optional):
             FSDP will bucket parameters so that gradient reduction can
             be more efficient for small parameters.
@@ -224,6 +225,10 @@ class FullyShardedDataParallel(nn.Module):
         verbose (bool):
             Set this to ``True`` to turn on verbose output for model's string representation.
             Default: False
+        cpu_offload (bool, Optional):
+            if ``True``, offload FP32 params to CPU. This is only relevant when
+            *``mixed_precision``* is ``True``. Note: This arg will be deprecated in favor of
+            *``move_params_to_cpu``* in an upcoming release. 
     """
 
     def __init__(
@@ -236,7 +241,7 @@ class FullyShardedDataParallel(nn.Module):
         fp32_buffer_dtype: Optional[bool] = None,
         fp32_reduce_scatter: bool = False,
         flatten_parameters: bool = True,
-        cpu_offload: bool = False,
+        move_params_to_cpu: bool = False,
         move_grads_to_cpu: Optional[bool] = None,
         bucket_cap_mb: int = 25,
         compute_device: Optional[torch.device] = None,
@@ -245,6 +250,10 @@ class FullyShardedDataParallel(nn.Module):
         clear_autocast_cache: bool = False,
         force_input_to_fp32: bool = False,
         verbose: bool = False,
+        # Deprecated options below.
+        cpu_offload: bool = False,
+        compute_dtype: Optional[torch.dtype] = None,
+        buffer_dtype: Optional[torch.dtype] = None,
     ):
         init_start = time.time()
         super().__init__()
@@ -257,8 +266,8 @@ class FullyShardedDataParallel(nn.Module):
         self.fp32_buffer_dtype = fp32_buffer_dtype
         self.fp32_reduce_scatter = fp32_reduce_scatter
         self.flatten_parameters = flatten_parameters
-        self.cpu_offload = cpu_offload
-        self.move_grads_to_cpu = cpu_offload if move_grads_to_cpu is None else move_grads_to_cpu
+        self.move_params_to_cpu = move_params_to_cpu or cpu_offload
+        self.move_grads_to_cpu = self.move_params_to_cpu if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
         self.compute_device = compute_device or _get_default_cuda_device(module)
         self.uncollected_opt_state: Dict[int, Dict] = {}
@@ -271,8 +280,8 @@ class FullyShardedDataParallel(nn.Module):
         # Validate args.
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
-        if self.cpu_offload and not self.mixed_precision:
-            raise ValueError("cpu_offload requires mixed_precision=True")
+        if self.move_params_to_cpu and not self.mixed_precision:
+            raise ValueError("move_params_to_cpu requires mixed_precision=True")
 
         # skip validation if the process group was created above
         if process_group:
@@ -588,7 +597,7 @@ class FullyShardedDataParallel(nn.Module):
                 f"fp32_buffer_dtype={self.fp32_buffer_dtype}, "
                 f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
                 f"compute_device={self.compute_device}"
-                f"cpu_offload={self.cpu_offload}, "
+                f"move_params_to_cpu={self.move_params_to_cpu}, "
                 f"move_grads_to_cpu={self.move_grads_to_cpu}, "
                 f"state_dict_device={self.state_dict_device}, "
                 f"no_broadcast_optim_state={self.no_broadcast_optim_state}"
@@ -637,8 +646,18 @@ class FullyShardedDataParallel(nn.Module):
         del self.orig_sizes
         self._reset_lazy_init()
 
-    # TODO (Min): figuring out how to do typing for this overloaded function.
-    def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
+    @typing.overload
+    def state_dict(
+        self, destination: Mapping[str, torch.Tensor], prefix: str = ..., keep_vars: bool = ...
+    ) -> Mapping[str, torch.Tensor]:
+        ...
+
+    @typing.overload
+    def state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> "OrderedDict[str, torch.Tensor]":
+        ...
+
+    # Since we have overloads above, we can use Any here.
+    def state_dict(self, *args: Any, **kwargs: Any) -> Any:
         """
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
@@ -648,7 +667,8 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         self._lazy_init()
         if self.mixed_precision:
             # Buffers dtype stays consistent with parameters.
@@ -667,7 +687,7 @@ class FullyShardedDataParallel(nn.Module):
             else:
                 state_dict = super().state_dict(*args, **kwargs)
 
-        if self.cpu_offload:
+        if self.move_params_to_cpu:
             for k in state_dict.keys():
                 state_dict[k] = state_dict[k].cpu()
 
@@ -676,8 +696,18 @@ class FullyShardedDataParallel(nn.Module):
             self._cast_buffers()
         return state_dict
 
-    # TODO (Min): figuring out how to do typing for this overloaded function.
-    def local_state_dict(self, *args, **kwargs):  # type: ignore
+    @typing.overload
+    def local_state_dict(
+        self, destination: Mapping[str, torch.Tensor], prefix: str = ..., keep_vars: bool = ...
+    ) -> Mapping[str, torch.Tensor]:
+        ...
+
+    @typing.overload
+    def local_state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> "OrderedDict[str, torch.Tensor]":
+        ...
+
+    # Since we have overloads above, we can use Any here.
+    def local_state_dict(self, *args: Any, **kwargs: Any) -> Any:
         """
         Returns the local (sharded) state of the module. Parameters are sharded,
         so the resulting state_dict can only be loaded after the Module has been
@@ -688,7 +718,9 @@ class FullyShardedDataParallel(nn.Module):
             for module in self.modules():  # includes self
                 if isinstance(module, FullyShardedDataParallel):
                     stack.enter_context(module._no_return_full_state_dict())
-            return self.state_dict(*args, **kwargs)
+            # We need to specially call FSDP's state_dict function in case
+            # self.state_dict is a function from a child class of FSDP.
+            return FullyShardedDataParallel.state_dict(self, *args, **kwargs)
 
     @contextlib.contextmanager
     def _no_return_full_state_dict(self) -> Generator:
@@ -699,7 +731,7 @@ class FullyShardedDataParallel(nn.Module):
         finally:
             self._return_full_state_dict = backup
 
-    def load_state_dict(
+    def _load_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
         """
@@ -716,6 +748,11 @@ class FullyShardedDataParallel(nn.Module):
             self._lazy_init()
             return self.module.load_state_dict(state_dict, strict)
 
+    def load_state_dict(
+        self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
+    ) -> NamedTuple:
+        return self._load_state_dict(state_dict, strict)
+
     def load_local_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
@@ -725,7 +762,7 @@ class FullyShardedDataParallel(nn.Module):
             for module in self.modules():  # includes self
                 if isinstance(module, FullyShardedDataParallel):
                     stack.enter_context(module._no_return_full_state_dict())
-            output = self.load_state_dict(state_dict, strict)
+            output = self._load_state_dict(state_dict, strict)
         return output
 
     @contextlib.contextmanager
@@ -883,7 +920,7 @@ class FullyShardedDataParallel(nn.Module):
             ``_fp32_shard``: a single shard of the parameters in full precision
                 (typically FP32, but this is dependent on the dtype of the model
                 as it's passed in by the user). This can be on CPU or GPU
-                depending on the value of *``cpu_offload``*.
+                depending on the value of *``move_params_to_cpu``*.
             ``_fp16_shard``: if *``mixed_precision``* is ``True``, this will be
                 a single shard of the parameters in FP16, used for all-gather.
             ``_full_param_padded``: the full weight (padded to be evenly
@@ -901,7 +938,7 @@ class FullyShardedDataParallel(nn.Module):
         if self.mixed_precision:
             assert p._fp32_shard.dtype == torch.float32
 
-            if self.cpu_offload:
+            if self.move_params_to_cpu:
                 assert p._fp32_shard.device == torch.device("cpu")
                 # If we plan to keep the FP32 parameters on CPU, then pinning
                 # memory allows us to later use non-blocking transfers when moving
@@ -982,12 +1019,15 @@ class FullyShardedDataParallel(nn.Module):
         """Create streams to overlap data transfer and computation."""
         if len(self._streams) > 0 or not self._is_root:
             return
-        # Stream to move main FP32 params (may be on CPU) to FP16 for forward.
-        self._streams["fp32_to_fp16"] = torch.cuda.Stream()
-        # Stream for all-gathering parameters.
-        self._streams["all_gather"] = torch.cuda.Stream()
-        # Stream for overlapping grad reduction with the backward pass.
-        self._streams["post_backward"] = torch.cuda.Stream()
+
+        if torch.cuda.is_available():
+            # Stream to move main FP32 params (may be on CPU) to FP16 for forward.
+            self._streams["fp32_to_fp16"] = torch.cuda.Stream()
+            # Stream for all-gathering parameters.
+            self._streams["all_gather"] = torch.cuda.Stream()
+            # Stream for overlapping grad reduction with the backward pass.
+            self._streams["post_backward"] = torch.cuda.Stream()
+
         # Helper for bucketing reduce-scatter ops. This is also shared with
         # children instances to improve bucket utilization.
         self._reducer = ReduceScatterBucketer(self.bucket_cap_mb)
@@ -1005,6 +1045,8 @@ class FullyShardedDataParallel(nn.Module):
         instance) needs to synchronize with the default stream to ensure the
         previous optimizer step is done.
         """
+        if not torch.cuda.is_available():
+            return
         if self.mixed_precision:
             self._streams["fp32_to_fp16"].wait_stream(torch.cuda.current_stream())
         else:
@@ -1416,7 +1458,7 @@ class FullyShardedDataParallel(nn.Module):
                 if not p._is_sharded:  # e.g., when world_size == 1
                     update_p_data()
                 else:
-                    # If self.cpu_offload and force_full_precision, we need to cast
+                    # If self.move_params_to_cpu and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
                     p_data = p.data.to(p._full_param_padded.device)
 
@@ -1509,7 +1551,7 @@ class FullyShardedDataParallel(nn.Module):
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
                 p._fp16_shard.copy_(
-                    # If cpu_offload is True, this will be non-blocking because
+                    # If move_params_to_cpu is True, this will be non-blocking because
                     # _fp32_shard is pinned, otherwise it's a no-op.
                     p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
                 )
@@ -1705,6 +1747,11 @@ class FullyShardedDataParallel(nn.Module):
                 f"max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, "
                 f"t={time.time()-self._tstart: .1f}"
             )
+
+    # Note: This property will be deprecated in an upcoming release in favor of `move_params_to_cpu`.
+    @property
+    def cpu_offload(self) -> bool:
+        return self.move_params_to_cpu
 
 
 def _get_default_cuda_device(module: nn.Module) -> torch.device:

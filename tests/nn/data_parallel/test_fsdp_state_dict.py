@@ -10,8 +10,8 @@ from parameterized import parameterized
 import torch
 from torch import nn
 
-from fairscale.nn.data_parallel import FullyShardedDataParallel
-from fairscale.utils.testing import objects_are_equal
+from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+from fairscale.utils.testing import dist_init, objects_are_equal, skip_if_cuda, teardown, temp_files_ctx
 
 from .test_fsdp import (
     CONFIG_OPTIONS,
@@ -111,10 +111,10 @@ class TestSaveLoadStateDict(DistributedTest):
         autocast = ddp_model.mixed_precision
         cls._train_for_several_steps(ddp_model, 2, autocast)
         state_1 = ddp_model.state_dict()
-        # You must make a new FullyShardedDataParallel instance to use module.load_state_dict
+        # You must make a new FSDP instance to use module.load_state_dict
         unwrapped_model = TransformerWithSharedParams(group)
         unwrapped_model.load_state_dict(state_1)
-        new_ddp_model = FullyShardedDataParallel(unwrapped_model, group, **config).cuda()
+        new_ddp_model = FSDP(unwrapped_model, group, **config).cuda()
         cls._train_for_several_steps(new_ddp_model, 2, autocast)
         try:
             ddp_model.load_state_dict(new_ddp_model.state_dict())
@@ -144,7 +144,7 @@ class TestSaveLoadStateDict(DistributedTest):
         if config["mixed_precision"]:
             config["fp32_compute_dtype"] = True
         model = NestedWrappedModule(group, config)
-        model = FullyShardedDataParallel(model, group, **config).cuda()
+        model = FSDP(model, group, **config).cuda()
         cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
 
         # Round-trip state dict save/load/save.
@@ -162,7 +162,7 @@ class TestSaveLoadStateDict(DistributedTest):
     def _test_nested_wrapped_model_local_state_dict(cls, rank, group, config=None, local=None):
         # Create a nested FSDP-wrapped instance.
         model = NestedWrappedModule(group, config)
-        model = FullyShardedDataParallel(model, group, **config).cuda()
+        model = FSDP(model, group, **config).cuda()
         cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
 
         # Round trip state dict save/load/save.
@@ -216,7 +216,7 @@ class TestStateDictDeviceDtype(DistributedTest):
         if pure_fp16:
             assert not config["mixed_precision"]
             model = model.half()
-        fsdp_model = FullyShardedDataParallel(model, group, **config)
+        fsdp_model = FSDP(model, group, **config)
         if not config["cpu_offload"]:
             fsdp_model = fsdp_model.cuda()
         autocast = fsdp_model.mixed_precision or pure_fp16
@@ -242,6 +242,29 @@ class TestStateDictDeviceDtype(DistributedTest):
                 assert v.dtype == fsdp_model.buffer_dtype, f"{v.dtype} != {fsdp_model.buffer_dtype}"
             else:
                 assert v.dtype == expected_dtype, f"{v.dtype} != {expected_dtype}"
+
+
+@skip_if_cuda
+def test_local_state_dict_calls_state_dict_recursion():
+    """Testing the case of infinite recursive when FSDP is subclassed"""
+
+    class TestModule(FSDP):
+        def __init__(self):
+            super().__init__(module=nn.Linear(100, 100))
+
+        def state_dict(self, *args, **kwargs):
+            return self.local_state_dict(*args, **kwargs)
+
+    rank = 0
+    world_size = 1
+    with temp_files_ctx(2) as temp_files:
+        result = dist_init(rank, world_size, temp_files[0], temp_files[1])
+        assert result, "Dist init failed"
+
+        m = TestModule()
+        d = m.state_dict()
+
+        teardown()
 
 
 if __name__ == "__main__":

@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MoE: several fixes [#666] [#667] [#668]
 - setup.py: hide CUDA extensions behind `BUILD_CUDA_EXTENSIONS` envvar [#634]
 - SDP: re-expose the module property [#647]
-- Cleanup - rename and move the `checkpoint_activations` wrapper [#654]
+- checkpointing: rename and move the checkpoint_activations wrapper [#654]
+- FSDP: Rename API arg `cpu_offload` to `move_params_to_cpu` to better reflect functionality. We will deprecate `cpu_offload` in an upcoming release. [#676]
 
 ### Added
 - FSDP: added `force_input_to_fp32` flag for SyncBatchNorm [#659]
