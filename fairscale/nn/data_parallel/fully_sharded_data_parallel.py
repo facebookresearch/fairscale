@@ -354,10 +354,6 @@ class FullyShardedDataParallel(nn.Module):
         self.gradient_postdivide_factor = post
 
     @property
-    def cpu_offload(self) -> bool:
-        return self.move_params_to_cpu
-
-    @property
     def module(self) -> nn.Module:
         return self._fsdp_wrapped_module  # note: may be a FlattenParamsWrapper instance
 
@@ -1686,6 +1682,11 @@ class FullyShardedDataParallel(nn.Module):
             logging.info(
                 f"{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, t={time.time()-self._tstart: .1f}"
             )
+
+    # Note: This property will be deprecated in an upcoming release in favor of `move_params_to_cpu`.
+    @property
+    def cpu_offload(self) -> bool:
+        return self.move_params_to_cpu
 
 
 def _get_default_cuda_device(module: nn.Module) -> torch.device:
