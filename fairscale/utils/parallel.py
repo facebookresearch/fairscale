@@ -62,9 +62,9 @@ def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGr
     """
     Singleton PyTorch distributed group cache. Inspired by the code from fairseq.
 
-    Just like torch.distributed.new_group, this needs to be called on all ranks
-    at the same time when a new group is created, no matter the rank is a member of
-    that group of not.
+    Just like torch.distributed.new_group, this method needs to be called on all ranks
+    at the same time when a new group is created. This is true for all ranks irrespective
+    of their group membership status.
 
     For FSDP, it is important to use the same group between outer and inner FSDP instances,
     otherwise, inner FSDP instances will not share the gradient reduction bucket buffer with
