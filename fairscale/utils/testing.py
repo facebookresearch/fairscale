@@ -34,6 +34,7 @@ import logging
 import multiprocessing
 import os
 import random
+import shutil
 from statistics import mean
 import subprocess
 import sys
@@ -669,7 +670,6 @@ def in_temporary_directory():
     Context manager to create a temporary direction and remove
     it at the end of the context
     """
-    import shutil
     temp_dir = tempfile.mkdtemp()
     old_cwd = os.getcwd()
     os.chdir(temp_dir)
@@ -699,7 +699,7 @@ def dump_all_tensors(rank: int) -> None:
             ttype = str(type(obj))
             if torch.is_tensor(obj) or (hasattr(obj, "data") and torch.is_tensor(obj.data)):
                 print(ttype, obj.shape, obj.dtype, obj.device, obj.storage().size())
-        except Exception as e:
+        except Exception:
             pass
     print(torch.cuda.memory_summary())
 

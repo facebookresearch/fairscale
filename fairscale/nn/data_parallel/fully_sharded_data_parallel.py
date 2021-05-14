@@ -1510,41 +1510,40 @@ class FullyShardedDataParallel(nn.Module):
         )
 
     @staticmethod
-    def consolidate_shard_weights(
-        shard_weights: List[Dict[str, torch.Tensor]],
-        shard_metadata: List[Dict[str, Any]]
-    ):
+    def consolidate_shard_weights(shard_weights: List[Dict[str, torch.Tensor]], shard_metadata: List[Dict[str, Any]]):
         """
         Given a list of weights and meta data associated to N shards, reconstruct
-        the weights of an equivalent unsharded model
+        the weights of an equivalent consolidated (non-sharded) model.
 
         This method is very useful to re-assemble checkpoints of shards without
         having to instantiate FSDP wrappers with the world size originally used
-        to save the shards
+        to save the shards.
         """
-        assert len(shard_weights) > 0, "Invalid number of shards: 0"
-        assert len(shard_weights) == len(shard_metadata), "Require meta data for each shard"
+        if len(shard_weights) != len(shard_metadata) or not len(shard_weights):
+            raise ValueError("Require meta data for each shard and non-empty shards")
 
         consolidated_weights = {}
         original_world_size = len(shard_weights)
 
-        num_fsdp_wraps = len(shard_metadata[0]["fsdp_paths"])
-        for i in range(num_fsdp_wraps):
-            fsdp_path = shard_metadata[0]["fsdp_paths"][i]
+        num_fsdp_wrappers = len(shard_metadata[0]["fsdp_paths"])
+        for fsdp_wrapper_index in range(num_fsdp_wrappers):
+            fsdp_path = shard_metadata[0]["fsdp_paths"][fsdp_wrapper_index]
             fsdp_param_name = ".".join([fsdp_path, "flat_param"]) if fsdp_path else "flat_param"
             shards = []
             for rank in range(original_world_size):
                 shard = shard_weights[rank][fsdp_param_name]
-                pad = shard_metadata[rank]["num_padded"][i][0]
+                pad = shard_metadata[rank]["num_padded"][fsdp_wrapper_index][0]
                 if pad > 0:
                     shard = shard[:-pad]
                 shards.append(shard)
-            full_param = torch.cat(shards, dim=0)
+            full_flatten_param = torch.cat(shards, dim=0)
 
-            param_names = shard_metadata[0]["param_names"][i]
-            param_numels = shard_metadata[0]["numels"][i]
-            param_shapes = shard_metadata[0]["unflat_shapes"][i]
-            for n, t, s in zip(param_names, full_param.split(param_numels), param_shapes):
+            param_names = shard_metadata[0]["param_names"][fsdp_wrapper_index]
+            param_numels = shard_metadata[0]["numels"][fsdp_wrapper_index]
+            param_shapes = shard_metadata[0]["unflat_shapes"][fsdp_wrapper_index]
+            assert sum(param_numels) == full_flatten_param.size(0)
+
+            for n, t, s in zip(param_names, full_flatten_param.split(param_numels), param_shapes):
                 full_name = fsdp_path + "." + n if fsdp_path else n
                 consolidated_weights[full_name] = t.view(s)
 
