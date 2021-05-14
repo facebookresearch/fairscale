@@ -8,12 +8,13 @@ import itertools
 from math import inf
 import pickle
 import sys
-from typing import Dict
+from typing import Dict, List
 import unittest
 from unittest import mock
 
 from parameterized import parameterized
 import torch
+import torch.distributed
 from torch import nn
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
@@ -25,7 +26,7 @@ from fairscale.utils.testing import (
     get_cycles_per_ms,
     objects_are_equal,
     spawn_for_all_world_sizes,
-    torch_version,
+    torch_version, temp_files_ctx, in_temporary_directory,
 )
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
@@ -524,6 +525,88 @@ class TestNoGrad(DistributedTest):
             no_grad_output = model(*input)
 
         assert objects_are_equal(ref_output, no_grad_output, raise_exception=True)
+
+
+class SimpleNestedModel(nn.Module):
+    def __init__(self, embedding_size: int, process_group):
+        super().__init__()
+        fc1 = nn.Linear(embedding_size, 2 * embedding_size)
+        fc2 = nn.Linear(2 * embedding_size, 2 * embedding_size)
+        fc3 = nn.Linear(2 * embedding_size, embedding_size)
+        self.fc1 = FullyShardedDataParallel(fc1, process_group=process_group)
+        self.fc2 = fc2
+        self.fc3 = FullyShardedDataParallel(fc3, process_group=process_group)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.fc2(x)
+        return self.fc3(x)
+
+
+class TestCheckpointConsolidation(DistributedTest):
+
+    @staticmethod
+    def _worker(gpu_id: int, world_size: int, embedding_size: int, checkpoint_folder: str):
+        torch.cuda.set_device(gpu_id)
+        torch.distributed.init_process_group(
+            backend="nccl",
+            init_method="tcp://127.0.0.1:9099",
+            world_size=world_size,
+            rank=gpu_id,
+        )
+        process_group = torch.distributed.new_group()
+
+        batch_size = 16
+        torch.manual_seed(0)
+        input = torch.randn(size=(batch_size, embedding_size)).cuda()
+        target = torch.zeros(size=(batch_size, embedding_size)).cuda()
+        model = SimpleNestedModel(process_group=process_group, embedding_size=embedding_size).cuda()
+        model = FullyShardedDataParallel(model, process_group=process_group)
+        criterion = nn.MSELoss()
+        optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
+
+        for epoch in range(2):
+            out = model(input)
+            loss = criterion(out, target)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        with torch.no_grad():
+            before_checkpoint_loss = criterion(model(input), target).item()
+
+        cp_data = {
+            "weights": {k: v.cpu() for k, v in model.local_state_dict().items()},
+            "meta": model.local_metadata_dict(),
+        }
+        torch.save(cp_data, f"checkpoint_{gpu_id}.torch")
+        torch.distributed.barrier()
+
+        # Reconstruct a full checkpoint and load it
+        all_checkpoints = [torch.load(f"checkpoint_{rank}.torch") for rank in range(world_size)]
+        consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
+            shard_weights=[c["weights"] for c in all_checkpoints],
+            shard_metadata=[c["meta"] for c in all_checkpoints],
+        )
+
+        model = SimpleNestedModel(process_group=process_group, embedding_size=embedding_size).cuda()
+        model = FullyShardedDataParallel(model, process_group=process_group)
+        model.load_state_dict(consolidated_checkpoint)
+        for m in model.modules():
+            if isinstance(m, FullyShardedDataParallel):
+                m._reset_lazy_init()
+
+        with torch.no_grad():
+            after_checkpoint_loss = criterion(model(input), target).item()
+        assert before_checkpoint_loss == after_checkpoint_loss
+
+    def test_consolidation(self):
+        import torch.multiprocessing as mp
+        num_gpu = 2
+        embedding_size = 2048
+        with in_temporary_directory() as directory:
+            mp.spawn(self._worker, (num_gpu, embedding_size, directory), nprocs=num_gpu)
 
 
 class TransformerWithSharedParams(nn.Module):

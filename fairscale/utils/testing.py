@@ -664,6 +664,21 @@ def rmf(filename: str) -> None:
 
 
 @contextlib.contextmanager
+def in_temporary_directory():
+    """
+    Context manager to create a temporary direction and remove
+    it at the end of the context
+    """
+    import shutil
+    temp_dir = tempfile.mkdtemp()
+    old_cwd = os.getcwd()
+    os.chdir(temp_dir)
+    yield temp_dir
+    os.chdir(old_cwd)
+    shutil.rmtree(temp_dir)
+
+
+@contextlib.contextmanager
 def temp_files_ctx(num: int) -> Generator:
     """ A context to get tempfiles and ensure they are cleaned up. """
     files = [tempfile.mkstemp()[1] for _ in range(num)]
