@@ -1470,16 +1470,82 @@ class FullyShardedDataParallel(nn.Module):
             # the Storage to 0 to save memory.
             free_storage_(p._full_param_padded)
 
-    def shard_reconstruction_info(self, consider_nested: bool = True) -> Dict[str, list]:
-        """Get the information needed to reconstruct the model from shards offline."""
-        _fsdp_instances = self._fsdp_instances if consider_nested else [self._fsdp_instances[0]]
-        assert hasattr(_fsdp_instances[0], "_param_numels"), "This method only supports flatten_parameters=True"
+    def local_metadata_dict(self) -> Dict[str, list]:
+        """
+        Get the information needed to reconstruct the model from shards offline.
+        """
+
+        def clean_path(path: str):
+            return ".".join(
+                [split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}]
+            )
+
+        fsdp_paths = []
+        param_names = []
+        num_padded = []
+        numels = []
+        unflat_shapes = []
+        no_broadcast_optim_state = []
+        for path, m in self.named_modules():
+            if isinstance(m, FullyShardedDataParallel):
+                assert hasattr(m, "_param_numels"), "This method only supports flatten_parameters=True"
+                fsdp_paths.append(clean_path(path))
+                fsdp_instance_param_names = []
+                for param_path, param_name in m._param_full_infos:
+                    full_param_path = param_path + "." + param_name if param_path else param_name
+                    fsdp_instance_param_names.append(clean_path(full_param_path))
+                param_names.append(fsdp_instance_param_names)
+                num_padded.append(m.numel_padded_per_param)
+                numels.append(m._param_numels)
+                unflat_shapes.append(m._param_shapes)
+                no_broadcast_optim_state.append(m.no_broadcast_optim_state)
+
         return dict(
-            num_padded=[m.numel_padded_per_param for m in _fsdp_instances],
-            numels=[m._param_numels for m in _fsdp_instances],  # Used by flatten_params_wrapper
-            unflat_shapes=[m._param_shapes for m in _fsdp_instances],  # Used by flatten_params_wrapper
-            no_broadcast_optim_state=[m.no_broadcast_optim_state for m in _fsdp_instances],
+            fsdp_paths=fsdp_paths,
+            param_names=param_names,
+            num_padded=num_padded,
+            numels=numels,
+            unflat_shapes=unflat_shapes,
+            no_broadcast_optim_state=no_broadcast_optim_state,
         )
+
+    @staticmethod
+    def consolidate_shard_weights(
+        shard_weights: List[Dict[str, torch.Tensor]],
+        shard_metadata: List[Dict[str, Any]]
+    ):
+        """
+        Given a list of weights and meta data associated to N shards, reconstruct
+        the weights of an equivalent unsharded model
+
+        This method is very useful to re-assemble checkpoints of shards without
+        having to instantiate FSDP wrappers with the world size originally used
+        to save the shards
+        """
+        consolidated_weights = {}
+        original_world_size = len(shard_weights)
+
+        num_fsdp_wraps = len(shard_metadata[0]["fsdp_paths"])
+        for i in range(num_fsdp_wraps):
+            fsdp_path = shard_metadata[0]["fsdp_paths"][i]
+            fsdp_param_name = ".".join([fsdp_path, "flat_param"]) if fsdp_path else "flat_param"
+            shards = []
+            for rank in range(original_world_size):
+                shard = shard_weights[rank][fsdp_param_name]
+                pad = shard_metadata[rank]["num_padded"][i][0]
+                if pad > 0:
+                    shard = shard[:-pad]
+                shards.append(shard)
+            full_param = torch.cat(shards, dim=0)
+
+            param_names = shard_metadata[0]["param_names"][i]
+            param_numels = shard_metadata[0]["numels"][i]
+            param_shapes = shard_metadata[0]["unflat_shapes"][i]
+            for n, t, s in zip(param_names, full_param.split(param_numels), param_shapes):
+                full_name = fsdp_path + "." + n if fsdp_path else n
+                consolidated_weights[full_name] = t.view(s)
+
+        return consolidated_weights
 
     @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
