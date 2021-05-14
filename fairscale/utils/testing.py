@@ -57,6 +57,8 @@ if TYPE_CHECKING:
 else:
     Base = nn.Module
 
+skip_if_cuda = pytest.mark.skipif(torch.cuda.is_available(), reason="Testing only on CPUs to save time")
+
 skip_if_no_cuda = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 1, reason="CUDA required"
 )
@@ -75,7 +77,7 @@ skip_if_py38 = pytest.mark.skipif(
 
 skip_if_py39_no_cuda = pytest.mark.skipif(
     not torch.cuda.is_available() and sys.version_info.major == 3 and sys.version_info.minor == 9,
-    reason="Python3.9 wo CUDA is skipped",
+    reason="Python3.9 without CUDA is skipped",
 )
 
 available_devices = ["cpu"]
