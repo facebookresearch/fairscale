@@ -150,3 +150,30 @@ def parity1d_syncbn():
     torch_bn = torch.nn.SyncBatchNorm(3).cuda()
     fs_bn = SyncBatchNorm(3).cuda()
     check_parity_ddp(torch_bn, fs_bn, x)
+
+
+@pg_test()
+def memory_allocated():
+    rank = dist.get_rank()
+    torch.cuda.set_device(rank)
+
+    x = torch.randn(50, 2048, 7, 7).to(rank)
+    torch_bn = torch.nn.SyncBatchNorm(2048).cuda()
+    torch_bn = DDP(torch_bn, device_ids=[rank])
+    fs_bn = SyncBatchNorm(2048).cuda()
+    fs_bn = DDP(fs_bn, device_ids=[rank])
+    torch_x = x.detach()
+    torch_x.requires_grad = True
+    fs_x = x.detach()
+    fs_x.requires_grad = True
+    torch.cuda.empty_cache()
+    mem_at_start = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+    torch_y = torch_bn(torch_x)
+    torch.cuda.empty_cache()
+    mem_after_torch = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+    fs_y = fs_bn(fs_x)
+    torch.cuda.empty_cache()
+    mem_final = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+    torch_used = mem_after_torch - mem_at_start
+    fs_used = mem_final - mem_after_torch
+    assert fs_used < torch_used, f"{fs_used} >= {torch_used}"
