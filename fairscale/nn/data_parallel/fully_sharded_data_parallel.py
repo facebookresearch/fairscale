@@ -1475,11 +1475,6 @@ class FullyShardedDataParallel(nn.Module):
         Get the information needed to reconstruct the model from shards offline.
         """
 
-        def clean_path(path: str):
-            return ".".join(
-                [split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}]
-            )
-
         fsdp_paths = []
         param_names = []
         num_padded = []
@@ -1489,11 +1484,11 @@ class FullyShardedDataParallel(nn.Module):
         for path, m in self.named_modules():
             if isinstance(m, FullyShardedDataParallel):
                 assert hasattr(m, "_param_numels"), "This method only supports flatten_parameters=True"
-                fsdp_paths.append(clean_path(path))
+                fsdp_paths.append(_clean_path(path))
                 fsdp_instance_param_names = []
                 for param_path, param_name in m._param_full_infos:
                     full_param_path = param_path + "." + param_name if param_path else param_name
-                    fsdp_instance_param_names.append(clean_path(full_param_path))
+                    fsdp_instance_param_names.append(_clean_path(full_param_path))
                 param_names.append(fsdp_instance_param_names)
                 num_padded.append(m.numel_padded_per_param)
                 numels.append(m._param_numels)
@@ -1851,6 +1846,12 @@ def _pre_load_state_dict_hook(
     state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], prefix: str, *args: Any
 ) -> None:
     replace_by_prefix_(state_dict, prefix, prefix + "_fsdp_wrapped_module.")
+
+
+def _clean_path(path: str):
+    return ".".join(
+        [split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}]
+    )
 
 
 ########################################################################################
