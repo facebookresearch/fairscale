@@ -49,11 +49,11 @@ class _SyncBatchNormFunction(torch.autograd.Function):
         dim = [d for d in range(input.ndim) if d != 1]
         count = torch.full((1,), input.numel() // input.size(1), device=input.device, dtype=input.dtype)
         total_count = count.clone()
-        handle = dist.all_reduce(total_count, group=process_group, async_op=True)
+        all_reduce_handle = dist.all_reduce(total_count, group=process_group, async_op=True)
         mean = torch.mean(input, dim=dim, keepdim=True)
         meansqr = torch.mean(input * input, dim=dim, keepdim=True)
         vec = torch.cat([mean, meansqr])
-        handle.wait()
+        all_reduce_handle.wait()
         vec = vec * (count / total_count)
         dist.all_reduce(vec, group=process_group)
         mean, meansqr = vec.chunk(2)
@@ -81,19 +81,24 @@ class _SyncBatchNormFunction(torch.autograd.Function):
     @staticmethod
     # type: ignore
     def backward(ctx, grad_output):
+        needs_input_grad = ctx.needs_input_grad[0]
+        needs_weight_grad = ctx.needs_input_grad[1]
+
         grad_input = None
         grad_weight = None
         grad_bias = None
+
         input, weight, bias, mean, invstd, total_count = ctx.saved_tensors
         process_group = ctx.process_group
+
         dim = [d for d in range(input.ndim) if d != 1]
-        if ctx.needs_input_grad[0] or ctx.needs_input_grad[1]:
+        if needs_input_grad or needs_weight_grad:
             grad_common = torch.sum(
                 (input - mean) * grad_output, dim=dim, keepdim=True
             )  # common to grad_weight and grad_invstd
 
-        if ctx.needs_input_grad[0]:
-            if weight is None:
+        if needs_input_grad:
+            if weight is None:  # i.e. affine is False
                 grad_input = invstd * grad_output
                 grad_mean = -torch.sum(grad_input, dim=dim, keepdim=True)
                 grad_invstd = grad_common
@@ -105,14 +110,14 @@ class _SyncBatchNormFunction(torch.autograd.Function):
             grad_mean += -2 * mean * grad_var
             grad_meansqr = grad_var
             vec = torch.cat([grad_mean, grad_meansqr])
-            handle = dist.all_reduce(vec, group=process_group, async_op=True)
+            all_reduce_handle = dist.all_reduce(vec, group=process_group, async_op=True)
 
-        if ctx.needs_input_grad[1]:
+        if needs_weight_grad:
             grad_weight = (grad_common * invstd).resize_as(weight)
             grad_bias = torch.sum(grad_output, dim=dim)
 
-        if ctx.needs_input_grad[0]:
-            handle.wait()
+        if needs_input_grad:
+            all_reduce_handle.wait()
             vec = vec / total_count  # NOTE(msb) removed '* count' here to avoid '/  count' below
             grad_mean, grad_meansqr = vec.chunk(2)
             grad_input += grad_mean  # removed '/ count'
