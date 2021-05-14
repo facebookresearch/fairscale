@@ -2,7 +2,8 @@
 # Licensed under the MIT License.
 
 from contextlib import ExitStack, contextmanager
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union
+import typing
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, Mapping, NamedTuple, Optional, Tuple, Union
 
 import torch
 from torch import Tensor
@@ -201,7 +202,18 @@ class FlattenParamsWrapper(nn.Module):
         except AttributeError:
             return getattr(self.module, name)  # fallback to wrapped module
 
-    def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, Tensor]":  # type: ignore
+    @typing.overload
+    def state_dict(
+        self, destination: Mapping[str, Tensor], prefix: str = ..., keep_vars: bool = ...
+    ) -> Mapping[str, Tensor]:
+        ...
+
+    @typing.overload
+    def state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> "OrderedDict[str, Tensor]":
+        ...
+
+    # Since we have overloads above, we can use Any here.
+    def state_dict(self, *args: Any, **kwargs: Any) -> Any:
         """Return the wrapped module's state_dict (unflattened)."""
         if self.is_flattened and self._auto_unflatten_state_dict:
             with self.unflatten_params(recurse=False):

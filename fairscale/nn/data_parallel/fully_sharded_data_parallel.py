@@ -11,7 +11,8 @@ import logging
 from math import inf
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, NamedTuple, Optional, Set, Tuple, Union
+import typing
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
 import torch
 from torch.autograd import Variable
@@ -24,7 +25,12 @@ import torch.nn.functional as F
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
-from fairscale.utils.parallel import chunk_and_pad, enable_pytorch_sync_bn, validate_process_group
+from fairscale.utils.parallel import (
+    chunk_and_pad,
+    enable_pytorch_sync_bn,
+    get_process_group_cached,
+    validate_process_group,
+)
 from fairscale.utils.params import broadcast_object, calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
@@ -238,7 +244,7 @@ class FullyShardedDataParallel(nn.Module):
     ):
         init_start = time.time()
         super().__init__()
-        self.process_group = process_group or dist.new_group()
+        self.process_group = process_group or get_process_group_cached()
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         self.reshard_after_forward = reshard_after_forward
@@ -616,8 +622,18 @@ class FullyShardedDataParallel(nn.Module):
         del self.orig_sizes
         self._reset_lazy_init()
 
-    # TODO (Min): figuring out how to do typing for this overloaded function.
-    def state_dict(self, *args: Any, **kwargs: Any) -> "OrderedDict[str, torch.Tensor]":  # type: ignore
+    @typing.overload
+    def state_dict(
+        self, destination: Mapping[str, torch.Tensor], prefix: str = ..., keep_vars: bool = ...
+    ) -> Mapping[str, torch.Tensor]:
+        ...
+
+    @typing.overload
+    def state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> "OrderedDict[str, torch.Tensor]":
+        ...
+
+    # Since we have overloads above, we can use Any here.
+    def state_dict(self, *args: Any, **kwargs: Any) -> Any:
         """
         Returns the whole (unsharded) state of the module. Parameters are not
         sharded, so the resulting state_dict can be loaded directly by the
@@ -627,7 +643,8 @@ class FullyShardedDataParallel(nn.Module):
         .. warning:: This needs to be called on all ranks, since synchronization
             primitives will be used.
         """
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         self._lazy_init()
         if self.mixed_precision:
             # Buffers dtype stays consistent with parameters.
@@ -655,8 +672,18 @@ class FullyShardedDataParallel(nn.Module):
             self._cast_buffers()
         return state_dict
 
-    # TODO (Min): figuring out how to do typing for this overloaded function.
-    def local_state_dict(self, *args, **kwargs):  # type: ignore
+    @typing.overload
+    def local_state_dict(
+        self, destination: Mapping[str, torch.Tensor], prefix: str = ..., keep_vars: bool = ...
+    ) -> Mapping[str, torch.Tensor]:
+        ...
+
+    @typing.overload
+    def local_state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> "OrderedDict[str, torch.Tensor]":
+        ...
+
+    # Since we have overloads above, we can use Any here.
+    def local_state_dict(self, *args: Any, **kwargs: Any) -> Any:
         """
         Returns the local (sharded) state of the module. Parameters are sharded,
         so the resulting state_dict can only be loaded after the Module has been
@@ -667,7 +694,9 @@ class FullyShardedDataParallel(nn.Module):
             for module in self.modules():  # includes self
                 if isinstance(module, FullyShardedDataParallel):
                     stack.enter_context(module._no_return_full_state_dict())
-            return self.state_dict(*args, **kwargs)
+            # We need to specially call FSDP's state_dict function in case
+            # self.state_dict is a function from a child class of FSDP.
+            return FullyShardedDataParallel.state_dict(self, *args, **kwargs)
 
     @contextlib.contextmanager
     def _no_return_full_state_dict(self) -> Generator:
@@ -678,7 +707,7 @@ class FullyShardedDataParallel(nn.Module):
         finally:
             self._return_full_state_dict = backup
 
-    def load_state_dict(
+    def _load_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
         """
@@ -695,6 +724,11 @@ class FullyShardedDataParallel(nn.Module):
             self._lazy_init()
             return self.module.load_state_dict(state_dict, strict)
 
+    def load_state_dict(
+        self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
+    ) -> NamedTuple:
+        return self._load_state_dict(state_dict, strict)
+
     def load_local_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
@@ -704,7 +738,7 @@ class FullyShardedDataParallel(nn.Module):
             for module in self.modules():  # includes self
                 if isinstance(module, FullyShardedDataParallel):
                     stack.enter_context(module._no_return_full_state_dict())
-            output = self.load_state_dict(state_dict, strict)
+            output = self._load_state_dict(state_dict, strict)
         return output
 
     @contextlib.contextmanager
@@ -961,12 +995,15 @@ class FullyShardedDataParallel(nn.Module):
         """Create streams to overlap data transfer and computation."""
         if len(self._streams) > 0 or not self._is_root:
             return
-        # Stream to move main FP32 params (may be on CPU) to FP16 for forward.
-        self._streams["fp32_to_fp16"] = torch.cuda.Stream()
-        # Stream for all-gathering parameters.
-        self._streams["all_gather"] = torch.cuda.Stream()
-        # Stream for overlapping grad reduction with the backward pass.
-        self._streams["post_backward"] = torch.cuda.Stream()
+
+        if torch.cuda.is_available():
+            # Stream to move main FP32 params (may be on CPU) to FP16 for forward.
+            self._streams["fp32_to_fp16"] = torch.cuda.Stream()
+            # Stream for all-gathering parameters.
+            self._streams["all_gather"] = torch.cuda.Stream()
+            # Stream for overlapping grad reduction with the backward pass.
+            self._streams["post_backward"] = torch.cuda.Stream()
+
         # Helper for bucketing reduce-scatter ops. This is also shared with
         # children instances to improve bucket utilization.
         self._reducer = ReduceScatterBucketer(self.bucket_cap_mb)
@@ -984,6 +1021,8 @@ class FullyShardedDataParallel(nn.Module):
         instance) needs to synchronize with the default stream to ensure the
         previous optimizer step is done.
         """
+        if not torch.cuda.is_available():
+            return
         if self.mixed_precision:
             self._streams["fp32_to_fp16"].wait_stream(torch.cuda.current_stream())
         else:
@@ -1826,13 +1865,11 @@ def auto_wrap_bn(
                 module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES)  # type: ignore
             )
 
-    pg = None
+    pg = process_group
     if single_rank_pg:
         # No sharding with this single member group.
         my_rank = dist.get_rank()
-        pg = dist.new_group(ranks=[my_rank])
-    else:
-        pg = process_group
+        pg = get_process_group_cached(ranks=[my_rank])
 
     if fsdp_config is None:
         fsdp_config = {
