@@ -279,7 +279,12 @@ class FullyShardedDataParallel(nn.Module):
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to
         # shard any leftover parameters.
-        params = list(p for p in module.parameters() if not hasattr(p, "_is_sharded"))
+        param_names = []
+        params = []
+        for param_name, param in module.named_parameters():
+            if not hasattr(param, "_is_sharded"):
+                param_names.append(param_name)
+                params.append(param)
 
         self._has_params = len(params) > 0
         if not self._has_params:
@@ -288,9 +293,11 @@ class FullyShardedDataParallel(nn.Module):
         if self.flatten_parameters:
             self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=params)
             del module  # free original module in case it helps garbage collection
+            self.param_paths = ["flat_param"]
             self.params = [self._fsdp_wrapped_module.flat_param]
         else:
             self._fsdp_wrapped_module = module
+            self.param_paths = param_names
             self.params = params
 
         # Shard module parameters in place
@@ -1476,15 +1483,38 @@ class FullyShardedDataParallel(nn.Module):
         """
 
         fsdp_paths = []
+        is_flatten = []
         param_names = []
         num_padded = []
         numels = []
         unflat_shapes = []
         no_broadcast_optim_state = []
+
         for path, m in self.named_modules():
-            if isinstance(m, FullyShardedDataParallel):
-                assert hasattr(m, "_param_numels"), "This method only supports flatten_parameters=True"
+            if not isinstance(m, FullyShardedDataParallel):
+                continue
+
+            # Dealing with FSDP(flatten_parameter=False)
+            # There are as many sharded parameters as there parameters in the
+            # consolidated model, so we only need to export how to reshape the
+            # parameters to their orginal shape and take care of the padding
+            if not hasattr(m, "_param_numels"):
                 fsdp_paths.append(_clean_path(path))
+                is_flatten.append(False)
+                num_padded.append(m.numel_padded_per_param)
+                param_names.append([_clean_path(p) for p in m.param_paths])
+                unflat_shapes.append([p._orig_size for p in m.params])
+                numels.append([_numel_from_size(p._orig_size) for p in m.params])
+                no_broadcast_optim_state.append(m.no_broadcast_optim_state)
+
+            # Dealing with FSDP(flatten_parameter=True)
+            # Now, there is just one flattened parameter mapped to N different
+            # parameters, so we need to export additional information (numels)
+            # on how to split the "merged" parameters, by extracing the meta-data
+            # used in the FlattenParamsWrapper
+            else:
+                fsdp_paths.append(_clean_path(path))
+                is_flatten.append(True)
                 fsdp_instance_param_names = []
                 for param_path, param_name in m._param_full_infos:
                     full_param_path = param_path + "." + param_name if param_path else param_name
@@ -1497,6 +1527,7 @@ class FullyShardedDataParallel(nn.Module):
 
         return dict(
             fsdp_paths=fsdp_paths,
+            is_flatten=is_flatten,
             param_names=param_names,
             num_padded=num_padded,
             numels=numels,
@@ -1523,24 +1554,50 @@ class FullyShardedDataParallel(nn.Module):
         num_fsdp_wrappers = len(shard_metadata[0]["fsdp_paths"])
         for fsdp_wrapper_index in range(num_fsdp_wrappers):
             fsdp_path = shard_metadata[0]["fsdp_paths"][fsdp_wrapper_index]
-            fsdp_param_name = ".".join([fsdp_path, "flat_param"]) if fsdp_path else "flat_param"
-            shards = []
-            for rank in range(original_world_size):
-                shard = shard_weights[rank][fsdp_param_name]
-                pad = shard_metadata[rank]["num_padded"][fsdp_wrapper_index][0]
-                if pad > 0:
-                    shard = shard[:-pad]
-                shards.append(shard)
-            full_flatten_param = torch.cat(shards, dim=0)
 
-            param_names = shard_metadata[0]["param_names"][fsdp_wrapper_index]
-            param_numels = shard_metadata[0]["numels"][fsdp_wrapper_index]
-            param_shapes = shard_metadata[0]["unflat_shapes"][fsdp_wrapper_index]
-            assert sum(param_numels) == full_flatten_param.size(0)
+            # Dealing with FSDP(flatten_parameter=False)
+            # For each parameter of the FSDP wrapper, get rid of the padding on each shard,
+            # concatenate the shards and reshape them to their initial shape
+            if not shard_metadata[0]["is_flatten"][fsdp_wrapper_index]:
+                num_params = len(shard_metadata[0]["param_names"][fsdp_wrapper_index])
+                for i in range(num_params):
+                    param_name = shard_metadata[0]["param_names"][fsdp_wrapper_index][i]
+                    param_name = ".".join([fsdp_path, param_name]) if fsdp_path else param_name
+                    shards = []
+                    for rank in range(original_world_size):
+                        shard = shard_weights[rank][param_name]
+                        pad = shard_metadata[rank]["num_padded"][fsdp_wrapper_index][i]
+                        if pad > 0:
+                            shard = shard[:-pad]
+                        shards.append(shard)
+                    full_flatten_param = torch.cat(shards, dim=0)
+                    param_shape = shard_metadata[0]["unflat_shapes"][fsdp_wrapper_index][i]
+                    consolidated_weights[param_name] = full_flatten_param.view(param_shape)
 
-            for n, t, s in zip(param_names, full_flatten_param.split(param_numels), param_shapes):
-                full_name = fsdp_path + "." + n if fsdp_path else n
-                consolidated_weights[full_name] = t.view(s)
+            # Dealing with FSDP(flatten_parameter=True)
+            # Concatenate the merged flat_param after removing the padding
+            # and then split the flat_param by using numel, before reshaping each
+            # split to the original shape
+            else:
+                # Concatenate the flat_param
+                flat_param_name = ".".join([fsdp_path, "flat_param"]) if fsdp_path else "flat_param"
+                shards = []
+                for rank in range(original_world_size):
+                    shard = shard_weights[rank][flat_param_name]
+                    pad = shard_metadata[rank]["num_padded"][fsdp_wrapper_index][0]
+                    if pad > 0:
+                        shard = shard[:-pad]
+                    shards.append(shard)
+                full_flatten_param = torch.cat(shards, dim=0)
+
+                # Split the flat_param into its constituents
+                param_names = shard_metadata[0]["param_names"][fsdp_wrapper_index]
+                param_numels = shard_metadata[0]["numels"][fsdp_wrapper_index]
+                param_shapes = shard_metadata[0]["unflat_shapes"][fsdp_wrapper_index]
+                assert sum(param_numels) == full_flatten_param.size(0)
+                for n, t, s in zip(param_names, full_flatten_param.split(param_numels), param_shapes):
+                    full_name = fsdp_path + "." + n if fsdp_path else n
+                    consolidated_weights[full_name] = t.view(s)
 
         return consolidated_weights
 
@@ -1849,9 +1906,14 @@ def _pre_load_state_dict_hook(
 
 
 def _clean_path(path: str):
-    return ".".join(
-        [split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}]
-    )
+    return ".".join([split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}])
+
+
+def _numel_from_size(size: torch.Size):
+    numel = 1
+    for dim in size:
+        numel *= dim
+    return numel
 
 
 ########################################################################################

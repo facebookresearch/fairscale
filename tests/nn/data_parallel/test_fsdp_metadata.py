@@ -20,7 +20,7 @@ class SimpleNestedModel(nn.Module):
         if with_fsdp:
             self.fc1 = FullyShardedDataParallel(fc1, process_group=process_group)
             self.fc2 = fc2  # To test different levels of nesting
-            self.fc3 = FullyShardedDataParallel(fc3, process_group=process_group)
+            self.fc3 = FullyShardedDataParallel(fc3, process_group=process_group, flatten_parameters=False)
             self.fc4 = fc4
         else:
             self.fc1 = fc1
@@ -36,7 +36,7 @@ class SimpleNestedModel(nn.Module):
         return x
 
 
-def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int):
+def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, flatten_parameters: bool):
     torch.manual_seed(0)
     torch.cuda.set_device(gpu_id)
     torch.distributed.init_process_group(
@@ -48,7 +48,7 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int):
     input = torch.randn(size=(16, embedding_size)).cuda()
     target = torch.zeros(size=(16, embedding_size)).cuda()
     model = SimpleNestedModel(with_fsdp=True, process_group=process_group, embedding_size=embedding_size).cuda()
-    model = FullyShardedDataParallel(model, process_group=process_group)
+    model = FullyShardedDataParallel(model, process_group=process_group, flatten_parameters=flatten_parameters)
     criterion = nn.MSELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
 
@@ -100,10 +100,11 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int):
 
 @skip_if_single_gpu
 @pytest.mark.parametrize("embedding_size", [128, 129])
-def test_consolidation(embedding_size: int):
+@pytest.mark.parametrize("flatten_parameters", [True, False])
+def test_consolidation(embedding_size: int, flatten_parameters: bool):
     import torch.multiprocessing as mp
 
     world_size = 2
     with in_temporary_directory():
         with temp_files_ctx(num=1) as temp_files:
-            mp.spawn(_worker, (temp_files[0], world_size, embedding_size), nprocs=world_size)
+            mp.spawn(_worker, (temp_files[0], world_size, embedding_size, flatten_parameters), nprocs=world_size)
