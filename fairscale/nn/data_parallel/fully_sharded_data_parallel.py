@@ -41,6 +41,129 @@ if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
 
 
+# Need to mixin the `str` base type with Enum below so that string and enum values
+# can be used interchangably, e.g.:
+#   - "flatten" == ParameterControl.Flatten is True
+#   - "flatten" in list(ParameterControl) is True
+# At run time, string values can be used in the place of the enum.
+# However, mypy won't be able track validity of the enum variables at static analysis
+# time if string is assigned to them.
+
+
+# This controls how does FSDP handle wrapped module's parameters. Currently, it can be
+# either the original parameters or a single flatten parameter to reduce the overhead
+# of all-gather. Based on future research, techniques like structured sparsification
+# could be added.
+class ParameterControl(str, Enum):
+    Flatten = "flatten"
+    Original = "original"
+
+    @staticmethod
+    def to_bool_type(val: ParameterControl) -> bool:
+        return {ParameterControl.Flatten: True, ParameterControl.Original: False}[val]
+
+
+# This controls how does FSDP handle shard of parameters. Currently, it can support the
+# following 2 modes:
+#   1. ShardForwardAndBackward: turn full parameters into shards both after the forward
+#      and the backward passes within an iteration.  This saves GPU memory and consumes
+#      more network bandwidth.
+#   2. ShardBackward: turn full parameters into shards only after backward pass
+#      is done, which consumes GPU memory for full parameters but still saves both
+#      memory and optimizer-FLOPs by splitting the gradients and optimizer state
+#      among workers.
+#
+# Two additional modes could be added if use cases arise:
+#   1. no sharding: works like DDP, but provides an alternative implementation
+#   2. sharding at init only: save all all-gather but full gradient state might
+#      need to be kept in memory and optimizer state might need to be broadcasted
+#      in order to perform an optimizer update. This mode is unlikely to be performant.
+class ShardingControl(str, Enum):
+    ShardForwardAndBackward = "shard_forward_and_backward"
+    ShardBackward = "shard_backward"
+
+    @staticmethod
+    def to_bool_type(val: ShardingControl) -> bool:
+        return {ShardingControl.ShardForwardAndBackward: False, ShardingControl.ShardBackward: True}[val]
+
+
+# This controls how precision is managed by FSDP. The way to read the long string is:
+#
+#   - 32: float32
+#   - 16: float16
+#   - I: input precision. Note, this can be input to the whole model (root FSDP) or
+#        input to a layer (inner FSDP).
+#   - W: weight precision. This is the "master" copy of the weights, which is used to
+#        accumulate the gradients by the optimizer (with its optimizer states)
+#   - C: compute precision. This is the copy of the weights used in all-gather and
+#        in forward and backward computation.
+#   - B: buffer precision. This is the buffer precision used in both compute and as
+#        the "master" copy of the buffer state.
+#   - G: gradient scatter-gather precision. After gradients are computed, they can
+#        be scatter-gather in this precision.
+#
+# In the future additional precision type, like bfloat16 can be supported.
+#
+# Even though there are 32 options below, many may not be feasible or useful. We list
+# all options for completeness, but comments below mark the most commonly used options.
+class PrecisionControl(str, Enum):
+    I32_W32_C32_B32_G32 = "I32_W32_C32_B32_G32"  # Basic full precision everything.
+    I32_W32_C32_B32_G16 = "I32_W32_C32_B32_G16"  # Compress the gradients.
+    I32_W32_C32_B16_G32 = "I32_W32_C32_B16_G32"
+    I32_W32_C32_B16_G16 = "I32_W32_C32_B16_G16"
+    I32_W32_C16_B32_G32 = "I32_W32_C16_B32_G32"
+    I32_W32_C16_B32_G16 = "I32_W32_C16_B32_G16"
+    I32_W32_C16_B16_G32 = "I32_W32_C16_B16_G32"
+    I32_W32_C16_B16_G16 = "I32_W32_C16_B16_G16"
+    I32_W16_C32_B32_G32 = "I32_W16_C32_B32_G32"
+    I32_W16_C32_B32_G16 = "I32_W16_C32_B32_G16"
+    I32_W16_C32_B16_G32 = "I32_W16_C32_B16_G32"
+    I32_W16_C32_B16_G16 = "I32_W16_C32_B16_G16"
+    I32_W16_C16_B32_G32 = "I32_W16_C16_B32_G32"
+    I32_W16_C16_B32_G16 = "I32_W16_C16_B32_G16"
+    I32_W16_C16_B16_G32 = "I32_W16_C16_B16_G32"
+    I32_W16_C16_B16_G16 = "I32_W16_C16_B16_G16"
+    I16_W32_C32_B32_G32 = "I16_W32_C32_B32_G32"
+    I16_W32_C32_B32_G16 = "I16_W32_C32_B32_G16"
+    I16_W32_C32_B16_G32 = "I16_W32_C32_B16_G32"
+    I16_W32_C32_B16_G16 = "I16_W32_C32_B16_G16"
+    I16_W32_C16_B32_G32 = "I16_W32_C16_B32_G32"
+    I16_W32_C16_B32_G16 = "I16_W32_C16_B32_G16"
+    I16_W32_C16_B16_G32 = "I16_W32_C16_B16_G32"
+    I16_W32_C16_B16_G16 = "I16_W32_C16_B16_G16"  # Mixed precision (autocast) with FP32 master weights.
+    I16_W16_C32_B32_G32 = "I16_W16_C32_B32_G32"
+    I16_W16_C32_B32_G16 = "I16_W16_C32_B32_G16"
+    I16_W16_C32_B16_G32 = "I16_W16_C32_B16_G32"
+    I16_W16_C32_B16_G16 = "I16_W16_C32_B16_G16"
+    I16_W16_C16_B32_G32 = "I16_W16_C16_B32_G32"
+    I16_W16_C16_B32_G16 = "I16_W16_C16_B32_G16"
+    I16_W16_C16_B16_G32 = "I16_W16_C16_B16_G32"
+    I16_W16_C16_B16_G16 = "I16_W16_C16_B16_G16"  # Purely FP16.
+
+    @staticmethod
+    def to_bool_type(val: PrecisionControl) -> Tuple[bool, bool, bool, bool, bool]:
+        # parse the string and return the bools.
+        pass
+
+
+# This controls how CPU offloading is used by FSDP. Currently supports both gradients and
+# parameters. Activation offloading is done by the ``checkpoint_wrapper`` function.
+class OffloadControl(str, Enum):
+    OffloadNone = "none"
+    OffloadGrad = "grad"
+    OffloadParam = "param"
+    OffloadGradParam = "grad_param"
+
+    @staticmethod
+    def to_bool_type(val: OffloadControl) -> Tuple[bool, bool]:
+        return {
+            OffloadControl.OffloadNone: (False, False),
+            OffloadControl.OffloadGrad: (True, False),
+            OffloadControl.OffloadParam: (False, True),
+            OffloadControl.OffloadGradParam: (True, True),
+        }[val]
+
+
 class TrainingState(Enum):
     """
     Simple enum to indicate what state FSDP is in. Used for asserting
@@ -158,6 +281,11 @@ class FullyShardedDataParallel(nn.Module):
             if ``True``, then reduce-scatter gradients in FP32.
             This is only relevant when *``mixed_precision``* is ``True``.
             Default: False
+        force_input_to_fp32 (bool):
+            Set to ``True`` to force input floating point tensors to be FP32 (if they are FP16)
+            when the FSDP instance is in full precision mode. This helps avoid issues of running
+            SyncBatchNorm with AMP and checkpoint_wrapper.
+            Default: False
         flatten_parameters (bool, Optional):
             if ``True``, flatten parameters into a single contiguous tensor,
             which improves training speed.
@@ -204,7 +332,7 @@ class FullyShardedDataParallel(nn.Module):
             ``torch.cuda.current_device()`` will be used.
         state_dict_device (torch.device, Optional):
             device for parameters returned by :func:`state_dict`. If not given,
-            this will default to ``compute_dtype``. Note that only the device
+            this will default to ``compute_device``. Note that only the device
             type will be respected (e.g., "cuda:0" and "cuda:1" are the same).
         no_broadcast_optim_state: (bool, Optional)
             do not broadcast this modules optimizer state when ``gather_full_optim_state_dict`` is called.
@@ -217,14 +345,10 @@ class FullyShardedDataParallel(nn.Module):
             GPU OOM during the forward pass. Setting this flag to true will help clearing this
             cache as inner FSDP instances finish part of the forward pass to save GPU memory.
             Default: False
-        force_input_to_fp32 (bool):
-            Set to ``True`` to force input floating point tensors to be FP32 (if they are FP16)
-            when the FSDP instance is in full precision mode. This helps avoid issues of running
-            SyncBatchNorm with AMP and checkpoint_wrapper.
-            Default: False
         verbose (bool):
             Set this to ``True`` to turn on verbose output for model's string representation.
             Default: False
+        # Deprecated options below.
         cpu_offload (bool, Optional):
             if ``True``, offload FP32 params to CPU. This is only relevant when
             *``mixed_precision``* is ``True``. Note: This arg will be deprecated in favor of
