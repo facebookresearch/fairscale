@@ -1886,7 +1886,10 @@ def auto_wrap_bn(
 
     # Wrap it.
     with (
-        enable_wrap(functools.partial(default_auto_wrap_policy, min_num_params=0), wrapper_cls=FullyShardedDataParallel)
+        enable_wrap(
+            functools.partial(default_auto_wrap_policy, min_num_params=0, wrap_configured=True),
+            wrapper_cls=FullyShardedDataParallel,
+        )
         if wrap_it
         else contextlib.suppress()
     ):
