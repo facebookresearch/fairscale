@@ -17,6 +17,7 @@ def default_auto_wrap_policy(
     min_num_params: int = int(1e8),
     force_leaf_modules: Optional[Set[Type[nn.Module]]] = None,
     exclude_wrap_modules: Optional[Set[Type[nn.Module]]] = None,
+    wrap_configured: bool = True,
 ) -> bool:
     """Default policy function for :func:`auto_wrap`.
 
@@ -45,6 +46,7 @@ def default_auto_wrap_policy(
            keep as leaves, i.e., their children will never be wrapped.
        exclude_wrap_modules (Set[Type[nn.Module]]):
            Customizable set of module types to be excluded in wrapping.
+       wrap_configured (bool): wrap modules that are already configured.
     """
     force_leaf_modules = (
         default_auto_wrap_policy.FORCE_LEAF_MODULES  # type: ignore
@@ -62,8 +64,11 @@ def default_auto_wrap_policy(
         # We should recurse if the module is big enough but not force_leaf_modulesed.
         return is_large and not isinstance(module, tuple(force_leaf_modules))
     else:
-        # If we are not recursing, we should wrap but not the exclude list.
-        return is_large and not isinstance(module, tuple(exclude_wrap_modules))
+        # If we are not recursing, determine if we should wrap.
+        should_wrap = is_large
+        if wrap_configured:
+            should_wrap = hasattr(module, "wrapper_config")
+        return should_wrap and not isinstance(module, tuple(exclude_wrap_modules))
 
 
 # Set those defaults to the default_auto_wrap_policy function. Make them easy to be imported.
@@ -112,13 +117,20 @@ def enable_wrap(auto_wrap_policy: Optional[Callable] = None, **wrapper_kwargs: A
 def wrap(module: nn.Module, **wrap_overrides: Any) -> nn.Module:
     """
     Annotate that a module should be wrapped. Annotated modules will only be
-    wrapped if inside of an :func:`enable_wrap` context manager. An important
-    use case is annotating large layers that should be sharded (in-place) during
-    initialization, to avoid running out of system memory.
+    wrapped if inside of an :func:`enable_wrap` context manager. This allows
+    a module to be initialized both with and without a wrapper without code
+    change.
+
+    Both wrapper_cls and wrapper_config can be taken from 3 sources with
+    increasing priority:
+
+        1. ConfigAutoWrap's context
+        2. module.wrapper_config
+        3. wrap_overrides argument of this function
 
     Usage::
 
-        with enable_wrap(**params):
+        with enable_wrap(wrapper_cls=FSDP, **fsdp_config):
             # Wraps layer in FSDP by default if within context
             self.l1 = wrap(torch.nn.Linear(5, 5))
 
@@ -128,7 +140,11 @@ def wrap(module: nn.Module, **wrap_overrides: Any) -> nn.Module:
             the values provided by the :func:`enable_wrap` context
     """
     if ConfigAutoWrap.in_autowrap_context:
-        wrap_overrides = {**ConfigAutoWrap.kwargs, **wrap_overrides}
+        module_overrides = {}
+        if hasattr(module, "wrapper_config"):
+            module_overrides = module.wrapper_config
+            assert isinstance(module_overrides, dict)
+        wrap_overrides = {**ConfigAutoWrap.kwargs, **module_overrides, **wrap_overrides}
         assert ConfigAutoWrap.wrapper_cls is not None
         return ConfigAutoWrap.wrapper_cls(module, **wrap_overrides)
     return module
@@ -140,6 +156,13 @@ def auto_wrap(module: nn.Module, auto_wrap_policy: Optional[Callable] = None, **
     :func:`enable_wrap` context (if the context exists) and recursively wrap
     children modules that meet the criteria given by :func:`auto_wrap_policy`. This
     is useful for wrapping large complex layers.
+
+    .. note:: auto_wrap can only be applied to a module once because it
+        assumes none of the sub-modules is already wrapped and uses that
+        assumption to compute the wrapped vs. unwrapped parameters.
+        To get around this limitation, users can pre-assign ``wrapper_config``
+        attributes to the sub-modules they want to wrap (in multiple passes)
+        and then uses the ``default_auto_wrap_policy`` with a ``min_num_params=0``.
 
     .. warning:: It is not recommended to use :func:`auto_wrap` with
         :class:`FullyShardedDataParallel` on modules that have shared

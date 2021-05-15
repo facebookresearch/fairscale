@@ -111,3 +111,6 @@ class Module(Generic[T_co]):
 
     # This is added torchgpipe
     training: bool
+
+    # Added by auto_wrap.py.
+    wrapper_config: dict
