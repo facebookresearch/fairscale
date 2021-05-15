@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+- wrap: support wrapping based on `wrapper_config` [#685]
 - FSDP: fix extra process groups being created by default. Old behavior can cause excessive GPU memory usage. [#678]
 - FSDP: fix forward pass not overlapping compute and allgather [#671]
 - FSDP: improved frozen weight support [#657]
