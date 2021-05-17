@@ -11,7 +11,7 @@ from fairscale.nn import FullyShardedDataParallel
 from fairscale.utils.testing import in_temporary_directory, skip_if_single_gpu, temp_files_ctx
 
 
-class SimpleNestedModel(nn.Module):
+class ConvolutionalModel(nn.Module):
     def __init__(self, embedding_size: int, with_fsdp: bool, process_group):
         super().__init__()
         self.conv1 = self._conv_block(3, embedding_size)
@@ -53,7 +53,7 @@ class SimpleNestedModel(nn.Module):
 
 
 def _create_model(embedding_size: int, with_fsdp: bool, process_group, flatten_parameters: bool = True):
-    model = SimpleNestedModel(with_fsdp=with_fsdp, process_group=process_group, embedding_size=embedding_size).cuda()
+    model = ConvolutionalModel(with_fsdp=with_fsdp, process_group=process_group, embedding_size=embedding_size).cuda()
     if with_fsdp:
         return FullyShardedDataParallel(model, process_group=process_group, flatten_parameters=flatten_parameters)
     else:
@@ -73,8 +73,9 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, f
     process_group = torch.distributed.new_group()
 
     # Create a dummy model with dummy inputs and targets
-    input = torch.randn(size=(16, 3, 32, 32)).cuda()
-    target = torch.zeros(size=(16, embedding_size)).cuda()
+    batch_size = 4
+    input = torch.randn(size=(batch_size, 3, 32, 32)).cuda()
+    target = torch.zeros(size=(batch_size, embedding_size)).cuda()
     model = _create_model(
         with_fsdp=True,
         process_group=process_group,
