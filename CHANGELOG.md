@@ -6,7 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
-- FSDP: fix extra process groups being created by default. Old behavior can cause excessive GPU memory usage. [#678]
+- FSDP: fix `local_state_dict` potentially called child class's `state_dict` [#574]
+- FSDP: fix extra process groups being created by default. Old behavior can cause excessive GPU memory usage [#678] [#681]
 - FSDP: fix forward pass not overlapping compute and allgather [#671]
 - FSDP: improved frozen weight support [#657]
 - FSDP: workaround AMP autocast cache issue with `clear_autocast_cache` flag [#650]
@@ -14,12 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - setup.py: hide CUDA extensions behind `BUILD_CUDA_EXTENSIONS` envvar [#634]
 - SDP: re-expose the module property [#647]
 - checkpointing: rename and move the checkpoint_activations wrapper [#654]
-- FSDP: Rename API arg `cpu_offload` to `move_params_to_cpu` to better reflect functionality. We will deprecate `cpu_offload` in an upcoming release. [#676]
+- FSDP: Rename API arg `cpu_offload` to `move_params_to_cpu` to better reflect functionality. We will deprecate `cpu_offload` in an upcoming release [#676]
 
 ### Added
 - FSDP: added `force_input_to_fp32` flag for SyncBatchNorm [#659]
 - FSDP: better memory usage for reduce bucket [#633]
-- Experimental SyncBatchNorm [#662]
+- Experimental SyncBatchNorm [#662] [#680]
 
 ## [0.3.6] - 2021-04-26
 ### Added
