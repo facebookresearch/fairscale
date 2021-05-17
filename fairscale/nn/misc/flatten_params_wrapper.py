@@ -75,7 +75,7 @@ class FlattenParamsWrapper(nn.Module):
         params = []
         param_numels = []
         param_shapes = []
-        for m_name, m in self.named_modules():
+        for module_name, m in self.named_modules():
             for n, p in m.named_parameters(recurse=False):
                 if p is not None and (m, n) in self._param_set:
                     if p in shared_param_memo:
@@ -84,7 +84,7 @@ class FlattenParamsWrapper(nn.Module):
                     else:
                         shared_param_memo[p] = (m, n)
                         param_infos.append((m, n))
-                        param_full_infos.append((m_name, n))
+                        param_full_infos.append((module_name, n))
                         params.append(p.detach())
                         param_numels.append(p.numel())
                         param_shapes.append(p.size())

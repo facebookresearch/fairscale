@@ -1482,7 +1482,7 @@ class FullyShardedDataParallel(nn.Module):
         Get the information needed to reconstruct the model from shards offline.
         """
 
-        fsdp_wraps_data = []
+        params_metadata = []
 
         for path, m in self.named_modules():
             if not isinstance(m, FullyShardedDataParallel):
@@ -1493,10 +1493,10 @@ class FullyShardedDataParallel(nn.Module):
             # consolidated model, so we only need to export how to reshape the
             # parameters to their orginal shape and take care of the padding
             if not hasattr(m, "_param_numels"):
-                fsdp_wraps_data.append(
+                params_metadata.append(
                     {
-                        "path": _clean_path(path),
-                        "is_flatten": False,
+                        "fsdp_path": _clean_path(path),
+                        "is_flat": False,
                         "num_padded": m.numel_padded_per_param,
                         "param_names": [_clean_path(p) for p in m.param_paths],
                         "param_shapes": [p._orig_size for p in m.params],
@@ -1511,16 +1511,16 @@ class FullyShardedDataParallel(nn.Module):
             # on how to split the "merged" parameters, by extracing the meta-data
             # used in the FlattenParamsWrapper
             else:
-                fsdp_instance_param_names = []
-                for param_path, param_name in m._param_full_infos:
-                    full_param_path = param_path + "." + param_name if param_path else param_name
-                    fsdp_instance_param_names.append(_clean_path(full_param_path))
-                fsdp_wraps_data.append(
+                param_names = []
+                for module_path, param_name in m._param_full_infos:
+                    full_param_path = module_path + "." + param_name if module_path else param_name
+                    param_names.append(_clean_path(full_param_path))
+                params_metadata.append(
                     {
-                        "path": _clean_path(path),
-                        "is_flatten": True,
+                        "fsdp_path": _clean_path(path),
+                        "is_flat": True,
                         "num_padded": m.numel_padded_per_param,
-                        "param_names": fsdp_instance_param_names,
+                        "param_names": param_names,
                         "param_shapes": m._param_shapes,
                         "param_numels": m._param_numels,
                         "no_broadcast_optim_state": m.no_broadcast_optim_state,
@@ -1528,7 +1528,7 @@ class FullyShardedDataParallel(nn.Module):
                 )
 
         buffer_names = [_clean_path(buffer_name) for buffer_name, _ in self.named_buffers(recurse=True)]
-        return dict(param_metadata=fsdp_wraps_data, buffer_names=buffer_names,)
+        return dict(param_metadata=params_metadata, buffer_names=buffer_names)
 
     @staticmethod
     def consolidate_shard_weights(
@@ -1561,7 +1561,7 @@ class FullyShardedDataParallel(nn.Module):
         # a corresponding entry in the metadata
         num_fsdp_wrappers = len(shard_metadata[0]["param_metadata"])
         for fsdp_wrapper_index in range(num_fsdp_wrappers):
-            fsdp_path = shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["path"]
+            fsdp_path = shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["fsdp_path"]
             param_names = shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["param_names"]
             param_numels = shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["param_numels"]
             param_shapes = shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["param_shapes"]
@@ -1569,7 +1569,7 @@ class FullyShardedDataParallel(nn.Module):
             # Dealing with FSDP(flatten_parameter=False)
             # For each parameter of the FSDP wrapper, get rid of the padding on each shard,
             # concatenate the shards and reshape them to their initial shape
-            if not shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["is_flatten"]:
+            if not shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["is_flat"]:
                 for i in range(len(param_names)):
                     param_name = param_names[i]
                     param_name = ".".join([fsdp_path, param_name]) if fsdp_path else param_name
@@ -1586,7 +1586,7 @@ class FullyShardedDataParallel(nn.Module):
             # and then split the flat_param by using numel, before reshaping each
             # split to the original shape
             else:
-                # Concatenate the flat_param
+                # Concatenate the flat_param parameter after removing the padding
                 flat_param_name = ".".join([fsdp_path, "flat_param"]) if fsdp_path else "flat_param"
                 shards = []
                 for rank in range(original_world_size):
