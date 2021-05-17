@@ -17,7 +17,6 @@ def default_auto_wrap_policy(
     min_num_params: int = int(1e8),
     force_leaf_modules: Optional[Set[Type[nn.Module]]] = None,
     exclude_wrap_modules: Optional[Set[Type[nn.Module]]] = None,
-    wrap_configured: bool = False,
 ) -> bool:
     """Default policy function for :func:`auto_wrap`.
 
@@ -46,7 +45,6 @@ def default_auto_wrap_policy(
            keep as leaves, i.e., their children will never be wrapped.
        exclude_wrap_modules (Set[Type[nn.Module]]):
            Customizable set of module types to be excluded in wrapping.
-       wrap_configured (bool): wrap modules that are already configured.
     """
     force_leaf_modules = (
         default_auto_wrap_policy.FORCE_LEAF_MODULES  # type: ignore
@@ -61,19 +59,42 @@ def default_auto_wrap_policy(
 
     is_large = unwrapped_params >= min_num_params
     if recurse:
-        # We should recurse if the module is big enough but not force_leaf_modulesed.
+        # We should recurse if the module is big enough but not in force_leaf_modules list.
         return is_large and not isinstance(module, tuple(force_leaf_modules))
     else:
         # If we are not recursing, determine if we should wrap.
-        should_wrap = is_large
-        if wrap_configured:
-            should_wrap = hasattr(module, "wrapper_config")
-        return should_wrap and not isinstance(module, tuple(exclude_wrap_modules))
+        return is_large and not isinstance(module, tuple(exclude_wrap_modules))
 
 
 # Set those defaults to the default_auto_wrap_policy function. Make them easy to be imported.
 default_auto_wrap_policy.EXCLUDE_WRAP_MODULES = {nn.ModuleList, nn.ModuleDict}  # type: ignore
 default_auto_wrap_policy.FORCE_LEAF_MODULES = {nn.MultiheadAttention}  # type: ignore
+
+
+def config_auto_wrap_policy(module: nn.Module, recurse: bool, unwrapped_params: int,) -> bool:
+    """Config based policy function for :func:`auto_wrap`.
+
+       Return true for a module to be wrapped if it is already tagged with
+       a ``wrapper_config`` attribute.
+
+    Args:
+       module (nn.Module):
+           The module to be considered in this decision.
+       recurse (bool):
+           Indicate if this is called to make a decision on whether we
+           should recurse down a subgraph of the module structure.
+           If False, it means this function is called to make a decision
+           on whether we should wrap the said module.
+       unwrapped_params (int):
+           The number of parameters yet to be wrapped in this module.
+           Unused by this function.
+    """
+    if recurse:
+        # We should always recurse.
+        return True
+    else:
+        # If we are not recursing, determine if we should wrap.
+        return hasattr(module, "wrapper_config")
 
 
 @contextlib.contextmanager
@@ -162,7 +183,7 @@ def auto_wrap(module: nn.Module, auto_wrap_policy: Optional[Callable] = None, **
         assumption to compute the wrapped vs. unwrapped parameters.
         To get around this limitation, users can pre-assign ``wrapper_config``
         attributes to the sub-modules they want to wrap (in multiple passes)
-        and then uses the ``default_auto_wrap_policy`` with a ``min_num_params=0``.
+        and then uses the ``config_auto_wrap_policy``.
 
     .. warning:: It is not recommended to use :func:`auto_wrap` with
         :class:`FullyShardedDataParallel` on modules that have shared

@@ -23,7 +23,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
-from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
+from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import (
     chunk_and_pad,
@@ -2054,10 +2054,7 @@ def auto_wrap_bn(
 
     # Wrap it.
     with (
-        enable_wrap(
-            functools.partial(default_auto_wrap_policy, min_num_params=0, wrap_configured=True),
-            wrapper_cls=FullyShardedDataParallel,
-        )
+        enable_wrap(config_auto_wrap_policy, wrapper_cls=FullyShardedDataParallel)
         if wrap_it
         else contextlib.suppress()
     ):
