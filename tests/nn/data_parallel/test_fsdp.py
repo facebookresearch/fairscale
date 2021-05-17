@@ -15,6 +15,7 @@ from unittest import mock
 from parameterized import parameterized
 import torch
 from torch import nn
+import torch.distributed
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
@@ -119,6 +120,9 @@ class DistributedTest(unittest.TestCase):
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
         except (AssertionError, RuntimeError) as e:
             raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
+        if config.get("flatten_parameters", True):
+            metadata = model.local_metadata_dict()
+            assert isinstance(metadata, dict)
 
 
 class TestMixedPrecision(DistributedTest):
