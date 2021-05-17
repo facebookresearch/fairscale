@@ -218,7 +218,7 @@ class FullyShardedDataParallel(nn.Module):
         cpu_offload (bool, Optional):
             if ``True``, offload FP32 params to CPU. This is only relevant when
             *``mixed_precision``* is ``True``. Note: This arg will be deprecated in favor of
-            *``move_params_to_cpu``* in an upcoming release. 
+            *``move_params_to_cpu``* in an upcoming release.
     """
 
     def __init__(
@@ -1829,6 +1829,7 @@ def auto_wrap_bn(
     process_group: Optional[ProcessGroup] = None,
     fsdp_config: Optional[Dict[str, Any]] = None,
     wrap_it: bool = True,
+    assert_on_collision: bool = True,
 ) -> nn.Module:
     """
     Auto wrap all BatchNorm (BN) instances with a safer FSDP, esp. when convert
@@ -1852,6 +1853,10 @@ def auto_wrap_bn(
             Optional fsdp_config to be used.
         wrap_it (bool):
             Whether or not wrap the module after setting the config.
+            Default: True
+        assert_on_collision (bool):
+            Whether or not assert if a wrapper_config already exists on the module.
+            Default: True
 
     Returns:
         Processed module, where BNs are wrapped with a special FSDP instance.
@@ -1882,6 +1887,10 @@ def auto_wrap_bn(
     # Assign the config dict to BNs.
     for m in module.modules():
         if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+            if assert_on_collision:
+                assert not hasattr(
+                    m, "wrapper_config"
+                ), "Module shouldn't already have a wrapper_config. Is it tagged already by another policy?"
             m.wrapper_config = fsdp_config
 
     # Wrap it.
