@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FSDP: added `force_input_to_fp32` flag for SyncBatchNorm [#659]
 - FSDP: better memory usage for reduce bucket [#633]
 - Experimental SyncBatchNorm [#662]
+- FSDP: added `local_metadata_dict` to save sharding relating information [#683]
+- FSDP: added `consolidate_shard_weights` to reconstruct the consolidated (non-sharded) model weights from saved sharded weights and metadata on the disk [#683]
 
 ## [0.3.6] - 2021-04-26
 ### Added

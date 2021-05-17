@@ -70,12 +70,13 @@ class FlattenParamsWrapper(nn.Module):
 
     def _init_flatten_params(self) -> List[Tensor]:
         param_infos = []
+        param_full_infos = []
         shared_param_memo: Dict[nn.Parameter, Tuple[nn.Module, str]] = {}
         shared_param_infos = []
         params = []
         param_numels = []
         param_shapes = []
-        for m in self.modules():
+        for module_name, m in self.named_modules():
             for n, p in m.named_parameters(recurse=False):
                 if p is not None and (m, n) in self._param_set:
                     if p in shared_param_memo:
@@ -84,6 +85,7 @@ class FlattenParamsWrapper(nn.Module):
                     else:
                         shared_param_memo[p] = (m, n)
                         param_infos.append((m, n))
+                        param_full_infos.append((module_name, n))
                         params.append(p.detach())
                         param_numels.append(p.numel())
                         param_shapes.append(p.size())
@@ -93,6 +95,7 @@ class FlattenParamsWrapper(nn.Module):
 
         # store the info for unflatten
         self._param_infos = tuple(param_infos)
+        self._param_full_infos = tuple(param_full_infos)
         self._shared_param_infos = tuple(shared_param_infos)
         self._param_numels = tuple(param_numels)
         self._param_shapes = tuple(param_shapes)
