@@ -665,7 +665,7 @@ def rmf(filename: str) -> None:
 
 
 @contextlib.contextmanager
-def in_temporary_directory():
+def in_temporary_directory() -> Generator:
     """
     Context manager to create a temporary direction and remove
     it at the end of the context

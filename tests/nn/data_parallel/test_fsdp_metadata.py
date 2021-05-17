@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 import pytest
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 
 from fairscale.nn import FullyShardedDataParallel
@@ -13,20 +14,13 @@ from fairscale.utils.testing import in_temporary_directory, skip_if_single_gpu, 
 class SimpleNestedModel(nn.Module):
     def __init__(self, embedding_size: int, with_fsdp: bool, process_group):
         super().__init__()
-        fc1 = nn.Linear(embedding_size, 2 * embedding_size)
-        fc2 = nn.Linear(2 * embedding_size, 2 * embedding_size)
-        fc3 = nn.Linear(2 * embedding_size, embedding_size + 1)
-        fc4 = nn.Linear(embedding_size + 1, embedding_size)
+        self.fc1: nn.Module = nn.Linear(embedding_size, 2 * embedding_size)
+        self.fc2: nn.Module = nn.Linear(2 * embedding_size, 2 * embedding_size)
+        self.fc3: nn.Module = nn.Linear(2 * embedding_size, embedding_size + 1)
+        self.fc4: nn.Module = nn.Linear(embedding_size + 1, embedding_size)
         if with_fsdp:
-            self.fc1 = FullyShardedDataParallel(fc1, process_group=process_group)
-            self.fc2 = fc2  # To test different levels of nesting
-            self.fc3 = FullyShardedDataParallel(fc3, process_group=process_group, flatten_parameters=False)
-            self.fc4 = fc4
-        else:
-            self.fc1 = fc1
-            self.fc2 = fc2
-            self.fc3 = fc3
-            self.fc4 = fc4
+            self.fc1 = FullyShardedDataParallel(self.fc1, process_group=process_group)
+            self.fc3 = FullyShardedDataParallel(self.fc3, process_group=process_group, flatten_parameters=False)
 
     def forward(self, x):
         x = self.fc1(x)
@@ -34,6 +28,18 @@ class SimpleNestedModel(nn.Module):
         x = self.fc3(x)
         x = self.fc4(x)
         return x
+
+
+def _create_model(embedding_size: int, with_fsdp: bool, process_group):
+    model = SimpleNestedModel(with_fsdp=with_fsdp, process_group=process_group, embedding_size=embedding_size).cuda()
+    if with_fsdp:
+        return FullyShardedDataParallel(model, process_group=process_group)
+    else:
+        return model
+
+
+def _load_sharded_checkpoint(rank: int):
+    return torch.load(f"checkpoint_{rank}.torch")  # type: ignore
 
 
 def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, flatten_parameters: bool):
@@ -47,8 +53,7 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, f
     # Create a dummy model with dummy inputs and targets
     input = torch.randn(size=(16, embedding_size)).cuda()
     target = torch.zeros(size=(16, embedding_size)).cuda()
-    model = SimpleNestedModel(with_fsdp=True, process_group=process_group, embedding_size=embedding_size).cuda()
-    model = FullyShardedDataParallel(model, process_group=process_group, flatten_parameters=flatten_parameters)
+    model = _create_model(with_fsdp=True, process_group=process_group, embedding_size=embedding_size)
     criterion = nn.MSELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
 
@@ -68,24 +73,23 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, f
     torch.save(cp_data, f"checkpoint_{gpu_id}.torch")
 
     # Wait for all files to be written on the disk
-    torch.distributed.barrier()
+    dist.barrier()  # type: ignore
 
     # Reconstruct a full checkpoint from the sharded checkpoints
-    all_checkpoints = [torch.load(f"checkpoint_{rank}.torch") for rank in range(world_size)]
+    all_checkpoints = [_load_sharded_checkpoint(rank) for rank in range(world_size)]
     consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
         shard_weights=[c["weights"] for c in all_checkpoints], shard_metadata=[c["meta"] for c in all_checkpoints],
     )
 
     # Check that the reconstructed parameters are correct and of the right shape
-    full_model = SimpleNestedModel(with_fsdp=False, process_group=process_group, embedding_size=embedding_size)
+    full_model = _create_model(with_fsdp=False, process_group=process_group, embedding_size=embedding_size)
     full_model_state_dict = full_model.state_dict()
     assert set(full_model_state_dict.keys()) == set(consolidated_checkpoint.keys())
     for k in full_model_state_dict.keys():
         assert consolidated_checkpoint[k].shape == full_model_state_dict[k].shape
 
     # Verify that the checkpoint can be loaded by a FSDP model
-    loaded_model = SimpleNestedModel(with_fsdp=True, process_group=process_group, embedding_size=embedding_size).cuda()
-    loaded_model = FullyShardedDataParallel(loaded_model, process_group=process_group)
+    loaded_model = _create_model(with_fsdp=True, process_group=process_group, embedding_size=embedding_size)
     loaded_model.load_state_dict(consolidated_checkpoint)
     for m in loaded_model.modules():
         if isinstance(m, FullyShardedDataParallel):

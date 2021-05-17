@@ -8,6 +8,7 @@ import copy
 from enum import Enum, auto
 import functools
 import logging
+import math
 from math import inf
 import time
 import traceback
@@ -1536,7 +1537,9 @@ class FullyShardedDataParallel(nn.Module):
         )
 
     @staticmethod
-    def consolidate_shard_weights(shard_weights: List[Dict[str, torch.Tensor]], shard_metadata: List[Dict[str, Any]]):
+    def consolidate_shard_weights(
+        shard_weights: List[Dict[str, torch.Tensor]], shard_metadata: List[Dict[str, Any]]
+    ) -> Dict[str, torch.Tensor]:
         """
         Given a list of weights and meta data associated to N shards, reconstruct
         the weights of an equivalent consolidated (non-sharded) model.
@@ -1905,15 +1908,12 @@ def _pre_load_state_dict_hook(
     replace_by_prefix_(state_dict, prefix, prefix + "_fsdp_wrapped_module.")
 
 
-def _clean_path(path: str):
+def _clean_path(path: str) -> str:
     return ".".join([split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}])
 
 
-def _numel_from_size(size: torch.Size):
-    numel = 1
-    for dim in size:
-        numel *= dim
-    return numel
+def _numel_from_size(size: torch.Size) -> int:
+    return math.prod(size)
 
 
 ########################################################################################
