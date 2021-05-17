@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FSDP: Rename API arg `cpu_offload` to `move_params_to_cpu` to better reflect functionality. We will deprecate `cpu_offload` in an upcoming release [#676]
 - MoE: several fixes [#666] [#667] [#668]
 - SDP: re-expose the module property [#647]
+- wrap: support wrapping based on `wrapper_config` [#685]
 
 ### Added
 - FSDP: added `force_input_to_fp32` flag for SyncBatchNorm [#659]
