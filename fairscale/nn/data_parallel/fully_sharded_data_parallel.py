@@ -2054,8 +2054,6 @@ def auto_wrap_bn(
 
     # Wrap it.
     with (
-        enable_wrap(config_auto_wrap_policy, wrapper_cls=FullyShardedDataParallel)
-        if wrap_it
-        else contextlib.suppress()
+        enable_wrap(config_auto_wrap_policy, wrapper_cls=FullyShardedDataParallel) if wrap_it else contextlib.suppress()
     ):
         return auto_wrap(module)
