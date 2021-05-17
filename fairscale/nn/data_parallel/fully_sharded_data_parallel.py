@@ -8,7 +8,6 @@ import copy
 from enum import Enum, auto
 import functools
 import logging
-import math
 from math import inf
 import time
 import traceback
@@ -1538,11 +1537,16 @@ class FullyShardedDataParallel(nn.Module):
 
     @staticmethod
     def consolidate_shard_weights(
-        shard_weights: List[Dict[str, torch.Tensor]], shard_metadata: List[Dict[str, Any]]
+        shard_weights: List[Dict[str, torch.Tensor]],
+        shard_metadata: List[Dict[str, Any]],
+        with_module_buffers: bool = True,
     ) -> Dict[str, torch.Tensor]:
         """
         Given a list of weights and meta data associated to N shards, reconstruct
-        the weights of an equivalent consolidated (non-sharded) model.
+        the weights of an equivalent consolidated (non-sharded) model:
+        - modules parameters are consolidated using the shard metadata
+        - modules buffers are taken from shard 0: this assumes that module buffers
+          are either synchronized or that the shard 0 value is valid for all shards
 
         This method is very useful to re-assemble checkpoints of shards without
         having to instantiate FSDP wrappers with the world size originally used
@@ -1551,9 +1555,12 @@ class FullyShardedDataParallel(nn.Module):
         if len(shard_weights) != len(shard_metadata) or not len(shard_weights):
             raise ValueError("Require meta data for each shard and non-empty shards")
 
+        shard_param_names = set()
         consolidated_weights = {}
         original_world_size = len(shard_weights)
 
+        # Deal with the parameters of the model, for which there should be
+        # a corresponding entry in the metadata
         num_fsdp_wrappers = len(shard_metadata[0]["fsdp_paths"])
         for fsdp_wrapper_index in range(num_fsdp_wrappers):
             fsdp_path = shard_metadata[0]["fsdp_paths"][fsdp_wrapper_index]
@@ -1566,6 +1573,7 @@ class FullyShardedDataParallel(nn.Module):
                 for i in range(num_params):
                     param_name = shard_metadata[0]["param_names"][fsdp_wrapper_index][i]
                     param_name = ".".join([fsdp_path, param_name]) if fsdp_path else param_name
+                    shard_param_names.add(param_name)
                     shards = []
                     for rank in range(original_world_size):
                         shard = shard_weights[rank][param_name]
@@ -1584,6 +1592,7 @@ class FullyShardedDataParallel(nn.Module):
             else:
                 # Concatenate the flat_param
                 flat_param_name = ".".join([fsdp_path, "flat_param"]) if fsdp_path else "flat_param"
+                shard_param_names.add(flat_param_name)
                 shards = []
                 for rank in range(original_world_size):
                     shard = shard_weights[rank][flat_param_name]
@@ -1601,6 +1610,17 @@ class FullyShardedDataParallel(nn.Module):
                 for n, t, s in zip(param_names, full_flatten_param.split(param_numels), param_shapes):
                     full_name = fsdp_path + "." + n if fsdp_path else n
                     consolidated_weights[full_name] = t.view(s)
+
+        # Deal with the buffers, which are not parameters and are not sharded by FSDP
+        # and therefore have no corresponding entry in the metadata.
+        # To recognize them, we simply identify which weights have not been consumed
+        # by the parameter consolidation loop above, and take the values of the first
+        # shard (this assumes that there is some form of synchronization done between
+        # shards or that the buffer of all shards are equivalent)
+        if with_module_buffers:
+            for name, weight in shard_weights[0].items():
+                if name not in shard_param_names:
+                    consolidated_weights[name] = weight
 
         return consolidated_weights
 
@@ -1913,7 +1933,10 @@ def _clean_path(path: str) -> str:
 
 
 def _numel_from_size(size: torch.Size) -> int:
-    return math.prod(size)
+    numel = 1
+    for dim in size:
+        numel *= dim
+    return numel
 
 
 ########################################################################################
