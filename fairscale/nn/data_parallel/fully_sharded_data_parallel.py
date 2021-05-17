@@ -1508,7 +1508,7 @@ class FullyShardedDataParallel(nn.Module):
             # Dealing with FSDP(flatten_parameter=True)
             # Now, there is just one flattened parameter mapped to N different
             # parameters, so we need to export additional information (numels)
-            # on how to split the "merged" parameters, by extracing the meta-data
+            # on how to split the "merged" parameters, by extracting the meta-data
             # used in the FlattenParamsWrapper
             else:
                 param_names = []
@@ -1559,17 +1559,18 @@ class FullyShardedDataParallel(nn.Module):
 
         # Deal with the parameters of the model, for which there should be
         # a corresponding entry in the metadata
-        num_fsdp_wrappers = len(shard_metadata[0]["param_metadata"])
+        shard_0_metadata = shard_metadata[0]["param_metadata"]
+        num_fsdp_wrappers = len(shard_0_metadata)
         for fsdp_wrapper_index in range(num_fsdp_wrappers):
-            fsdp_path = shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["fsdp_path"]
-            param_names = shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["param_names"]
-            param_numels = shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["param_numels"]
-            param_shapes = shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["param_shapes"]
+            fsdp_path = shard_0_metadata[fsdp_wrapper_index]["fsdp_path"]
+            param_names = shard_0_metadata[fsdp_wrapper_index]["param_names"]
+            param_numels = shard_0_metadata[fsdp_wrapper_index]["param_numels"]
+            param_shapes = shard_0_metadata[fsdp_wrapper_index]["param_shapes"]
 
             # Dealing with FSDP(flatten_parameter=False)
             # For each parameter of the FSDP wrapper, get rid of the padding on each shard,
             # concatenate the shards and reshape them to their initial shape
-            if not shard_metadata[0]["param_metadata"][fsdp_wrapper_index]["is_flat"]:
+            if not shard_0_metadata[fsdp_wrapper_index]["is_flat"]:
                 for i in range(len(param_names)):
                     param_name = param_names[i]
                     param_name = ".".join([fsdp_path, param_name]) if fsdp_path else param_name

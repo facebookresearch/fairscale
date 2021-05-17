@@ -34,7 +34,6 @@ import logging
 import multiprocessing
 import os
 import random
-import shutil
 from statistics import mean
 import subprocess
 import sys
@@ -670,12 +669,11 @@ def in_temporary_directory() -> Generator:
     Context manager to create a temporary direction and remove
     it at the end of the context
     """
-    temp_dir = tempfile.mkdtemp()
     old_cwd = os.getcwd()
-    os.chdir(temp_dir)
-    yield temp_dir
-    os.chdir(old_cwd)
-    shutil.rmtree(temp_dir)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        os.chdir(temp_dir)
+        yield temp_dir
+        os.chdir(old_cwd)
 
 
 @contextlib.contextmanager
