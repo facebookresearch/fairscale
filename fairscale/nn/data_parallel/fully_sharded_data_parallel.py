@@ -1477,7 +1477,7 @@ class FullyShardedDataParallel(nn.Module):
             # the Storage to 0 to save memory.
             free_storage_(p._full_param_padded)
 
-    def local_metadata_dict(self) -> Dict[str, list]:
+    def local_metadata_dict(self) -> Dict[str, Any]:
         """
         Get the information needed to reconstruct the model from shards offline.
         """
@@ -1525,6 +1525,7 @@ class FullyShardedDataParallel(nn.Module):
                 unflat_shapes.append(m._param_shapes)
                 no_broadcast_optim_state.append(m.no_broadcast_optim_state)
 
+        buffer_names = [_clean_path(buffer_name) for buffer_name, _ in self.named_buffers(recurse=True)]
         return dict(
             fsdp_paths=fsdp_paths,
             is_flatten=is_flatten,
@@ -1533,6 +1534,7 @@ class FullyShardedDataParallel(nn.Module):
             numels=numels,
             unflat_shapes=unflat_shapes,
             no_broadcast_optim_state=no_broadcast_optim_state,
+            buffer_names=buffer_names,
         )
 
     @staticmethod
@@ -1543,10 +1545,14 @@ class FullyShardedDataParallel(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """
         Given a list of weights and meta data associated to N shards, reconstruct
-        the weights of an equivalent consolidated (non-sharded) model:
-        - modules parameters are consolidated using the shard metadata
-        - modules buffers are taken from shard 0: this assumes that module buffers
-          are either synchronized or that the shard 0 value is valid for all shards
+        the weights of an equivalent consolidated (non-sharded) model.
+
+        Module parameters are consolidated using the shard metadata.
+
+        Module buffers are taken from shard 0: this assumes that module buffers
+        are either synchronized or that the shard 0 value is valid for all shards.
+        If this behavior is not correct for your module (for instance if buffers
+        needs to be reduced instead), you can disable it with `with_module_buffers=False`.
 
         This method is very useful to re-assemble checkpoints of shards without
         having to instantiate FSDP wrappers with the world size originally used
@@ -1555,7 +1561,6 @@ class FullyShardedDataParallel(nn.Module):
         if len(shard_weights) != len(shard_metadata) or not len(shard_weights):
             raise ValueError("Require meta data for each shard and non-empty shards")
 
-        shard_param_names = set()
         consolidated_weights = {}
         original_world_size = len(shard_weights)
 
@@ -1573,7 +1578,6 @@ class FullyShardedDataParallel(nn.Module):
                 for i in range(num_params):
                     param_name = shard_metadata[0]["param_names"][fsdp_wrapper_index][i]
                     param_name = ".".join([fsdp_path, param_name]) if fsdp_path else param_name
-                    shard_param_names.add(param_name)
                     shards = []
                     for rank in range(original_world_size):
                         shard = shard_weights[rank][param_name]
@@ -1592,7 +1596,6 @@ class FullyShardedDataParallel(nn.Module):
             else:
                 # Concatenate the flat_param
                 flat_param_name = ".".join([fsdp_path, "flat_param"]) if fsdp_path else "flat_param"
-                shard_param_names.add(flat_param_name)
                 shards = []
                 for rank in range(original_world_size):
                     shard = shard_weights[rank][flat_param_name]
@@ -1618,9 +1621,8 @@ class FullyShardedDataParallel(nn.Module):
         # shard (this assumes that there is some form of synchronization done between
         # shards or that the buffer of all shards are equivalent)
         if with_module_buffers:
-            for name, weight in shard_weights[0].items():
-                if name not in shard_param_names:
-                    consolidated_weights[name] = weight
+            for buffer_name in shard_metadata[0]["buffer_names"]:
+                consolidated_weights[buffer_name] = shard_weights[0][buffer_name]
 
         return consolidated_weights
 
