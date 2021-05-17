@@ -76,7 +76,6 @@ def _create_model(
     if with_sync_bn:
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
         fsdp_config = {
-            "wrapper_cls": FSDP,
             "mixed_precision": False,
             "flatten_parameters": False,
             "reshard_after_forward": False,

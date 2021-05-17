@@ -23,7 +23,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 
 from fairscale.nn.misc import FlattenParamsWrapper
-from fairscale.nn.wrap import auto_wrap, default_auto_wrap_policy, enable_wrap
+from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import (
     chunk_and_pad,
@@ -218,7 +218,7 @@ class FullyShardedDataParallel(nn.Module):
         cpu_offload (bool, Optional):
             if ``True``, offload FP32 params to CPU. This is only relevant when
             *``mixed_precision``* is ``True``. Note: This arg will be deprecated in favor of
-            *``move_params_to_cpu``* in an upcoming release. 
+            *``move_params_to_cpu``* in an upcoming release.
     """
 
     def __init__(
@@ -1987,6 +1987,8 @@ def auto_wrap_bn(
     single_rank_pg: bool = False,
     process_group: Optional[ProcessGroup] = None,
     fsdp_config: Optional[Dict[str, Any]] = None,
+    wrap_it: bool = True,
+    assert_on_collision: bool = True,
 ) -> nn.Module:
     """
     Auto wrap all BatchNorm (BN) instances with a safer FSDP, esp. when convert
@@ -2008,22 +2010,17 @@ def auto_wrap_bn(
             Optional process group to be used.
         fsdp_config (Dict):
             Optional fsdp_config to be used.
+        wrap_it (bool):
+            Whether or not wrap the module after setting the config.
+            Default: True
+        assert_on_collision (bool):
+            Whether or not assert if a wrapper_config already exists on the module.
+            Default: True
 
     Returns:
         Processed module, where BNs are wrapped with a special FSDP instance.
     """
-
-    def wrap_bn_only_policy(module: nn.Module, recurse: bool, unwrapped_params: int) -> bool:
-        is_bn = isinstance(module, torch.nn.modules.batchnorm._BatchNorm)
-        if recurse:
-            return not isinstance(
-                module, tuple(default_auto_wrap_policy.FORCE_LEAF_MODULES)  # type: ignore
-            )
-        else:
-            return is_bn and not isinstance(
-                module, tuple(default_auto_wrap_policy.EXCLUDE_WRAP_MODULES)  # type: ignore
-            )
-
+    # Prepare a fsdp_config dict for BNs.
     pg = process_group
     if single_rank_pg:
         # No sharding with this single member group.
@@ -2032,7 +2029,6 @@ def auto_wrap_bn(
 
     if fsdp_config is None:
         fsdp_config = {
-            "wrapper_cls": FullyShardedDataParallel,
             "process_group": pg,
             "mixed_precision": False,  # Keep the weights in FP32.
             "flatten_parameters": False,  # Do not flatten.
@@ -2047,5 +2043,17 @@ def auto_wrap_bn(
             "force_input_to_fp32": False,
         }
 
-    with enable_wrap(wrap_bn_only_policy, **fsdp_config):
+    # Assign the config dict to BNs.
+    for m in module.modules():
+        if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+            if assert_on_collision:
+                assert not hasattr(
+                    m, "wrapper_config"
+                ), "Module shouldn't already have a wrapper_config. Is it tagged already by another policy?"
+            m.wrapper_config = fsdp_config
+
+    # Wrap it.
+    with (
+        enable_wrap(config_auto_wrap_policy, wrapper_cls=FullyShardedDataParallel) if wrap_it else contextlib.suppress()
+    ):
         return auto_wrap(module)
