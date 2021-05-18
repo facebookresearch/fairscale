@@ -6,20 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
-- FSDP: fix extra process groups being created by default. Old behavior can cause excessive GPU memory usage. [#678]
+
+### Added
+
+## [0.3.7] - 2021-05-17
+### Fixed
+- setup.py: hide CUDA extensions behind `BUILD_CUDA_EXTENSIONS` envvar [#634]
+- checkpointing: rename and move the `checkpoint_activations` wrapper [#654]
+- FSDP: fix `local_state_dict` potentially called child class's `state_dict` [#574]
+- FSDP: fix extra process groups being created by default. Old behavior can cause excessive GPU memory usage [#678] [#681]
 - FSDP: fix forward pass not overlapping compute and allgather [#671]
 - FSDP: improved frozen weight support [#657]
 - FSDP: workaround AMP autocast cache issue with `clear_autocast_cache` flag [#650]
+- FSDP: Rename API arg `cpu_offload` to `move_params_to_cpu` to better reflect functionality. We will deprecate `cpu_offload` in an upcoming release [#676]
 - MoE: several fixes [#666] [#667] [#668]
-- setup.py: hide CUDA extensions behind `BUILD_CUDA_EXTENSIONS` envvar [#634]
 - SDP: re-expose the module property [#647]
-- checkpointing: rename and move the checkpoint_activations wrapper [#654]
-- FSDP: Rename API arg `cpu_offload` to `move_params_to_cpu` to better reflect functionality. We will deprecate `cpu_offload` in an upcoming release. [#676]
+- wrap: support wrapping based on `wrapper_config` [#685]
 
 ### Added
 - FSDP: added `force_input_to_fp32` flag for SyncBatchNorm [#659]
 - FSDP: better memory usage for reduce bucket [#633]
-- Experimental SyncBatchNorm [#662]
+- FSDP: added `local_metadata_dict` to save sharding relating information [#683]
+- FSDP: added `consolidate_shard_weights` to reconstruct the consolidated (non-sharded) model weights from saved sharded weights and metadata on the disk [#683]
+- Experimental SyncBatchNorm [#662] [#680]
 
 ## [0.3.6] - 2021-04-26
 ### Added

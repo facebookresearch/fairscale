@@ -681,6 +681,19 @@ def rmf(filename: str) -> None:
 
 
 @contextlib.contextmanager
+def in_temporary_directory() -> Generator:
+    """
+    Context manager to create a temporary direction and remove
+    it at the end of the context
+    """
+    old_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        os.chdir(temp_dir)
+        yield temp_dir
+        os.chdir(old_cwd)
+
+
+@contextlib.contextmanager
 def temp_files_ctx(num: int) -> Generator:
     """ A context to get tempfiles and ensure they are cleaned up. """
     files = [tempfile.mkstemp()[1] for _ in range(num)]
@@ -701,7 +714,7 @@ def dump_all_tensors(rank: int) -> None:
             ttype = str(type(obj))
             if torch.is_tensor(obj) or (hasattr(obj, "data") and torch.is_tensor(obj.data)):
                 print(ttype, obj.shape, obj.dtype, obj.device, obj.storage().size())
-        except Exception as e:
+        except Exception:
             pass
     print(torch.cuda.memory_summary())
 
