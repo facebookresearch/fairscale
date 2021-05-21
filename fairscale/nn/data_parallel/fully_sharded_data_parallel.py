@@ -2,9 +2,10 @@
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
-
+import bisect
 import contextlib
 import copy
+import math
 from enum import Enum, auto
 import functools
 import logging
@@ -14,6 +15,7 @@ import traceback
 import typing
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
+import numpy as np
 import torch
 from torch.autograd import Variable
 import torch.distributed as dist
@@ -504,6 +506,84 @@ class FullyShardedDataParallel(nn.Module):
                 p.grad.detach().mul_(clip_coef.to(p.grad.device))  # type: ignore
 
         return total_norm
+
+    def shard_view_parameters(self, prefix: str = "", recurse: bool = True):
+        for _, param_view in self.named_shard_view_parameters(prefix, recurse):
+            yield param_view
+
+    def named_shard_view_parameters(self, prefix: str = "", recurse: bool = True):
+        """
+        Return views of the original parameter into the current shard,
+        dealing with the flattening and the padding
+
+        This can be used to apply different learning rates by parameters
+        or compute norms by parameters (for LARC or any non-pointwise optimizer)
+        """
+
+        # TODO - the un-padding / view of parameters yields a tensor not a parameter
+        #   create a kind of parameter view to deal with this?
+
+        # TODO - the view in the parameters makes a non-leaf tensor that cannot be optimized
+        #   * it will not contain any grad (propagated to the original tensor)
+        #   * we could create a new object that wraps the tensor:
+        #     it would have is_leaf of the underlying tensor, it would have the grad of the underlying tensor
+
+        if recurse:
+            for n, m in self.named_modules(prefix=prefix):
+                if isinstance(m, FullyShardedDataParallel):
+                    yield from m.named_shard_view_parameters(prefix=n, recurse=False)
+            return
+
+        with torch.no_grad():
+            # In case flatten_parameters=False:
+            # Scan the parameters and remove their padding before yielding them
+            if not hasattr(self, "_param_numels"):
+                num_params = len(self.numel_padded_per_param)
+                for i in range(num_params):
+                    splits = [prefix, self.param_paths[i]]
+                    full_param_path = ".".join(split for split in splits if split)
+                    param_view = _unpad(self.params[i], self.numel_padded_per_param[i])
+                    yield _clean_path(full_param_path), param_view
+
+            # In case flatten_parameters=True:
+            # This is much more subtle: shards may not have any view on one of the parameters:
+            # Example:
+            #   Parameters A(size 2) and B(size 3) will be merged in F(size 5)
+            #   - Sharding on 2 GPUs will assign half of F (size 3) to W0 and the rest fo W1 (size 2)
+            #   - Padding will add 1 to the shard of W1 (size 2 + pad 1)
+            #   => In the end, W0 will have the entirety of param A and a small part of B (size 1)
+            #      while W1 will have the rest of param B
+            else:
+                param_names = []
+                for module_path, param_name in self._param_full_infos:
+                    splits = [prefix, module_path, param_name]
+                    full_param_path = ".".join(split for split in splits if split)
+                    param_names.append(_clean_path(full_param_path))
+
+                # Compute where the local shard start in the flat_param
+                local_flat_param_numel = self.flat_param.size(0)
+                rank_shift_numel = local_flat_param_numel * self.rank
+
+                # Compute where each parameter ends in the flat_param
+                cum_param_numels = np.cumsum(self._param_numels)
+
+                # Identify where the current shard is inside flat_param
+                lo_param = bisect.bisect_left(cum_param_numels, rank_shift_numel)
+                if cum_param_numels[lo_param] > rank_shift_numel:
+                    lo_param -= 1
+                hi_param = bisect.bisect_left(cum_param_numels, rank_shift_numel + local_flat_param_numel)
+
+                # Yield the parameters available in the current shard
+                flat_param = _unpad(self.flat_param, self.numel_padded_per_param[0])
+                for i in range(lo_param, hi_param):
+                    if i + 1 >= len(cum_param_numels):
+                        break  # we are dealing with padding
+
+                    start_range = 0 if i == -1 else max(0, cum_param_numels[i] - rank_shift_numel)
+                    end_range = cum_param_numels[i + 1]
+                    param_name = param_names[i + 1]
+                    param_view = flat_param[start_range:end_range]
+                    yield param_name, param_view
 
     @torch.no_grad()
     def _shard_parameters_(self) -> None:
