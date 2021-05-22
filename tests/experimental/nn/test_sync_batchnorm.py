@@ -13,6 +13,7 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fairscale.experimental.nn import SyncBatchNorm
+from fairscale.nn.checkpoint import checkpoint_wrapper
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 
@@ -90,6 +91,19 @@ def parity3d_bn():
     torch_bn = torch.nn.BatchNorm3d(3).cuda()
     fs_bn = SyncBatchNorm(3).cuda()
     check_parity(torch_bn, fs_bn, x)
+
+
+@pg_test()
+def parity3d_checkpoint_syncbn():
+    rank = dist.get_rank()
+    torch.cuda.set_device(rank)
+    torch.manual_seed(rank)
+
+    x = torch.randn(4, 3, 4, 4, 4).cuda() * rank
+    torch_bn = torch.nn.SyncBatchNorm(3).cuda()
+    fs_bn = SyncBatchNorm(3).cuda()
+    fs_bn = checkpoint_wrapper(fs_bn, maintain_forward_counter=True)
+    check_parity_ddp(torch_bn, fs_bn, x)
 
 
 @pg_test()

@@ -3,80 +3,60 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, cast
 
 import torch
+from torch import Tensor
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
 
 
-def _forward(
-    input: torch.Tensor,
-    affine: bool,
-    track_running_stats: bool,
-    mean: torch.Tensor,
-    var: torch.Tensor,
-    invstd: torch.Tensor,
-    momentum: float,
-    weight: torch.Tensor,
-    bias: torch.Tensor,
-    running_mean: torch.Tensor,
-    running_var: torch.Tensor,
-    total_count: torch.Tensor,
-) -> torch.Tensor:
-    if track_running_stats:
-        with torch.no_grad():
-            unbiased_var = var * (total_count / (total_count - 1))
-            running_mean += momentum * (mean.reshape(-1) - running_mean)
-            running_var += momentum * (unbiased_var.reshape(-1) - running_var)
-
+def _forward(input: Tensor, affine: bool, mean: Tensor, invstd: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
     if affine:
         return (input - mean) * (invstd * weight.reshape_as(mean)) + bias.reshape_as(mean)
     else:
         return (input - mean) * invstd
 
 
+def _track_running_stats(
+    running_mean: Tensor, running_var: Tensor, momentum: float, mean: Tensor, var: Tensor, total_count: Tensor
+) -> None:
+    with torch.no_grad():
+        unbiased_var = var * (total_count / (total_count - 1))
+        running_mean += momentum * (mean.reshape(-1) - running_mean)
+        running_var += momentum * (unbiased_var.reshape(-1) - running_var)
+
+
+def _calculate_stats(input: Tensor, eps: float, process_group: ProcessGroup) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    dim = [d for d in range(input.ndim) if d != 1]
+    count = torch.full((1,), input.numel() // input.size(1), device=input.device, dtype=input.dtype)
+    total_count = count.clone()
+    all_reduce_handle = dist.all_reduce(total_count, group=process_group, async_op=True)
+    mean = torch.mean(input, dim=dim, keepdim=True)
+    meansqr = torch.mean(input * input, dim=dim, keepdim=True)
+    vec = torch.cat([mean, meansqr])
+    all_reduce_handle.wait()
+    vec = vec * (count / total_count)
+    dist.all_reduce(vec, group=process_group)
+    mean, meansqr = vec.chunk(2)
+    var = meansqr - mean * mean
+    invstd = torch.rsqrt(var + eps)
+    return mean, var, invstd, total_count
+
+
 if torch.__version__.split(".")[:2] >= ["1", "7"]:
     _forward = torch.jit.script(_forward)  # type: ignore
+    _track_running_stats = torch.jit.script(_track_running_stats)  # type: ignore
 
 
 class _SyncBatchNormFunction(torch.autograd.Function):
     @staticmethod
     # type: ignore
-    def forward(
-        ctx, input, weight, bias, affine, track_running_stats, running_mean, running_var, eps, momentum, process_group
-    ):
-        dim = [d for d in range(input.ndim) if d != 1]
-        count = torch.full((1,), input.numel() // input.size(1), device=input.device, dtype=input.dtype)
-        total_count = count.clone()
-        all_reduce_handle = dist.all_reduce(total_count, group=process_group, async_op=True)
-        mean = torch.mean(input, dim=dim, keepdim=True)
-        meansqr = torch.mean(input * input, dim=dim, keepdim=True)
-        vec = torch.cat([mean, meansqr])
-        all_reduce_handle.wait()
-        vec = vec * (count / total_count)
-        dist.all_reduce(vec, group=process_group)
-        mean, meansqr = vec.chunk(2)
-        var = meansqr - mean * mean
-        invstd = torch.rsqrt(var + eps)
-
+    def forward(ctx, input, weight, bias, affine, mean, invstd, total_count, process_group):
         ctx.save_for_backward(input, weight, bias, mean, invstd, total_count)
         ctx.process_group = process_group
 
-        return _forward(
-            input,
-            affine,
-            track_running_stats,
-            mean,
-            var,
-            invstd,
-            momentum,
-            weight,
-            bias,
-            running_mean,
-            running_var,
-            total_count,
-        )
+        return _forward(input, affine, mean, invstd, weight, bias)
 
     @staticmethod
     # type: ignore
@@ -138,22 +118,27 @@ class SyncBatchNorm(torch.nn.BatchNorm2d):
     ) -> None:
         super().__init__(*args, **kwargs)  # type: ignore
         self._process_group = process_group if process_group is not None else dist.group.WORLD
+        self.saved_for_2nd_fwd: Optional[Tuple] = None
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:  # type: ignore
+    def forward(self, input: Tensor) -> Tensor:  # type: ignore
         if not dist.is_initialized() or not self.training:
             return super().forward(input)
 
+        if not hasattr(self, "_checkpoint_fwd_counter") or self._checkpoint_fwd_counter == 0:
+            mean, var, invstd, total_count = _calculate_stats(input, self.eps, self._process_group)
+            if self.track_running_stats:
+                _track_running_stats(self.running_mean, self.running_var, self.momentum, mean, var, total_count)
+
+        if hasattr(self, "_checkpoint_fwd_counter"):
+            if self._checkpoint_fwd_counter == 0:
+                self.saved_for_2nd_fwd = (mean, invstd, total_count)
+                return _forward(input, self.affine, mean, invstd, self.weight, self.bias)
+            else:
+                mean, invstd, total_count = cast(Tuple, self.saved_for_2nd_fwd)
+                del self.saved_for_2nd_fwd
+
         return _SyncBatchNormFunction.apply(
-            input,
-            self.weight,
-            self.bias,
-            self.affine,
-            self.track_running_stats,
-            self.running_mean,
-            self.running_var,
-            self.eps,
-            self.momentum,
-            self._process_group,
+            input, self.weight, self.bias, self.affine, mean, invstd, total_count, self._process_group
         )
 
     @classmethod
