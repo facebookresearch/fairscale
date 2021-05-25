@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 import torch
 
+from fairscale.experimental.nn.auto_shard import shard_model
 from fairscale.experimental.nn.offload import OffloadModel
 from fairscale.utils.testing import skip_if_no_cuda
 
@@ -135,7 +136,8 @@ def _train_offload_model(
 @pytest.mark.parametrize("use_fp16", [True, False])
 @pytest.mark.parametrize("checkpoint_activation", [True, False])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
-def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
+@pytest.mark.parametrize("use_auto_shard", [True, False])
+def test_correctness(use_fp16, checkpoint_activation, num_microbatches, use_auto_shard):
     if (use_fp16 or checkpoint_activation) and not hasattr(torch.cuda.amp, "custom_fwd"):
         pytest.skip(f"AMP APIs are not supported in torch version {torch.__version__}")
 
@@ -144,9 +146,14 @@ def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
 
     device, offload_device = _init()
     model = _get_model()
+    if use_auto_shard:
+        offload_model = shard_model(model)
+    else:
+        offload_model = model
+
     rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
     omodel, oopt, oloss = _train_offload_model(
-        model,
+        offload_model,
         device,
         offload_device,
         use_fp16=use_fp16,
