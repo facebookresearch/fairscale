@@ -24,8 +24,8 @@ functionality beyond that provided by the PyTorch API specifically you can use
 pass, offload intermediate activations to the CPU and handle non-tensor outputs returned from the 
 forward function.
 
-Best Practices
-^^^^^^^^^^^^^^
+Best practices for `fairscale.nn.checkpoint.checkpoint_wrapper`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 1. Memory savings depends entirely on the model and the segmentation of checkpoint wrapping. 
 Each backprop consists of several mini-forward and backprop passes. The gain is entirely dependent 

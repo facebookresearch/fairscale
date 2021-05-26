@@ -39,7 +39,7 @@ The training process is as follows:
 
 5. The training loop terminates once maximum number of steps has been reached
 
-Best Practices
-^^^^^^^^^^^^^^
+Best practices for `fairscale.optim.AdaScale`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Adascale only works for the SGD optimizer (with and without momentum)
 

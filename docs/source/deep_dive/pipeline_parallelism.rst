@@ -15,8 +15,8 @@ the micro-batches and send the output to the following shard/device. In the mean
 process the micro batch from the previous shard/device. By pipepling the input in this way, Gpipe is 
 able to reduce the idle time of devices. 
 
-Best Practices
-^^^^^^^^^^^^^^
+Best practices for using `fairscale.nn.Pipe`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 1. Choice of size of micro-batches can affect GPU utilization. A smaller microbatch can reduce latency of shards waiting for previous shard outputs but a large microbatch better utilizes GPUs.
 

@@ -1,4 +1,4 @@
-Offload Model
+OffloadModel
 =============
 
 Heavily inspired by the `Layer-to-Layer <https://arxiv.org/abs/2002.05645>`_ algorithm and 
@@ -36,8 +36,8 @@ and activations from CPU <-> GPU. Micro-batches allow you to specify large mini-
 broken down into micro-batches and fed to the model shards at each iteration. In short it is a way 
 to allow more computation at a given time on a model shard to offset the cost of copying from CPU <-> GPU.
 
-Best Practices
-^^^^^^^^^^^^^^
+Best practices for using `fairscale.experimental.nn.OffloadModel`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 1. Using OffloadModel to train large models can result in loss of throughput which can be overcome by using activation checkpointing and microbatches.
 

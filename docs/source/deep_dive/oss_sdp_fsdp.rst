@@ -59,8 +59,8 @@ slowdown when using multiple nodes, due to the additional communication in step 
 wasteful memory used to store gradients during allreduce in step 2 that is then discarded, although this 
 also happens with normal PyTorch (nothing extraneous here).
 
-Best Practices
-^^^^^^^^^^^^^^
+Best practices for using `fairscale.optim.oss`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 1. OSS exposes a broadcast_fp16 flag that you should probably use in multi-node jobs, unless this leads to 
 accuracy issues (which is very unlikely). This can be used with or without Torch AMP. This is usually not 
@@ -74,8 +74,8 @@ would be preferable.
 such as the `fp16 gradient compression hook <https://pytorch.org/docs/stable/ddp_comm_hooks.html#torch.distributed.algorithms.ddp_comm_hooks.default_hooks.fp16_compress_hook>`_, 
 gradient accumulation and PyTorch AMP.
 
-Performance
-^^^^^^^^^^^
+Performance tips for `fairscale.optim.oss`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 1. On a single node, OSS should be always faster than vanilla PyTorch, memory savings will vary depending 
 on the optimizer being used
@@ -124,8 +124,8 @@ Both the OSS and SDP APIs allow you to reduce the memory used for gradients and 
 Additional communication costs can be present in slow interconnects but are useful to try as first steps 
 when running into Out Of Memory (OOM) issues. 
 
-Best Practices
-^^^^^^^^^^^^^^
+Best practices for `fairscale.nn.ShardedDataParallel`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 1. If using multiple nodes, make sure that SDP is using reduce buffers by specifying the 
 `reduce_buffer_size` arg. Changing their size can be an optimization target, the best configuration 
@@ -188,8 +188,8 @@ To enable further memory savings, FSDP supports offloading parameters and gradie
 not being used onto the CPU. This can be enabled by setting `move_params_to_cpu` and `move_grads_to_cpu` 
 to be equal to True.
 
-Best Practices
-^^^^^^^^^^^^^^
+Best practices for `fairscale.nn.FullyShardedDataParallel`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 1. For FSDP, it is preferable to use `model.zero_grad(set_to_none=True)` since it saves a large amount of
 memory after stepping.
@@ -204,8 +204,8 @@ over checkpoint_wrapper(FSDP(module)). The latter will result in more communicat
 SGD, etc.. However, the sharding will result in slightly different results when using non-pointwise 
 Optimizers, e.g., Adagrad, Adafactor, LAMB, etc.
 
-Performance
-^^^^^^^^^^^^
+Performance tips for `fairscale.nn.FullyShardedDataParallel`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 1. For best memory efficiency use auto_wrap to wrap each layer in your network with FSDP and 
 set `reshard_after_forward` to be True
