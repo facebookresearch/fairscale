@@ -43,13 +43,12 @@ class MOELayer(Base):
         output = moe(input)
         l_aux = moe.l_aux
 
-    .. Gshard_: https://arxiv.org/pdf/2006.16668.pdf
+    .. _Gshard: https://arxiv.org/pdf/2006.16668.pdf
 
     Args:
-        gate (torch.nn.Module):
-            gate network
-        expert (torch.nn.Module):
-            expert network
+        gate: gate network
+        expert: expert network
+        group: group to use for all-to-all communication
     """
 
     def __init__(self, gate: Module, experts: Union[Module, ModuleList], group: Optional[Any] = None) -> None:

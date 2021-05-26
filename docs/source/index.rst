@@ -26,6 +26,9 @@ Components
     * `Fully Sharded Data Parallel FSDP <../../en/latest/api/nn/fsdp.html>`_
     * `FSDP Tips <../../en/latest/api/nn/fsdp_tips.html>`_
 
+* Mixture-of-Experts:
+    * `MOE <../../en/latest/api/nn/moe.html>`_
+
 * Optimization at scale:
    * `AdaScale SGD <../../en/latest/api/optim/adascale.html>`_
 
