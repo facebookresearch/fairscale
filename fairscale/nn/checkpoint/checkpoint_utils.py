@@ -42,7 +42,7 @@ def patch_batchnorm(module: nn.Module) -> List:
     hooks = []
     for name, child in module.named_modules():
         # _BatchNorm is base for bn1d, bn2d, bn3d and sync_bn, apex_sync_bn, etc.
-        if isinstance(child, _BatchNorm):
+        if isinstance(child, _BatchNorm) and not hasattr(child, "disable_patch_batchnorm"):
             # Register the pre/post hooks.
             pre_handle = child.register_forward_pre_hook(pre_forward)
             post_handle = child.register_forward_hook(post_forward)

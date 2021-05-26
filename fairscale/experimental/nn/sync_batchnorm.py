@@ -3,12 +3,14 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
+
+from fairscale.nn.checkpoint import is_checkpointing, is_recomputing
 
 
 def _forward(input: Tensor, affine: bool, mean: Tensor, invstd: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
@@ -118,24 +120,24 @@ class SyncBatchNorm(torch.nn.BatchNorm2d):
     ) -> None:
         super().__init__(*args, **kwargs)  # type: ignore
         self._process_group = process_group if process_group is not None else dist.group.WORLD
-        self.saved_for_2nd_fwd: Optional[Tuple] = None
+        self.saved_for_2nd_fwd: List[Tuple] = []
+        self.disable_patch_batchnorm = True
 
     def forward(self, input: Tensor) -> Tensor:  # type: ignore
         if not dist.is_initialized() or not self.training:
             return super().forward(input)
 
-        if not hasattr(self, "_checkpoint_fwd_counter") or self._checkpoint_fwd_counter == 0:
+        wrapped = is_checkpointing() or is_recomputing()
+        if not wrapped or is_checkpointing():
             mean, var, invstd, total_count = _calculate_stats(input, self.eps, self._process_group)
             if self.track_running_stats:
                 _track_running_stats(self.running_mean, self.running_var, self.momentum, mean, var, total_count)
 
-        if hasattr(self, "_checkpoint_fwd_counter"):
-            if self._checkpoint_fwd_counter == 0:
-                self.saved_for_2nd_fwd = (mean, invstd, total_count)
-                return _forward(input, self.affine, mean, invstd, self.weight, self.bias)
-            else:
-                mean, invstd, total_count = cast(Tuple, self.saved_for_2nd_fwd)
-                del self.saved_for_2nd_fwd
+        if is_checkpointing():
+            self.saved_for_2nd_fwd.append((mean, invstd, total_count))
+            return _forward(input, self.affine, mean, invstd, self.weight, self.bias)
+        if is_recomputing():
+            mean, invstd, total_count = self.saved_for_2nd_fwd.pop(0)
 
         return _SyncBatchNormFunction.apply(
             input, self.weight, self.bias, self.affine, mean, invstd, total_count, self._process_group
