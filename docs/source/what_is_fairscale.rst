@@ -8,16 +8,17 @@ modules and easy to use APIs. These APIs are a fundamental part of a researcher'
 they attempt to scale models with limited resources.
 
 .. image:: _static/img/global.png
-    :width: 200px
-    :height: 200px
+    :width: 400px
+    :height: 400px
+    :align: center
 
 FairScale was designed with the following values in mind:
 
-**Usability** -  Users should be able to understand and use FairScale APIs with minimum cognitive overload.
+1. **Usability** -  Users should be able to understand and use FairScale APIs with minimum cognitive overload.
 
-**Modularity** - Users should be able to combine multiple FairScale APIs as part of their training loop seamlessly. 
+2. **Modularity** - Users should be able to combine multiple FairScale APIs as part of their training loop seamlessly. 
 
-**Performance** - FairScale APIs provide the best performance in terms of scaling and efficiency.
+3. **Performance** - FairScale APIs provide the best performance in terms of scaling and efficiency.
 
 .. image:: _static/img/ddp.png
 
@@ -30,8 +31,8 @@ has only increased over the years and data parallelism no longer serves all “s
 There are multiple axes across which you can scale training and FairScale provides the following broad 
 categories of solutions:
 
-**Parallelism** → These techniques allow scaling of models by layer parallelism and tensor parallelism.
+1. **Parallelism** → These techniques allow scaling of models by layer parallelism and tensor parallelism.
 
-**Sharding Methods** → Memory and computation are usually trade-offs and in this category we attempt to achieve both low memory utilization and efficient computation by sharding model layers or parameters, optimizer state and gradients.
+2. **Sharding Methods** → Memory and computation are usually trade-offs and in this category we attempt to achieve both low memory utilization and efficient computation by sharding model layers or parameters, optimizer state and gradients.
 
-**Optimization** → This bucket deals with optimizing memory usage irrespective of the scale of the model, training without hyperparameter tuning and all other techniques that attempt to optimize training performance in some way.
+3. **Optimization** → This bucket deals with optimizing memory usage irrespective of the scale of the model, training without hyperparameter tuning and all other techniques that attempt to optimize training performance in some way.

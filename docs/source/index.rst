@@ -7,6 +7,10 @@
 FairScale Documentation
 =======================
 
+FairScale is a PyTorch extension library for high performance and large scale training. 
+FairScale makes available the latest distributed training techniques in the form of composable 
+modules and easy to use APIs.
+
 .. toctree::
    :maxdepth: 1
    :caption: Index
