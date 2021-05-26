@@ -124,6 +124,11 @@ class SyncBatchNorm(torch.nn.BatchNorm2d):
         self.disable_patch_batchnorm = True
 
     def forward(self, input: Tensor) -> Tensor:  # type: ignore
+        # There are 3 modes this is being called:
+        # 1. not wrapped (and there is only a single phase)
+        # 2. wrapped and in checkpointing phase
+        # 3. wrapped and in recomputing phase
+
         if not dist.is_initialized() or not self.training:
             return super().forward(input)
 

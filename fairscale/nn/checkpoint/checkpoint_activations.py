@@ -19,6 +19,8 @@ from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kw
 from .checkpoint_utils import dec_counter, inc_counter, init_counter, patch_batchnorm
 
 
+# https://docs.python.org/3/library/threading.html#thread-local-data
+# Manage the checkpoint context with thread-local data.
 class ThreadLocal(threading.local):
     def __init__(self) -> None:
         self.is_checkpointing = False
@@ -77,9 +79,6 @@ def is_recomputing() -> bool:
 
     Returns:
         bool: :data:`True` if it's under checkpoint recomputation.
-
-    .. see also:: :ref:`Detecting Recomputation`
-
     """
     return thread_local.is_recomputing
 
