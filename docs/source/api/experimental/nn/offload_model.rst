@@ -1,5 +1,5 @@
-OffloadModel
-============
+Offload Model
+==============
 
 .. autoclass:: fairscale.experimental.nn.OffloadModel
     :members:

@@ -1,5 +1,5 @@
-Activation Checkpointing
-========================
+Efficient memory usage using Activation Checkpointing
+=====================================================
 
 Adaped from `torch.utils.checkpoint`, this is a friendlier wrapper for performing activation checkpointing.
 
@@ -8,7 +8,9 @@ checkpointed.
 
 .. code-block:: python
 
+
     from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
+
 
     class CheckpointModel(nn.Module):
 

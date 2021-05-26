@@ -1,7 +1,8 @@
-Optimizer, Gradient and Parameter Sharding
-========================
+Optimizer, Gradient and Model Sharding
+=======================================
 
-Using torch.nn.parallel.DistributedDataParallel leads to some wasted communications in the case of OSS, but it is possible and makes OSS a drop in solution in your existing torch distributed code.
+Using torch.nn.parallel.DistributedDataParallel leads to some wasted communications in the case of OSS, 
+but it is possible and makes OSS a drop in solution in your existing torch distributed code.
 Let's suppose that your trainer looks like
 
 .. code-block:: python
@@ -44,8 +45,10 @@ Let's suppose that your trainer looks like
                 optimizer.step()
 
 
-Then sharding the optimizer state is merely a matter of wrapping your optimizer in fairscale.optim.OSS, as follows.
-DDP can be used in place of ShardedDDP in the example below, but the memory savings will be reduced (the gradients are not as efficiently sharded)
+Then sharding the optimizer state is merely a matter of wrapping your optimizer in `fairscale.optim.OSS`, 
+as follows.
+DDP can be used in place of ShardedDDP in the example below, but the memory savings will be reduced 
+(the gradients are not as efficiently sharded).
 
 .. code-block:: python
 
@@ -94,8 +97,8 @@ DDP can be used in place of ShardedDDP in the example below, but the memory savi
                 optimizer.step()
 
 
-The above `train` function can then be run via a `multiprocessing.spawn` call. Note that any launcher can be used,
-the only assumption being that each of the ranks lives in its own python process.
+The above `train` function can then be run via a `multiprocessing.spawn` call. Note that any launcher 
+can be used, the only assumption being that each of the ranks lives in its own python process.
 
 .. code-block:: python
 
@@ -108,18 +111,17 @@ the only assumption being that each of the ranks lives in its own python process
         )
 
 
-
-
-Using PyTorch Automatic Mixed Precision is possible, and its actual usage will depend on whether OSS is used with DDP or with ShardedDDP.
-If OSS is used with DDP, then the normal PyTorch GradScaler can be used, nothing needs to be changed. If OSS is used with ShardedDDP (to
-get the gradient sharding), then a very similar flow can be used, but it requires a shard-aware GradScaler, which is available in
-`fairscale.optim.grad_scaler`. In both cases Autocast can be used as is, and the loss will be scaled and handled in the same way.
+Using PyTorch Automatic Mixed Precision is possible, and its actual usage will depend on whether OSS 
+is used with DDP or with ShardedDDP.
+If OSS is used with DDP, then the normal PyTorch GradScaler can be used, nothing needs to be changed. 
+If OSS is used with ShardedDDP (to
+get the gradient sharding), then a very similar flow can be used, but it requires a shard-aware GradScaler, 
+which is available in `fairscale.optim.grad_scaler`. In both cases Autocast can be used as is, and the 
+loss will be scaled and handled in the same way.
 See [the original documentation] (https://pytorch.org/docs/stable/notes/amp_examples.html?highlight=automatic%20mixed%20precision)
 for more information.
 
 .. code-block:: python
-
-
 
     from fairscale.optim.grad_scaler import ShardedGradScaler
 
@@ -200,15 +202,19 @@ SDP API above.
 
 
 Auto wrapping sub-modules with FSDP is a convenient way to improve training speed by overlapping 
-the all-gather step across the forward passes of different submodules. 
-It also improves memory efficiency by freeing gathered parameters after each layer finishes executing. For example:
+the allgather step across the forward passes of different submodules. 
+It also improves memory efficiency by freeing gathered parameters after each layer finishes executing. 
+For example:
 
 .. code-block:: python
+
 
     import torch
     from fairscale.nn.wrap import auto_wrap, enable_wrap, wrap
     from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
     from fairscale.utils.testing import DummyProcessGroup
+
+
     tfmr = torch.nn.Transformer(num_encoder_layers=2, num_decoder_layers=2)
 
     group = DummyProcessGroup(rank=0, size=1)

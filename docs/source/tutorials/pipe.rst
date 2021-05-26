@@ -1,5 +1,5 @@
-Pipeline Parallel
-=================
+Model sharding using Pipeline Parallel 
+======================================
 
 Let us start with a toy model that contains two linear layers.
 
