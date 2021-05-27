@@ -5,7 +5,15 @@
 
 
  .tutorials-header .header-logo  {
-    background-image: url("../images/fairscale-logo.png");
+    background-image: url("../images/fairscale-logo-dark.svg");
     background-repeat: no-repeat;
     background-position: center;
 }
+
+/* .header-logo {
+    background-image: url("../images/fairscale-logo.svg");
+} */
+
+/* .footer-logo {
+    background-image: url("../images/fairscale-logo-icon.svg");
+} */

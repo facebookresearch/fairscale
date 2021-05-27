@@ -14,8 +14,8 @@ function which handles the forward pass of the module, using `no_grad`, we can p
 of the forward graph and materialization of intermediate activation tensors for a long period of 
 time (i.e till the backward pass). Instead, during the backward pass, the forward pass is executed 
 again followed by the backward pass. The inputs to the forward pass are saved using a context object 
-that is then accessed in the backward pass to retrieve the original inputs. We also save the RNG 
-state for the forward and backward passes as required for Dropout layers.
+that is then accessed in the backward pass to retrieve the original inputs. We also save the 
+Random Number Generator(RNG) state for the forward and backward passes as required for Dropout layers.
 
 The above functionality is already implemented as part of the `torch.utils.checkpoint.checkpoint_wrapper` 
 API whereby different modules in the forward pass can be wrapped. The wrapper in FairScale offers 

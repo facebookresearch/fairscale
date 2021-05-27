@@ -1,4 +1,4 @@
-ShardedDataParallel
+Sharded Data Parallel
 ====================
 
 .. autoclass:: fairscale.nn.ShardedDataParallel
