@@ -10,9 +10,11 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fairscale.experimental.nn import SyncBatchNorm
+from fairscale.nn.checkpoint import checkpoint_wrapper
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 
@@ -71,13 +73,16 @@ def check_parity_ddp(torch_bn, fs_bn, x):
     fs_y = fs_ddp(fs_x)
     fs_y.backward(yh)
     torch.testing.assert_allclose(torch_y, fs_y)
+    torch.testing.assert_allclose(torch_x.grad, fs_x.grad)
+    if isinstance(torch_bn, nn.Sequential):
+        torch_bn = torch_bn[0]
+        fs_bn = fs_bn[0]
     torch.testing.assert_allclose(torch_bn.running_mean, fs_bn.running_mean)
     torch.testing.assert_allclose(torch_bn.running_var, fs_bn.running_var)
     torch.testing.assert_allclose(torch_bn.weight, fs_bn.weight)
     torch.testing.assert_allclose(torch_bn.bias, fs_bn.bias)
     torch.testing.assert_allclose(torch_bn.weight.grad, fs_bn.weight.grad)
     torch.testing.assert_allclose(torch_bn.bias.grad, fs_bn.bias.grad)
-    torch.testing.assert_allclose(torch_x.grad, fs_x.grad)
 
 
 @pg_test(world_size=1)
@@ -90,6 +95,34 @@ def parity3d_bn():
     torch_bn = torch.nn.BatchNorm3d(3).cuda()
     fs_bn = SyncBatchNorm(3).cuda()
     check_parity(torch_bn, fs_bn, x)
+
+
+@pg_test()
+def parity3d_checkpoint_syncbn():
+    rank = dist.get_rank()
+    torch.cuda.set_device(rank)
+    torch.manual_seed(rank)
+
+    x = torch.randn(4, 3, 4, 4, 4).cuda() * rank
+    torch_bn = torch.nn.SyncBatchNorm(3).cuda()
+    fs_bn = SyncBatchNorm(3).cuda()
+    fs_bn = checkpoint_wrapper(fs_bn, maintain_forward_counter=True)
+    check_parity_ddp(torch_bn, fs_bn, x)
+
+
+@pg_test()
+def parity3d_checkpoint_syncbn_twice():
+    rank = dist.get_rank()
+    torch.cuda.set_device(rank)
+    torch.manual_seed(rank)
+
+    x = torch.randn(4, 3, 4, 4, 4).cuda() * rank
+    torch_bn = torch.nn.SyncBatchNorm(3)
+    torch_bn = nn.Sequential(torch_bn, torch_bn).cuda()
+    fs_bn = SyncBatchNorm(3)
+    fs_bn = nn.Sequential(fs_bn, fs_bn).cuda()
+    fs_bn = checkpoint_wrapper(fs_bn)
+    check_parity_ddp(torch_bn, fs_bn, x)
 
 
 @pg_test()
