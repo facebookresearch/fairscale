@@ -1,11 +1,19 @@
-.tutorials-header .header-logo  {
+/* Copyright (c) Facebook, Inc. and its affiliates. All rights reserved. */
+/*
+ * some extra css to make markdown look similar between github/sphinx
+ */
+
+
+ .tutorials-header .header-logo  {
     background-image: url("../images/fairscale-logo-dark.svg");
+    background-repeat: no-repeat;
+    background-position: center;
 }
 
-.header-logo {
+/* .header-logo {
     background-image: url("../images/fairscale-logo.svg");
-}
+} */
 
-.footer-logo {
+/* .footer-logo {
     background-image: url("../images/fairscale-logo-icon.svg");
-}
+} */

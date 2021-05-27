@@ -1,5 +1,5 @@
-AdaScale SGD Tutorial
-=====================
+Scale without modifying learning rate using Adascale
+====================================================
 
 `AdaScale <https://arxiv.org/pdf/2007.05105.pdf>`_ adaptively scales the learning rate when
 using larger batch sizes for data-parallel training. Let's suppose that your trainer looks

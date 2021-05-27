@@ -1,5 +1,5 @@
-checkpoint_wrapper
-==================
+Activation Checkpoint
+======================
 
 .. autoclass:: fairscale.nn.checkpoint.checkpoint_wrapper
     :members:
