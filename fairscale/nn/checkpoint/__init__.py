@@ -5,6 +5,6 @@
 
 from typing import List
 
-from .checkpoint_activations import checkpoint_wrapper
+from .checkpoint_activations import checkpoint_wrapper, is_checkpointing, is_recomputing
 
 __all__: List[str] = []
