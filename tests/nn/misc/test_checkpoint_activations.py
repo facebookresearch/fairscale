@@ -265,6 +265,8 @@ def test_list_input():
             return x
 
         def forward(self, x):
+            if not isinstance(x, (list, tuple)):
+                x = [x]
             y = []
             y.append(self.conv(x[0]))
             print("XXX y", y[0].requires_grad, y[0].shape)
@@ -272,7 +274,7 @@ def test_list_input():
 
     model = nn.Sequential(checkpoint_wrapper(Model().cuda()), Model().cuda())
     in_data = torch.rand(4, 2).requires_grad_(True).cuda()
-    out = model([in_data])
+    out = model(in_data)
     #import ipdb; ipdb.set_trace()
     loss = out[0].sum()
     print("XXX loss", loss.requires_grad)
