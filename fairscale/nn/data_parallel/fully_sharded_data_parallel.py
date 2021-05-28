@@ -653,17 +653,22 @@ class FullyShardedDataParallel(nn.Module):
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         self._lazy_init()
-        if self.mixed_precision:
-            # Buffers dtype stays consistent with parameters.
-            self._cast_buffers(dtype=torch.float32)
+
+        def maybe_cast_buffers(dtype: Optional[torch.dtype] = None) -> None:
+            if self.mixed_precision:
+                # Buffers dtype stays consistent with parameters.
+                self._cast_buffers(dtype=torch.float32)
 
         if self._return_full_state_dict:
             if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
                 with self.summon_full_params(recurse=False, volatile=True):
+                    maybe_cast_buffers(torch.float32)
                     state_dict = super().state_dict(*args, **kwargs)
             else:
+                maybe_cast_buffers(torch.float32)
                 state_dict = super().state_dict(*args, **kwargs)
         else:
+            maybe_cast_buffers(torch.float32)
             if self.flatten_parameters:
                 assert isinstance(self.module, FlattenParamsWrapper)
                 state_dict = self.module.flat_state_dict(*args, **kwargs)
@@ -674,9 +679,7 @@ class FullyShardedDataParallel(nn.Module):
             for k in state_dict.keys():
                 state_dict[k] = state_dict[k].cpu()
 
-        if self.mixed_precision:
-            # In case we are in mixed precision, restore buffers back to buffer_dtype.
-            self._cast_buffers()
+        maybe_cast_buffers()
         return state_dict
 
     @typing.overload
@@ -860,7 +863,7 @@ class FullyShardedDataParallel(nn.Module):
 
     def _lazy_init(self) -> None:
         """Initialization steps that should happen lazily, typically right
-           before the first forward pass.
+        before the first forward pass.
         """
         # Initialize param attributes lazily, in case the param's dtype or
         # device changes after __init__.
