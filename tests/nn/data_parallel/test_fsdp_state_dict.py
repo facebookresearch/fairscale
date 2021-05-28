@@ -233,16 +233,10 @@ class TestStateDictDeviceDtype(DistributedTest):
                 assert v.device.type == "cuda", v.device.type
 
         expected_dtype = torch.float16 if pure_fp16 else torch.float32
-        buffers = {
-            k.replace("_fsdp_wrapped_module.", "").replace("_fpw_module.", "") for k, _ in fsdp_model.named_buffers()
-        }
         for k, v in sd.items():
             if not torch.is_floating_point(v):
                 continue
-            if k in buffers:
-                assert v.dtype == fsdp_model.buffer_dtype, f"{v.dtype} != {fsdp_model.buffer_dtype}"
-            else:
-                assert v.dtype == expected_dtype, f"{v.dtype} != {expected_dtype}"
+            assert v.dtype == expected_dtype, f"{v.dtype} != {expected_dtype}"
 
 
 @skip_if_cuda

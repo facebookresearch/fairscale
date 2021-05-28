@@ -656,8 +656,7 @@ class FullyShardedDataParallel(nn.Module):
 
         def maybe_cast_buffers(dtype: Optional[torch.dtype] = None) -> None:
             if self.mixed_precision:
-                # Buffers dtype stays consistent with parameters.
-                self._cast_buffers(dtype=torch.float32)
+                self._cast_buffers(dtype=dtype)
 
         if self._return_full_state_dict:
             if self.training_state != TrainingState.SUMMON_FULL_PARAMS:
@@ -679,6 +678,7 @@ class FullyShardedDataParallel(nn.Module):
             for k in state_dict.keys():
                 state_dict[k] = state_dict[k].cpu()
 
+        # In case we are in mixed precision, restore buffers back to buffer_dtype.
         maybe_cast_buffers()
         return state_dict
 
