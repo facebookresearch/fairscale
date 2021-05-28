@@ -271,7 +271,7 @@ def test_deprecated_path():
 
 @skip_if_no_cuda
 def test_list_input():
-    """Test to ensure that we correctly does the checkpoint when the input is a list.
+    """ Test checkpointing with input argument type being a list.
 
     Note: Testing shows that PyTorch's torch.utils.checkpoint function does not pass this test.
     """
