@@ -155,6 +155,7 @@ class CheckpointFunction(torch.autograd.Function):
         *args: Any,
         **kwargs: Any
     ) -> Any:
+        print("XXX fwd")
         if torch.is_grad_enabled():  # grad may be disabled, e.g., during validation
             torch_checkpoint.check_backward_validity(args)
 
@@ -186,10 +187,12 @@ class CheckpointFunction(torch.autograd.Function):
             # through *parent_ctx_dict* and returning the latter directly.
             outputs, packed_non_tensor_outputs = split_non_tensors(outputs)
             parent_ctx_dict["packed_non_tensor_outputs"] = packed_non_tensor_outputs
+        #import ipdb; ipdb.set_trace()
         return outputs
 
     @staticmethod
     def backward(ctx: Any, *args: Any) -> Tuple[Optional[Tensor], ...]:
+        print("XXX bwd")
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
 

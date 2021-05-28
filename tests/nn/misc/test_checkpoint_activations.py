@@ -252,3 +252,28 @@ def test_multiin_multiout(device, multiout, checkpoint_config):
         if no_cpt[key] != cpt[key]:
             print(no_cpt, cpt)
             assert 0
+
+
+def test_list_input():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = nn.Linear(2, 2)
+
+        def forward1(self, x):
+            x[0] = self.conv(x[0])
+            return x
+
+        def forward(self, x):
+            y = []
+            y.append(self.conv(x[0]))
+            print("XXX y", y[0].requires_grad, y[0].shape)
+            return y
+
+    model = nn.Sequential(checkpoint_wrapper(Model().cuda()), Model().cuda())
+    in_data = torch.rand(4, 2).requires_grad_(True).cuda()
+    out = model([in_data])
+    #import ipdb; ipdb.set_trace()
+    loss = out[0].sum()
+    print("XXX loss", loss.requires_grad)
+    loss.backward()
