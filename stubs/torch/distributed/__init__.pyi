@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
-from typing import Any, List, Union, Optional
+from typing import Any, List, Union, Optional, Sequence
 from torch import Tensor
 import datetime
 
@@ -37,7 +37,7 @@ def broadcast_object_list(object_list: List[Any], src: int, group:Optional[Proce
 def is_initialized() -> bool: ...
 
 def init_process_group(backend: Union[str, Backend], init_method: Optional[str] = None, timeout: datetime.timedelta = datetime.timedelta(0, 1800), rank: Optional[int] = None, world_size: Optional[int] = None): ...
-def new_group(ranks: Optional[List[int]] = None,
+def new_group(ranks: Optional[Sequence[int]] = None,
               timeout: Optional[datetime.timedelta] = datetime.timedelta(0, 1800),
               backend: Optional[Union[str, Backend]] = None): ...
 

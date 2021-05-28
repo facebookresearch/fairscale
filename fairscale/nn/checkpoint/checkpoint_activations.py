@@ -5,6 +5,7 @@
 
 from contextlib import contextmanager
 import functools
+import threading
 from typing import Any, Dict, Generator, Optional, Tuple
 import weakref
 
@@ -15,7 +16,71 @@ import torch.utils.checkpoint as torch_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
-from .misc import dec_counter, inc_counter, init_counter, patch_batchnorm
+from .checkpoint_utils import dec_counter, inc_counter, init_counter, patch_batchnorm
+
+
+# https://docs.python.org/3/library/threading.html#thread-local-data
+# Manage the checkpoint context with thread-local data.
+class ThreadLocal(threading.local):
+    def __init__(self) -> None:
+        self.is_checkpointing = False
+        self.is_recomputing = False
+
+
+thread_local = ThreadLocal()
+
+
+@contextmanager
+def enable_checkpointing() -> Generator[None, None, None]:
+    """Makes :func:`is_checkpointing` return :data:`True` within a context."""
+    orig = thread_local.is_checkpointing
+    thread_local.is_checkpointing = True
+    try:
+        yield
+    finally:
+        thread_local.is_checkpointing = orig
+
+
+@contextmanager
+def enable_recomputing() -> Generator[None, None, None]:
+    """Makes :func:`is_recomputing` return :data:`True` within a context."""
+    orig = thread_local.is_recomputing
+    thread_local.is_recomputing = True
+    try:
+        yield
+    finally:
+        thread_local.is_recomputing = orig
+
+
+def is_checkpointing() -> bool:
+    """Whether the current forward propagation is under checkpointing.
+
+    Returns:
+        bool: :data:`True` if it's under checkpointing.
+
+    """
+    return thread_local.is_checkpointing
+
+
+def is_recomputing() -> bool:
+    """Whether the current forward propagation is under checkpoint
+    recomputation. Use this to prevent duplicated side-effects at forward
+    propagation::
+
+        class Counter(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.counter = 0
+
+            def forward(self, input):
+                if not is_recomputing():
+                    self.counter += 1
+                return input
+
+    Returns:
+        bool: :data:`True` if it's under checkpoint recomputation.
+    """
+    return thread_local.is_recomputing
 
 
 def checkpoint_wrapper(
@@ -181,7 +246,7 @@ class CheckpointFunction(torch.autograd.Function):
         ctx.save_for_backward(*tensor_inputs)
         ctx.packed_non_tensor_inputs = packed_non_tensor_inputs
 
-        with torch.no_grad():
+        with torch.no_grad(), enable_checkpointing():
             unpacked_args, unpacked_kwargs = unpack_kwargs(kwarg_keys, args)
             outputs = run_function(*unpacked_args, **unpacked_kwargs)
             the_module = unpacked_args[0]
@@ -214,7 +279,7 @@ class CheckpointFunction(torch.autograd.Function):
         # Set the states to what it used to be before the forward pass.
         set_rng_state(ctx.fwd_rng_state)
 
-        with torch.enable_grad(), autocast(ctx.had_autocast_in_fwd):
+        with torch.enable_grad(), enable_recomputing(), autocast(ctx.had_autocast_in_fwd):
             unpacked_args, unpacked_kwargs = unpack_kwargs(ctx.kwarg_keys, inputs)
             outputs = ctx.run_function(*unpacked_args, **unpacked_kwargs)
             tensor_outputs, _ = split_non_tensors(outputs)

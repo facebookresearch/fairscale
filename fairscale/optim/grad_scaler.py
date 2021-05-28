@@ -30,8 +30,22 @@ class ShardedGradScaler(TorchGradScaler):
     documentation https://pytorch.org/docs/stable/amp.html#torch.cuda.amp.GradScaler
     """
 
-    def __init__(self, process_group: Any = dist.group.WORLD) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        init_scale: float = 2.0 ** 16,
+        growth_factor: float = 2.0,
+        backoff_factor: float = 0.5,
+        growth_interval: int = 2000,
+        enabled: bool = True,
+        process_group: Any = dist.group.WORLD,
+    ) -> None:
+        super().__init__(
+            init_scale=init_scale,
+            growth_factor=growth_factor,
+            backoff_factor=backoff_factor,
+            growth_interval=growth_interval,
+            enabled=enabled,
+        )
         self.display_warning = True
         self.group = process_group
 

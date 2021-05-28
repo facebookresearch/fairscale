@@ -74,7 +74,7 @@ class AdaScale(Optimizer):
         last_epoch = 0
         done = False
         step = 0
-        while True:
+        while not done:
             for batch in dataset:
                 optim.zero_grad()
                 logits = model()
@@ -86,7 +86,7 @@ class AdaScale(Optimizer):
                 if epoch > last_epoch:
                     scheduler.step()
                     last_epoch = epoch
-                if epoch >= max_epochs:
+                if epoch >= MAX_EPOCHS:
                     done = True
 
     Example 2: using a custom `update_lr()` function that update the learning

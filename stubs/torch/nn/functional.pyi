@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
-from .. import Tensor, _size
+from .. import Tensor, _size, _dtype
 from typing import Any, Optional, Tuple, Dict, List, Callable, Union
 from .common_types import _ratio_any_t
 
@@ -154,7 +154,7 @@ def softsign(input: Any): ...
 def softmin(input: Tensor, dim: Optional[int] = ..., _stacklevel: int = ..., dtype: Optional[int] = ...) -> Tensor: ...
 
 
-def softmax(input: Tensor, dim: Optional[int] = ..., _stacklevel: int = ..., dtype: Optional[int] = ...) -> Tensor: ...
+def softmax(input: Tensor, dim: Optional[int] = ..., _stacklevel: int = ..., dtype: Optional[_dtype] = ...) -> Tensor: ...
 
 
 def gumbel_softmax(logits: Tensor, tau: float = ..., hard: bool = ..., eps: float = ..., dim: int = ...) -> Tensor: ...
