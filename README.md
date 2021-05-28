@@ -145,7 +145,7 @@ At a high level, we want ML researchers to:
   * not worrying about losing accuracy
   * potentially higher GPU efficiency (fewer steps, less networking overhead, etc.)
 
-# Testing
+## Testing
 
 We use circleci to test on PyTorch versions 1.6.0, 1.7.1, and 1.8.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
