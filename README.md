@@ -151,7 +151,6 @@ We use circleci to test on PyTorch versions 1.6.0, 1.7.1, and 1.8.1. Please crea
 
 ## Contributors
 
-FairScale is written and maintained by Facebook AI Research.
 We welcome outside contributions! Please see the [CONTRIBUTING](CONTRIBUTING.md) instructions for how you can contribute to FairScale.
 
 ## License
