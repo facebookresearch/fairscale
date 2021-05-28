@@ -100,7 +100,13 @@ def _checkpointed_forward(
     parent_ctx_dict: Dict[str, Any] = {
         "offload": offload_to_cpu,
     }
-    output = CheckpointFunction.apply(original_forward, parent_ctx_dict, kwarg_keys, *flat_args)
+    # Dummy tensor with grad is used to ensure the backward pass is called. This is needed
+    # when original_forward's input are non-tensor (i.e. a tuple). Using this dummy tensor
+    # avoids requiring users to set their input tensors's requires_grad flag. In the case
+    # of tuple type inputs, setting the flag won't even trigger the backward pass.
+    output = CheckpointFunction.apply(
+        torch.tensor([], requires_grad=True), original_forward, parent_ctx_dict, kwarg_keys, *flat_args
+    )
     if not isinstance(output, torch.Tensor):
         packed_non_tensor_outputs = parent_ctx_dict["packed_non_tensor_outputs"]
         if packed_non_tensor_outputs:
@@ -149,13 +155,13 @@ class CheckpointFunction(torch.autograd.Function):
     @staticmethod
     def forward(  # type: ignore
         ctx: Any,
+        dummy_tensor_requires_grad: torch.Tensor,
         run_function: Any,
         parent_ctx_dict: Dict[str, Any],
         kwarg_keys: Tuple[str, ...],
         *args: Any,
         **kwargs: Any
     ) -> Any:
-        print("XXX fwd")
         if torch.is_grad_enabled():  # grad may be disabled, e.g., during validation
             torch_checkpoint.check_backward_validity(args)
 
@@ -187,12 +193,10 @@ class CheckpointFunction(torch.autograd.Function):
             # through *parent_ctx_dict* and returning the latter directly.
             outputs, packed_non_tensor_outputs = split_non_tensors(outputs)
             parent_ctx_dict["packed_non_tensor_outputs"] = packed_non_tensor_outputs
-        #import ipdb; ipdb.set_trace()
         return outputs
 
     @staticmethod
     def backward(ctx: Any, *args: Any) -> Tuple[Optional[Tensor], ...]:
-        print("XXX bwd")
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
 
@@ -233,4 +237,4 @@ class CheckpointFunction(torch.autograd.Function):
         torch.autograd.backward(outputs_with_grad, args_with_grad)
 
         grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else None for inp in inputs)
-        return (None, None, None) + grads
+        return (None, None, None, None) + grads

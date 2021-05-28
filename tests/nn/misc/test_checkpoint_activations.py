@@ -51,7 +51,7 @@ def get_loss_and_gnorm(model, input):
 class BasicModel(nn.Module):
     """Basic model with a single FFN being checkpointed.
 
-       Used for extensive checkings: equivalency with non-checkpoint, torch-checkpoint, etc.
+    Used for extensive checkings: equivalency with non-checkpoint, torch-checkpoint, etc.
     """
 
     def __init__(self, use_pytorch_checkpoint=False, use_fairscale_checkpoint=False, **kwargs):
@@ -254,28 +254,36 @@ def test_multiin_multiout(device, multiout, checkpoint_config):
             assert 0
 
 
+@skip_if_no_cuda
 def test_list_input():
+    """Test to ensure that we correctly does the checkpoint when the input is a list.
+
+    Note: Testing shows that PyTorch's torch.utils.checkpoint function does not pass this test.
+    """
+    count = 0
+
     class Model(nn.Module):
         def __init__(self):
             super().__init__()
             self.conv = nn.Linear(2, 2)
 
-        def forward1(self, x):
-            x[0] = self.conv(x[0])
-            return x
-
         def forward(self, x):
-            if not isinstance(x, (list, tuple)):
-                x = [x]
+            nonlocal count
+            count += 1
             y = []
-            y.append(self.conv(x[0]))
-            print("XXX y", y[0].requires_grad, y[0].shape)
+            for i in x:
+                y.append(self.conv(i))
             return y
 
-    model = nn.Sequential(checkpoint_wrapper(Model().cuda()), Model().cuda())
-    in_data = torch.rand(4, 2).requires_grad_(True).cuda()
-    out = model(in_data)
-    #import ipdb; ipdb.set_trace()
-    loss = out[0].sum()
-    print("XXX loss", loss.requires_grad)
+    model = nn.Sequential(checkpoint_wrapper(Model()), Model()).cuda()
+    in_data1 = torch.rand(4, 2).cuda()
+    in_data2 = torch.rand(4, 2).cuda()
+
+    # Forward. Count should be 2 for 2 modules.
+    out = model([in_data1, in_data2])
+    loss = sum(x.sum() for x in out)
+    assert count == 2, f"Incorrect count {count}"
+
+    # Backward. Adds 1 more forward call due to checkpoint.
     loss.backward()
+    assert count == 3, f"Incorrect count {count}"
