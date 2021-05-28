@@ -439,8 +439,10 @@ class OffloadModel(nn.Module):
         # List of model shards that will be placed on/off the device.
         self.model_slices: List[nn.Module] = []
 
+        # TODO(anj): Add an experimental flag for using this instead of modifying the
+        # arg type.
         if type(model) == list:
-            # already sharded
+            # This is already sharded using the auto shard functinality.
             for i, m in enumerate(model):
                 self.model_slices.append(
                     ModelShard(cpu_model_shard=m, device=device, offload_device=offload_device, index=i,)
