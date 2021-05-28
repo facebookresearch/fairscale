@@ -6,51 +6,33 @@
 --------------------------------------------------------------------------------
 
 ## Description
-FairScale is a PyTorch extension library for high performance and large scale training on one or multiple machines/nodes. This library extends basic PyTorch capabilities while adding new experimental ones.
+FairScale is a PyTorch extension library for high performance and large scale training. 
+This library extends basic PyTorch capabilities while adding new SOTA scaling techniques. 
+FairScale makes available the latest distributed training techniques in the form of composable 
+modules and easy to use APIs. These APIs are a fundamental part of a researcher's toolbox as 
+they attempt to scale models with limited resources.
 
-FairScale supports:
-* Parallelism:
-   * Pipeline parallelism (`fairscale.nn.pipe`)
-   * Asynchronous Pipeline parallelism (`fairscale.nn.async_pipe`)
-   * Model Parallelism (`fairscale.nn.model_parallel.layers`)
-   * _experimental_ AmpNet (`fairscale.experimental.nn.ampnet_pipe`)
-* Sharded training:
-   * Optimizer state sharding (`fairscale.optim.OSS`)
-   * Sharded Data Parallel (SDP) (`fairscale.nn.ShardedDataParallel`)
-   * Fully Sharded Data Parallel (FSDP) (`fairscale.nn.FullyShardedDataParallel`) (PyTorch >= 1.6)
-   * OffloadModel (`fairscale.experimental.nn.OffloadModel`)
-* Optimization at scale:
-   * AdaScale SGD (`fairscale.optim.AdaScale`)
-* GPU memory optimization:
-   * Activation checkpointing wrapper (`fairscale.nn.misc.checkpoint_wrapper`)
-* GPU speed optimization:
-   * Sharded grad scaler - automatic mixed precision (`fairscale.optim.grad_scaler`)
+FairScale was designed with the following values in mind:
 
-## Requirements
+* **Usability** -  Users should be able to understand and use FairScale APIs with minimum cognitive overload.
 
-* PyTorch >= 1.5.1
+* **Modularity** - Users should be able to combine multiple FairScale APIs as part of their training loop seamlessly. 
+
+* **Performance** - FairScale APIs provide the best performance in terms of scaling and efficiency.
+
 
 ## Installation
 
-Normal installation:
-```bash
-pip install fairscale
-```
-
-Development mode:
-```bash
-cd fairscale
-pip install -r requirements.txt
-pip install -e .
-```
-
-If either of the above fails, add `--no-build-isolation` to the `pip install` command (this could be a problem with recent versions of pip).
-
+To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/master/docs/source/installation_instructions.rst). You should be able to install a pip package or 
+build directly from source.
 
 ## Getting Started
-The full documentation (https://fairscale.readthedocs.io/) contains instructions for getting started and extending fairscale.
+The full [documentation](https://fairscale.readthedocs.io/) contains instructions for getting started, deep dives and tutorials about the various FairScale APIs.
 
 ## Examples
+
+Here are a few sample snippets from a subset of FairScale offerings:
+
 ### Pipe
 
 Run a 4-layer model on 2 GPUs. The first two layers run on cuda:0 and the next two layers run on cuda:1.
@@ -169,11 +151,12 @@ We use circleci to test on PyTorch versions 1.6.0, 1.7.1, and 1.8.1. Please crea
 
 ## Contributors
 
-See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.
+FairScale is written and maintained by Facebook AI Research.
+We welcome outside contributions! Please see the [CONTRIBUTING](CONTRIBUTING.md) instructions for how you can contribute to FairScale.
 
 ## License
 
-fairscale is licensed under the [BSD-3-Clause License](LICENSE).
+FairScale is licensed under the [BSD-3-Clause License](LICENSE).
 
 fairscale.nn.pipe is forked from [torchgpipe](https://github.com/kakaobrain/torchgpipe), Copyright 2019, Kakao Brain, licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
 
@@ -183,15 +166,16 @@ fairscale.optim.adascale is forked from [AdaptDL](https://github.com/petuum/adap
 
 fairscale.nn.misc.flatten_params_wrapper is forked from [PyTorch-Reparam-Module](https://github.com/SsnL/PyTorch-Reparam-Module), Copyright 2018, Tongzhou Wang, licensed under [MIT License](https://github.com/SsnL/PyTorch-Reparam-Module/blob/master/LICENSE).
 
-## References
 
-Here is a list of all authors on relevant research papers this work is based on:
+## Citing FairScale
 
-* torchgpipe: Chiheon Kim, Heungsub Lee, Myungryong Jeong, Woonhyuk Baek, Boogeon Yoon, Ildoo Kim, Sungbin Lim, Sungwoong Kim. [[Paper](https://arxiv.org/pdf/2004.09910.pdf)] [[Code](https://github.com/kakaobrain/torchgpipe)]
-* ZeRO: Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, Yuxiong He. [[Paper](https://arxiv.org/pdf/1910.02054.pdf)] [[Code](https://github.com/microsoft/DeepSpeed)]
-* Megatron-LM: Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley, Jared Casper, Bryan Catanzaro. [[Paper](https://arxiv.org/pdf/1909.08053.pdf)][[Code](https://github.com/NVIDIA/Megatron-LM)]
-* AdaScale SGD: Tyler B. Johnson, Pulkit Agrawal, Haijie Gu, Carlos Guestrin. [[Paper](https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Paper.pdf)]
-* GShard: Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu, Dehao Chen, Orhan Firat, Yanping Huang, Maxim Krikun, Noam Shazeer, Zhifeng Chen [[Paper]](https://arxiv.org/abs/2006.16668)
-* AMPNet:Alexander L. Gaunt, Matthew A. Johnson, Maik Riechert, Daniel Tarlow, Ryota Tomioka, Dimitrios Vytiniotis, Sam Webster [[Paper]](https://arxiv.org/abs/1705.09786)
-* L2L: Training large Neural networks with constant Memory using a new execution Algorithm, 2020, [[Paper](https://arxiv.org/abs/2002.05645)]
-* ZeRO-Offload: Democratizing Billion-Scale Model Training. 2021, [[Paper](https://arxiv.org/abs/2101.06840)]
+If you use FairScale in your publication, please cite it by using the following BibTeX entry.
+
+```BibTeX
+@Misc{FairScale2021,
+  author =       {Mandeep Baines, Shruti Bhosale, Vittorio Caggiano, Naman Goyal, Siddharth Goyal, Myle Ott, Benjamin Lefaudeux, Vitaliy Liptchinsky, Mike Rabatt, Sam Sheiffer, Anjali Sridhar, Min Xu},
+  title =        {FairScale:  A general purpose modular PyTorch library for high performance and large scale training},
+  howpublished = {\url{https://github.com/facebookresearch/fairscale}},
+  year =         {2021}
+}
+```
