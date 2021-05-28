@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+- checkpointing: use dummy tensor to ensure backward pass is called [#701]
 
 ### Added
 
