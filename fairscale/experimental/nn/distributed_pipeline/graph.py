@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from dataclasses import dataclass
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple, Union
 
 from torch import Tensor, nn
 from torch.distributed import rpc
@@ -78,46 +78,49 @@ class PipelineModulesGraph(nn.Module):
             self.nodes.append(new_node)
             return new_node
 
-    def _set_inputs(self, module: RemoteModule, inputs: List[DataSource]) -> None:
-        self._find_or_add(module).inputs = inputs
+    # DataSourceSpec lists choices the user has for specifying the source of each input to a module:
+    # -- If the input is one of model inputs, it is specified by a simple integer, which is the index of that input
+    # -- If the input comes from a module with a simple output, it is specified by that module
+    # -- If the input comes from a module with multiple outputs (a tuple), it is specified by that module and the
+    #    index of the output
+    DataSourceSpec = Union[int, RemoteModule, Tuple[RemoteModule, int]]
 
-    def add_sequence(self, modules: List[RemoteModule], first_input: Optional[RemoteModule] = None) -> None:
+    def _data_source_spec_to_data_source(self, spec: DataSourceSpec) -> DataSource:
+        if isinstance(spec, int):
+            return DataSource(None, spec)
+        if isinstance(spec, RemoteModule):
+            return DataSource(self._find_node(spec), 0)
+        return DataSource(self._find_node(spec[0]), spec[1])
+
+    def add_layer(self, module: RemoteModule, inputs: List[DataSourceSpec], num_outputs: Optional[int] = None) -> None:
+        """Adds a module with specified inputs to the graph. The modules that provide inputs to this module must have
+        been added previously to the graph and are listed with argument inputs. If the module output is a tuple,
+        num_outputs specifies the number of elements in the tuple.
+        """
+        node = Node(module)
+        node.inputs = [self._data_source_spec_to_data_source(spec) for spec in inputs]
+        node.num_outputs = num_outputs
+        self.nodes.append(node)
+
+    def add_sequence(
+        self,
+        modules: List[RemoteModule],
+        first_module_inputs: List[DataSourceSpec],
+        last_module_num_outputs: Optional[int] = None,
+    ) -> None:
         """Adds a list of modules to the graph, to be run sequentially.
-        The connection between these modules is as follows: the first output of each of these modules
-        (except the last one) is used as the first input of its next module in this sequence.
-        The user may also specify the input to the first module in this sequence with argument 'first_input'.
-        In this case the module 'first_input' must have been added to the graph previously.
+        The connection between these modules is as follows: the output of each of these modules
+        (except the last one) is used as the input of its next module in this sequence.
+        So all modules (except the last one) must have simple output, and also all of them (except the first one)
+        should have a single input.
+        The user also specifies the input to the first module in this sequence with argument 'first_module_inputs'.
+        In case the last module output is a tuple, 'last_module_num_outputs' specifies the number of elements
+        in the tuple.
         """
-        old_modules_len = len(self.nodes)
-        new_modules_len = len(modules)
-        self.nodes.extend(Node(mod) for mod in modules)
-        # update inputs array
-        if first_input is not None:
-            self.nodes[old_modules_len].inputs = [DataSource(self._find_node(first_input), 0)]
-        for i in range(old_modules_len + 1, old_modules_len + new_modules_len):
-            self.nodes[i].inputs = [DataSource(self.nodes[i - 1], 0)]
-
-    def set_model_input(self, module: RemoteModule, ind: int = 0) -> None:
-        """Declares the input to a module as the input to the model. In case the model has multiple
-        inputs, the argument 'ind' indicates the index of the model input that is fed to the module.
-        """
-        self._set_inputs(module, [DataSource(None, ind)])
-
-    def add_multi_input_layer(self, module: RemoteModule, inputs: List[RemoteModule]) -> None:
-        """Adds a module with multiple inputs to the graph. The modules that provide inputs to this module
-        must have been added previously to the graph and are listed with argument inputs.
-        """
-        self._set_inputs(module, [DataSource(self._find_node(m), 0) for m in inputs])
-
-    def fan_out(self, module: RemoteModule, outputs: List[RemoteModule]) -> None:
-        """Feeds outputs of a previously added module to modules specified by argument 'outputs' (so
-        'module' should have at least 'len(outputs)' outputs.
-        Modules in the list 'outputs' are added to the graph if they have not been added previously.
-        """
-        node = self._find_node(module)
-        node.num_outputs = len(outputs)
-        for i, m in enumerate(outputs):
-            self._set_inputs(m, [DataSource(node, i)])
+        next_input = first_module_inputs
+        for i, module in enumerate(modules):
+            self.add_layer(module, next_input, last_module_num_outputs if i == len(modules) - 1 else None)
+            next_input = [module]
 
     def _compile(self) -> None:
         """Precomputes self.model_input_consumers and self.output_consumers for internal use by the pipleine

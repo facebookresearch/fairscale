@@ -26,16 +26,19 @@ you see fit, but refrain from ad-hoc test utils within the different feature set
 relative imports.
 """
 
+import contextlib
 import functools
+import gc
 import inspect
 import logging
 import multiprocessing
 import os
 import random
+from statistics import mean
 import subprocess
 import sys
 import tempfile
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import numpy
 import pytest
@@ -53,6 +56,8 @@ if TYPE_CHECKING:
     Base = nn.Module[Tensor]
 else:
     Base = nn.Module
+
+skip_if_cuda = pytest.mark.skipif(torch.cuda.is_available(), reason="Testing only on CPUs to save time")
 
 skip_if_no_cuda = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 1, reason="CUDA required"
@@ -72,7 +77,7 @@ skip_if_py38 = pytest.mark.skipif(
 
 skip_if_py39_no_cuda = pytest.mark.skipif(
     not torch.cuda.is_available() and sys.version_info.major == 3 and sys.version_info.minor == 9,
-    reason="Python3.9 wo CUDA is skipped",
+    reason="Python3.9 without CUDA is skipped",
 )
 
 available_devices = ["cpu"]
@@ -80,7 +85,7 @@ if torch.cuda.is_available():
     available_devices.append("cuda")
 
 
-_, filename_mpi = tempfile.mkstemp()
+filename_mpi: Optional[str] = None
 
 
 class IdentityLayer(Base):
@@ -117,7 +122,8 @@ def torch_version() -> Tuple[int, ...]:
     return tuple(int(n) for n in numbering)
 
 
-_smi_ver = None
+# Global variable to cache the results from the first nvidia-smi execution.
+_smi_ver: Optional[str] = None
 
 
 def torch_cuda_version(compiled: bool = False) -> Tuple[int, ...]:
@@ -302,7 +308,14 @@ def torch_spawn(world_sizes: Optional[List[int]] = None) -> Callable:
 
             error_queue = multiprocessing.get_context("spawn").SimpleQueue()
             if "OMPI_COMM_WORLD_RANK" in os.environ:
+                # TODO (Min): this global used to be assigned every time this file is imported.
+                #     I changed it to be assigned on first use. Should be the same, but I am not
+                #     sure this is used or is correct since different processes would have different
+                #     file names to init_process_group below. By initing, here, we don't leave
+                #     a temp file behind on importing time.
                 global filename_mpi
+                if filename_mpi is None:
+                    filename_mpi = tempfile.mkstemp()[1]
 
                 os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
                 os.environ["WORLD_SIZE"] = os.environ["OMPI_COMM_WORLD_SIZE"]
@@ -567,30 +580,35 @@ class DeviceAndTypeCheckModule(Base):
 
 @functools.lru_cache()
 def get_cycles_per_ms() -> float:
-    """Approximate number of cycles per millisecond for torch.cuda._sleep
+    """Measure and return approximate number of cycles per millisecond for torch.cuda._sleep
 
     Copied from: github.com/pytorch/pytorch/blob/master/test/test_cuda.py
-
-    ..note::
-        This doesn't seems to return consistent cycles on desktop GPUs likely
-        due to frequency scaling.
-        >>> get_cycles_per_ms()
-        227.6441091140009
-        # new python process
-        >>> get_cycles_per_ms()
-        564.652154766248
-        # new python process
-        >>> get_cycles_per_ms()
-        245.56459442962856
     """
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    start.record()
-    torch.cuda._sleep(1000000)
-    end.record()
-    end.synchronize()
-    cycles_per_ms = 1000000 / start.elapsed_time(end)
-    return cycles_per_ms
+
+    def measure() -> float:
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        torch.cuda._sleep(1000000)
+        end.record()
+        end.synchronize()
+        cycles_per_ms = 1000000 / start.elapsed_time(end)
+        return cycles_per_ms
+
+    # Get 10 values and remove the 2 max and 2 min and return the avg.
+    # This is to avoid system disturbance that skew the results, e.g.
+    # the very first cuda call likely does a bunch of init, which takes
+    # much longer than subsequent calls.
+    #
+    # Tested on both Tesla V100, Quadro GP100, Titan RTX, RTX 3090 GPUs
+    # and seems to return stable values. Therefore, we enable caching
+    # using lru_cache decorator above.
+    num = 10
+    vals = []
+    for _ in range(num):
+        vals.append(measure())
+    vals = sorted(vals)
+    return mean(vals[2 : num - 2])
 
 
 class DummyProcessGroup:
@@ -645,3 +663,54 @@ def rmf(filename: str) -> None:
         os.remove(filename)
     except FileNotFoundError:
         pass
+
+
+@contextlib.contextmanager
+def in_temporary_directory() -> Generator:
+    """
+    Context manager to create a temporary direction and remove
+    it at the end of the context
+    """
+    old_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        os.chdir(temp_dir)
+        yield temp_dir
+        os.chdir(old_cwd)
+
+
+@contextlib.contextmanager
+def temp_files_ctx(num: int) -> Generator:
+    """ A context to get tempfiles and ensure they are cleaned up. """
+    files = [tempfile.mkstemp()[1] for _ in range(num)]
+
+    yield tuple(files)
+
+    # temp files could have been removed, so we use rmf.
+    for name in files:
+        rmf(name)
+
+
+def dump_all_tensors(rank: int) -> None:
+    """Useful tool for debugging memory issues from the python side."""
+    if rank != 0:
+        return
+    for obj in gc.get_objects():
+        try:
+            ttype = str(type(obj))
+            if torch.is_tensor(obj) or (hasattr(obj, "data") and torch.is_tensor(obj.data)):
+                print(ttype, obj.shape, obj.dtype, obj.device, obj.storage().size())
+        except Exception:
+            pass
+    print(torch.cuda.memory_summary())
+
+
+def get_smi_memory() -> float:
+    """Return process's GPU memory in MB."""
+    pid = os.getpid()
+    info_string = torch.cuda.list_gpu_processes()
+    for line in info_string.splitlines():
+        if str(pid) in line:
+            toks = line.split()
+            return float(toks[3])
+    # If the process is not in the list, we are not using the GPU.
+    return 0.0

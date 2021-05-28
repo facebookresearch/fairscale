@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Please update the doc version in docs/source/conf.py as well.
-__version__ = "0.3.5"
+__version__ = "0.3.7"
 
 ################################################################################
 # Import most common subpackages

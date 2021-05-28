@@ -71,10 +71,8 @@ class Module(Generic[T_co]):
 
     # The user can pass an optional arbitrary mappable object to `state_dict`, in which case `state_dict` returns
     # back that same object. But if they pass nothing, an `OrederedDict` is created and returned.
-    T_destination = TypeVar('T_destination', bound=Mapping[str, Tensor])
-
     @overload
-    def state_dict(self, destination: T_destination, prefix: str = ..., keep_vars: bool = ...) -> T_destination: ...
+    def state_dict(self, destination: Mapping[str, Tensor], prefix: str = ..., keep_vars: bool = ...) -> Mapping[str, Tensor]: ...
 
     @overload
     def state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> OrderedDict[str, Tensor]: ...
@@ -108,6 +106,11 @@ class Module(Generic[T_co]):
 
     def extra_repr(self) -> str: ...
 
-#MODIFIED BY TORCHGPIPE
+    # This is added by checkpoint_wrapper
+    _checkpoint_fwd_counter: int
+
+    # This is added torchgpipe
     training: bool
-#END
+
+    # Added by auto_wrap.py.
+    wrapper_config: dict

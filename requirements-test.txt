@@ -2,8 +2,11 @@
 -r requirements.txt
 
 # Tools for static checking.
+#   - flake8-annotations is needed to avoid F811 error with overload
+#     function typing with mypy.
 black == 19.10b0
 flake8 == 3.7.9
+flake8-annotations == 2.6.2
 isort == 5.6.4
 mypy == 0.790
 
@@ -13,3 +16,6 @@ pytest-cov == 2.10.0
 pytest-timeout == 1.4.2
 remote-pdb >= 2.1.0
 parameterized >= 0.8.1
+
+# For torch.cuda.list_gpu_processes()
+pynvml == 8.0.4

@@ -5,6 +5,7 @@
 
 from contextlib import contextmanager
 import functools
+import threading
 from typing import Any, Dict, Generator, Optional, Tuple
 import weakref
 
@@ -15,10 +16,76 @@ import torch.utils.checkpoint as torch_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
-from .misc import patch_batchnorm
+from .checkpoint_utils import dec_counter, inc_counter, init_counter, patch_batchnorm
 
 
-def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Module:
+# https://docs.python.org/3/library/threading.html#thread-local-data
+# Manage the checkpoint context with thread-local data.
+class ThreadLocal(threading.local):
+    def __init__(self) -> None:
+        self.is_checkpointing = False
+        self.is_recomputing = False
+
+
+thread_local = ThreadLocal()
+
+
+@contextmanager
+def enable_checkpointing() -> Generator[None, None, None]:
+    """Makes :func:`is_checkpointing` return :data:`True` within a context."""
+    orig = thread_local.is_checkpointing
+    thread_local.is_checkpointing = True
+    try:
+        yield
+    finally:
+        thread_local.is_checkpointing = orig
+
+
+@contextmanager
+def enable_recomputing() -> Generator[None, None, None]:
+    """Makes :func:`is_recomputing` return :data:`True` within a context."""
+    orig = thread_local.is_recomputing
+    thread_local.is_recomputing = True
+    try:
+        yield
+    finally:
+        thread_local.is_recomputing = orig
+
+
+def is_checkpointing() -> bool:
+    """Whether the current forward propagation is under checkpointing.
+
+    Returns:
+        bool: :data:`True` if it's under checkpointing.
+
+    """
+    return thread_local.is_checkpointing
+
+
+def is_recomputing() -> bool:
+    """Whether the current forward propagation is under checkpoint
+    recomputation. Use this to prevent duplicated side-effects at forward
+    propagation::
+
+        class Counter(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.counter = 0
+
+            def forward(self, input):
+                if not is_recomputing():
+                    self.counter += 1
+                return input
+
+    Returns:
+        bool: :data:`True` if it's under checkpoint recomputation.
+    """
+    return thread_local.is_recomputing
+
+
+def checkpoint_wrapper(
+    module: nn.Module, offload_to_cpu: bool = False, maintain_forward_counter: bool = False
+) -> nn.Module:
     """
     A friendlier wrapper for performing activation checkpointing.
 
@@ -58,15 +125,22 @@ def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False) -> nn.Mo
     Args:
         module (nn.Module):
             The module to be wrapped
-        offload_to_cpu (Optional, bool):
+        offload_to_cpu (bool):
             Whether to offload activations to CPU.
+        maintain_forward_counter (bool):
+            If True, maintain a forward counter per inner module. The counter will first
+            increases in forward calls of outer forward pass and then decreases in the
+            forward calls of outer backward pass. It is used by FullyShardedDataParallel.
 
     Returns:
         (nn.Module):
             Wrapped module
     """
-    # Patch the batchnorm layers in case there are any.
+    # Patch the batchnorm layers in case there are any in this module.
     patch_batchnorm(module)
+
+    if maintain_forward_counter:
+        init_counter(module)
 
     # The use of weakref here is to prevent creating a ref cycle: m -> m.forward -> m.
     # When such cycle exists, gc won't collect the module when the module is freed.
@@ -165,9 +239,11 @@ class CheckpointFunction(torch.autograd.Function):
         ctx.save_for_backward(*tensor_inputs)
         ctx.packed_non_tensor_inputs = packed_non_tensor_inputs
 
-        with torch.no_grad():
+        with torch.no_grad(), enable_checkpointing():
             unpacked_args, unpacked_kwargs = unpack_kwargs(kwarg_keys, args)
             outputs = run_function(*unpacked_args, **unpacked_kwargs)
+            the_module = unpacked_args[0]
+            inc_counter(the_module)
 
         if not isinstance(outputs, torch.Tensor):
             # Autograd Functions don't like non-Tensor outputs. We can split the
@@ -196,10 +272,12 @@ class CheckpointFunction(torch.autograd.Function):
         # Set the states to what it used to be before the forward pass.
         set_rng_state(ctx.fwd_rng_state)
 
-        with torch.enable_grad(), autocast(ctx.had_autocast_in_fwd):
+        with torch.enable_grad(), enable_recomputing(), autocast(ctx.had_autocast_in_fwd):
             unpacked_args, unpacked_kwargs = unpack_kwargs(ctx.kwarg_keys, inputs)
             outputs = ctx.run_function(*unpacked_args, **unpacked_kwargs)
             tensor_outputs, _ = split_non_tensors(outputs)
+            the_module = unpacked_args[0]
+            dec_counter(the_module)
 
         # Set the states back to what it was at the start of this function.
         set_rng_state(bwd_rng_state)

@@ -1,4 +1,4 @@
-# Contributing to fairscale
+# Contributing to FairScale
 
 We want to make contributing to this project as easy and transparent as
 possible.
@@ -47,6 +47,7 @@ outlined on that page and do not file a public issue.
 
 ## Coding Style
 
+* We follow the [PEP8](https://www.python.org/dev/peps/pep-0008/) style guide.
 * In your editor, install the [editorconfig](https://editorconfig.org/) extension
   which should ensure that you are following the same standards as us.
 * Please run black and isort before opening up your PR.

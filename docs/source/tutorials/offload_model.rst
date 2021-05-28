@@ -1,5 +1,5 @@
-Training with `OffloadModel`
-============================
+Scale your model on a single GPU using OffloadModel
+====================================================
 
 `fairscale.experimental.nn.offload.OffloadModel` API democratizes large scale distributed training by enabling
 users to train large models on limited GPU resources that would have traditionally resulted in OOM errors. 
@@ -20,6 +20,7 @@ Consider a training loop as described below:
     from torchvision.transforms import ToTensor
 
     from fairscale.experimental.nn.offload import OffloadModel
+
 
     num_inputs = 8
     num_outputs = 8
