@@ -268,6 +268,7 @@ def test_deprecated_path():
     ffn = nn.Sequential(nn.Linear(32, 128), nn.Dropout(p=0.5), nn.Linear(128, 32),)
     ffn = deprecated_checkpoint_wrapper(ffn, {})
 
+
 @skip_if_no_cuda
 def test_list_input():
     """Test to ensure that we correctly does the checkpoint when the input is a list.
