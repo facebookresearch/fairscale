@@ -9,11 +9,15 @@ Testing Auto Shard functionality of non nn.Sequential models.
 
 import math
 
+import pytest
 import torch
 import torch.nn
 import torch.nn as nn
 
 from fairscale.experimental.nn.auto_shard import shard_model
+from fairscale.utils.testing import torch_version
+
+pytestmark = pytest.mark.skipif(torch_version() < (1, 8, 0), reason="requires torch version >= 1.8.0")
 
 
 class PositionalEncoding(nn.Module):

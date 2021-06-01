@@ -16,7 +16,7 @@ import torch
 
 from fairscale.experimental.nn.auto_shard import shard_model
 from fairscale.experimental.nn.offload import OffloadModel
-from fairscale.utils.testing import skip_if_no_cuda
+from fairscale.utils.testing import skip_if_no_cuda, torch_version
 
 
 def _init():
@@ -138,6 +138,9 @@ def _train_offload_model(
 @pytest.mark.parametrize("num_microbatches", [1, 5])
 @pytest.mark.parametrize("use_auto_shard", [True, False])
 def test_correctness(use_fp16, checkpoint_activation, num_microbatches, use_auto_shard):
+    if use_auto_shard and torch_version() < (1, 8, 0):
+        pytest.skip("auto_shard requires torch version >= 1.8.0")
+
     if (use_fp16 or checkpoint_activation) and not hasattr(torch.cuda.amp, "custom_fwd"):
         pytest.skip(f"AMP APIs are not supported in torch version {torch.__version__}")
 

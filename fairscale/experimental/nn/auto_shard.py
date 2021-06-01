@@ -3,13 +3,13 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from functools import reduce
 import logging
-import math
+import operator
 from typing import Any, Dict, List
 
 import torch
 import torch.fx
-from torch.fx.graph_module import GraphModule
 from torch.fx.node import Node
 
 
@@ -55,7 +55,7 @@ def _split_nodes(model: Any, shard_count: int = 3) -> Dict:
     for named_mods in model.named_modules():
         sum = 0
         for x in named_mods[1].parameters():
-            mul_dims = math.prod(x.size())
+            mul_dims = reduce(operator.mul, x.size(), 1)
             sum += mul_dims
 
         name = named_mods[0].split(".")[0]
@@ -110,10 +110,10 @@ def _split_nodes(model: Any, shard_count: int = 3) -> Dict:
     return node_name_to_shard_id
 
 
-def shard_model(model: Any, shard_count: int = 3) -> List[GraphModule]:
+def shard_model(model: Any, shard_count: int = 3) -> List[torch.fx.GraphModule]:  # type: ignore
     """Utility used to shard a model using torch.fx.
 
-    This function traces the model twice in an attempt to idenify the
+    This function traces the model twice in an attempt to identify the
     right cutpoints and then shard the model. In the first pass we calculate
     the number of parameters as we are tracing the graph and mark nodes at 
     which we might want to create a new module. In the second pass we 
@@ -122,7 +122,7 @@ def shard_model(model: Any, shard_count: int = 3) -> List[GraphModule]:
 
     We don't support skip connections between shards. This means that all 
     input and output is self contained within a given shard. A node from
-    shard 1 cannot be an input to node from shard 3. We expect all inputs
+    shard 1 cannot be an input to a node from shard 3. We expect all inputs
     to a given shard to be coming from the last node in the previous shard.
     This means that we may not be able to shard models by the specified
     `shard_count` mentioned by the user. 
@@ -133,7 +133,7 @@ def shard_model(model: Any, shard_count: int = 3) -> List[GraphModule]:
         shard_count (int): Number of shards that we want to split the model into.
 
     """
-    module_list: List[GraphModule] = []
+    module_list: List[torch.fx.GraphModule] = []  # type: ignore
     num_graphs = 0
     new_graph = torch.fx.Graph()  # type: ignore
     env: Dict[str, Node] = {}
@@ -156,7 +156,7 @@ def shard_model(model: Any, shard_count: int = 3) -> List[GraphModule]:
             with new_graph.inserting_after(prev_node):
                 new_graph.output(env[prev_node.name])
             num_graphs += 1
-            module_list.append(torch.fx.GraphModule(model, new_graph))
+            module_list.append(torch.fx.GraphModule(model, new_graph))  # type: ignore
             new_graph = torch.fx.Graph()
             node_name = "placeholder" + str(num_graphs)
             pl_node = new_graph.create_node("placeholder", node_name)
@@ -178,7 +178,7 @@ def shard_model(model: Any, shard_count: int = 3) -> List[GraphModule]:
 
             with new_graph.inserting_after(prev_node):
                 new_graph.output(env[prev_node.name])
-            module_list.append(torch.fx.GraphModule(model, new_graph))
+            module_list.append(torch.fx.GraphModule(model, new_graph))  # type: ignore
             break
         prev_node = new_node
         prev_shard_id = node_name_to_shard_id[node.name]
