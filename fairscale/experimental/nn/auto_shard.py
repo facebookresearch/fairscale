@@ -48,7 +48,7 @@ def _split_nodes(model: Any, shard_count: int = 3) -> Dict:
     param_count: Dict[str, int] = {}
     shard_to_param_count = {}
 
-    traced_graph_module = torch.fx.symbolic_trace(model)
+    traced_graph_module = torch.fx.symbolic_trace(model)  # type: ignore
 
     # Find the total number of params in the model and
     # the number of params per shard we are aiming for.
@@ -133,16 +133,16 @@ def shard_model(model: Any, shard_count: int = 3) -> List[GraphModule]:
         shard_count (int): Number of shards that we want to split the model into.
 
     """
-    module_list = []
+    module_list: List[GraphModule] = []
     num_graphs = 0
-    new_graph = torch.fx.Graph()
+    new_graph = torch.fx.Graph()  # type: ignore
     env: Dict[str, Node] = {}
     new_input_node = None
     # This is the first pass where we attempt to get a map of where
     # we need to insert placeholder and output nodes.
     node_name_to_shard_id = _split_nodes(model, shard_count=shard_count)
 
-    traced_graph_module = torch.fx.symbolic_trace(model)
+    traced_graph_module = torch.fx.symbolic_trace(model)  # type: ignore
 
     # dummy value which indicates that this is the first node.
     prev_shard_id = 1000
@@ -151,6 +151,8 @@ def shard_model(model: Any, shard_count: int = 3) -> List[GraphModule]:
         # If the current node is in the next shard, we insert an output node.
         # A new graph is created and a placeholder is added for the next shard.
         if node.name in node_name_to_shard_id and prev_shard_id < node_name_to_shard_id[node.name]:
+            assert prev_node, "prev_node cannot be None"
+
             with new_graph.inserting_after(prev_node):
                 new_graph.output(env[prev_node.name])
             num_graphs += 1
@@ -172,6 +174,8 @@ def shard_model(model: Any, shard_count: int = 3) -> List[GraphModule]:
         elif node.op == "output":
             # If this is the last node, we should add an output
             # node and add the last graph to the list.
+            assert prev_node, "prev_node cannot be None"
+
             with new_graph.inserting_after(prev_node):
                 new_graph.output(env[prev_node.name])
             module_list.append(torch.fx.GraphModule(model, new_graph))

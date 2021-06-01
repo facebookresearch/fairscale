@@ -10,8 +10,8 @@ Testing Auto Shard functionality of non nn.Sequential models.
 import math
 
 import torch
+import torch.nn
 import torch.nn as nn
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 from fairscale.experimental.nn.auto_shard import shard_model
 
@@ -40,8 +40,8 @@ class TransformerModel(nn.Module):
     def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
         super(TransformerModel, self).__init__()
         self.pos_encoder = PositionalEncoding(ninp, dropout)
-        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
-        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        encoder_layers = torch.nn.TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_encoder = torch.nn.TransformerEncoder(encoder_layers, nlayers)
         self.encoder = nn.Embedding(ntoken, ninp)
         self.ninp = ninp
         self.decoder = nn.Linear(ninp, ntoken)
