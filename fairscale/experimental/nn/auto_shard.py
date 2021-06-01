@@ -48,7 +48,7 @@ def _split_nodes(model: Any, shard_count: int = 3) -> Dict:
     param_count: Dict[str, int] = {}
     shard_to_param_count = {}
 
-    traced_graph_module = torch.fx.symbolic_trace(model)  # type: ignore
+    traced_graph_module = torch.fx.symbolic_trace(model)
 
     # Find the total number of params in the model and
     # the number of params per shard we are aiming for.
@@ -110,7 +110,7 @@ def _split_nodes(model: Any, shard_count: int = 3) -> Dict:
     return node_name_to_shard_id
 
 
-def shard_model(model: Any, shard_count: int = 3) -> List[torch.fx.GraphModule]:  # type: ignore
+def shard_model(model: Any, shard_count: int = 3) -> List[torch.fx.GraphModule]:
     """Utility used to shard a model using torch.fx.
 
     This function traces the model twice in an attempt to identify the
@@ -133,7 +133,7 @@ def shard_model(model: Any, shard_count: int = 3) -> List[torch.fx.GraphModule]:
         shard_count (int): Number of shards that we want to split the model into.
 
     """
-    module_list: List[torch.fx.GraphModule] = []  # type: ignore
+    module_list: List[torch.fx.GraphModule] = []
     num_graphs = 0
     new_graph = torch.fx.Graph()  # type: ignore
     env: Dict[str, Node] = {}
@@ -142,7 +142,7 @@ def shard_model(model: Any, shard_count: int = 3) -> List[torch.fx.GraphModule]:
     # we need to insert placeholder and output nodes.
     node_name_to_shard_id = _split_nodes(model, shard_count=shard_count)
 
-    traced_graph_module = torch.fx.symbolic_trace(model)  # type: ignore
+    traced_graph_module = torch.fx.symbolic_trace(model)
 
     # dummy value which indicates that this is the first node.
     prev_shard_id = 1000
@@ -156,7 +156,7 @@ def shard_model(model: Any, shard_count: int = 3) -> List[torch.fx.GraphModule]:
             with new_graph.inserting_after(prev_node):
                 new_graph.output(env[prev_node.name])
             num_graphs += 1
-            module_list.append(torch.fx.GraphModule(model, new_graph))  # type: ignore
+            module_list.append(torch.fx.GraphModule(model, new_graph))
             new_graph = torch.fx.Graph()
             node_name = "placeholder" + str(num_graphs)
             pl_node = new_graph.create_node("placeholder", node_name)
@@ -178,7 +178,7 @@ def shard_model(model: Any, shard_count: int = 3) -> List[torch.fx.GraphModule]:
 
             with new_graph.inserting_after(prev_node):
                 new_graph.output(env[prev_node.name])
-            module_list.append(torch.fx.GraphModule(model, new_graph))  # type: ignore
+            module_list.append(torch.fx.GraphModule(model, new_graph))
             break
         prev_node = new_node
         prev_shard_id = node_name_to_shard_id[node.name]

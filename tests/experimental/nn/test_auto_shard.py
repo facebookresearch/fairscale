@@ -14,10 +14,10 @@ import torch
 import torch.nn
 import torch.nn as nn
 
-from fairscale.experimental.nn.auto_shard import shard_model
 from fairscale.utils.testing import torch_version
 
 pytestmark = pytest.mark.skipif(torch_version() < (1, 8, 0), reason="requires torch version >= 1.8.0")
+from fairscale.experimental.nn.auto_shard import shard_model
 
 
 class PositionalEncoding(nn.Module):
