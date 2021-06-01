@@ -101,8 +101,9 @@ class TestSaveLoadStateDict(DistributedTest):
     def _test_state_dict_before_forward(cls, config, rank, group):
         ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
         sd = ddp_model.state_dict()
-        wt = sd["embed_tokens.weight"]
-        assert wt.dtype == torch.float32, f"got dtype {wt.dtype} expected torch.float32"
+        for param_name in ("embed_tokens.weight", "vocab_bias"):
+            wt = sd[param_name]
+            assert wt.dtype == torch.float32, f"got dtype {wt.dtype} for {param_name}, expected torch.float32"
         cls._train_for_several_steps(ddp_model, 1, ddp_model.mixed_precision)
 
     @classmethod
@@ -232,16 +233,10 @@ class TestStateDictDeviceDtype(DistributedTest):
                 assert v.device.type == "cuda", v.device.type
 
         expected_dtype = torch.float16 if pure_fp16 else torch.float32
-        buffers = {
-            k.replace("_fsdp_wrapped_module.", "").replace("_fpw_module.", "") for k, _ in fsdp_model.named_buffers()
-        }
         for k, v in sd.items():
             if not torch.is_floating_point(v):
                 continue
-            if k in buffers:
-                assert v.dtype == fsdp_model.buffer_dtype, f"{v.dtype} != {fsdp_model.buffer_dtype}"
-            else:
-                assert v.dtype == expected_dtype, f"{v.dtype} != {expected_dtype}"
+            assert v.dtype == expected_dtype, f"{v.dtype} != {expected_dtype}"
 
 
 @skip_if_cuda
