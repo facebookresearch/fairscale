@@ -94,16 +94,13 @@ def test_single_run():
         param_count = {}
         for named_mods in model.named_modules():
             sum = 0
+            if "." in named_mods[0]:
+                continue
+
             for x in named_mods[1].parameters():
                 mul_dims = reduce(operator.mul, x.size(), 1)
                 sum += mul_dims
-
-            name = named_mods[0].split(".")[0]
-            if name in param_count:
-                param_count[name] += sum
-            else:
-                param_count[name] = sum
-
+            param_count[named_mods[0]] = sum
         assert expected_param_nums[i] == param_count[""]
 
     src_mask = torch.randn((35, 35), dtype=torch.float32)

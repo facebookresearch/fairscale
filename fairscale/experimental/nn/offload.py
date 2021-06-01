@@ -464,7 +464,6 @@ class OffloadModel(nn.Module):
             splits = _split(model, num_slices)
 
             for i, split in enumerate(splits):
-                print(f"split {split}")
                 # Add one model handling this slice
                 self.model_slices.append(
                     ModelShard(
