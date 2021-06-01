@@ -18,9 +18,6 @@ import torch.nn as nn
 
 from fairscale.utils.testing import torch_version
 
-pytestmark = pytest.mark.skipif(torch_version() < (1, 8, 0), reason="requires torch version >= 1.8.0")
-from fairscale.experimental.nn.auto_shard import shard_model
-
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
@@ -85,6 +82,10 @@ dropout = 0.2  # the dropout value
 
 
 def test_single_run():
+    if torch_version() < (1, 8, 0):
+        pytest.skip("requires torch version >= 1.8.0")
+    from fairscale.experimental.nn.auto_shard import shard_model
+
     model = TransformerModel(ntokens, emsize, nhead, nhid, nlayers, dropout)
     sharded_model = shard_model(model)
     assert len(sharded_model) == 2, "Length is sharded model is incorrect."
