@@ -7,9 +7,7 @@
 Testing Auto Shard functionality of non nn.Sequential models.
 """
 
-from functools import reduce
 import math
-import operator
 
 import pytest
 import torch
@@ -98,8 +96,7 @@ def test_single_run():
                 continue
 
             for x in named_mods[1].parameters():
-                mul_dims = reduce(operator.mul, x.size(), 1)
-                sum += mul_dims
+                sum += x.numel()
             param_count[named_mods[0]] = sum
         assert expected_param_nums[i] == param_count[""]
 

@@ -3,9 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from functools import reduce
 import logging
-import operator
 from typing import Dict, List
 
 import torch
@@ -61,8 +59,7 @@ def _split_nodes(model: torch.nn.Module, shard_count: int = 3) -> Dict:
             continue
 
         for x in named_mods[1].parameters():
-            mul_dims = reduce(operator.mul, x.size(), 1)
-            sum += mul_dims
+            sum += x.numel()
         param_count[named_mods[0]] = sum
 
     logging.info(f"Total number of params are {param_count['']}")
@@ -81,9 +78,7 @@ def _split_nodes(model: torch.nn.Module, shard_count: int = 3) -> Dict:
             # last node we traversed. This is to help us find skip connections
             # across shards.
             for arg in node.args:
-                try:
-                    test = arg.name
-                except AttributeError:
+                if not hasattr(arg, "name"):
                     continue
 
                 if arg.name in node_name_to_shard_id and arg.name != nodes_so_far[-1]:
