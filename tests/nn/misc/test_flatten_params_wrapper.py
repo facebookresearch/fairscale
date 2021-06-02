@@ -20,7 +20,8 @@ class TestFlattenParams(unittest.TestCase):
     def _get_module_init_fns(self):
         return [
             self._get_shared_params_transformer,
-            self._get_nested_flat_module,
+            # XXX still testing
+            # self._get_nested_flat_module,
         ]
 
     def _get_transformer(self, seed=0):

@@ -3,7 +3,7 @@
 
 from contextlib import ExitStack, contextmanager
 import typing
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, Mapping, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
 import torch
 from torch import Tensor
@@ -13,6 +13,37 @@ from fairscale.utils.state_dict import replace_by_prefix_
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
+
+
+class FlatParameter(nn.Parameter):
+    """ A parameter that is initialized from a list of parameters and can be
+        turned into a list of views as needed.
+    """
+
+    def __new__(cls, params: Sequence[nn.Parameter], requires_grad: bool = True) -> "FlatParameter":
+        if not isinstance(params, (list, tuple)) or len(params) == 0:
+            raise ValueError("An non-empty list or tuple argument is needed")
+
+        if not all(isinstance(p, nn.Parameter) for p in params):
+            raise ValueError("List items need to be Parameter types")
+
+        if any(isinstance(p, FlatParameter) for p in params):
+            raise ValueError("Nesting FlatParameter is not supported")
+
+        data = torch.cat([p.detach().reshape(-1) for p in params], 0)
+        return Tensor._make_subclass(cls, data, requires_grad)
+
+    def __init__(self, params: Sequence[nn.Parameter], requires_grad: bool = True):
+        self._param_numels = [p.numel() for p in params]
+        assert self.numel() == sum(self._param_numels), "Something wrong with __new__ method"
+        self._param_shapes = [p.size() for p in params]
+        del params
+
+    def get_param_views(self, external_data: Optional[Tensor] = None) -> Generator:
+        data = external_data if external_data is not None else self
+        if data.numel() != self.numel():
+            raise ValueError(f"Incorrect size of supplied data: got {data.numel()} but expected {self.numel()}")
+        return (t.view(s) for (t, s) in zip(data.split(self._param_numels), self._param_shapes))
 
 
 class FlattenParamsWrapper(nn.Module):
@@ -68,14 +99,15 @@ class FlattenParamsWrapper(nn.Module):
     def module(self) -> nn.Module:
         return self._fpw_module
 
-    def _init_flatten_params(self) -> List[Tensor]:
+    def _init_flatten_params(self) -> List[nn.Parameter]:
+        """ Build metadata for need-to-be-flatten parameters and returns a list
+            contains the need-to-be-flatten parameters.
+        """
         param_infos = []
         param_full_infos = []
         shared_param_memo: Dict[nn.Parameter, Tuple[nn.Module, str]] = {}
         shared_param_infos = []
         params = []
-        param_numels = []
-        param_shapes = []
         for module_name, m in self.named_modules():
             for n, p in m.named_parameters(recurse=False):
                 if p is not None and (m, n) in self._param_set:
@@ -86,19 +118,15 @@ class FlattenParamsWrapper(nn.Module):
                         shared_param_memo[p] = (m, n)
                         param_infos.append((m, n))
                         param_full_infos.append((module_name, n))
-                        params.append(p.detach())
-                        param_numels.append(p.numel())
-                        param_shapes.append(p.size())
+                        params.append(p)
         del shared_param_memo
 
-        assert len(set(p.dtype for p in params)) <= 1, "expects all parameters in module to have same dtype"
+        assert len(set(p.dtype for p in params)) == 1, "expects all parameters in module to have same dtype"
 
         # store the info for unflatten
         self._param_infos = tuple(param_infos)
         self._param_full_infos = tuple(param_full_infos)
         self._shared_param_infos = tuple(shared_param_infos)
-        self._param_numels = tuple(param_numels)
-        self._param_shapes = tuple(param_shapes)
 
         return params
 
@@ -109,9 +137,8 @@ class FlattenParamsWrapper(nn.Module):
         if not hasattr(self, "_param_infos"):
             assert flat_param is None
             params = self._init_flatten_params()
-            flat_param = nn.Parameter(torch.cat([p.reshape(-1) for p in params], 0))
+            flat_param = FlatParameter(params)
             self.param_numel = flat_param.numel()
-            del params
 
         # flatten
         assert flat_param is not None
@@ -126,15 +153,14 @@ class FlattenParamsWrapper(nn.Module):
         # register the views as plain attributes
         self._unflatten_params_as_views()
 
-    def get_param_views(self, flat_param: Tensor) -> Generator:
-        return (t.view(s) for (t, s) in zip(flat_param.split(self._param_numels), self._param_shapes))
-
-    def _unflatten_params(self, flat_param: Optional[Tensor] = None) -> None:
-        assert self.is_flattened or flat_param is not None
+    def _unflatten_params(self, external_data: Optional[Tensor] = None) -> None:
+        """ Undo flattening and create separate parameters from the already flattened
+            self.flat_param or a user supplied external data.
+        """
+        assert self.is_flattened or external_data is not None
         self.is_flattened = False
-        flat_param = flat_param if flat_param is not None else self.flat_param
 
-        ps = self.get_param_views(flat_param)
+        ps = self.flat_param.get_param_views(external_data)
         for (m, n), p in zip(self._param_infos, ps):
             if hasattr(m, n):
                 delattr(m, n)
@@ -147,8 +173,11 @@ class FlattenParamsWrapper(nn.Module):
             del self.flat_param
 
     def _unflatten_params_as_views(self) -> None:
+        """ Unlike ``_unflatten_params``, this function unflatten into views and keep
+            self.flat_param unchanged.
+        """
         assert self.is_flattened
-        ps = self.get_param_views(self.flat_param)
+        ps = self.flat_param.get_param_views()
         for (m, n), p in zip(self._param_infos, ps):
             setattr(m, n, p)  # This will set as plain attr
         for (m, n, shared_m, shared_n) in self._shared_param_infos:
