@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 from contextlib import ExitStack, contextmanager
+from itertools import chain
 import typing
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
@@ -41,16 +42,21 @@ class FlatParameter(nn.Parameter):
         self._param_shapes = [p.size() for p in params]
         del params
 
-    def get_param_views(self, external_data: Optional[Tensor] = None) -> Generator:
+    def get_param_views(self, external_data: Optional[Tensor] = None) -> Generator[Tensor, None, None]:
         """ Return a generator of views that map to the original parameters. """
+        # Note, self.data could be sharded, so its numel is <= to the sum.
+        assert self.data.numel() <= sum(self._param_numels), "incorrect internal state"
         data = external_data if external_data is not None else self
-        if data.numel() != self.numel():
-            raise ValueError(f"Incorrect size of supplied data: got {data.numel()} but expected {self.numel()}")
+        if data.numel() != sum(self._param_numels):
+            raise ValueError(
+                f"Incorrect numel of supplied data: got {data.numel()} but expected {sum(self._param_numels)}"
+            )
         return (t.view(s) for (t, s) in zip(data.split(self._param_numels), self._param_shapes))
 
     def __setstate__(self, state: Tuple[Any, Any]) -> None:
         """ Use by pickle to set the internal states. """
         self._param_numels, self._param_shapes = state
+        assert self.data.numel() == sum(self._param_numels), "incorrect pickling"
 
     def __reduce_ex__(self, proto: int) -> Tuple[Any, Any, Any]:
         """ Support pickling between ranks. """
@@ -179,7 +185,7 @@ class FlattenParamsWrapper(nn.Module):
         assert self.is_flattened or external_data is not None
         self.is_flattened = False
 
-        ps = self.flat_param.get_param_views(external_data)
+        ps = self.get_param_views([external_data])
         for (m, n), p in zip(self._param_infos, ps):
             if hasattr(m, n):
                 delattr(m, n)
@@ -196,7 +202,7 @@ class FlattenParamsWrapper(nn.Module):
             self.flat_param unchanged.
         """
         assert self.is_flattened
-        ps = self.flat_param.get_param_views()
+        ps = self.get_param_views()
         for (m, n), p in zip(self._param_infos, ps):
             setattr(m, n, p)  # This will set as plain attr
         for (m, n, shared_m, shared_n) in self._shared_param_infos:
@@ -307,6 +313,20 @@ class FlattenParamsWrapper(nn.Module):
     def forward(self, *inputs: Any, **kwinputs: Any) -> Any:
         self._unflatten_params_as_views()
         return self.module(*inputs, **kwinputs)
+
+    def get_param_views(
+        self, external_data_list: Optional[List[Optional[Tensor]]] = None
+    ) -> Generator[Tensor, None, None]:
+        """ Used to get a generator over all views from a list of external data list. """
+        params = [self.flat_param]  # For now, there is only a single flat param.
+        if external_data_list is None:
+            external_data_list = [None] * len(params)
+
+        gens = []
+        for p, data in zip(params, external_data_list):
+            gens.append(p.get_param_views(data))
+
+        return chain(*gens)  # type: ignore
 
 
 def _post_state_dict_hook(
