@@ -75,6 +75,10 @@ class FlattenParamsWrapper(nn.Module):
             param_list = list(module.parameters())
         param_set = set(param_list)
 
+        # Since the parameters will be deleted, let's record the number original parameters
+        # managed by this class.
+        self.num_params_managed = len(param_set)
+
         # convert from list of Parameters to set of (Module, name) tuples, which
         # will survive in case the Parameter instances are reset
         self._param_set = set()

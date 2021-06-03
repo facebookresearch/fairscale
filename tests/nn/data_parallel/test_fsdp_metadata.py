@@ -5,6 +5,7 @@
 import pytest
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 import torch.nn as nn
 
 from fairscale.nn import FullyShardedDataParallel
@@ -139,7 +140,6 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, f
 @pytest.mark.parametrize("embedding_size", [128, 129])
 @pytest.mark.parametrize("flatten_parameters", [True, False])
 def test_consolidation(embedding_size: int, flatten_parameters: bool):
-    import torch.multiprocessing as mp
 
     world_size = 2
     with in_temporary_directory():

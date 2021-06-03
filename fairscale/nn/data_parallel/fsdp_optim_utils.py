@@ -97,7 +97,7 @@ def _unflatten_optim_state(
     non_tensor_state = [_extract_non_tensor_state(combined_state, id) for id in combined_state]
 
     # local corresponds to flattened, global corresponds to unflattened
-    num_global_params = [len(m._param_numels) for m in instance_list]  # type: ignore
+    num_global_params = [len(m.num_params_managed) for m in instance_list]  # type: ignore
     global_to_local_id = {}
     for local_id, num_unflat in enumerate(num_global_params):
         for _ in range(num_unflat):
@@ -156,7 +156,7 @@ def build_unflat_state_dict(
     unflat_state, global_to_local_id = _unflatten_optim_state(state, instance_list, world_pad_info, singleton_state)
     # Since there are no tensors in param_groups, deepcopy is fine
     param_groups = copy.deepcopy(param_groups)
-    num_params = sum([len(m._param_numels) for m in instance_list])  # type: ignore
+    num_params = sum([len(m.num_params_managed) for m in instance_list])  # type: ignore
     param_groups[0]["params"] = list(range(num_params))
     unflat_optim_state_dict = {
         "state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
