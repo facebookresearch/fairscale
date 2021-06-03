@@ -38,13 +38,13 @@ class FlatParameter(nn.Parameter):
     def __init__(self, params: Sequence[nn.Parameter], requires_grad: bool = True):
         """ Initialize the _param_numels and _param_shapes lists. """
         self._param_numels = [p.numel() for p in params]
-        assert self.numel() == sum(self._param_numels), "Something wrong with __new__ method"
+        assert self.numel() <= sum(self._param_numels), f"Something wrong with __new__ method, {self.numel()} vs. {sum(self._param_numels)}"
         self._param_shapes = [p.size() for p in params]
 
     def get_param_views(self, external_data: Optional[Tensor] = None) -> Generator[Tensor, None, None]:
         """ Return a generator of views that map to the original parameters. """
         # Note, self.data could be sharded, so its numel is <= to the sum.
-        assert self.data.numel() <= sum(self._param_numels), "incorrect internal state"
+        assert self.data.numel() <= sum(self._param_numels), f"Incorrect internal state {self.data.numel()} vs. {sum(self._param_numels)}"
         data = external_data if external_data is not None else self
         if data.numel() != sum(self._param_numels):
             raise ValueError(
@@ -55,7 +55,7 @@ class FlatParameter(nn.Parameter):
     def __setstate__(self, state: Tuple[Any, Any]) -> None:
         """ Use by pickle to set the internal states. """
         self._param_numels, self._param_shapes = state
-        assert self.data.numel() == sum(self._param_numels), "incorrect pickling"
+        assert self.numel() <= sum(self._param_numels), f"Incorrect pickling {self.numel()} vs. {sum(self._param_numels)}"
 
     def __reduce_ex__(self, proto: int) -> Tuple[Any, Any, Any]:
         """ Support pickling between ranks. """
