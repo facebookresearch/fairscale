@@ -21,29 +21,44 @@ class FlatParameter(nn.Parameter):
     """
 
     def __new__(cls, params: Sequence[nn.Parameter], requires_grad: bool = True) -> "FlatParameter":
+        """ Make an object using the parent's __new__ function. """
         if not isinstance(params, (list, tuple)) or len(params) == 0:
             raise ValueError("An non-empty list or tuple argument is needed")
 
-        if not all(isinstance(p, nn.Parameter) for p in params):
+        if not all(isinstance(p, (nn.Parameter, Tensor)) for p in params):
             raise ValueError("List items need to be Parameter types")
 
         if any(isinstance(p, FlatParameter) for p in params):
             raise ValueError("Nesting FlatParameter is not supported")
 
-        data = torch.cat([p.detach().reshape(-1) for p in params], 0)
-        return Tensor._make_subclass(cls, data, requires_grad)
+        data = torch.cat([p.detach().reshape(-1) if isinstance(p, nn.Parameter) else p.reshape(-1) for p in params], 0)
+        return super(FlatParameter, cls).__new__(cls, data, requires_grad)
 
     def __init__(self, params: Sequence[nn.Parameter], requires_grad: bool = True):
+        """ Initialize the _param_numels and _param_shapes lists. """
         self._param_numels = [p.numel() for p in params]
         assert self.numel() == sum(self._param_numels), "Something wrong with __new__ method"
         self._param_shapes = [p.size() for p in params]
         del params
 
     def get_param_views(self, external_data: Optional[Tensor] = None) -> Generator:
+        """ Return a generator of views that map to the original parameters. """
         data = external_data if external_data is not None else self
         if data.numel() != self.numel():
             raise ValueError(f"Incorrect size of supplied data: got {data.numel()} but expected {self.numel()}")
         return (t.view(s) for (t, s) in zip(data.split(self._param_numels), self._param_shapes))
+
+    def __setstate__(self, state: Tuple[Any, Any]) -> None:
+        """ Use by pickle to set the internal states. """
+        self._param_numels, self._param_shapes = state
+
+    def __reduce_ex__(self, proto: int) -> Tuple[Any, Any, Any]:
+        """ Support pickling between ranks. """
+        return (
+            FlatParameter,  # Callable
+            ([self.data], self.requires_grad),  # Args to the callable above
+            (self._param_numels, self._param_shapes),  # Args to __setstate__
+        )
 
 
 class FlattenParamsWrapper(nn.Module):
