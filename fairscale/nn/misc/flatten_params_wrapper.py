@@ -40,7 +40,6 @@ class FlatParameter(nn.Parameter):
         self._param_numels = [p.numel() for p in params]
         assert self.numel() == sum(self._param_numels), "Something wrong with __new__ method"
         self._param_shapes = [p.size() for p in params]
-        del params
 
     def get_param_views(self, external_data: Optional[Tensor] = None) -> Generator[Tensor, None, None]:
         """ Return a generator of views that map to the original parameters. """
