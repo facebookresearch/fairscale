@@ -19,9 +19,8 @@ from fairscale.utils.testing import objects_are_equal
 class TestFlattenParams(unittest.TestCase):
     def _get_module_init_fns(self):
         return [
+            self._get_basic_linear_module,
             self._get_shared_params_transformer,
-            # XXX still testing
-            # self._get_nested_flat_module,
         ]
 
     def _get_transformer(self, seed=0):
@@ -48,13 +47,11 @@ class TestFlattenParams(unittest.TestCase):
             dec_layer.linear2.weight = enc_layer.linear2.weight
         return module
 
-    def _get_nested_flat_module(self, seed=0):
+    def _get_basic_linear_module(self, seed=0):
         module = torch.nn.Sequential(
-            FlattenParamsWrapper(
-                torch.nn.Sequential(torch.nn.Linear(4, 8), FlattenParamsWrapper(torch.nn.Linear(8, 8)))
-            ),
-            FlattenParamsWrapper(torch.nn.Sequential(FlattenParamsWrapper(torch.nn.Linear(8, 16)))),
-            FlattenParamsWrapper(torch.nn.Linear(16, 4)),
+            torch.nn.Sequential(torch.nn.Linear(4, 8), torch.nn.Linear(8, 8)),
+            torch.nn.Sequential(torch.nn.Linear(8, 16)),
+            torch.nn.Linear(16, 4),
         )
 
         def get_input(device, dtype):
