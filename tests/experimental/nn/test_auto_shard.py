@@ -90,14 +90,11 @@ def test_single_run():
     expected_param_nums = [5998600, 5785383]
     for i, model in enumerate(sharded_model):
         param_count = {}
-        for named_mods in model.named_modules():
-            sum = 0
-            if "." in named_mods[0]:
+        for name, module in model.named_modules():
+            if "." in name:
                 continue
 
-            for x in named_mods[1].parameters():
-                sum += x.numel()
-            param_count[named_mods[0]] = sum
+            param_count[name] = sum([x.numel() for x in module.parameters()])
         assert expected_param_nums[i] == param_count[""]
 
     src_mask = torch.randn((35, 35), dtype=torch.float32)

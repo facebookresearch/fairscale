@@ -26,7 +26,6 @@ def _get_count(param_count: Dict, node_name: str) -> int:
 
 def _create_shard_to_param_count(param_count: Dict, node_name_to_shard_id: Dict) -> Dict:
     """Utility to create a map from shard id to param count using existing state."""
-
     shard_to_param_count: Dict[int, int] = {}
     for node_name in node_name_to_shard_id.keys():
         try:
@@ -53,14 +52,10 @@ def _split_nodes(model: torch.nn.Module, shard_count: int = 3) -> Dict:
 
     # Find the total number of params in the model and
     # the number of params per shard we are aiming for.
-    for named_mods in model.named_modules():
-        sum = 0
-        if "." in named_mods[0]:
+    for name, module in model.named_modules():
+        if "." in name:
             continue
-
-        for x in named_mods[1].parameters():
-            sum += x.numel()
-        param_count[named_mods[0]] = sum
+        param_count[name] = sum([x.numel() for x in module.parameters()])
 
     logging.info(f"Total number of params are {param_count['']}")
     per_shard_param = param_count[""] // shard_count
@@ -78,6 +73,8 @@ def _split_nodes(model: torch.nn.Module, shard_count: int = 3) -> Dict:
             # last node we traversed. This is to help us find skip connections
             # across shards.
             for arg in node.args:
+                # If the node has args that are inputs to the forward function, they
+                # maynot have explicit names.
                 if not hasattr(arg, "name"):
                     continue
 
