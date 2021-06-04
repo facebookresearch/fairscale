@@ -26,6 +26,7 @@ def _get_count(param_count: Dict, node_name: str) -> int:
 
 def _create_shard_to_param_count(param_count: Dict, node_name_to_shard_id: Dict) -> Dict:
     """Utility to create a map from shard id to param count using existing state."""
+
     shard_to_param_count: Dict[int, int] = {}
     for node_name in node_name_to_shard_id.keys():
         try:
@@ -64,7 +65,6 @@ def _split_nodes(model: torch.nn.Module, shard_count: int = 3) -> Dict:
     for node in traced_graph_module.graph.nodes:
         if node.op == "placeholder":
             node_name_to_shard_id[node.name] = shard_id
-            nodes_so_far.append(node.name)
         elif node.op in ["get_attr", "call_function", "call_method", "call_module"]:
 
             min_shard_id = shard_id
@@ -74,7 +74,7 @@ def _split_nodes(model: torch.nn.Module, shard_count: int = 3) -> Dict:
             # across shards.
             for arg in node.args:
                 # If the node has args that are inputs to the forward function, they
-                # maynot have explicit names.
+                # may not have explicit names.
                 if not hasattr(arg, "name"):
                     continue
 
@@ -83,8 +83,9 @@ def _split_nodes(model: torch.nn.Module, shard_count: int = 3) -> Dict:
                         min_shard_id = node_name_to_shard_id[arg.name]
                         min_node_name = arg.name
 
-            # If we there is an input that is not from the previous shard as expected,
-            # we collapse all shards in between and update the param count per shard.
+            # If there is an input that is not from the previous shard,
+            # we collapse all the shards in between to be part of 1 shard.
+            # and update the param count per shard accordingly.
             if min_shard_id < shard_id:
                 for node_name in reversed(nodes_so_far):
                     node_name_to_shard_id[node_name] = min_shard_id
