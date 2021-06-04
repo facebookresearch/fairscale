@@ -65,6 +65,7 @@ def _split_nodes(model: torch.nn.Module, shard_count: int = 3) -> Dict:
     for node in traced_graph_module.graph.nodes:
         if node.op == "placeholder":
             node_name_to_shard_id[node.name] = shard_id
+            nodes_so_far.append(node.name)
         elif node.op in ["get_attr", "call_function", "call_method", "call_module"]:
 
             min_shard_id = shard_id
