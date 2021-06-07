@@ -833,7 +833,7 @@ class FullyShardedDataParallel(nn.Module):
                     # latter may contain padding.
                     assert len(self.params) == 1
                     assert isinstance(self.module, FlattenParamsWrapper)
-                    stack.enter_context(self.module.unflatten_params(recurse=False, flat_param=self.params[0]))
+                    stack.enter_context(self.module.unflatten_params(flat_param=self.params[0]))
                 try:
                     yield
                 finally:

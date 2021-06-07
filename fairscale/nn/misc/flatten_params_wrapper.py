@@ -1,7 +1,12 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
+
 # Copyright (c) Tongzhou Wang
 # Licensed under the MIT License.
 
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from itertools import chain
 import typing
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
@@ -23,12 +28,22 @@ class FlatParameter(nn.Parameter):
 
     def __new__(cls, params: Sequence[nn.Parameter], requires_grad: bool = True) -> "FlatParameter":
         """ Make an object using the parent's __new__ function. """
+
+        # A empty of non-list input doesn't make sense.
         if not isinstance(params, (list, tuple)) or len(params) == 0:
             raise ValueError("An non-empty list or tuple argument is needed")
 
+        # Normally, all items are Parameters. But during pickling, we will have a single
+        # Tensor as the input and later in __init__, the correct _param_numels and _param_shapes
+        # are set.
         if not all(isinstance(p, (nn.Parameter, Tensor)) for p in params):
             raise ValueError("List items need to be Parameter types")
 
+        # Flattening is (1) making a tensor flat (i.e. single dimensional) and (2) make a module
+        # heirarchy flat (i.e. only a single tensor to replace a tree of tensors). Therefore,
+        # adding back nesting and heirarchy is counter-productive. If nesting is encountered
+        # in the future, the reasonable thing to do it likely for the top level FlatParameter to
+        # absorb the nested one and keep the result flat, free from hierarchy.
         if any(isinstance(p, FlatParameter) for p in params):
             raise ValueError("Nesting FlatParameter is not supported")
 
@@ -81,6 +96,7 @@ class FlattenParamsWrapper(nn.Module):
     - supports shared parameters
     - handles state_dict/load_state_dict transparently
     - is renamed to FlattenParamsWrapper
+    - refactored to use the FlatParameter class
 
     [1] https://github.com/SsnL/PyTorch-Reparam-Module
 
@@ -214,14 +230,12 @@ class FlattenParamsWrapper(nn.Module):
             setattr(m, n, getattr(shared_m, shared_n))
 
     @contextmanager
-    def unflatten_params(self, recurse: bool = True, flat_param: Optional[Tensor] = None) -> Generator:
+    def unflatten_params(self, flat_param: Optional[Tensor] = None) -> Generator:
         """
         Unflatten params. If the current instance is already unflattened, then
         it will remain unflattened after the context manager exits.
 
         Args:
-            recurse (bool, Optional): recursively unflatten all nested instances
-                (default: True)
             flat_param (Tensor, Optional): flat param to use for unflattening.
                 If provided, the current instance must be in a flattened state
                 at the start of the context manager. The provided Tensor must be
@@ -229,31 +243,20 @@ class FlattenParamsWrapper(nn.Module):
                 manager. After the context manager exits, we will revert to
                 using ``self.flat_param`` (default: None).
         """
-        if recurse:
-            with ExitStack() as stack:
-                # unflatten any nested FlattenParamsWrapper instances
-                for name, module in self.named_modules():
-                    if isinstance(module, FlattenParamsWrapper):
-                        is_self = name == ""
-                        stack.enter_context(
-                            module.unflatten_params(recurse=False, flat_param=flat_param if is_self else None)
-                        )
-                # yield to the caller, with unflattened params in all nested instances
-                yield
-            # exiting from the ExitStack will re-flatten params
-            return
-        else:
-            assert (
-                flat_param is None or self.is_flattened
-            ), "Unflattening with custom flat_param requires current instance to be flattened"
+        assert (
+            flat_param is None or self.is_flattened
+        ), "Unflattening with external flat_param requires current instance to be flattened"
 
-            orig_flattened = self.is_flattened
-            if orig_flattened:
-                orig_flat_param = self.flat_param
-                self._unflatten_params(flat_param)
+        orig_flattened = self.is_flattened
+        if orig_flattened:
+            orig_flat_param = self.flat_param
+            self._unflatten_params(flat_param)
 
+        # Put yield in a try...finally in case the caller catches the exception and handles
+        # it. In that case, we need to properly handle the undoing of state.
+        try:
             yield
-
+        finally:
             if orig_flattened:
                 self._flatten_params(orig_flat_param)
 
@@ -276,30 +279,29 @@ class FlattenParamsWrapper(nn.Module):
 
     # Since we have overloads above, we can use Any here.
     def state_dict(self, *args: Any, **kwargs: Any) -> Any:
-        """Return the wrapped module's state_dict (unflattened)."""
+        """Return the wrapped module's state_dict."""
         if self.is_flattened and self._auto_unflatten_state_dict:
-            with self.unflatten_params(recurse=False):
+            # Returns the original version.
+            with self.unflatten_params():
                 return super().state_dict(*args, **kwargs)
         else:
+            # Returns flattened version.
             return super().state_dict(*args, **kwargs)
 
     def flat_state_dict(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         """Return the flattened state_dict."""
         assert self.is_flattened
-        with ExitStack() as stack:
-            # tell any nested FlattenParamsWrapper instances not to auto unflatten
-            for module in self.modules():  # includes self
-                if isinstance(module, FlattenParamsWrapper):
-                    stack.enter_context(module._no_auto_unflatten_state_dict())
-            state_dict = self.state_dict(*args, **kwargs)
-        return state_dict
+        with self._no_auto_unflatten_state_dict():
+            return self.state_dict(*args, **kwargs)
 
     @contextmanager
     def _no_auto_unflatten_state_dict(self) -> Generator:
         backup = self._auto_unflatten_state_dict
         self._auto_unflatten_state_dict = False
-        yield
-        self._auto_unflatten_state_dict = backup
+        try:
+            yield
+        finally:
+            self._auto_unflatten_state_dict = backup
 
     def load_state_dict(
         self, state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], strict: bool = True
@@ -310,9 +312,11 @@ class FlattenParamsWrapper(nn.Module):
         """
         # unflatten the module automatically if the state_dict is non-flat
         if self.is_flattened and "flat_param" not in state_dict:
-            with self.unflatten_params(recurse=True):
+            # This object is flatten but state_dict is not. So we unflatten and load.
+            with self.unflatten_params():
                 return super().load_state_dict(state_dict, strict)
         else:
+            # Otherwise, load as it.
             return super().load_state_dict(state_dict, strict)
 
     def forward(self, *inputs: Any, **kwinputs: Any) -> Any:
