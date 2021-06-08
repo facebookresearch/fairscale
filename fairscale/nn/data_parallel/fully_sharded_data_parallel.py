@@ -833,7 +833,7 @@ class FullyShardedDataParallel(nn.Module):
                     # latter may contain padding.
                     assert len(self.params) == 1
                     assert isinstance(self.module, FlattenParamsWrapper)
-                    stack.enter_context(self.module.unflatten_params(recurse=False, flat_param=self.params[0]))
+                    stack.enter_context(self.module.unflatten_params(flat_param=self.params[0]))
                 try:
                     yield
                 finally:
@@ -1534,7 +1534,7 @@ class FullyShardedDataParallel(nn.Module):
             # There are as many sharded parameters as there parameters in the
             # consolidated model, so we only need to export how to reshape the
             # parameters to their orginal shape and take care of the padding
-            if not hasattr(m, "_param_numels"):
+            if not m.flatten_parameters:
                 params_metadata.append(
                     {
                         "fsdp_path": _clean_path(path),
@@ -1563,8 +1563,11 @@ class FullyShardedDataParallel(nn.Module):
                         "is_flat": True,
                         "num_padded": m.numel_padded_per_param,
                         "param_names": param_names,
-                        "param_shapes": m._param_shapes,
-                        "param_numels": m._param_numels,
+                        # TODO (Min): we don't want to access the private _param_shapes and
+                        # _param_numels here. We want to dump metadata from FPW when there are
+                        # multiple groups of params.
+                        "param_shapes": m._fsdp_wrapped_module.flat_param._param_shapes,  # type: ignore
+                        "param_numels": m._fsdp_wrapped_module.flat_param._param_numels,  # type: ignore
                         "no_broadcast_optim_state": m.no_broadcast_optim_state,
                     }
                 )
@@ -1589,7 +1592,7 @@ class FullyShardedDataParallel(nn.Module):
         If this behavior is not correct for your module (for instance if buffers
         needs to be reduced instead), you can disable it with `with_module_buffers=False`.
 
-        This method is very useful to re-assemble checkpoints of shards without
+        This method is used to re-assemble checkpoints of shards without
         having to instantiate FSDP wrappers with the world size originally used
         to save the shards.
         """

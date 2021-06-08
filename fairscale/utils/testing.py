@@ -674,8 +674,10 @@ def in_temporary_directory() -> Generator:
     old_cwd = os.getcwd()
     with tempfile.TemporaryDirectory() as temp_dir:
         os.chdir(temp_dir)
-        yield temp_dir
-        os.chdir(old_cwd)
+        try:
+            yield temp_dir
+        finally:
+            os.chdir(old_cwd)
 
 
 @contextlib.contextmanager
@@ -683,11 +685,12 @@ def temp_files_ctx(num: int) -> Generator:
     """ A context to get tempfiles and ensure they are cleaned up. """
     files = [tempfile.mkstemp()[1] for _ in range(num)]
 
-    yield tuple(files)
-
-    # temp files could have been removed, so we use rmf.
-    for name in files:
-        rmf(name)
+    try:
+        yield tuple(files)
+    finally:
+        # temp files could have been removed, so we use rmf.
+        for name in files:
+            rmf(name)
 
 
 def dump_all_tensors(rank: int) -> None:

@@ -121,6 +121,9 @@ class Tensor:
     _has_been_cloned: Optional[bool] = ...
 #END
 
+    @staticmethod
+    def _make_subclass(cls: Any, data: Tensor, requires_grad: builtins.bool) -> Any: ...
+
     def __init__(self, *args, **kwargs) -> None: ...
 
     @property
