@@ -98,7 +98,8 @@ def _unflatten_optim_state(
     # we check that these are identical across workers and then take the first
     non_tensor_state = [_extract_non_tensor_state(combined_state, id) for id in combined_state]
 
-    # local corresponds to flattened, global corresponds to unflattened
+    # Local corresponds to flattened, global corresponds to unflattened.
+    # Casting needed only for mypy.
     num_global_params = [cast(int, m.num_params_managed) for m in instance_list]
     global_to_local_id = {}
     for local_id, num_unflat in enumerate(num_global_params):
@@ -128,6 +129,7 @@ def _unflatten_optim_state(
             assert isinstance(v, list), f"got {k}: {v} for {local_id}"
             v_unpad = [t[:-np] if np > 0 else t for t, np in zip(v, pad_info[local_id])]
             flat_buffer = torch.cat(v_unpad)
+            # Casting needed only for mypy.
             param_views: Generator = cast(FlattenParamsWrapper, instance_list[local_id]).get_param_views([flat_buffer])
             for global_id, param_view in zip(sorted(local_to_global[local_id]), param_views):
                 assert k not in unflat_state[global_id], f"already added {k} to {global_id} {local_id}"
@@ -156,8 +158,9 @@ def build_unflat_state_dict(
         singleton_state[local_id] = {buffer_name: [x] for buffer_name, x in v.items() if is_singleton_tensor(x)}
     # local ids are in the current state, global_ids will be in returned state.
     unflat_state, global_to_local_id = _unflatten_optim_state(state, instance_list, world_pad_info, singleton_state)
-    # Since there are no tensors in param_groups, deepcopy is fine
+    # Since there are no tensors in param_groups, deepcopy is fine.
     param_groups = copy.deepcopy(param_groups)
+    # Casting needed only for mypy.
     num_params = sum([cast(int, m.num_params_managed) for m in instance_list])
     param_groups[0]["params"] = list(range(num_params))
     unflat_optim_state_dict = {

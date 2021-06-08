@@ -48,7 +48,7 @@ class FlatParameter(nn.Parameter):
             raise ValueError("Nesting FlatParameter is not supported")
 
         data = torch.cat([p.detach().reshape(-1) if isinstance(p, nn.Parameter) else p.reshape(-1) for p in params], 0)
-        return super(FlatParameter, cls).__new__(cls, data, requires_grad)
+        return super(FlatParameter, cls).__new__(cls, data, requires_grad=requires_grad)
 
     def __init__(self, params: Sequence[nn.Parameter], requires_grad: bool = True):
         """ Initialize the _param_numels and _param_shapes lists. """
@@ -129,6 +129,7 @@ class FlattenParamsWrapper(nn.Module):
                 if p in param_set:
                     self._param_set.add((m, n))
 
+        # TODO (Min): double check we handle the special case of module without any params.
         self._flatten_params()
 
         # Register hook to be called after state_dict() to remove the
@@ -167,7 +168,7 @@ class FlattenParamsWrapper(nn.Module):
                         params.append(p)
         del shared_param_memo
 
-        assert len(set(p.dtype for p in params)) == 1, "expects all parameters in module to have same dtype"
+        assert len(set(p.dtype for p in params)) <= 1, "expects all parameters in module to have same dtype"
 
         # store the info for unflatten
         self._param_infos = tuple(param_infos)
@@ -298,6 +299,8 @@ class FlattenParamsWrapper(nn.Module):
     def _no_auto_unflatten_state_dict(self) -> Generator:
         backup = self._auto_unflatten_state_dict
         self._auto_unflatten_state_dict = False
+        # Put yield in a try...finally in case the caller catches the exception and handles
+        # it. In that case, we need to properly handle the undoing of state.
         try:
             yield
         finally:
