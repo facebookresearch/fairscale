@@ -157,10 +157,16 @@ def checkpoint_wrapper(
 def _checkpointed_forward(
     original_forward: Any, weak_self: Any, offload_to_cpu: bool, *args: Any, **kwargs: Any
 ) -> Any:
+    module = weak_self()
+
+    # If in eval mode, just use the original `.forward()` method.
+    if not module.training:
+        return original_forward(module, *args, **kwargs)
+
     # Autograd Functions in PyTorch work best with positional args, since
     # the backward must return gradients (or None) for every input argument.
     # We can flatten keyword arguments to make this easier.
-    args = (weak_self(),) + args
+    args = (module,) + args
     kwarg_keys, flat_args = pack_kwargs(*args, **kwargs)
     parent_ctx_dict: Dict[str, Any] = {
         "offload": offload_to_cpu,
