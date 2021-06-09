@@ -188,22 +188,29 @@ def _distributed_worker(
     losses = {}
     i = 0
     with no_sync_context:
-        for iteration in range(3):
+        for _ in range(2):
+            model.train()
+
+            for iteration in range(3):
+                with mp_context:
+                    out = model(batch)
+                    loss = criterion(out, target)
+                    print("Loss", iteration, ":", loss.item())
+                    losses[f"iter_{i}"] = loss
+                    i += 1
+                    optimizer.zero_grad()
+                    loss.backward()
+                # Manual grad reduction, no autocast.
+                if not with_fsdp:
+                    for p in model.parameters():
+                        dist.all_reduce(p.grad.data)
+                        p.grad.data.div_(2.0)
+                # Stepping, no autocast
+                optimizer.step()
+
+            model.eval()
             with mp_context:
-                out = model(batch)
-                loss = criterion(out, target)
-                print("Loss", iteration, ":", loss.item())
-                losses[f"iter_{i}"] = loss
-                i += 1
-                optimizer.zero_grad()
-                loss.backward()
-            # Manual grad reduction, no autocast.
-            if not with_fsdp:
-                for p in model.parameters():
-                    dist.all_reduce(p.grad.data)
-                    p.grad.data.div_(2.0)
-            # Stepping, no autocast
-            optimizer.step()
+                model(batch)
 
     # Due to dist.all_reduce code block above with ddp.no_sync, we seem to hit a bug
     # in DDP where tensor.cpu() and torch.save() calls both hang. FSDP is not affected.
@@ -228,8 +235,8 @@ def _get_cached_results(
     wrap_bn,
     fp32_reduce_scatter,
 ):
-    """ Cache the training to save time. For DDP, flatten, wrap_bn etc. doesn't matter, so
-        the results can be cached.
+    """Cache the training to save time. For DDP, flatten, wrap_bn etc. doesn't matter, so
+    the results can be cached.
     """
     if not with_fsdp:
         flatten = None
