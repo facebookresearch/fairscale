@@ -6,10 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+- doc: thoroughly improved the doc
 - checkpointing: use dummy tensor to ensure backward pass is called [#701]
-- FSDP: fixed bug where buffers returned in `state_dict()` could still be half precision when `mixed_precision` is set to `True`.
+- FSDP: fixed bug where buffers returned in `state_dict()` could still be half precision when `mixed_precision` is set to `True`. [#705]
 
 ### Added
+- FSDP: supporting multiple flatten parameter groups [#708]
 
 ## [0.3.7] - 2021-05-17
 ### Fixed
