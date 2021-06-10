@@ -68,36 +68,36 @@ def _test_func(rank, world_size, tempfile_name, unused):
 
 def _train_step(model, optim, expected_param_shapes):
     # Prepare for training step.
-    optim.zero_grad(set_to_none=True)  # type: ignore
+    optim.zero_grad()
     model.train()
 
     # Create input and run forward pass.
     input = torch.randn(2, 3).cuda()
     loss = model(input).sum()
     _check_fwd_counter(model, 1)
-    _check_params_and_grads(model, expected_param_shapes, grads_are_none=True)
+    _check_params(model, expected_param_shapes)
 
     # Run backward pass.
     loss.backward()
     _check_fwd_counter(model, 0)
-    _check_params_and_grads(model, expected_param_shapes, grads_are_none=False)
+    _check_params(model, expected_param_shapes)
 
     # Finally, take a step.
     optim.step()
-    _check_params_and_grads(model, expected_param_shapes, grads_are_none=False)
+    _check_params(model, expected_param_shapes)
 
 
 def _eval_step(model, optim, expected_param_shapes):
-    optim.zero_grad(set_to_none=True)  # type: ignore
+    optim.zero_grad()
     model.eval()
     with torch.no_grad():
         input = torch.randn(2, 3).cuda()
         model(input).sum()
     _check_fwd_counter(model, 0)
-    _check_params_and_grads(model, expected_param_shapes, grads_are_none=True)
+    _check_params(model, expected_param_shapes)
 
 
-def _check_params_and_grads(model, expected_param_shapes, grads_are_none=False):
+def _check_params(model, expected_param_shapes):
     current_param_shapes = {name: tuple(param.shape) for name, param in model.named_parameters()}
     assert set(current_param_shapes.keys()) == set(expected_param_shapes.keys())
     for key, current_shape in current_param_shapes.items():
@@ -105,17 +105,6 @@ def _check_params_and_grads(model, expected_param_shapes, grads_are_none=False):
         assert (
             current_shape == expected_shape
         ), f"Parameter {key} should have shape {expected_shape}, but found shape {current_shape}"
-
-    for key, param in model.named_parameters():
-        if grads_are_none:
-            assert param.grad is None, f"Parameter {key} should not have a gradient in this context"
-        else:
-            assert param.grad is not None, f"Parameter {key} should have a gradient"
-            current_shape = tuple(param.grad.shape)
-            expected_shape = expected_param_shapes[key]
-            assert (
-                current_shape == expected_shape
-            ), f"Parameter {key} should have gradient with shape {expected_shape}, but found shape {current_shape}"
 
 
 def _check_fwd_counter(model, expected_value):
