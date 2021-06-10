@@ -159,7 +159,11 @@ def _checkpointed_forward(
 ) -> Any:
     module = weak_self()
 
-    # If gradients are disabled, can just use original `.forward()` method directly.
+    # If gradients are disabled, just use original `.forward()` method directly.
+    # Doing so also ensures the internal fwd counter is not incremented in the forward pass,
+    # which would be an issue during eval since there wouldn't be a corresponding backward pass
+    # to decrement the fwd counter.
+    # See https://github.com/facebookresearch/fairscale/pull/709.
     if not torch.is_grad_enabled():
         return original_forward(module, *args, **kwargs)
 
@@ -233,8 +237,7 @@ class CheckpointFunction(torch.autograd.Function):
         *args: Any,
         **kwargs: Any
     ) -> Any:
-        if torch.is_grad_enabled():  # grad may be disabled, e.g., during validation
-            torch_checkpoint.check_backward_validity(args)
+        torch_checkpoint.check_backward_validity(args)
 
         ctx.run_function = run_function
         ctx.kwarg_keys = kwarg_keys
