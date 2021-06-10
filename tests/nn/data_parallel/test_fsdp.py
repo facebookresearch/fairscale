@@ -546,6 +546,18 @@ class TestBasicTrainAndEvalWithCheckpointing(DistributedTest):
             name: tuple(param.shape) for name, param in model.named_parameters()
         }
 
+        # For clarify, this is what `expected_param_shapes` should look like depending on world size:
+        if group.size() == 1:
+            assert expected_param_shapes == {
+                "_fsdp_wrapped_module.flat_param": (24,),
+                "_fsdp_wrapped_module._fpw_module.ffn.1._fsdp_wrapped_module.flat_param": (12,),
+            }, list(expected_param_shapes.keys())
+        else:
+            assert expected_param_shapes == {
+                "_fsdp_wrapped_module.flat_param": (12,),
+                "_fsdp_wrapped_module._fpw_module.ffn.1._fsdp_wrapped_module.flat_param": (6,),
+            }, list(expected_param_shapes.keys())
+
         torch.manual_seed(1 + rank)
 
         # Train for a step.
@@ -568,10 +580,12 @@ class TestBasicTrainAndEvalWithCheckpointing(DistributedTest):
         # Create input and run forward pass.
         input = torch.randn(2, 3).cuda()
         loss = model(input).sum()
+        cls._check_fwd_counter(model, 1)
         cls._check_params_and_grads(model, expected_param_shapes, grads_are_none=True)
 
         # Run backward pass.
         loss.backward()
+        cls._check_fwd_counter(model, 0)
         cls._check_params_and_grads(model, expected_param_shapes, grads_are_none=False)
 
         # Finally, take a step.
@@ -587,6 +601,7 @@ class TestBasicTrainAndEvalWithCheckpointing(DistributedTest):
         with torch.no_grad():
             input = torch.randn(2, 3).cuda()
             model(input).sum()
+        cls._check_fwd_counter(model, 0)
         cls._check_params_and_grads(model, expected_param_shapes, grads_are_none=True)
 
     @staticmethod
@@ -613,6 +628,13 @@ class TestBasicTrainAndEvalWithCheckpointing(DistributedTest):
                 assert (
                     current_shape == expected_shape
                 ), f"Parameter {key} should have gradient with shape {expected_shape}, but found shape {current_shape}"
+
+    @staticmethod
+    def _check_fwd_counter(model: nn.Module, expected_value: int):
+        current_value = model._fpw_module.ffn[1]._fsdp_wrapped_module.module._checkpoint_fwd_counter
+        assert (
+            current_value == expected_value
+        ), f"forward counter of checkpointed submodule should be {expected_value}, but found {current_value}"
 
 
 class TransformerWithSharedParams(nn.Module):
