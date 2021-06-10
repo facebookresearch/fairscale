@@ -167,7 +167,7 @@ class FlattenParamsWrapper(nn.Module):
                         new_p_set_with_names.add((m, n))
             self._param_sets.append(new_p_set_with_names)
 
-        if len(overall_param_set) != self.num_param_managed:
+        if len(overall_param_set) != self.num_params_managed:
             # Each p_list above could have shared params. However, you can't
             # have shared params cross different p_list. That means part of
             # the flattened parameter must be shared, which is impossible to
@@ -177,7 +177,14 @@ class FlattenParamsWrapper(nn.Module):
         self.flat_params: List[FlatParameter] = []
         self._param_infos: List[Tuple[nn.Module, str]] = []
         self._shared_param_infos: List[Tuple[nn.Module, str, nn.Module, str]] = []
-        self._flatten_params()
+
+        # Init all flat_params.
+        for new_p_set in self._param_sets:
+            params = self._init_flatten_params(new_p_set)
+            flat_param = FlatParameter(params)
+            self.flat_params.append(flat_param)
+
+        self._flatten_params(self.flat_params)
 
         # Register hook to be called after state_dict() to remove the
         # "_fpw_module." prefix and before load_state_dict() to add it back.
@@ -221,7 +228,7 @@ class FlattenParamsWrapper(nn.Module):
         params = []
         for module_name, m in self.named_modules():
             for n, p in m.named_parameters(recurse=False):
-                if p is not None and (m, n) in self._param_set:
+                if p is not None and (m, n) in p_set:
                     if p in shared_param_memo:
                         shared_m, shared_n = shared_param_memo[p]
                         shared_param_infos.append((m, n, shared_m, shared_n))
@@ -240,28 +247,15 @@ class FlattenParamsWrapper(nn.Module):
         assert len(params) == len(set(params)), "params list should not have dups"
         return params
 
-    def _flatten_params(self, flat_params: Optional[List[FlatParameter]] = None) -> None:
+    def _flatten_params(self, flat_params: List[FlatParameter]) -> None:
         """ Flatten the managed parameters and replaced the original
             attributes with views to the flat params.
-
-            This is called at init time, in which case `flat_params` is None.
-            After init, this is called with `flat_params` supplied by the caller.
         """
         assert not self.is_flattened
         self.is_flattened = True
 
-        if not hasattr(self, "_param_infos"):
-            # First time calling this function. Init all flat_params.
-            assert flat_params is None
-            assert self.flat_params == []
-            for p_set in self._param_sets:
-                params = self._init_flatten_params(p_set)
-                flat_param = FlatParameter(params)
-                self.flat_params.append(flat_param)
-            flat_params = self.flat_params
-
         # flatten
-        assert flat_params is not None
+        self.flat_params = flat_params
         for i, flat_param in enumerate(flat_params):
             self.register_parameter(f"flat_param_{i}", flat_param)
 
@@ -290,8 +284,11 @@ class FlattenParamsWrapper(nn.Module):
             if hasattr(m, n):
                 delattr(m, n)
             m.register_parameter(n, getattr(shared_m, shared_n))
-        if hasattr(self, "flat_params"):
-            del self.flat_params
+
+        for i, _ in enumerate(self.flat_params):
+            # This ensures the flat params are removed from the module.
+            delattr(self, f"flat_param_{i}")
+        self.flat_params = []
 
     def _unflatten_params_as_views(self) -> None:
         """ Unlike ``_unflatten_params``, this function unflatten into views and keep
@@ -305,7 +302,7 @@ class FlattenParamsWrapper(nn.Module):
             setattr(m, n, getattr(shared_m, shared_n))
 
     @contextmanager
-    def unflatten_params(self, flat_params: Optional[Union[Tensor, List[Tensor]]] = None) -> Generator:
+    def unflatten_params(self, flat_params: Optional[List[Tensor]] = None) -> Generator:
         """
         Unflatten params. If the current instance is already unflattened, then
         it will remain unflattened after the context manager exits.
@@ -323,10 +320,6 @@ class FlattenParamsWrapper(nn.Module):
         assert (
             flat_params is None or self.is_flattened
         ), "Unflattening with external flat_param requires current instance to be flattened"
-
-        # Be backward compatible.
-        if flat_params is not None and isinstance(flat_params, Tensor):
-            flat_params = [flat_params]
 
         orig_flattened = self.is_flattened
         if orig_flattened:
@@ -442,7 +435,7 @@ def _pre_load_state_dict_hook(
     replace_by_prefix_(state_dict, prefix, prefix + "_fpw_module.")
     # The flat_param_* keys actually needs to move one level up.
     flat_param_key = prefix + "_fpw_module.flat_param"
-    for k in state_dict.keys():
+    for k in list(state_dict.keys()):
         if k.startswith(flat_param_key):
             last_part = k.split(".")[-1]
             assert last_part.startswith("flat_param_"), last_part

@@ -224,14 +224,14 @@ class TestFlattenParams(unittest.TestCase):
 
             # confirm that unflatten_params reflects values from new_flat_param
             new_flat_param = torch.full_like(module.flat_param, fill_value=42.0)
-            with module.unflatten_params(flat_param=new_flat_param):
+            with module.unflatten_params(flat_params=[new_flat_param]):
                 new_state_dict = clone_state_dict()
                 assert new_state_dict.keys() == ref_state_dict.keys()
                 for k, v in new_state_dict.items():
                     if k in buffers:  # buffers are not changed
                         torch.testing.assert_allclose(v, ref_state_dict[k])
                     else:  # params reflect new_flat_param value
-                        assert torch.all(v == 42.0)
+                        torch.testing.assert_allclose(v, torch.ones_like(v) * 42.0)
 
             # after context manager exits, we go back to previous (reference) state
             torch.testing.assert_allclose(module.flat_param, ref_flat_param)
