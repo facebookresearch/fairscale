@@ -8,7 +8,7 @@ import itertools
 from math import inf
 import pickle
 import sys
-from typing import Dict
+from typing import Dict, Tuple
 import unittest
 from unittest import mock
 
@@ -537,27 +537,82 @@ class TestBasicTrainAndEvalWithCheckpointing(DistributedTest):
     def _test_train_and_eval_with_checkpointing(self, rank, group):
         # Keep initialization deterministic.
         torch.manual_seed(0)
+
         model = FullyShardedDataParallel(SimpleModuleWithCheckpointing().cuda())
         optim = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
-        # Train for a step.
+        # Collect parameter sizes to ensure these stay consistent through the steps below.
+        expected_param_shapes: Dict[str, Tuple[int, ...]] = {
+            name: tuple(param.shape) for name, param in model.named_parameters()
+        }
+
         torch.manual_seed(1 + rank)
-        input = torch.randn(2, 3).cuda()
-        loss = model(input).sum()
-        loss.backward()
-        optim.step()
+
+        # Train for a step.
+        self._train_step(model, optim, expected_param_shapes)
 
         # Now do an eval step.
+        self._eval_step(model, optim, expected_param_shapes)
+
+        # And finally do another train step.
+        self._train_step(model, optim, expected_param_shapes)
+
+    @classmethod
+    def _train_step(
+        cls, model: nn.Module, optim: torch.optim.Optimizer, expected_param_shapes: Dict[str, Tuple[int, ...]]
+    ):
+        # Prepare for training step.
+        optim.zero_grad(set_to_none=True)
+        model.train()
+
+        # Create input and run forward pass.
+        input = torch.randn(2, 3).cuda()
+        loss = model(input).sum()
+        cls._check_params_and_grads(model, expected_param_shapes, grads_are_none=True)
+
+        # Run backward pass.
+        loss.backward()
+        cls._check_params_and_grads(model, expected_param_shapes, grads_are_none=False)
+
+        # Finally, take a step.
+        optim.step()
+        cls._check_params_and_grads(model, expected_param_shapes, grads_are_none=False)
+
+    @classmethod
+    def _eval_step(
+        cls, model: nn.Module, optim: torch.optim.Optimizer, expected_param_shapes: Dict[str, Tuple[int, ...]]
+    ):
+        optim.zero_grad(set_to_none=True)  # not strictly necessary, but helps for debugging.
         model.eval()
         with torch.no_grad():
             input = torch.randn(2, 3).cuda()
             model(input).sum()
+        cls._check_params_and_grads(model, expected_param_shapes, grads_are_none=True)
 
-        # And finally do another train step.
-        input = torch.randn(2, 3).cuda()
-        loss = model(input).sum()
-        loss.backward()
-        optim.step()
+    @staticmethod
+    def _check_params_and_grads(
+        model: nn.Module, expected_param_shapes: Dict[str, Tuple[int, ...]], grads_are_none: bool = False
+    ):
+        current_param_shapes: Dict[str, Tuple[int, ...]] = {
+            name: tuple(param.shape) for name, param in model.named_parameters()
+        }
+        assert set(current_param_shapes.keys()) == set(expected_param_shapes.keys())
+        for key, current_shape in current_param_shapes.items():
+            expected_shape = expected_param_shapes[key]
+            assert (
+                current_shape == expected_shape
+            ), f"Parameter {key} should have shape {expected_shape}, but found shape {current_shape}"
+
+        for key, param in model.named_parameters():
+            if grads_are_none:
+                assert param.grad is None, f"Parameter {key} should not have a gradient in this context"
+            else:
+                assert param.grad is not None, f"Parameter {key} should have a gradient"
+                current_shape = tuple(param.grad.shape)
+                expected_shape = expected_param_shapes[key]
+                assert (
+                    current_shape == expected_shape
+                ), f"Parameter {key} should have gradient with shape {expected_shape}, but found shape {current_shape}"
 
 
 class TransformerWithSharedParams(nn.Module):
