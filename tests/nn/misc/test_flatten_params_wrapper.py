@@ -23,6 +23,22 @@ class TestFlattenParams(unittest.TestCase):
             self._get_shared_params_transformer,
         ]
 
+    def _get_empty_module(self, seed=0):
+        torch.manual_seed(seed)  # keep everything deterministic
+
+        class Test(torch.nn.Module):
+            def forward(self, x):
+                return x + 1
+
+        module = Test()
+
+        def get_input(device, dtype):
+            torch.manual_seed(1)  # keep everything deterministic
+            return torch.rand(1).to(device=device, dtype=dtype)
+
+        module.get_input = get_input
+        return module
+
     def _get_transformer(self, seed=0):
         torch.manual_seed(seed)  # keep everything deterministic
         module = torch.nn.Transformer(
@@ -131,6 +147,30 @@ class TestFlattenParams(unittest.TestCase):
         assert module.flat_params[0].numel() == num_params_to_flatten1
         assert module.flat_params[1].numel() == num_params_to_flatten2
         assert sum(p.numel() for p in module.parameters()) == num_params
+
+    def test_flatten_nothing(self):
+        module = self._get_transformer()
+        ref_out = self._get_output(module)
+        ref_state_dict = module.state_dict()
+        for k, v in ref_state_dict.items():
+            ref_state_dict[k] = v.clone()
+        module = FlattenParamsWrapper(module, param_list=[[]])
+        fpw_state_dict = module.state_dict()
+        assert ref_state_dict.keys() == fpw_state_dict.keys()
+        for k, v in ref_state_dict.items():
+            torch.testing.assert_allclose(v, fpw_state_dict[k])
+        fpw_out = self._get_output(module)
+        torch.testing.assert_allclose(ref_out, fpw_out)
+
+    def test_empty_module(self):
+        module = self._get_empty_module()
+        in_data = torch.rand(1)
+        ref_out = module(in_data)
+        module = FlattenParamsWrapper(module)
+        assert len(list(module.parameters())) == 0
+        assert len(module.state_dict()) == 0
+        fpw_out = module(in_data)
+        torch.testing.assert_allclose(ref_out, fpw_out)
 
     def test_num_params(self):
         module = self._get_transformer()

@@ -165,7 +165,8 @@ class FlattenParamsWrapper(nn.Module):
                 for n, p in m.named_parameters(recurse=False):
                     if p in p_set:
                         new_p_set_with_names.add((m, n))
-            self._param_sets.append(new_p_set_with_names)
+            if new_p_set_with_names:
+                self._param_sets.append(new_p_set_with_names)
 
         if len(overall_param_set) != self.num_params_managed:
             # Each p_list above could have shared params. However, you can't
