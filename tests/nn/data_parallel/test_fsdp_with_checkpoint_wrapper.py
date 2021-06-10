@@ -4,18 +4,13 @@ import tempfile
 
 import pytest
 import torch
-import torch.multiprocessing as mp
 from torch import nn
 import torch.distributed
+import torch.multiprocessing as mp
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel
-from fairscale.utils.testing import (
-    dist_init,
-    skip_if_single_gpu,
-    torch_version,
-    teardown,
-)
+from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, torch_version
 
 
 @skip_if_single_gpu
