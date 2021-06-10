@@ -527,6 +527,39 @@ class TestNoGrad(DistributedTest):
         assert objects_are_equal(ref_output, no_grad_output, raise_exception=True)
 
 
+class TestBasicTrainAndEvalWithCheckpointing(DistributedTest):
+    def test_train_and_eval_with_checkpointing(self):
+        #  test_fn = functools.partial(self._test_train_and_eval_with_checkpointing)
+        test_fn = self._test_train_and_eval_with_checkpointing
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_train_and_eval_with_checkpointing(self, rank, group):
+        # Keep initialization deterministic.
+        torch.manual_seed(0)
+        model = FullyShardedDataParallel(SimpleModuleWithCheckpointing().cuda())
+        optim = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+
+        # Train for a step.
+        torch.manual_seed(1 + rank)
+        input = torch.randn(2, 3).cuda()
+        loss = model(input).sum()
+        loss.backward()
+        optim.step()
+
+        # Now do an eval step.
+        model.eval()
+        with torch.no_grad():
+            input = torch.randn(2, 3).cuda()
+            model(input).sum()
+
+        # And finally do another train step.
+        input = torch.randn(2, 3).cuda()
+        loss = model(input).sum()
+        loss.backward()
+        optim.step()
+
+
 class TransformerWithSharedParams(nn.Module):
     def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=True, **unused_kwargs):
         super().__init__()
@@ -721,6 +754,19 @@ class ModuleWithDelay(nn.Module):
 class NestedWrappedModuleWithDelay(ModuleWithDelay):
     def __init__(self, group, wrapper_config, **kwargs):
         super().__init__(NestedWrappedModule(group, wrapper_config), **kwargs)
+
+
+class SimpleModuleWithCheckpointing(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.ffn = nn.Sequential(
+            nn.Linear(3, 3),
+            FullyShardedDataParallel(checkpoint_wrapper(nn.Linear(3, 3), maintain_forward_counter=True)),
+            nn.Linear(3, 3),
+        )
+
+    def forward(self, x):
+        return self.ffn(x)
 
 
 def spawn_and_init(fn, args=None, **spawn_kwargs):
