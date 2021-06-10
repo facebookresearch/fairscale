@@ -3,14 +3,14 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-	
+from distutils.version import LooseVersion
+import io
 import operator
 import tempfile
-from distutils.version import LooseVersion
 
 import torch
-import torchtext
 from torch.utils.data import DataLoader
+import torchtext
 from torchtext.data.utils import get_tokenizer
 from torchtext.utils import download_from_url, extract_archive
 
