@@ -833,7 +833,7 @@ class FullyShardedDataParallel(nn.Module):
                     # latter may contain padding.
                     assert len(self.params) == 1
                     assert isinstance(self.module, FlattenParamsWrapper)
-                    stack.enter_context(self.module.unflatten_params(flat_param=self.params[0]))
+                    stack.enter_context(self.module.unflatten_params(flat_params=self.params[0]))
                 try:
                     yield
                 finally:
@@ -1185,6 +1185,7 @@ class FullyShardedDataParallel(nn.Module):
                 # Register a hook on the first call, empirically, autograd
                 # fires it at the end for this param, which makes sense.
                 p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
+                assert p_tmp.grad_fn is not None
                 grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
                 handle = grad_acc.register_hook(functools.partial(self._post_backward_hook, p))
                 p._shard_bwd_hook = (grad_acc, handle)
@@ -1417,6 +1418,7 @@ class FullyShardedDataParallel(nn.Module):
                 output_tensors.append((p.data, True))
             elif not p._is_sharded:
                 if self.mixed_precision and not force_full_precision:
+                    assert p._fp16_shard is not None
                     p.data = p._fp16_shard
                     output_tensors.append((p.data, True))
                 else:
@@ -1483,6 +1485,7 @@ class FullyShardedDataParallel(nn.Module):
         for p in self.params:
             if not p._is_sharded:
                 if self.mixed_precision:
+                    assert p._fp16_shard is not None
                     assert p._fp16_shard.storage().size() != 0
                     p.data = p._fp16_shard
             else:

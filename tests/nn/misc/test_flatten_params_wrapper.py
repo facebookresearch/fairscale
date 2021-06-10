@@ -3,9 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""
-Test FlattenParamsWrapper
-"""
+""" Test FlattenParamsWrapper on CPU and GPU (FP32 & FP16 on GPU). """
 
 from collections import OrderedDict
 import unittest
@@ -17,6 +15,8 @@ from fairscale.utils.testing import objects_are_equal
 
 
 class TestFlattenParams(unittest.TestCase):
+    """ Base test class and used for CPU case. """
+
     def _get_module_init_fns(self):
         return [
             self._get_basic_linear_module,
@@ -117,6 +117,20 @@ class TestFlattenParams(unittest.TestCase):
         module = module.to(dtype=new_dtype)
         assert module.flat_param.dtype == new_dtype
         assert all(p.dtype == new_dtype for p in module.encoder.layers[0].parameters())
+
+    def test_two_flattening_group(self):
+        module = self._get_transformer()
+        num_params = sum(p.numel() for p in module.parameters())
+
+        params_to_flatten1 = list(module.encoder.layers[1].parameters()) + list(module.decoder.layers[0].parameters())
+        params_to_flatten2 = list(module.encoder.layers[0].parameters()) + list(module.decoder.layers[1].parameters())
+        num_params_to_flatten1 = sum(p.numel() for p in params_to_flatten1)
+        num_params_to_flatten2 = sum(p.numel() for p in params_to_flatten2)
+
+        module = FlattenParamsWrapper(module, param_list=[params_to_flatten1, params_to_flatten2])
+        assert module.flat_params[0].numel() == num_params_to_flatten1
+        assert module.flat_params[1].numel() == num_params_to_flatten2
+        assert sum(p.numel() for p in module.parameters()) == num_params
 
     def test_num_params(self):
         module = self._get_transformer()
