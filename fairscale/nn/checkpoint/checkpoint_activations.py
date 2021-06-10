@@ -159,8 +159,8 @@ def _checkpointed_forward(
 ) -> Any:
     module = weak_self()
 
-    # If in eval mode, just use the original `.forward()` method.
-    if not module.training:
+    # If gradients are disabled, can just use original `.forward()` method directly.
+    if not torch.is_grad_enabled():
         return original_forward(module, *args, **kwargs)
 
     # Autograd Functions in PyTorch work best with positional args, since
