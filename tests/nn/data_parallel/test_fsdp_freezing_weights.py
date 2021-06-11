@@ -12,7 +12,9 @@
 
 from enum import Enum
 import tempfile
+import contextlib
 
+from copy import deepcopy
 import pytest
 import torch
 import torch.multiprocessing as mp
@@ -33,6 +35,7 @@ class Model(nn.Module):
             nn.AdaptiveAvgPool2d(output_size=(1, 1)),
             nn.Flatten(),
         )
+        self.trunk2 = deepcopy(self.trunk)
         self.head = nn.Linear(64, 10)
 
     def forward(self, x):
@@ -65,6 +68,7 @@ def _create_model(with_fsdp, with_nested_trunk):
         model = Model()
         if with_fsdp:
             model.trunk = FSDP(model.trunk)
+            model.trunk2 = FSDP(model.trunk2)
             model.head = FSDP(model.head)
     return model
 
@@ -99,9 +103,13 @@ def _distributed_worker(
     model = model.cuda()
 
     # freezing the trunk using requires_grad.
-    if freezing_method == FreezingMethod.RequiresGrad:
+    if False and freezing_method == FreezingMethod.RequiresGrad:
         for param in model.trunk.parameters():
             param.requires_grad = False
+
+    # Freeze trunk2.
+    for param in model.trunk2.parameters():
+        param.requires_grad = False
 
     if with_fsdp:
         model = FSDP(model)
@@ -121,10 +129,20 @@ def _distributed_worker(
         print("Loss", iteration, ":", fake_loss.item())
         optimizer.zero_grad()
         fake_loss.backward()
-        if freezing_method == FreezingMethod.GradToNone:
+        if False and freezing_method == FreezingMethod.GradToNone:
             for param in model.trunk.parameters():
                 param.grad = None
         optimizer.step()
+
+        # Now let's update trunk2
+        for param, tracked_param in zip(
+            model.module.trunk2.parameters(), model.module.trunk.parameters()
+        ):
+            param.data = (
+                0.5 * param.data
+                + 0.5 * tracked_param.data
+            )
+
 
     if with_fsdp:
         fsdp_state = model.state_dict()
@@ -135,6 +153,16 @@ def _distributed_worker(
     elif rank == 0:
         state_after = model.module.cpu().state_dict()
         torch.save(state_after, rank_0_output)
+
+    # trunk2 is already checked above with state_dict, but let's double check with
+    # summon_full_params() here.
+    params=[]
+    context = model.module.trunk2.summon_full_params() if with_fsdp else contextlib.suppress()
+    with context:
+        for p in model.module.trunk2.parameters():
+            params.append(p.reshape(-1).clone())
+    if rank == 0:
+        print("trunk2", torch.cat(params).shape, torch.cat(params).sum().item())
 
     teardown()
 

@@ -571,6 +571,7 @@ class FullyShardedDataParallel(nn.Module):
 
     def extra_repr(self) -> str:
         repr = (
+            f"id={id(self)}, "
             f"world_size={self.world_size}, "
             f"flatten_parameters={self.flatten_parameters}, "
             f"mixed_precision={self.mixed_precision}, "
