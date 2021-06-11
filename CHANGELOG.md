@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - doc: thoroughly improved the doc
 - checkpointing: use dummy tensor to ensure backward pass is called [#701]
+- checkpointing: ensure internal fwd counter is not incremented in eval mode [#709]
 - FSDP: fixed bug where buffers returned in `state_dict()` could still be half precision when `mixed_precision` is set to `True`. [#705]
 
 ### Added

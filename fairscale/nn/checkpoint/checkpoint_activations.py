@@ -157,10 +157,20 @@ def checkpoint_wrapper(
 def _checkpointed_forward(
     original_forward: Any, weak_self: Any, offload_to_cpu: bool, *args: Any, **kwargs: Any
 ) -> Any:
+    module = weak_self()
+
+    # If gradients are disabled, just use original `.forward()` method directly.
+    # Doing so also ensures the internal fwd counter is not incremented in the forward pass,
+    # which would be an issue during eval since there wouldn't be a corresponding backward pass
+    # to decrement the fwd counter.
+    # See https://github.com/facebookresearch/fairscale/pull/709.
+    if not torch.is_grad_enabled():
+        return original_forward(module, *args, **kwargs)
+
     # Autograd Functions in PyTorch work best with positional args, since
     # the backward must return gradients (or None) for every input argument.
     # We can flatten keyword arguments to make this easier.
-    args = (weak_self(),) + args
+    args = (module,) + args
     kwarg_keys, flat_args = pack_kwargs(*args, **kwargs)
     parent_ctx_dict: Dict[str, Any] = {
         "offload": offload_to_cpu,
@@ -227,8 +237,7 @@ class CheckpointFunction(torch.autograd.Function):
         *args: Any,
         **kwargs: Any
     ) -> Any:
-        if torch.is_grad_enabled():  # grad may be disabled, e.g., during validation
-            torch_checkpoint.check_backward_validity(args)
+        torch_checkpoint.check_backward_validity(args)
 
         ctx.run_function = run_function
         ctx.kwarg_keys = kwarg_keys
