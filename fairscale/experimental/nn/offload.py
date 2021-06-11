@@ -426,7 +426,7 @@ class OffloadModel(nn.Module):
 
     def __init__(
         self,
-        model: nn.Sequential,
+        model: Any,
         device: torch.device,
         offload_device: torch.device = torch.device("cpu"),
         num_slices: int = 3,
@@ -440,7 +440,7 @@ class OffloadModel(nn.Module):
         if not device:
             raise TypeError("`device` argument to `OffloadModel` cannot be None.")
 
-        if not isinstance(model, nn.Sequential):
+        if not (isinstance(model, nn.Sequential) or type(model) == list):
             raise TypeError("`model` argument to `OffloadModel` must be of type `nn.Sequential`.")
 
         if not torch.cuda.is_available():
@@ -448,20 +448,28 @@ class OffloadModel(nn.Module):
 
         self.device = device
         self.offload_device = offload_device
-
-        # Slice the model into roughly equivalent sequential shards.
-        splits = _split(model, num_slices)
-
         # List of model shards that will be placed on/off the device.
         self.model_slices: List[nn.Module] = []
 
-        for i, split in enumerate(splits):
-            # Add one model handling this slice
-            self.model_slices.append(
-                ModelShard(
-                    cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device, index=i,
+        # TODO(anj): Add an experimental flag for using this instead of modifying the
+        # arg type.
+        if type(model) == list:
+            # This is already sharded using the auto shard functinality.
+            for i, m in enumerate(model):
+                self.model_slices.append(
+                    ModelShard(cpu_model_shard=m, device=device, offload_device=offload_device, index=i,)
                 )
-            )
+        else:
+            # Slice the model into roughly equivalent sequential shards.
+            splits = _split(model, num_slices)
+
+            for i, split in enumerate(splits):
+                # Add one model handling this slice
+                self.model_slices.append(
+                    ModelShard(
+                        cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device, index=i,
+                    )
+                )
 
         # Expose a unified view of the slices
         self._model = torch.nn.Sequential(*self.model_slices)
