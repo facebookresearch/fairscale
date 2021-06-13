@@ -5,4 +5,10 @@
 
 from typing import List
 
+import torch
+
 __all__: List[str] = []
+
+
+def torch_version() -> List[int]:
+    return [int(x) for x in torch.__version__.split(".")[:2]]
