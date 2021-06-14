@@ -3,14 +3,21 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from distutils.version import LooseVersion
 import io
+import operator
 import tempfile
 
 import torch
 from torch.utils.data import DataLoader
+import torchtext
 from torchtext.data.utils import get_tokenizer
 from torchtext.utils import download_from_url, extract_archive
-from torchtext.vocab import build_vocab_from_iterator
+
+if operator.ge(torchtext.__version__, LooseVersion("0.10.0")):
+    from torchtext.legacy.vocab import build_vocab_from_iterator
+else:
+    from torchtext.vocab import build_vocab_from_iterator
 
 
 def _batchify(data, batch_size):
