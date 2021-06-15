@@ -1557,7 +1557,7 @@ class FullyShardedDataParallel(nn.Module):
             # used in the FlattenParamsWrapper
             else:
                 param_names = []
-                for module_path, param_name in m._param_full_infos:
+                for module_path, param_name in m.param_path_infos:
                     full_param_path = module_path + "." + param_name if module_path else param_name
                     param_names.append(_clean_path(full_param_path))
                 params_metadata.append(

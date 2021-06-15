@@ -176,7 +176,7 @@ class FlattenParamsWrapper(nn.Module):
             raise ValueError(f"Incorrect param groups {len(overall_param_set)} vs {self.num_param_managed}")
 
         self.flat_params: List[FlatParameter] = []
-        self._param_infos: List[Tuple[nn.Module, str]] = []
+        self._param_infos: List[Tuple[str, nn.Module, str]] = []
         self._shared_param_infos: List[Tuple[nn.Module, str, nn.Module, str]] = []
 
         # Init all flat_params.
@@ -203,6 +203,11 @@ class FlattenParamsWrapper(nn.Module):
             property to the underlying module.
         """
         return self._fpw_module
+
+    @property
+    def param_path_infos(self) -> List[Tuple[str, str]]:
+        """ Returns the list of tuples that contains (module_name, param_name). """
+        return [(m, n) for (m, _, n) in self._param_infos]
 
     @property
     def flat_param(self) -> nn.Parameter:
@@ -235,7 +240,7 @@ class FlattenParamsWrapper(nn.Module):
                         shared_param_infos.append((m, n, shared_m, shared_n))
                     else:
                         shared_param_memo[p] = (m, n)
-                        param_infos.append((m, n))
+                        param_infos.append((module_name, m, n))
                         params.append(p)
         del shared_param_memo
 
@@ -261,7 +266,7 @@ class FlattenParamsWrapper(nn.Module):
             self.register_parameter(f"flat_param_{i}", flat_param)
 
         # deregister the names as parameters
-        for m, n in self._param_infos:
+        for _, m, n in self._param_infos:
             delattr(m, n)
         for m, n, _, _ in self._shared_param_infos:
             delattr(m, n)
@@ -277,7 +282,7 @@ class FlattenParamsWrapper(nn.Module):
         self.is_flattened = False
 
         ps = self.get_param_views(external_data)
-        for (m, n), p in zip(self._param_infos, ps):
+        for (_, m, n), p in zip(self._param_infos, ps):
             if hasattr(m, n):
                 delattr(m, n)
             m.register_parameter(n, nn.Parameter(p))
@@ -297,7 +302,7 @@ class FlattenParamsWrapper(nn.Module):
         """
         assert self.is_flattened
         ps = self.get_param_views()
-        for (m, n), p in zip(self._param_infos, ps):
+        for (_, m, n), p in zip(self._param_infos, ps):
             setattr(m, n, p)  # This will set as plain attr
         for (m, n, shared_m, shared_n) in self._shared_param_infos:
             setattr(m, n, getattr(shared_m, shared_n))
