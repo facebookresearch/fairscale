@@ -1636,7 +1636,7 @@ class FullyShardedDataParallel(nn.Module):
             # split to the original shape
             else:
                 # Concatenate the flat_param parameter after removing the padding
-                flat_param_name = ".".join([fsdp_path, "flat_param"]) if fsdp_path else "flat_param"
+                flat_param_name = ".".join([fsdp_path, "flat_param_0"]) if fsdp_path else "flat_param_0"
                 shards = []
                 for rank in range(original_world_size):
                     shard = shard_weights[rank][flat_param_name]
