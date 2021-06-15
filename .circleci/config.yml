@@ -49,16 +49,6 @@ gpu_cu111: &gpu_cu111
 # -------------------------------------------------------------------------------------
 # Re-usable commands
 # -------------------------------------------------------------------------------------
-setup_pyenv:
-  - run:
-      name: Setup pyenv
-      command: |
-        # Install pyenv-update to allow addition of python 3.7.0
-        git clone git://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
-        pyenv update
-        pyenv install 3.7.0
-        pyenv global 3.7.0
-
 setup_venv: &setup_venv
   - run:
       name: Setup Virtual Env
@@ -249,6 +239,19 @@ commands:
              if [ ! -f <<parameters.test_list_file>> ]; then exit 1; fi
              pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./ `cat <<parameters.test_list_file>>`
 
+   setup_pyenv:
+     parameters:
+       version:
+         type: string
+     steps:
+       - run:
+           name: Setup pyenv
+           command: |
+             git clone git://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
+             pyenv update
+             pyenv install -f <<parameters.version>>
+             pyenv global <<parameters.version>>
+
 # -------------------------------------------------------------------------------------
 # Jobs to run
 # -------------------------------------------------------------------------------------
@@ -371,7 +374,8 @@ jobs:
 
       - run: nvidia-smi
 
-      - setup_pyenv
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
@@ -413,7 +417,8 @@ jobs:
       - run: nvidia-smi
 
       # Run this to make sure we use python3 from the system.
-      - run: pyenv global 3.8.6
+      - setup_pyenv:
+          version: 3.8.6
 
       - <<: *setup_venv
 
@@ -455,7 +460,8 @@ jobs:
       - run: nvidia-smi
 
       # Run this to make sure we use python3 from the system.
-      - setup_pyenv
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
@@ -497,7 +503,8 @@ jobs:
       - run: nvidia-smi
 
       # Run this to make sure we use python3 from the system.
-      - setup_pyenv
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
@@ -531,11 +538,8 @@ jobs:
 
       - run: nvidia-smi
 
-      - run: pyenv uninstall -f 3.7.0
-
-      - run: pyenv install 3.7.0
-
-      - setup_pyenv
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
@@ -583,11 +587,8 @@ jobs:
 
       - run: nvidia-smi
 
-      - run: pyenv uninstall -f 3.7.0
-
-      - run: pyenv install 3.7.0
-
-      - setup_pyenv
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
