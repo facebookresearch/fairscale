@@ -32,10 +32,10 @@ cpu_py39: &cpu_py39
 #   https://circleci.com/docs/2.0/configuration-reference/#available-linux-gpu-images
 gpu: &gpu
   environment:
-    CUDA_VERSION: "10.1"
-    CUDA_HOME: /usr/local/cuda-10.1
+    CUDA_VERSION: "10.2"
+    CUDA_HOME: /usr/local/cuda-10.2
   machine:
-    image: ubuntu-1604-cuda-10.1:201909-23
+    image: ubuntu-1604-cuda-10.2:202012-01
   resource_class: gpu.large
 
 gpu_cu111: &gpu_cu111
