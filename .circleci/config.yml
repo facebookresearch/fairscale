@@ -49,6 +49,16 @@ gpu_cu111: &gpu_cu111
 # -------------------------------------------------------------------------------------
 # Re-usable commands
 # -------------------------------------------------------------------------------------
+setup_pyenv:
+  - run:
+      name: Setup pyenv
+      command: |
+        # Install pyenv-update to allow addition of python 3.7.0
+        git clone git://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
+        pyenv update
+        pyenv install 3.7.0
+        pyenv global 3.7.0
+
 setup_venv: &setup_venv
   - run:
       name: Setup Virtual Env
@@ -361,7 +371,7 @@ jobs:
 
       - run: nvidia-smi
 
-      - run: pyenv global 3.7.0
+      - setup_pyenv
 
       - <<: *setup_venv
 
@@ -445,7 +455,7 @@ jobs:
       - run: nvidia-smi
 
       # Run this to make sure we use python3 from the system.
-      - run: pyenv global 3.7.0
+      - setup_pyenv
 
       - <<: *setup_venv
 
@@ -487,7 +497,7 @@ jobs:
       - run: nvidia-smi
 
       # Run this to make sure we use python3 from the system.
-      - run: pyenv global 3.7.0
+      - setup_pyenv
 
       - <<: *setup_venv
 
@@ -525,7 +535,7 @@ jobs:
 
       - run: pyenv install 3.7.0
 
-      - run: pyenv global 3.7.0
+      - setup_pyenv
 
       - <<: *setup_venv
 
@@ -577,7 +587,7 @@ jobs:
 
       - run: pyenv install 3.7.0
 
-      - run: pyenv global 3.7.0
+      - setup_pyenv
 
       - <<: *setup_venv
 
