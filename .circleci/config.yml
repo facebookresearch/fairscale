@@ -114,7 +114,7 @@ install_dep_190: &install_dep_190
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.8 && exit 0; fi
         # start installing
-        pip install --pre --progress-bar off torch==1.9.0.dev20210614+cu102 torchvision==0.10.0.dev20210614+cu102 -f https://download.pytorch.org/whl/nightly/cu102/torch_nightly.html
+        pip install --pre --progress-bar off torch==1.9.0 torchvision==0.10.0 -f https://download.pytorch.org/whl/test/cu111/torch_test.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
