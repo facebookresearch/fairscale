@@ -41,7 +41,7 @@ class TestLocalStateDict(DistributedTest):
         state_before_training = {k: v.cpu().clone() for k, v in state_1.items()}
         assert len(state_1) > 0
         model.load_local_state_dict(state_1)
-        weight_key = "flat_param" if model.flatten_parameters else "embed_tokens.weight"
+        weight_key = "flat_param_0" if model.flatten_parameters else "embed_tokens.weight"
 
         state_1_weight = state_1[weight_key]
         assert state_1_weight.dtype == torch.float32, f"got dtype {state_1_weight.dtype} expected torch.float32"

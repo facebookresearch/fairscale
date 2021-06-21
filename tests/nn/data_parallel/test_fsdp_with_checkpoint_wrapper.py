@@ -44,8 +44,8 @@ def _test_func(rank, world_size, tempfile_name, unused):
 
     # For clarity, this is what `expected_param_shapes` should look like depending on world size:
     assert expected_param_shapes == {
-        "_fsdp_wrapped_module.flat_param": (12,),
-        "_fsdp_wrapped_module._fpw_module.ffn.1._fsdp_wrapped_module.flat_param": (6,),
+        "_fsdp_wrapped_module.flat_param_0": (12,),
+        "_fsdp_wrapped_module._fpw_module.ffn.1._fsdp_wrapped_module.flat_param_0": (6,),
     }, expected_param_shapes
 
     torch.manual_seed(1 + rank)
