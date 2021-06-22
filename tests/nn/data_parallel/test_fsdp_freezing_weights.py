@@ -20,6 +20,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel
 import torch.optim as optim
+from itertools import product
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.utils.testing import dist_init, objects_are_equal, rmf, skip_if_single_gpu, teardown
@@ -179,8 +180,7 @@ def test_freezing_weights(temp_files, nested_trunk):
     expected_state = torch.load(temp_files[2])
     temp_file_idx = 3
     for freezing_method, freeze_after_wrap_fsdp in product(
-        [FreezingMethod.RequiresGrad, FreezingMethod.GradToNone], [True, False]
-    ):
+        [FreezingMethod.RequiresGrad, FreezingMethod.GradToNone], [True, False]):
         print(f"Testing FSDP with freezing method {freezing_method}")
         mp.spawn(
             _distributed_worker,
