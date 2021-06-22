@@ -184,7 +184,12 @@ class FlattenParamsWrapper(nn.Module):
         if not hasattr(self, "_param_infos"):
             assert flat_param is None
             params = self._init_flatten_params()
-            flat_param = FlatParameter(params)
+
+            assert (
+                len(set(p.requires_grad for p in params)) == 1
+            ), "expects all parameters in module to have same requires_grad"
+
+            flat_param = FlatParameter(params, params[0].requires_grad)
             self.param_numel = flat_param.numel()
 
         # flatten
