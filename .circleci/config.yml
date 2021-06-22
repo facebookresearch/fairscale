@@ -32,10 +32,10 @@ cpu_py39: &cpu_py39
 #   https://circleci.com/docs/2.0/configuration-reference/#available-linux-gpu-images
 gpu: &gpu
   environment:
-    CUDA_VERSION: "10.1"
-    CUDA_HOME: /usr/local/cuda-10.1
+    CUDA_VERSION: "10.2"
+    CUDA_HOME: /usr/local/cuda-10.2
   machine:
-    image: ubuntu-1604-cuda-10.1:201909-23
+    image: ubuntu-1604-cuda-10.2:202012-01
   resource_class: gpu.large
 
 gpu_cu111: &gpu_cu111
@@ -114,7 +114,7 @@ install_dep_190: &install_dep_190
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.8 && exit 0; fi
         # start installing
-        pip install --pre --progress-bar off torch==1.9.0.dev20210415+cu101 torchvision==0.10.0.dev20210415+cu101 -f https://download.pytorch.org/whl/nightly/cu101/torch_nightly.html
+        pip install --progress-bar off install torch==1.9.0+cu102 torchvision==0.10.0+cu102 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -239,6 +239,19 @@ commands:
              if [ ! -f <<parameters.test_list_file>> ]; then exit 1; fi
              pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./ `cat <<parameters.test_list_file>>`
 
+   setup_pyenv:
+     parameters:
+       version:
+         type: string
+     steps:
+       - run:
+           name: Setup pyenv
+           command: |
+             git clone git://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
+             pyenv update
+             pyenv install -f <<parameters.version>>
+             pyenv global <<parameters.version>>
+
 # -------------------------------------------------------------------------------------
 # Jobs to run
 # -------------------------------------------------------------------------------------
@@ -361,7 +374,8 @@ jobs:
 
       - run: nvidia-smi
 
-      - run: pyenv global 3.7.0
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
@@ -403,7 +417,8 @@ jobs:
       - run: nvidia-smi
 
       # Run this to make sure we use python3 from the system.
-      - run: pyenv global 3.8.6
+      - setup_pyenv:
+          version: 3.8.6
 
       - <<: *setup_venv
 
@@ -445,7 +460,8 @@ jobs:
       - run: nvidia-smi
 
       # Run this to make sure we use python3 from the system.
-      - run: pyenv global 3.7.0
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
@@ -487,7 +503,8 @@ jobs:
       - run: nvidia-smi
 
       # Run this to make sure we use python3 from the system.
-      - run: pyenv global 3.7.0
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
@@ -521,11 +538,8 @@ jobs:
 
       - run: nvidia-smi
 
-      - run: pyenv uninstall -f 3.7.0
-
-      - run: pyenv install 3.7.0
-
-      - run: pyenv global 3.7.0
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
@@ -573,11 +587,8 @@ jobs:
 
       - run: nvidia-smi
 
-      - run: pyenv uninstall -f 3.7.0
-
-      - run: pyenv install 3.7.0
-
-      - run: pyenv global 3.7.0
+      - setup_pyenv:
+          version: 3.7.0
 
       - <<: *setup_venv
 
