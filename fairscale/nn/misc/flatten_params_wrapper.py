@@ -182,7 +182,10 @@ class FlattenParamsWrapper(nn.Module):
         # Init all flat_params.
         for new_p_set in self._param_sets:
             params = self._init_flatten_params(new_p_set)
-            flat_param = FlatParameter(params)
+            assert (
+                len(set(p.requires_grad for p in params)) == 1
+            ), "expects all parameters in the same parameter group of the module to have same requires_grad"
+            flat_param = FlatParameter(params, params[0].requires_grad)
             self.flat_params.append(flat_param)
 
         self._flatten_params(self.flat_params)
