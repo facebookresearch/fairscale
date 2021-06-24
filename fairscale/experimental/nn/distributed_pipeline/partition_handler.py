@@ -223,7 +223,7 @@ class PartitionHandler:
         checkpoint = chunk < checkpoint_stop
         if checkpoint:
 
-            def function(input: TensorOrTensors, chunk_id: int = chunk, rank=self.rank) -> TensorOrTensors:
+            def function(input: TensorOrTensors, chunk_id: int = chunk, rank: int = self.rank) -> TensorOrTensors:
                 with record_function("chunk%d-rank%d" % (chunk_id, pipeline_record.rank)):
                     result = self.module(*input)
                     if self.num_outputs is None:
