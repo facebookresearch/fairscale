@@ -16,8 +16,7 @@ from fairscale.nn.pipe import microbatch
 from fairscale.nn.pipe.checkpoint import Checkpointing, TensorOrTensors
 from fairscale.nn.pipe.dependency import fork, join
 from fairscale.nn.pipe.microbatch import Batch
-from fairscale.nn.pipe.stream import as_cuda, current_stream, is_cuda, use_device, use_stream
-from fairscale.nn.pipe.worker import Task, create_workers
+from fairscale.nn.pipe.stream import AbstractStream, as_cuda, current_stream, is_cuda, use_device, use_stream, new_stream
 
 from .data import DataConsumer
 
@@ -167,7 +166,7 @@ class PartitionHandler:
         self.rank = rank
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
-        (self.in_queue,), (self.out_queue,) = create_workers([self.device])
+        self.stream = new_stream(self.device)
 
     def __getstate__(self) -> Dict:
         # avoid pickling failure.
@@ -188,8 +187,6 @@ class PartitionHandler:
     def run(self, pipeline_record: DistributedPipelineRecord) -> None:
         """Runs pipeline parallelism. It modifies the given batches in place."""
         m = len(pipeline_record.batches)
-
-        self.stream = current_stream(self.device)
 
         for chunk in range(m):
             with record_function("feed"):
@@ -217,8 +214,7 @@ class PartitionHandler:
         # Determine whether checkpointing or not.
         checkpoint = chunk < checkpoint_stop
         if checkpoint:
-
-            def function(input: TensorOrTensors, chunk_id: int = chunk) -> TensorOrTensors:
+            def function(input: TensorOrTensors, chunk_id: int = chunk, rank=self.rank) -> TensorOrTensors:
                 with record_function("chunk%d-rank%d" % (chunk_id, pipeline_record.rank)):
                     result = self.module(*input)
                     if self.num_outputs is None:
@@ -226,44 +222,17 @@ class PartitionHandler:
                     return tuple(result)
 
             chk = Checkpointing(function, batch)
-            task = Task(self.stream, compute=chk.checkpoint, finalize=chk.recompute)
+            with use_stream(self.stream):
+               batch = chk.checkpoint()
+               chk.recompute(batch)
             del function, chk
-
         else:
-
-            def compute(
-                batch: Batch = batch,
-                chunk_id: int = chunk,
-                rank: int = pipeline_record.rank if pipeline_record is not None else -1,
-            ) -> Batch:
-                with record_function("chunk%d-rank%d" % (chunk_id, pipeline_record.rank)):
-                    result = self.module(*batch.tensors)
-                    if self.num_outputs is None:
-                        result = (result,)
-                return Batch(result, chunk_id)
-
-            task = Task(self.stream, compute=compute, finalize=None)
-            del compute
-
-        self.in_queue.put(task)
-
-        ok, payload = self.out_queue.get()
-
-        # Hold the first exception.
-        if exc_info is not None:
-            pass
-        elif not ok:
-            exc_info = cast(ExcInfo, payload)
-        else:
-            task, batch = cast(Tuple[Task, Batch], payload)
-
-            with use_device(self.device):
-                task.finalize(batch)
-
-            pipeline_record.batches[chunk] = batch
-
-        if exc_info is not None:
-            raise exc_info[0].with_traceback(exc_info[1], exc_info[2])
+            with use_stream(self.stream), record_function("chunk%d-rank%d" % (chunk, pipeline_record.rank)):
+                result = self.module(*batch.tensors)
+                if self.num_outputs is None:
+                    result = (result,)
+            batch = Batch(result, chunk)
+        pipeline_record.batches[chunk] = batch
 
     def run_pipeline(self, pipeline_record_rref: rpc.RRef) -> Optional[Tensor]:
         """Processes a min-batch on this partition.
