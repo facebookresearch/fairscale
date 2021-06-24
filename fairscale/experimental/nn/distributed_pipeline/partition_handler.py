@@ -275,6 +275,8 @@ class PartitionHandler:
         pipeline_record = pipeline_record_rref.local_value()
         self.run(pipeline_record)
 
+        result: Optional[Tensor] = None
+
         if not pipeline_record.consumers:
             result = microbatch.gather(pipeline_record.batches)
             assert len(result) == 1
@@ -283,6 +285,9 @@ class PartitionHandler:
             if is_cuda(s0):
                 # TODO. Investigate why this is needed and remove it if possible.
                 as_cuda(s0).synchronize()
-            return result
 
-        return None
+        # TODO: There seems to be a memory leak that is solved by following line.
+        # Investigate why is it needed.
+        del pipeline_record.batches
+
+        return result
