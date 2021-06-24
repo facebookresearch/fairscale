@@ -222,6 +222,7 @@ class PartitionHandler:
         # Determine whether checkpointing or not.
         checkpoint = chunk < checkpoint_stop
         if checkpoint:
+
             def function(input: TensorOrTensors, chunk_id: int = chunk, rank=self.rank) -> TensorOrTensors:
                 with record_function("chunk%d-rank%d" % (chunk_id, pipeline_record.rank)):
                     result = self.module(*input)
@@ -231,8 +232,8 @@ class PartitionHandler:
 
             chk = Checkpointing(function, batch)
             with use_stream(self.stream):
-               batch = chk.checkpoint()
-               chk.recompute(batch)
+                batch = chk.checkpoint()
+                chk.recompute(batch)
             del function, chk
         else:
             with use_stream(self.stream), record_function("chunk%d-rank%d" % (chunk, pipeline_record.rank)):
