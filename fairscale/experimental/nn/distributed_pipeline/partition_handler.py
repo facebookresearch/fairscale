@@ -16,7 +16,15 @@ from fairscale.nn.pipe import microbatch
 from fairscale.nn.pipe.checkpoint import Checkpointing, TensorOrTensors
 from fairscale.nn.pipe.dependency import fork, join
 from fairscale.nn.pipe.microbatch import Batch
-from fairscale.nn.pipe.stream import AbstractStream, as_cuda, current_stream, is_cuda, use_device, use_stream, new_stream
+from fairscale.nn.pipe.stream import (
+    AbstractStream,
+    as_cuda,
+    current_stream,
+    is_cuda,
+    new_stream,
+    use_device,
+    use_stream,
+)
 
 from .data import DataConsumer
 
