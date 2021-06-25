@@ -291,7 +291,7 @@ def auto_graph_extract(devices):
     model = nn.Sequential(
         RemoteModule(devices[0], nn.Linear, (4, 4), {}),
         ShardedLinearLayer(devices[0], devices, devices[1]),
-        RemoteModule(devices[0], nn.Linear, (4, 4), {})
+        RemoteModule(devices[0], nn.Linear, (4, 4), {}),
     )
     graph = make_graph(model)
     pipe = DistributedPipeline(graph, chunks=4)
