@@ -5,7 +5,7 @@
 
 from threading import Condition
 from types import TracebackType
-from typing import List, Optional, Tuple, Type, Union, cast
+from typing import Dict, List, Optional, Tuple, Type, Union, cast
 
 import torch
 from torch import Tensor
@@ -67,6 +67,10 @@ class DistributedPipelineRecord:
         self.consumers = consumers
         self.rank = rank
         self.device = device
+
+    def __getstate__(self) -> Dict:
+        # avoid pickling failure.
+        return {}
 
     def feed(self, chunk: int, input_idx: int, input: Tensor) -> Tensor:
         """ This function is called remotely to provide individual tensors of a given chunk."""
@@ -166,6 +170,10 @@ class PartitionHandler:
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
         (self.in_queue,), (self.out_queue,) = create_workers([self.device])
+
+    def __getstate__(self) -> Dict:
+        # avoid pickling failure.
+        return {}
 
     def local_parameter_rrefs(self) -> List[rpc.RRef]:
         r"""
