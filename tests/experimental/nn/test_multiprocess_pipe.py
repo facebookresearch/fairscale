@@ -243,7 +243,9 @@ def multi_input_multi_output_layers(devices):
 
     pipe = DistributedPipeline(graph, chunks=4)
     assert [[0, 1], [2], [3], [4]] == extract_partitions(graph, pipe)
-    opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
+    parameter_rrefs = pipe.parameter_rrefs()
+    assert len(parameter_rrefs) == 6
+    opt = DistributedOptimizer(torch.optim.SGD, parameter_rrefs, lr=0.05,)
     losses = []
     for i in range(2):
         with dist_autograd.context() as context_id:
@@ -293,7 +295,9 @@ def auto_graph_extract(devices):
     pipe = DistributedPipeline(graph, chunks=4)
     partitions = extract_partitions(graph, pipe)
     assert [[0, 1], [2], [3], [4]] == partitions, f"partitions={partitions}"
-    opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
+    parameter_rrefs = pipe.parameter_rrefs()
+    assert len(parameter_rrefs) == 6
+    opt = DistributedOptimizer(torch.optim.SGD, parameter_rrefs, lr=0.05,)
     losses = []
     for i in range(2):
         with dist_autograd.context() as context_id:
