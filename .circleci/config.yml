@@ -130,6 +130,12 @@ install_repo: &install_repo
         # Test import.
         python -c 'import sys; sys.path = sys.path[1:]; import fairscale'
 
+dump_pip_list: &dump_pip_list
+   - run:
+       name: dump pip packages and their versions
+       command: |
+         pip list
+
 run_isort: &run_isort
    - run:
        name: Run Linter (isort)
@@ -281,6 +287,7 @@ jobs:
 
       - <<: *install_repo
 
+      - <<: *dump_pip_list
       - <<: *run_isort
       - <<: *run_black
       - <<: *run_mypy
@@ -314,6 +321,7 @@ jobs:
 
       - <<: *install_repo
 
+      - <<: *dump_pip_list
       - <<: *run_isort
       - <<: *run_black
       - <<: *run_mypy
@@ -348,6 +356,7 @@ jobs:
 
       - <<: *install_repo
 
+      - <<: *dump_pip_list
       - <<: *run_isort
       - <<: *run_black
       - <<: *run_mypy
