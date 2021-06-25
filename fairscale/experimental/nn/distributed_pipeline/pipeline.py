@@ -20,7 +20,7 @@ Device = Union[torch.device, int, str]
 
 
 def check_pytorch_version() -> None:
-    if torch.__version__.split("+")[0].split(".")[:2] < ["1", "9"]:
+    if list(map(int, torch.__version__.split("+")[0].split(".")[:2])) < [1, 9]:
         raise Exception("DistributedPipeline requires PyTorch version 1.9 or higher")
 
 

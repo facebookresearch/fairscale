@@ -31,7 +31,7 @@ else:
     DEVICES = [CPU_DEVICES]
 
 
-pytestmark = pytest.mark.skipif(torch_version() < (1, 10, 0), reason="requires torch version >= 1.10.0")
+pytestmark = pytest.mark.skipif(torch_version() < (1, 9, 0), reason="requires torch version >= 1.10.0")
 
 
 def rpc_worker(rank, world_size, init_file, func, *args):
