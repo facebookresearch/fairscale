@@ -27,7 +27,7 @@ class Bucket:
             return
         # reduce-scatter bucket
         dist._reduce_scatter_base(
-             self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
+            self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
         )
         # execute post-reduction callbacks
         for callback_fn in self.callbacks:
