@@ -1315,7 +1315,7 @@ class FullyShardedDataParallel(nn.Module):
         # Optionally move gradients to CPU, typically used if one is running
         # the optimizer on the CPU.
         if self.move_grads_to_cpu:
-            param._cpu_grad.copy_(param.grad.data, non_blocking=False)
+            param._cpu_grad.copy_(param.grad.data, non_blocking=True)
             # Don't let this memory get reused until after the transfer.
             param.grad.data.record_stream(torch.cuda.current_stream())
             param.grad.data = param._cpu_grad
@@ -1448,7 +1448,7 @@ class FullyShardedDataParallel(nn.Module):
                 else:
                     # If self.move_params_to_cpu and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
-                    p_data = p.data.to(p._full_param_padded.device)
+                    p_data = p.data.to(p._full_param_padded.device, non_blocking=True)
 
                     p_size = p._full_param_padded.size()
                     assert p_size.numel() % self.world_size == 0
