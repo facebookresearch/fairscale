@@ -87,6 +87,7 @@ def log_number_of_parameters(model):
 
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
     logging.info(f"training model, #params = {num_params}")
+    logging.info("Debugging")
 
 
 def _get_fp16_context(use_fp16=False):
