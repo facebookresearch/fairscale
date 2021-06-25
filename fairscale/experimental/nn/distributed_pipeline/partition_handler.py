@@ -278,9 +278,9 @@ class PartitionHandler:
         result: Optional[Tensor] = None
 
         if not pipeline_record.consumers:
-            result = microbatch.gather(pipeline_record.batches)
-            assert len(result) == 1
-            result = result[0]
+            gather_result = microbatch.gather(pipeline_record.batches)
+            assert len(gather_result) == 1
+            result = gather_result[0]
             s0 = current_stream(result.device)
             if is_cuda(s0):
                 # TODO. Investigate why this is needed and remove it if possible.
