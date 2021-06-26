@@ -8,6 +8,7 @@ from torch.distributed import rpc
 
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import PipeRPCWrapper
+from fairscale.utils import torch_version
 from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
@@ -242,7 +243,7 @@ def rpc_multiple_tensors():
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" in os.environ, reason="no mpi")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 # TODO(msb) Fix this
-@pytest.mark.skipif(torch.__version__.split("+")[0].split(".") >= ["1", "8", "0"], reason="disabled for torch 1.8.0")
+@pytest.mark.skipif(torch_version() >= (1, 8, 0), reason="disabled for torch 1.8.0")
 def construct_only_rank_zero():
     model = [nn.Linear(10, 10), nn.ReLU()]
     if torch.distributed.get_rank() == 0:

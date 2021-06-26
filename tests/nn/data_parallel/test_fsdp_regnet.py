@@ -36,6 +36,7 @@ from torch.optim import SGD
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import TrainingState, auto_wrap_bn
 from fairscale.optim.grad_scaler import ShardedGradScaler
+from fairscale.utils import torch_version
 from fairscale.utils.testing import (
     dist_init,
     objects_are_equal,
@@ -44,7 +45,6 @@ from fairscale.utils.testing import (
     state_dict_norm,
     teardown,
     torch_cuda_version,
-    torch_version,
 )
 
 # Const test params.

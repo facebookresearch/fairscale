@@ -14,7 +14,7 @@ import torch
 import torch.nn
 import torch.nn as nn
 
-from fairscale.utils.testing import torch_version
+from fairscale.utils import torch_version
 
 
 class PositionalEncoding(nn.Module):
