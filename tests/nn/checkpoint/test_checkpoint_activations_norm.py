@@ -15,7 +15,8 @@ from torch.nn import BatchNorm2d, LayerNorm, Linear, Sequential
 from torch.optim import SGD
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
-from fairscale.utils.testing import objects_are_equal, torch_version
+from fairscale.utils import torch_version
+from fairscale.utils.testing import objects_are_equal
 
 NORM_TYPES = [LayerNorm, BatchNorm2d]
 MP_TYPES = ["fp32", "fp16", "call_half"]

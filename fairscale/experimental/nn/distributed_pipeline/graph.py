@@ -20,7 +20,7 @@ class MultiInputSequential(nn.Module):
 
     def __init__(self, *modules: nn.Module) -> None:
         super().__init__()
-        self.modules_list = modules
+        self.modules_list = nn.ModuleList(modules)
 
     def forward(self, *inputs: Tuple[Tensor]) -> Tensor:  # type: ignore
         input = self.modules_list[0](*inputs)

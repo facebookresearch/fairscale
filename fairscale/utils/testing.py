@@ -51,6 +51,7 @@ import torch.nn as nn
 
 from fairscale.nn.model_parallel import destroy_model_parallel, initialize_model_parallel
 from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
+from fairscale.utils import torch_version
 
 if TYPE_CHECKING:
     Base = nn.Module[Tensor]
@@ -103,23 +104,6 @@ def set_random_seed(seed: int) -> None:
     numpy.random.seed(seed)
     torch.manual_seed(seed)
     model_parallel_cuda_manual_seed(seed)
-
-
-def torch_version() -> Tuple[int, ...]:
-    numbering = torch.__version__.split("+")[0].split(".")[:3]
-
-    # Catch torch version if run against internal pre-releases, like `1.8.0a0fb`,
-    if not numbering[2].isnumeric():
-        # Two options here:
-        # - either skip this version (minor number check is not relevant)
-        # - or check that our codebase is not broken by this ongoing development.
-
-        # Assuming that we're interested in the second usecase more than the first,
-        # return the pre-release or dev numbering
-        logging.warning(f"Pytorch pre-release version {torch.__version__} - assuming intent to test it")
-        numbering[2] = "0"
-
-    return tuple(int(n) for n in numbering)
 
 
 # Global variable to cache the results from the first nvidia-smi execution.

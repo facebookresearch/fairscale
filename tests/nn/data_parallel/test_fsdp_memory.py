@@ -21,15 +21,9 @@ import torch.optim as optim
 from fairscale.nn import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import auto_wrap_bn
+from fairscale.utils import torch_version
 from fairscale.utils.parallel import get_process_group_cached
-from fairscale.utils.testing import (
-    dist_init,
-    dump_all_tensors,
-    skip_if_single_gpu,
-    teardown,
-    temp_files_ctx,
-    torch_version,
-)
+from fairscale.utils.testing import dist_init, dump_all_tensors, skip_if_single_gpu, teardown, temp_files_ctx
 
 
 def to_fsdp(module, fsdp_config):

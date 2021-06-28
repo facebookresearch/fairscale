@@ -12,6 +12,7 @@ from unittest import mock
 from parameterized import parameterized
 import torch
 
+from fairscale.utils import torch_version
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
 
@@ -28,8 +29,7 @@ CONFIG_OPTIONS = [
 class TestReduceScatterBucketer(unittest.TestCase):
     # TODO(sshleifer): check if possible to reuse `DistributedTest, spawn_and_init`.
     def setUp(self):
-        major, minor = torch.__version__.split(".")[:2]
-        major, minor = int(major), int(minor)
+        major, minor, _ = torch_version()
         if major < 1 or (major == 1 and minor < 6):
             raise unittest.SkipTest("Need pytorch version >= 1.6 due to reduce_scatter")
         if not torch.cuda.is_available():

@@ -27,6 +27,8 @@ from torch import Tensor, nn
 import torch.autograd
 import torch.cuda
 
+from fairscale.utils import torch_version
+
 from . import microbatch
 from .batchnorm import DeferredBatchNorm
 from .pipeline import Pipeline
@@ -256,7 +258,7 @@ class Pipe(Module):
     ) -> None:
         super().__init__()
 
-        if torch.__version__.split(".")[:2] >= ["1", "8"]:
+        if torch_version()[:2] >= (1, 8):
             warnings.warn(
                 "fairscale.nn.Pipe has been upstreamed to PyTorch as torch.distributed.pipeline.sync.Pipe. "
                 "It is now deprecated and will be removed in a future version of fairscale. "

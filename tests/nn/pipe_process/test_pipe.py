@@ -29,7 +29,8 @@ from torch import nn
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import AsyncPipe
 from fairscale.nn.pipe.types import LazyModule
-from fairscale.utils.testing import get_worker_map, torch_spawn, torch_version
+from fairscale.utils import torch_version
+from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 @torch_spawn([2])
