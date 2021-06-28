@@ -26,9 +26,14 @@ class Bucket:
             assert len(self.callbacks) == 0
             return
         # reduce-scatter bucket
-        dist._reduce_scatter_base(
-            self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
-        )
+        if hasattr(dist, "_reduce_scatter_base"):
+            dist._reduce_scatter_base(
+                self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
+            )
+        else:
+            dist.reduce_scatter(
+                self.output_shard[: self.offset], list(self.data[:, : self.offset].unbind(0)), group=self.group
+            )
         # execute post-reduction callbacks
         for callback_fn in self.callbacks:
             callback_fn()
@@ -124,8 +129,12 @@ class ReduceScatterBucketer:
         if first_input_size > bucket_shard_size:
             # input is too big to fit in the bucket, reduce-scatter directly
             output = torch.zeros_like(input_list[0])
-            input_flattened = torch.cat(input_list)
-            dist._reduce_scatter_base(output, input_flattened, group=group)
+            if hasattr(dist, "_reduce_scatter_base"):
+                input_flattened = torch.cat(input_list)
+                dist._reduce_scatter_base(output, input_flattened, group=group)
+            else:
+                # fallback
+                dist.reduce_scatter(output, input_list, group=group)
             if callback_fn is not None:
                 callback_fn(output)
             return
