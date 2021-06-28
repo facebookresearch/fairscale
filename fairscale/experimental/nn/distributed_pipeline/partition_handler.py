@@ -108,15 +108,13 @@ class DistributedPipelineRecord:
         # with this constraint, replace the condition 'self.rank > 0' below with
         # a more accurate one.
         if chunk != 0 and self.consumers and self.rank > 0:
-            dependant_tensors = []
             batch = self.batches[chunk]
             assert batch is not None
-            for tensor, remote_ph_list in zip(batch.tensors, self.forwarded_phony[chunk - 1]):
-                dependant = tensor
+            dependant_tensors = list(batch.tensors)
+            for remote_ph_list in self.forwarded_phony[chunk - 1]:
                 for remote_ph in remote_ph_list:
                     phony = remote_ph.to_here()
-                    dependant = join(dependant, phony)
-                dependant_tensors.append(dependant)
+                    dependant_tensors[0] = join(dependant_tensors[0], phony)
             self.batches[chunk] = Batch(tuple(dependant_tensors), chunk)
 
     def sync_stream(self, chunk: int, stream: torch.cuda.Stream) -> None:
