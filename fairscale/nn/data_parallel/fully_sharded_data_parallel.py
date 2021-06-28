@@ -1463,7 +1463,11 @@ class FullyShardedDataParallel(nn.Module):
                         output_tensor = p._full_param_padded
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
-                    dist._all_gather_base(output_tensor, p_data, group=self.process_group)
+                    if hasattr(dist, "_all_gather_base"):
+                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)
+                    else:
+                        chunks = list(output_tensor.chunk(self.world_size))
+                        dist.all_gather(chunks, p_data, group=self.process_group)    
 
                     # Set p.data = output_tensor (with padding trimmed)
                     update_p_data(output_tensor)
