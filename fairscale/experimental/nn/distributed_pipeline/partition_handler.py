@@ -265,7 +265,7 @@ class PartitionHandler:
         if exc_info is not None:
             raise exc_info[0].with_traceback(exc_info[1], exc_info[2])
 
-    def run_pipeline(self, pipeline_record_rref: rpc.RRef) -> Optional[Tensor]:
+    def run_pipeline(self, pipeline_record_rref: rpc.RRef) -> Tensor:
         """Processes a min-batch on this partition.
            If this is the last partition (pipeline_record has no consumer), concatenates results of processing
            all chunks and returns the result as the output of the model on the whole mini-batch.
@@ -273,7 +273,7 @@ class PartitionHandler:
         pipeline_record = pipeline_record_rref.local_value()
         self.run(pipeline_record)
 
-        result: Optional[Tensor] = None
+        result: Tensor
 
         if not pipeline_record.consumers:
             gather_result = microbatch.gather(pipeline_record.batches)
@@ -283,6 +283,8 @@ class PartitionHandler:
             if is_cuda(s0):
                 # TODO. Investigate why this is needed and remove it if possible.
                 as_cuda(s0).synchronize()
+        else:
+            result = torch.zeros([])
 
         # TODO: There seems to be a memory leak that is solved by following line.
         # Investigate why is it needed.

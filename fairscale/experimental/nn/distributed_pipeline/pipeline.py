@@ -70,10 +70,18 @@ class DistributedPipeline(nn.Module):
 
     DataConsumer = DataConsumer[Partition]
 
-    def __init__(self, graph: PipelineModulesGraph, chunks: int = 1, checkpoint: str = "except_last",) -> None:
+    def __init__(
+        self,
+        graph: PipelineModulesGraph,
+        chunks: int = 1,
+        checkpoint: str = "except_last",
+        wait_for_workers: bool = False,
+    ) -> None:
         super().__init__()
 
         check_pytorch_version()
+
+        self.wait_for_workers = wait_for_workers
 
         chunks = int(chunks)
         checkpoint = str(checkpoint)
@@ -162,6 +170,7 @@ class DistributedPipeline(nn.Module):
         # Create a DistributedPipelineRecord, one per partition, and make connections between them (i.e.
         # set list of consumers).
         pipeline_records: Dict[DistributedPipeline.Partition, rpc.RRef] = {}
+        all_results = []
         for partition in reversed(self.partitions):
             r_handler = partition.handler.remote()
             consumers = []
@@ -181,6 +190,7 @@ class DistributedPipeline(nn.Module):
             # If this is the last partition, we expect the result of the model be the output of this partition.
             if partition is self.partitions[-1]:
                 result = this_result
+            all_results.append(this_result)
 
         # Start feeding model input to the partitions that need them.
         for i, b in enumerate(zip(*batches_list)):
@@ -193,5 +203,9 @@ class DistributedPipeline(nn.Module):
                     )
                 else:
                     pipeline_record.rpc_async().feed(i, input_consumer.consumer_input_idx, b[input_consumer.output_idx].value)  # type: ignore
+
+        if self.wait_for_workers:
+            futures = [r.rpc_async().size() for r in all_results]
+            torch.futures.wait_all(futures)
 
         return result
