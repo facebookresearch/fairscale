@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
@@ -205,7 +206,9 @@ class DistributedPipeline(nn.Module):
                     pipeline_record.rpc_async().feed(i, input_consumer.consumer_input_idx, b[input_consumer.output_idx].value)  # type: ignore
 
         if self.wait_for_workers:
-            futures = [r.rpc_async().size() for r in all_results]
-            torch.futures.wait_all(futures)
+            with ThreadPoolExecutor(max_workers=len(all_results)) as executor:
+                futures = [executor.submit(lambda r=r: r.rpc_sync().size()) for r in all_results]
+            for f in futures:
+                f.result()
 
         return result
