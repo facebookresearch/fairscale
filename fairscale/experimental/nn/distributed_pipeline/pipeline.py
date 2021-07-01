@@ -206,9 +206,18 @@ class DistributedPipeline(nn.Module):
                     pipeline_record.rpc_async().feed(i, input_consumer.consumer_input_idx, b[input_consumer.output_idx].value)  # type: ignore
 
         if self.wait_for_workers:
+            exceptions = []
+
+            def process_remote_handler_result(result_rref: rpc.RRef) -> None:
+                try:
+                    result_rref.rpc_sync().size()
+                except Exception as ex:
+                    exceptions.append(ex)
+
             with ThreadPoolExecutor(max_workers=len(all_results)) as executor:
-                futures = [executor.submit(lambda r=r: r.rpc_sync().size()) for r in all_results]
-            for f in futures:
-                f.result()
+                for r in all_results:
+                    executor.submit(lambda r=r: process_remote_handler_result(r))
+            if exceptions:
+                raise Exception() from exceptions[0]
 
         return result
