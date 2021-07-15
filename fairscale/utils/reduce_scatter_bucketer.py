@@ -44,12 +44,12 @@ class Bucket:
         self.output_shard = torch.zeros_like(self.data[0])
 
     def setup(self) -> None:
-        """ Setup the buffers if they are not allocated.
+        """Setup the buffers if they are not allocated.
 
-            Using ``setup`` and ``teardown``, we can ensure that the bucket
-            buffers are only allocated during the backward pass, hence saving more
-            memory to other parts of the training process, such as the forward pass
-            for activation memory.
+        Using ``setup`` and ``teardown``, we can ensure that the bucket
+        buffers are only allocated during the backward pass, hence saving more
+        memory to other parts of the training process, such as the forward pass
+        for activation memory.
         """
         for tensor in [self.data, self.output_shard]:
             if tensor.storage().size() == 0:
@@ -96,7 +96,10 @@ class ReduceScatterBucketer:
 
     @torch.no_grad()
     def reduce_scatter_async(
-        self, input_list: List[Tensor], group: ProcessGroup, callback_fn: Optional[Callable] = None,
+        self,
+        input_list: List[Tensor],
+        group: ProcessGroup,
+        callback_fn: Optional[Callable] = None,
     ) -> None:
         """
         Reduce-scatter a list of tensors asynchronously, so smaller reductions
