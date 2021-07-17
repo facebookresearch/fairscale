@@ -86,11 +86,7 @@ class Min10:
 
 
 def _distributed_worker(
-    gpu_id,
-    world_size,
-    fsdp_config,
-    tempfile,
-    tempfile_rpc,
+    gpu_id, world_size, fsdp_config, tempfile, tempfile_rpc,
 ):
     torch.cuda.set_device(gpu_id)
 
@@ -260,7 +256,5 @@ def test_forward_overlap(world_size, flatten, mixed):
     }
     with temp_files_ctx(2) as temp_files:
         mp.spawn(
-            _distributed_worker,
-            (world_size, fsdp_config, temp_files[0], temp_files[1]),
-            nprocs=world_size,
+            _distributed_worker, (world_size, fsdp_config, temp_files[0], temp_files[1]), nprocs=world_size,
         )
