@@ -12,7 +12,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from fairscale.nn import MOELayer, Top2Gate
-from fairscale.utils.testing import torch_version
+from fairscale.utils import torch_version
 
 pytestmark = pytest.mark.skipif(
     not (torch.cuda.is_available() and torch_version() >= (1, 8, 0)), reason="cuda and torch>=1.8.0 required"

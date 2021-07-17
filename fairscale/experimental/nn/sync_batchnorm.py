@@ -11,6 +11,7 @@ import torch.distributed as dist
 from torch.distributed import ProcessGroup
 
 from fairscale.nn.checkpoint import is_checkpointing, is_recomputing
+from fairscale.utils import torch_version
 
 
 def _forward(input: Tensor, affine: bool, mean: Tensor, invstd: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
@@ -45,7 +46,7 @@ def _calculate_stats(input: Tensor, eps: float, process_group: ProcessGroup) -> 
     return mean, var, invstd, total_count
 
 
-if torch.__version__.split(".")[:2] >= ["1", "7"]:
+if torch_version()[:2] >= (1, 7):
     _forward = torch.jit.script(_forward)  # type: ignore
     _track_running_stats = torch.jit.script(_track_running_stats)  # type: ignore
 

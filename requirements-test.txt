@@ -19,3 +19,6 @@ parameterized >= 0.8.1
 
 # For torch.cuda.list_gpu_processes()
 pynvml == 8.0.4
+
+# For mypy typing
+numpy >= 1.21

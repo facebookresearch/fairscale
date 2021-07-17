@@ -5,7 +5,7 @@
 
 from threading import Condition
 from types import TracebackType
-from typing import List, Optional, Tuple, Type, Union, cast
+from typing import Dict, List, Optional, Tuple, Type, Union, cast
 
 import torch
 from torch import Tensor
@@ -68,6 +68,10 @@ class DistributedPipelineRecord:
         self.rank = rank
         self.device = device
 
+    def __getstate__(self) -> Dict:
+        # avoid pickling failure.
+        return {}
+
     def feed(self, chunk: int, input_idx: int, input: Tensor) -> Tensor:
         """ This function is called remotely to provide individual tensors of a given chunk."""
         if input.device.type == "cpu":
@@ -104,15 +108,13 @@ class DistributedPipelineRecord:
         # with this constraint, replace the condition 'self.rank > 0' below with
         # a more accurate one.
         if chunk != 0 and self.consumers and self.rank > 0:
-            dependant_tensors = []
             batch = self.batches[chunk]
             assert batch is not None
-            for tensor, remote_ph_list in zip(batch.tensors, self.forwarded_phony[chunk - 1]):
-                dependant = tensor
+            dependant_tensors = list(batch.tensors)
+            for remote_ph_list in self.forwarded_phony[chunk - 1]:
                 for remote_ph in remote_ph_list:
                     phony = remote_ph.to_here()
-                    dependant = join(dependant, phony)
-                dependant_tensors.append(dependant)
+                    dependant_tensors[0] = join(dependant_tensors[0], phony)
             self.batches[chunk] = Batch(tuple(dependant_tensors), chunk)
 
     def sync_stream(self, chunk: int, stream: torch.cuda.Stream) -> None:
@@ -166,6 +168,10 @@ class PartitionHandler:
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
         (self.in_queue,), (self.out_queue,) = create_workers([self.device])
+
+    def __getstate__(self) -> Dict:
+        # avoid pickling failure.
+        return {}
 
     def local_parameter_rrefs(self) -> List[rpc.RRef]:
         r"""
@@ -267,14 +273,19 @@ class PartitionHandler:
         pipeline_record = pipeline_record_rref.local_value()
         self.run(pipeline_record)
 
+        result: Optional[Tensor] = None
+
         if not pipeline_record.consumers:
-            result = microbatch.gather(pipeline_record.batches)
-            assert len(result) == 1
-            result = result[0]
+            gather_result = microbatch.gather(pipeline_record.batches)
+            assert len(gather_result) == 1
+            result = gather_result[0]
             s0 = current_stream(result.device)
             if is_cuda(s0):
                 # TODO. Investigate why this is needed and remove it if possible.
                 as_cuda(s0).synchronize()
-            return result
 
-        return None
+        # TODO: There seems to be a memory leak that is solved by following line.
+        # Investigate why is it needed.
+        del pipeline_record.batches
+
+        return result

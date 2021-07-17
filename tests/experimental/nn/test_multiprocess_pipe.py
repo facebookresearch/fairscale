@@ -21,7 +21,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 
 from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
-from fairscale.utils.testing import torch_version
+from fairscale.utils import torch_version
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
 GPU_DEVICES = ["worker0/cuda:0", "worker1/cuda:1"]
@@ -31,7 +31,7 @@ else:
     DEVICES = [CPU_DEVICES]
 
 
-pytestmark = pytest.mark.skipif(torch_version() < (1, 10, 0), reason="requires torch version >= 1.10.0")
+pytestmark = pytest.mark.skipif(torch_version() < (1, 9, 0), reason="requires torch version >= 1.9.0")
 
 
 def rpc_worker(rank, world_size, init_file, func, *args):
@@ -243,7 +243,9 @@ def multi_input_multi_output_layers(devices):
 
     pipe = DistributedPipeline(graph, chunks=4)
     assert [[0, 1], [2], [3], [4]] == extract_partitions(graph, pipe)
-    opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
+    parameter_rrefs = pipe.parameter_rrefs()
+    assert len(parameter_rrefs) == 6
+    opt = DistributedOptimizer(torch.optim.SGD, parameter_rrefs, lr=0.05,)
     losses = []
     for i in range(2):
         with dist_autograd.context() as context_id:
@@ -287,13 +289,17 @@ def auto_graph_extract(devices):
 
     # create model
     model = nn.Sequential(
-        RemoteModule(devices[0], nn.Linear, (4, 4), {}), ShardedLinearLayer(devices[0], devices, devices[1])
+        RemoteModule(devices[0], nn.Linear, (4, 4), {}),
+        ShardedLinearLayer(devices[0], devices, devices[1]),
+        RemoteModule(devices[0], nn.Linear, (4, 4), {}),
     )
     graph = make_graph(model)
     pipe = DistributedPipeline(graph, chunks=4)
     partitions = extract_partitions(graph, pipe)
-    assert [[0, 1], [2], [3], [4]] == partitions, f"partitions={partitions}"
-    opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
+    assert [[0, 1], [2], [3], [4], [5]] == partitions, f"partitions={partitions}"
+    parameter_rrefs = pipe.parameter_rrefs()
+    assert len(parameter_rrefs) == 8
+    opt = DistributedOptimizer(torch.optim.SGD, parameter_rrefs, lr=0.05,)
     losses = []
     for i in range(2):
         with dist_autograd.context() as context_id:

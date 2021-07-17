@@ -11,6 +11,7 @@ from torch import Tensor, nn
 from torch.distributed import rpc
 
 from fairscale.nn.pipe import microbatch
+from fairscale.utils import torch_version
 
 from .data import DataConsumer
 from .graph import Node, PipelineModulesGraph
@@ -20,7 +21,7 @@ Device = Union[torch.device, int, str]
 
 
 def check_pytorch_version() -> None:
-    if torch.__version__.split("+")[0].split(".")[:2] < ["1", "9"]:
+    if torch_version() < (1, 9, 0):
         raise Exception("DistributedPipeline requires PyTorch version 1.9 or higher")
 
 

@@ -19,6 +19,7 @@ import torch.distributed
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
+from fairscale.utils import torch_version
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,
@@ -26,7 +27,6 @@ from fairscale.utils.testing import (
     get_cycles_per_ms,
     objects_are_equal,
     spawn_for_all_world_sizes,
-    torch_version,
 )
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4

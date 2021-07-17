@@ -21,14 +21,8 @@ import torch.nn as nn
 
 from fairscale.nn import enable_wrap, wrap
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.utils.testing import (
-    dist_init,
-    get_cycles_per_ms,
-    skip_if_single_gpu,
-    teardown,
-    temp_files_ctx,
-    torch_version,
-)
+from fairscale.utils import torch_version
+from fairscale.utils.testing import dist_init, get_cycles_per_ms, skip_if_single_gpu, teardown, temp_files_ctx
 
 
 def test_nonexistent_func_patch():

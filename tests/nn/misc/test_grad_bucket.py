@@ -31,7 +31,12 @@ def test_memory_leak():
         bucket.add_grad(param)
         bucket.shrink()
 
-        assert len(bucket.buffer.storage()) == 6
+        storage = bucket.buffer.storage()
+        # See https://github.com/pytorch/pytorch/pull/59671/
+        if hasattr(storage, "nbytes"):
+            assert storage.nbytes() == 6 * bucket.buffer.element_size()
+        else:
+            assert len(storage) == 6
 
 
 def test_max_size():

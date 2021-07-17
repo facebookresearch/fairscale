@@ -6,13 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
-- doc: thoroughly improved the doc
-- checkpointing: use dummy tensor to ensure backward pass is called [#701]
-- checkpointing: ensure internal fwd counter is not incremented in eval mode [#709]
-- FSDP: fixed bug where buffers returned in `state_dict()` could still be half precision when `mixed_precision` is set to `True`. [#705]
+
+### Added
+
+## [0.3.8] - 2021-07-12
+### Fixed
+- checkpointing: Use dummy tensor to ensure backward pass is called. [#701]
+- checkpointing: Ensure internal fwd counter is not incremented in eval mode. [#709]
+- checkpointing: Use non-blocking CPU transfer to improve perf. [#719]
+- FSDP: Fixed bug where buffers returned in `state_dict()` could still be half precision when `mixed_precision` is set to `True`. [#705]
+- FSDP: Ensure requires_grad of FlatParameter is consistent with requires_grad of the original parameters. [#721]
+- doc: Thoroughly improved the doc for FSDP. [#711]
+- cleanup: Remove examples/ doc from the repo. [#712]
+- cleanup: Future proof storage size test. [#735] 
+- cleanup: Migrate away from legacy torchtext iterators. [#713]
+- chore: Updated torch 1.9 to release version. [#717]
 
 ### Added
 - FSDP: supporting multiple flatten parameter groups [#708] [#711]
+- chore: Add the latest numpy version to requirements-test.txt to prevent mypy errors on certain PR commits [#732]
 
 ## [0.3.7] - 2021-05-17
 ### Fixed
