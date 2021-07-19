@@ -435,7 +435,7 @@ class FullyShardedDataParallel(nn.Module):
 
     @property
     def params_with_grad(self) -> List[Parameter]:
-        """[p for p in self.parameters() if p.grad is not None] """
+        """[p for p in self.parameters() if p.grad is not None]"""
         return [p for p in self.parameters() if p.grad is not None]
 
     @torch.no_grad()
@@ -1315,7 +1315,7 @@ class FullyShardedDataParallel(nn.Module):
         # Optionally move gradients to CPU, typically used if one is running
         # the optimizer on the CPU.
         if self.move_grads_to_cpu:
-            param._cpu_grad.copy_(param.grad.data, non_blocking=False)
+            param._cpu_grad.copy_(param.grad.data, non_blocking=True)
             # Don't let this memory get reused until after the transfer.
             param.grad.data.record_stream(torch.cuda.current_stream())
             param.grad.data = param._cpu_grad
@@ -1448,7 +1448,7 @@ class FullyShardedDataParallel(nn.Module):
                 else:
                     # If self.move_params_to_cpu and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
-                    p_data = p.data.to(p._full_param_padded.device)
+                    p_data = p.data.to(p._full_param_padded.device, non_blocking=True)
 
                     p_size = p._full_param_padded.size()
                     assert p_size.numel() % self.world_size == 0
@@ -1463,8 +1463,12 @@ class FullyShardedDataParallel(nn.Module):
                         output_tensor = p._full_param_padded
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
-                    chunks = list(output_tensor.chunk(self.world_size))
-                    dist.all_gather(chunks, p_data, group=self.process_group)
+                    if hasattr(dist, "_all_gather_base"):
+                        # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
+                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)  # type: ignore
+                    else:
+                        chunks = list(output_tensor.chunk(self.world_size))
+                        dist.all_gather(chunks, p_data, group=self.process_group)
 
                     # Set p.data = output_tensor (with padding trimmed)
                     update_p_data(output_tensor)

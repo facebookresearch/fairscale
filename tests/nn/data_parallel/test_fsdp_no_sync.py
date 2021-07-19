@@ -150,28 +150,47 @@ class TestNoSyncCommunication(DistributedTest):
         expected_reduce_scatter = num_fsdp
 
         batch = model.module.get_input(torch.device("cuda"))
+
+        # depending on pytorch version the _base methods may not be available
+        method_string_reduce_scatter_base = "torch.distributed._reduce_scatter_base"
+        if hasattr(torch.distributed, "_reduce_scatter_base") is False:
+            # no such method, to make mock_reduce_scatter_base 0 invocation, use an impossible name
+            method_string_reduce_scatter_base = "math.nan"  # just an arbitrary function not going to be called
+
+        method_string_all_gather_base = "torch.distributed._all_gather_base"
+        if hasattr(torch.distributed, "_all_gather_base") is False:
+            # no such method, to make mock_all_gather_base 0 invocation, use an impossible name
+            method_string_all_gather_base = "math.nan"  # just an arbitrary function not going to be called
+
         with patch("torch.distributed.all_gather") as mock_all_gather:
             with patch("torch.distributed.reduce_scatter") as mock_reduce_scatter:
-                with model.no_sync():
-                    output = model(*batch)
-                    loss = model.module.get_loss(batch, output)
-                    loss.backward()
+                with patch(method_string_all_gather_base) as mock_all_gather_base:
+                    with patch(method_string_reduce_scatter_base) as mock_reduce_scatter_base:
+                        with model.no_sync():
+                            output = model(*batch)
+                            loss = model.module.get_loss(batch, output)
+                            loss.backward()
 
-                assert (
-                    mock_all_gather.call_count == expected_all_gather1
-                ), f"{mock_all_gather.call_count} != {expected_all_gather1}"
-                assert mock_reduce_scatter.call_count == 0, f"{mock_reduce_scatter.call_count} != 0"
+                        # the _base methods are activated when they are available.
+                        # the sum of the _base and public methods should stay the same.
+                        assert (
+                            mock_all_gather.call_count + mock_all_gather_base.call_count == expected_all_gather1
+                        ), f"{mock_all_gather.call_count +  mock_all_gather_base.call_count} != {expected_all_gather1}"
+                        assert (
+                            mock_reduce_scatter.call_count + mock_reduce_scatter_base.call_count == 0
+                        ), f"{mock_reduce_scatter.call_count +  mock_reduce_scatter_base.call_count} != 0"
 
-                output = model(*batch)
-                loss = model.module.get_loss(batch, output)
-                loss.backward()
+                        output = model(*batch)
+                        loss = model.module.get_loss(batch, output)
+                        loss.backward()
 
-                assert (
-                    mock_all_gather.call_count == expected_all_gather2
-                ), f"{mock_all_gather.call_count} != {expected_all_gather2}"
-                assert (
-                    mock_reduce_scatter.call_count == expected_reduce_scatter
-                ), f"{mock_reduce_scatter.call_count} != {expected_reduce_scatter}"
+                        assert (
+                            mock_all_gather.call_count + mock_all_gather_base.call_count == expected_all_gather2
+                        ), f"{mock_all_gather.call_count + mock_all_gather_base.call_count} != {expected_all_gather2}"
+                        assert (
+                            mock_reduce_scatter.call_count + mock_reduce_scatter_base.call_count
+                            == expected_reduce_scatter
+                        ), f"{mock_reduce_scatter.call_count + mock_reduce_scatter_base.call_count} != {expected_reduce_scatter}"
 
 
 if __name__ == "__main__":
