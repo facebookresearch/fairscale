@@ -17,7 +17,7 @@ from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
 from fairscale.nn.misc import ParamBucket
-from fairscale.utils.params import broadcast_object, calc_grad_norm, get_global_rank, recursive_copy_to_device
+from fairscale.utils.params import calc_grad_norm, get_global_rank, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
@@ -285,17 +285,18 @@ class OSS(Optimizer):
                     if should_send_state
                     else torch.tensor([0], dtype=torch.uint8, device=dist_device)
                 )
-                broadcast_object(
-                    state_to_share, src_rank=self.global_rank, group=self.group, dist_device=dist_device,
+                obj_list = [state_to_share]
+                dist.broadcast_object_list(
+                    obj_list, src=self.global_rank, group=self.group,
                 )
+                state_to_share = obj_list[0]
             else:
                 # Fetch the optim state from the other replicas
-                replica_state = broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=dist_device),
-                    src_rank=self._local_to_global_rank[rank],
-                    group=self.group,
-                    dist_device=dist_device,
+                obj_list = [torch.tensor([0], dtype=torch.uint8, device=dist_device)]
+                dist.broadcast_object_list(
+                    obj_list, src=self._local_to_global_rank[rank], group=self.group,
                 )
+                replica_state = obj_list[0]
 
                 if should_collect_state:
                     self._all_states.append(

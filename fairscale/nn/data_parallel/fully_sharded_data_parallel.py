@@ -495,13 +495,14 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.move_grads_to_cpu:
             total_norm = total_norm.cpu()
+
         # Now multiply each grad by (max_norm/total_norm), same as torch 1.7 https://tinyurl.com/3wtxhhqq)
         clip_coef = torch.tensor(max_norm, dtype=total_norm.dtype, device=total_norm.device) / (total_norm + 1e-6)
         if clip_coef < 1:
-
             # multiply by clip_coef
             for p in params_with_grad:
-                p.grad.detach().mul_(clip_coef.to(p.grad.device))  # type: ignore
+                assert p.grad is not None
+                p.grad.detach().mul_(clip_coef.to(p.grad.device))
 
         return total_norm
 
@@ -1465,7 +1466,7 @@ class FullyShardedDataParallel(nn.Module):
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     if hasattr(dist, "_all_gather_base"):
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
-                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)  # type: ignore
+                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)
                     else:
                         chunks = list(output_tensor.chunk(self.world_size))
                         dist.all_gather(chunks, p_data, group=self.process_group)

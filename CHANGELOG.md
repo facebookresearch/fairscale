@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- FSDP: better performance; use `_allgather_base` and `_reduce_scatter_base` when available [#729]
+
 ## [0.3.8] - 2021-07-12
 ### Fixed
 - checkpointing: Use dummy tensor to ensure backward pass is called. [#701]

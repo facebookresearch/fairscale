@@ -22,7 +22,6 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import fairscale.optim as optim
-import fairscale.utils as utils
 from fairscale.utils import torch_version
 from fairscale.utils.testing import (
     check_same_model_params,
@@ -36,15 +35,6 @@ BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO 
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
 RECIPIENT_RANK = 1
 
-try:
-    from torch.distributed import broadcast_object_list  # noqa
-
-    _torch_broadcast_object = True
-except ImportError:
-    from fairscale.utils.params import broadcast_object  # noqa
-
-    _torch_broadcast_object = False
-
 
 def dist_init(rank, world_size, tempfile_name, backend=BACKEND):
     url = "file://" + tempfile_name
@@ -52,15 +42,9 @@ def dist_init(rank, world_size, tempfile_name, backend=BACKEND):
 
 
 def sync_object_ranks(something_to_sync: Any, reference_rank: int, device: torch.device) -> Any:
-    if _torch_broadcast_object:
-        package = [something_to_sync]
-        dist.broadcast_object_list(package, src=reference_rank, group=dist.group.WORLD)
-        package_sync = package[0]
-    else:
-        package_sync = utils.params.broadcast_object(
-            something_to_sync, src_rank=reference_rank, group=dist.group.WORLD, dist_device=device
-        )
-
+    package = [something_to_sync]
+    dist.broadcast_object_list(package, src=reference_rank, group=dist.group.WORLD)
+    package_sync = package[0]
     return package_sync
 
 
