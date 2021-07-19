@@ -27,7 +27,7 @@ class Bucket:
             return
         # reduce-scatter bucket
         if hasattr(dist, "_reduce_scatter_base"):
-            dist._reduce_scatter_base(  # type: ignore
+            dist._reduce_scatter_base(
                 self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
             )
         else:
@@ -132,7 +132,7 @@ class ReduceScatterBucketer:
             output = torch.zeros_like(input_list[0])
             if hasattr(dist, "_reduce_scatter_base"):
                 input_flattened = torch.cat(input_list)
-                dist._reduce_scatter_base(output, input_flattened, group=group)  # type: ignore
+                dist._reduce_scatter_base(output, input_flattened, group=group)
             else:
                 # fallback
                 dist.reduce_scatter(output, input_list, group=group)
