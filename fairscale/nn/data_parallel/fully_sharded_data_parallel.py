@@ -12,7 +12,21 @@ from math import inf
 import time
 import traceback
 import typing
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 
 import torch
 from torch.autograd import Variable
@@ -31,7 +45,7 @@ from fairscale.utils.parallel import (
     get_process_group_cached,
     validate_process_group,
 )
-from fairscale.utils.params import broadcast_object, calc_grad_norm, recursive_copy_to_device
+from fairscale.utils.params import calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
 
@@ -1721,19 +1735,17 @@ class FullyShardedDataParallel(nn.Module):
             raise ValueError(msg)
 
     def _broadcast_pad_info_to_r0(self) -> List[List[List[int]]]:
-        """Collect [x.numel_padded_per_param for x in self._fsdp_instances] from teach rank."""
-        dummy_tensor = torch.tensor([0], dtype=torch.uint8, device=self.compute_device)
+        """Collect [x.numel_padded_per_param for x in self._fsdp_instances] from each rank."""
         world_pad_info: List[List[List[int]]] = []  # this will contain values from the whole world.
+        my_pad_info: List[List[int]] = [cast(List[int], m.numel_padded_per_param) for m in self._fsdp_instances]
         for rank in range(self.world_size):
             if rank == self.rank:
-                pad_info = [m.numel_padded_per_param for m in self._fsdp_instances]
+                pad_info = my_pad_info
             else:
-                pad_info = dummy_tensor  # type: ignore
-            pad_info = broadcast_object(
-                pad_info, src_rank=rank, group=self.process_group, dist_device=self.compute_device
-            )
+                pad_info = [[0]] * len(my_pad_info)
+            dist.broadcast_object_list(pad_info, src=rank, group=self.process_group)
             if self.rank == 0:
-                world_pad_info.append(pad_info)  # type: ignore
+                world_pad_info.append(pad_info)
         return world_pad_info
 
     def _gather_optim_state(
