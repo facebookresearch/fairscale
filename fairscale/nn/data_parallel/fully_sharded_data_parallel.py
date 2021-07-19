@@ -1464,6 +1464,7 @@ class FullyShardedDataParallel(nn.Module):
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     if hasattr(dist, "_all_gather_base"):
+                        # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
                         dist._all_gather_base(output_tensor, p_data, group=self.process_group)  # type: ignore
                     else:
                         chunks = list(output_tensor.chunk(self.world_size))
