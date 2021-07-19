@@ -24,6 +24,7 @@ from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.utils import torch_version
 from fairscale.utils.testing import dist_init, get_cycles_per_ms, skip_if_single_gpu, teardown, temp_files_ctx
 
+
 class Layer(nn.Module):
     def __init__(self, compute_cycles, has_params: bool):
         super().__init__()
