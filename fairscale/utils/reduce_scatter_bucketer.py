@@ -128,7 +128,7 @@ class ReduceScatterBucketer:
 
         bucket_shard_size = self._get_shard_size(first_input.element_size(), world_size)
         if first_input_size > bucket_shard_size:
-            # TODO: investigate how to avoid using torch.cat
+            # TODO: investigate how to avoid using torch.cat (because it seems to be slow for CPU tensors)
             # input is too big to fit in the bucket, reduce-scatter directly
             output = torch.zeros_like(input_list[0])
             if hasattr(dist, "_reduce_scatter_base"):
