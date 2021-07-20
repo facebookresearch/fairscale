@@ -36,15 +36,15 @@ gpu: &gpu
     CUDA_HOME: /usr/local/cuda-10.2
   machine:
     image: ubuntu-1604-cuda-10.2:202012-01
-  resource_class: gpu.large
+  resource_class: gpu.nvidia.small
 
 gpu_cu111: &gpu_cu111
   environment:
-    CUDA_VERSION: "11.1"
-    CUDA_HOME: /usr/local/cuda-11.1
+    CUDA_VERSION: "11.2"
+    CUDA_HOME: /usr/local/cuda-11.2
   machine:
-    image: ubuntu-1604-cuda-11.1:202012-01
-  resource_class: gpu.large
+    image: ubuntu-2004-cuda-11.2:202103-01
+  resource_class: gpu.nvidia.small
 
 # -------------------------------------------------------------------------------------
 # Re-usable commands
