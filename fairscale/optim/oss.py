@@ -289,7 +289,6 @@ class OSS(Optimizer):
                 dist.broadcast_object_list(
                     obj_list, src=self.global_rank, group=self.group,
                 )
-                state_to_share = obj_list[0]
             else:
                 # Fetch the optim state from the other replicas
                 obj_list = [torch.tensor([0], dtype=torch.uint8, device=dist_device)]

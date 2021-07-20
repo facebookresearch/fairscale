@@ -461,7 +461,7 @@ jobs:
 
       # Run this to make sure we use python3 from the system.
       - setup_pyenv:
-          version: 3.7.0
+          version: 3.8.6
 
       - <<: *setup_venv
 
@@ -502,7 +502,7 @@ jobs:
 
       # Run this to make sure we use python3 from the system.
       - setup_pyenv:
-          version: 3.7.0
+          version: 3.8.6
 
       - <<: *setup_venv
 
