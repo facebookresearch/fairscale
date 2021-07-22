@@ -12,7 +12,21 @@ from math import inf
 import time
 import traceback
 import typing
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 
 import torch
 from torch.autograd import Variable
@@ -293,18 +307,22 @@ class FullyShardedDataParallel(nn.Module):
                 params.append(param)
 
         self._has_params = len(params) > 0
-        if not self._has_params:
-            self.flatten_parameters = False
 
+        # For now, it is either all flatten or none. This will be extended to multiple flatten
+        # groups later.
+        to_be_flatten_params: List[List[Parameter]] = [[]]
+        remining_params = params
         if self.flatten_parameters:
-            self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=params)
-            del module  # free original module in case it helps garbage collection
-            self.param_paths = ["flat_param"]
-            self.params = [self._fsdp_wrapped_module.flat_param]
-        else:
-            self._fsdp_wrapped_module = module
-            self.param_paths = param_names
-            self.params = params
+            to_be_flatten_params = [params]
+            remining_params = []
+
+        self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=to_be_flatten_params)
+        del module  # free original module in case it helps garbage collection
+
+        # Now, keep a list of to the flatten and remining params for doing sharding, gradient
+        # hooks, etc. in FSDP wrapper.
+        self.params = cast(List[Parameter], self._fsdp_wrapped_module.flat_params) + remining_params
+        self._num_flatten_params = len(self._fsdp_wrapped_module.flat_params)
 
         # Shard module parameters in place
         self._shard_parameters_()
@@ -367,8 +385,10 @@ class FullyShardedDataParallel(nn.Module):
         self.gradient_postdivide_factor = post
 
     @property
-    def module(self) -> nn.Module:
-        return self._fsdp_wrapped_module  # note: may be a FlattenParamsWrapper instance
+    def module(self) -> FlattenParamsWrapper:
+        """ make model.module accessible, just like DDP. """
+        assert isinstance(self._fsdp_wrapped_module, FlattenParamsWrapper)
+        return self._fsdp_wrapped_module
 
     def apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":
         """
@@ -668,11 +688,7 @@ class FullyShardedDataParallel(nn.Module):
                 state_dict = super().state_dict(*args, **kwargs)
         else:
             maybe_cast_buffers(torch.float32)
-            if self.flatten_parameters:
-                assert isinstance(self.module, FlattenParamsWrapper)
-                state_dict = self.module.flat_state_dict(*args, **kwargs)
-            else:
-                state_dict = super().state_dict(*args, **kwargs)
+            state_dict = self.module.flat_state_dict(*args, **kwargs)
 
         if self.move_params_to_cpu:
             for k in state_dict.keys():
@@ -827,13 +843,15 @@ class FullyShardedDataParallel(nn.Module):
             full_tensors = self._rebuild_full_params(force_full_precision=True)
             assert full_tensors is not None
             with contextlib.ExitStack() as stack:
-                if self.flatten_parameters and self.module.is_flattened:
+                if self.module.is_flattened:
                     # Update flattened views to point to fully-sized tensors. We
-                    # use self.params[0] instead of full_tensors since the
+                    # use self.params instead of full_tensors since the
                     # latter may contain padding.
-                    assert len(self.params) == 1
-                    assert isinstance(self.module, FlattenParamsWrapper)
-                    stack.enter_context(self.module.unflatten_params(flat_params=[self.params[0]]))
+                    stack.enter_context(
+                        self.module.unflatten_params(
+                            flat_params=[p.data for p in self.params[: self._num_flatten_params]]
+                        )
+                    )
                 try:
                     yield
                 finally:
@@ -1974,6 +1992,7 @@ def _pre_load_state_dict_hook(
 
 
 def _clean_path(path: str) -> str:
+    """ Remove FSDP related wrapper modules from a given state dict key str path. """
     return ".".join([split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}])
 
 

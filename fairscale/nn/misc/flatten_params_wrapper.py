@@ -121,9 +121,12 @@ class FlattenParamsWrapper(nn.Module):
 
     Args:
         module (nn.Module):
-            module to wrap.
+            The module to wrap.
         param_list (Optional[List[List[nn.Parameter]]]):
-            only flatten parameters appearing in the given groups
+            Only flatten parameters appearing in the given groups.
+            If the param_list is an empty list, then no parameters will get flattened.
+            Note, if a single param is in one of the list, it still get flattened and the
+            original param is removed and replaced with the flatten one.
             Default: None, flatten all parameters (if any)
     """
 
