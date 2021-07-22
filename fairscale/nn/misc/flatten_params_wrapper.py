@@ -204,7 +204,7 @@ class FlattenParamsWrapper(nn.Module):
         self._auto_unflatten_state_dict = True
 
     @property
-    def module(self) -> nn.Module:
+    def module(self) -> Any:
         """ Support fpw.module in case we are immitating DDP, which has .module
             property to the underlying module.
         """
@@ -352,6 +352,10 @@ class FlattenParamsWrapper(nn.Module):
             return super().__getattr__(name)  # defer to nn.Module's logic
         except AttributeError:
             return getattr(self.module, name)  # fallback to wrapped module
+
+    def __getitem__(self, key: int) -> Any:
+        """Forward indexing calls in case it is a nn.Sequential."""
+        return self.module.__getitem__(key)
 
     @typing.overload
     def state_dict(
