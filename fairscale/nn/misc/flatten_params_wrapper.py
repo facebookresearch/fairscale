@@ -354,7 +354,7 @@ class FlattenParamsWrapper(nn.Module):
             return getattr(self.module, name)  # fallback to wrapped module
 
     def __getitem__(self, key: int) -> Any:
-        """Forward indexing calls in case it is a nn.Sequential."""
+        """Forward indexing calls in case the module is a nn.Sequential."""
         return self.module.__getitem__(key)
 
     @typing.overload

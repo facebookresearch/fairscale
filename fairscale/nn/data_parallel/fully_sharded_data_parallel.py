@@ -649,6 +649,10 @@ class FullyShardedDataParallel(nn.Module):
         del self.orig_sizes
         self._reset_lazy_init()
 
+    def __getitem__(self, key: int) -> Any:
+        """Forward indexing calls in case the module is a nn.Sequential."""
+        return self.module.__getitem__(key)
+
     @typing.overload
     def state_dict(
         self, destination: Mapping[str, torch.Tensor], prefix: str = ..., keep_vars: bool = ...
