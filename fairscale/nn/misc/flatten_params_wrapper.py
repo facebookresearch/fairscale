@@ -275,11 +275,11 @@ class FlattenParamsWrapper(nn.Module):
         return params, param_infos, shared_param_infos
 
     @property
-    def _param_infos(self) -> chain[Tuple[str, nn.Module, str]]:
+    def _param_infos(self) -> Iterator[Tuple[str, nn.Module, str]]:
         return chain(*[p._param_infos for p in self.flat_params])
 
     @property
-    def _shared_param_infos(self) -> chain[Tuple[nn.Module, str, nn.Module, str]]:
+    def _shared_param_infos(self) -> Iterator[Tuple[nn.Module, str, nn.Module, str]]:
         return chain(*[p._shared_param_infos for p in self.flat_params])
 
     def _flatten_params(self, flat_params: List[FlatParameter]) -> None:
@@ -442,7 +442,7 @@ class FlattenParamsWrapper(nn.Module):
         self._unflatten_params_as_views()
         return self.module(*inputs, **kwinputs)
 
-    def get_param_views(self, external_data_list: Optional[List[Optional[Tensor]]] = None) -> chain[Tensor]:
+    def get_param_views(self, external_data_list: Optional[List[Optional[Tensor]]] = None) -> Iterator[Tensor]:
         """ Used to get a generator over all views from a list of external data list. """
         params = self.flat_params
         if external_data_list is None:
