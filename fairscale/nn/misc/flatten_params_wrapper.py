@@ -154,15 +154,6 @@ class FlattenParamsWrapper(nn.Module):
         if param_list is None:
             param_list = list(module.parameters())
 
-        # Handle flat param names.
-        if flat_param_names is None:
-            flat_param_names = [f"{i}" for i, _ in enumerate(param_list)]
-        if len(flat_param_names) != len(param_list):
-            raise ValueError("Names and number of param lists must be equal")
-        if len(flat_param_names) != len(set(flat_param_names)):
-            raise ValueError("Each flat param must be given a unique name")
-        self.flat_param_names = [f"flat_param_{n}" for n in flat_param_names]
-
         # Be backward compatible and turn a single param list into a list of
         # a single list.
         if len(param_list) > 0 and isinstance(param_list[0], nn.Parameter):
@@ -203,6 +194,15 @@ class FlattenParamsWrapper(nn.Module):
             raise ValueError(f"Incorrect param groups {len(overall_param_set)} vs {self.num_param_managed}")
 
         self.flat_params: List[FlatParameter] = []
+
+        # Prepare flat param names.
+        if flat_param_names is None:
+            flat_param_names = [f"{i}" for i, _ in enumerate(self._param_sets)]
+        if len(flat_param_names) != len(self._param_sets):
+            raise ValueError("Names and number of param lists must be equal")
+        if len(flat_param_names) != len(set(flat_param_names)):
+            raise ValueError("Each flat param must be given a unique name")
+        self.flat_param_names = [f"flat_param_{n}" for n in flat_param_names]
 
         # Init all flat_params.
         for new_p_set in self._param_sets:
