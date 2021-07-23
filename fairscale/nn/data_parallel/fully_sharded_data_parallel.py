@@ -308,21 +308,30 @@ class FullyShardedDataParallel(nn.Module):
 
         self._has_params = len(params) > 0
 
-        # For now, it is either all flatten or none. This will be extended to multiple flatten
-        # groups later.
+        # For now, it is either all flatten or none flatten. This will be extended to
+        # multiple flatten groups in my next PR.
         to_be_flatten_params: List[List[Parameter]] = [[]]
-        remining_params = params
+        non_flatten_params = params
+        param_name_groups = [[n] for n in param_names]
         if self.flatten_parameters:
             to_be_flatten_params = [params]
-            remining_params = []
+            non_flatten_params = []
+            param_name_groups = [param_names]
+        del param_names
 
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=to_be_flatten_params)
         del module  # free original module in case it helps garbage collection
 
         # Now, keep a list of to the flatten and remining params for doing sharding, gradient
-        # hooks, etc. in FSDP wrapper.
-        self.params = cast(List[Parameter], self._fsdp_wrapped_module.flat_params) + remining_params
+        # hooks, etc. in this FSDP wrapper class. Note, the ordering of the
+        # list matters; flatten params are in the front.
+        #
+        # The self._num_flatten_params and self._param_name_groups are computed
+        # and kept to support summon_full_params and shard-to-full weight
+        # consolidation.
+        self.params = cast(List[Parameter], self._fsdp_wrapped_module.flat_params) + non_flatten_params
         self._num_flatten_params = len(self._fsdp_wrapped_module.flat_params)
+        self._param_name_groups = param_name_groups
 
         # Shard module parameters in place
         self._shard_parameters_()
@@ -1551,58 +1560,35 @@ class FullyShardedDataParallel(nn.Module):
     def local_metadata_dict(self) -> Dict[str, Any]:
         """
         Get the information needed to reconstruct the model from shards offline.
+
+        See the `consolidate_shard_weights` method below.
         """
-
-        params_metadata = []
-
+        param_metadata = []
         for path, m in self.named_modules():
-            if not isinstance(m, FullyShardedDataParallel):
-                continue
-
-            # Dealing with FSDP(flatten_parameter=False)
-            # There are as many sharded parameters as there parameters in the
-            # consolidated model, so we only need to export how to reshape the
-            # parameters to their orginal shape and take care of the padding
-            if not m.flatten_parameters:
-                params_metadata.append(
-                    {
-                        "fsdp_path": _clean_path(path),
-                        "is_flat": False,
-                        "num_padded": m.numel_padded_per_param,
-                        "param_names": [_clean_path(p) for p in m.param_paths],
-                        "param_shapes": [p._orig_size for p in m.params],
-                        "param_numels": [_numel_from_size(p._orig_size) for p in m.params],
-                        "no_broadcast_optim_state": m.no_broadcast_optim_state,
+            if isinstance(m, FullyShardedDataParallel):
+                metadata: Dict[str, Any] = {}
+                metadata["fsdp_path"] = _clean_path(path)
+                metadata["num_padded"] = m.numel_padded_per_param
+                for i, p in enumerate(m.params):
+                    if i < m._num_flatten_params:
+                        backing_param_name = m.module.flat_param_names[i]
+                        names, shapes, numels = m.module.metadata(i)
+                    else:
+                        assert len(m._param_name_groups[i]) == 1
+                        backing_param_name = m._param_name_groups[i][0]
+                        names = [backing_param_name]
+                        shapes = [p._orig_size]
+                        numels = [p._orig_size.numel()]
+                    backing_param_name = _clean_path(backing_param_name)
+                    metadata[backing_param_name] = {
+                        "names": [_clean_path(n) for n in names],
+                        "shapes": shapes,
+                        "numels": numels,
                     }
-                )
-
-            # Dealing with FSDP(flatten_parameter=True)
-            # Now, there is just one flattened parameter mapped to N different
-            # parameters, so we need to export additional information (numels)
-            # on how to split the "merged" parameters, by extracting the meta-data
-            # used in the FlattenParamsWrapper
-            else:
-                param_names = []
-                for module_path, param_name in m.param_path_infos:
-                    full_param_path = module_path + "." + param_name if module_path else param_name
-                    param_names.append(_clean_path(full_param_path))
-                params_metadata.append(
-                    {
-                        "fsdp_path": _clean_path(path),
-                        "is_flat": True,
-                        "num_padded": m.numel_padded_per_param,
-                        "param_names": param_names,
-                        # TODO (Min): we don't want to access the private _param_shapes and
-                        # _param_numels here. We want to dump metadata from FPW when there are
-                        # multiple groups of params.
-                        "param_shapes": m._fsdp_wrapped_module.flat_param._param_shapes,  # type: ignore
-                        "param_numels": m._fsdp_wrapped_module.flat_param._param_numels,  # type: ignore
-                        "no_broadcast_optim_state": m.no_broadcast_optim_state,
-                    }
-                )
+                param_metadata.append(metadata)
 
         buffer_names = [_clean_path(buffer_name) for buffer_name, _ in self.named_buffers(recurse=True)]
-        return dict(param_metadata=params_metadata, buffer_names=buffer_names)
+        return dict(param_metadata=param_metadata, buffer_names=buffer_names)
 
     @staticmethod
     def consolidate_shard_weights(
@@ -1624,6 +1610,18 @@ class FullyShardedDataParallel(nn.Module):
         This method is used to re-assemble checkpoints of shards without
         having to instantiate FSDP wrappers with the world size originally used
         to save the shards.
+
+        Args:
+            shard_weights (List[Dict[str, torch.Tensor]]):
+                List of dictionaries that contains sharded weights from
+                each rank.
+            shard_metadata (List[Dict[str, Any]]):
+                List of dictionaries that contains metadata from each shard.
+                See `local_metadata_dict` above.
+            with_module_buffers (bool):
+                If shard 0's buffer should be returned in the consolidated
+                weight dict.
+                Default: True.
         """
         if len(shard_weights) != len(shard_metadata) or not len(shard_weights):
             raise ValueError("Require meta data for each shard and non-empty shards")
@@ -1679,7 +1677,7 @@ class FullyShardedDataParallel(nn.Module):
         # Deal with the buffers, which are not parameters and are not sharded by FSDP
         # and therefore are replicated among the different shards.
         # We take the values of the first shard (this assumes that there is some form
-        # of synchronization between shards or that all shards buffers are equivalent)
+        # of synchronization between shards or that all shards buffers are equivalent).
         if with_module_buffers:
             for buffer_name in shard_metadata[0]["buffer_names"]:
                 consolidated_weights[buffer_name] = shard_weights[0][buffer_name]
@@ -1998,13 +1996,6 @@ def _pre_load_state_dict_hook(
 def _clean_path(path: str) -> str:
     """ Remove FSDP related wrapper modules from a given state dict key str path. """
     return ".".join([split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}])
-
-
-def _numel_from_size(size: torch.Size) -> int:
-    numel = 1
-    for dim in size:
-        numel *= dim
-    return numel
 
 
 def _unpad(shard: torch.Tensor, pad: int) -> torch.Tensor:

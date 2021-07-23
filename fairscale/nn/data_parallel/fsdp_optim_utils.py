@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 """These functions are used by FullyShardedDataParallel to help consolidate and shard optimizer states."""
 import copy
-from typing import Any, Dict, Generator, List, Tuple, cast
+from typing import Any, Dict, Iterator, List, Tuple, cast
 
 import torch
 
@@ -130,7 +130,7 @@ def _unflatten_optim_state(
             v_unpad = [t[:-np] if np > 0 else t for t, np in zip(v, pad_info[local_id])]
             flat_buffer = torch.cat(v_unpad)
             # Casting needed only for mypy.
-            param_views: Generator = cast(FlattenParamsWrapper, instance_list[local_id]).get_param_views([flat_buffer])
+            param_views: Iterator = cast(FlattenParamsWrapper, instance_list[local_id]).get_param_views([flat_buffer])
             for global_id, param_view in zip(sorted(local_to_global[local_id]), param_views):
                 assert k not in unflat_state[global_id], f"already added {k} to {global_id} {local_id}"
                 unflat_state[global_id][k] = param_view
