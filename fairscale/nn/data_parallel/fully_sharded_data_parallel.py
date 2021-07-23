@@ -1568,7 +1568,7 @@ class FullyShardedDataParallel(nn.Module):
             if isinstance(m, FullyShardedDataParallel):
                 metadata: Dict[str, Any] = {}
                 metadata["fsdp_path"] = _clean_path(path)
-                metadata["num_padded"] = m.numel_padded_per_param
+                metadata["params"] = {}
                 for i, p in enumerate(m.params):
                     if i < m._num_flatten_params:
                         backing_param_name = m.module.flat_param_names[i]
@@ -1580,10 +1580,11 @@ class FullyShardedDataParallel(nn.Module):
                         shapes = [p._orig_size]
                         numels = [p._orig_size.numel()]
                     backing_param_name = _clean_path(backing_param_name)
-                    metadata[backing_param_name] = {
+                    metadata["params"][backing_param_name] = {
                         "names": [_clean_path(n) for n in names],
                         "shapes": shapes,
                         "numels": numels,
+                        "padding_of_backing": m.numel_padded_per_param[i],
                     }
                 param_metadata.append(metadata)
 
@@ -1598,18 +1599,18 @@ class FullyShardedDataParallel(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """
         Given a list of weights and meta data associated to N shards, reconstruct
-        the weights of an equivalent consolidated (non-sharded) model.
+        the weights of an equivalent consolidated (non-sharded) state dict.
 
         Module parameters are consolidated using the shard metadata.
 
         Module buffers are taken from shard 0: this assumes that module buffers
         are either synchronized or that the shard 0 value is valid for all shards.
         If this behavior is not correct for your module (for instance if buffers
-        needs to be reduced instead), you can disable it with `with_module_buffers=False`.
+        needs to be all-reduced instead), you can disable it with `with_module_buffers=False`.
 
         This method is used to re-assemble checkpoints of shards without
-        having to instantiate FSDP wrappers with the world size originally used
-        to save the shards.
+        having to instantiate FSDP wrappers with the world size (i.e. large
+        number of GPUs) originally used to save the shards.
 
         Args:
             shard_weights (List[Dict[str, torch.Tensor]]):
@@ -1624,55 +1625,33 @@ class FullyShardedDataParallel(nn.Module):
                 Default: True.
         """
         if len(shard_weights) != len(shard_metadata) or not len(shard_weights):
-            raise ValueError("Require meta data for each shard and non-empty shards")
+            raise ValueError("Require metadata for each shard and non-empty shards")
 
         consolidated_weights = {}
         original_world_size = len(shard_weights)
 
-        # Deal with the parameters of the model, for which there should be
-        # a corresponding entry in the metadata
-        shard_0_metadata = shard_metadata[0]["param_metadata"]
-        num_fsdp_wrappers = len(shard_0_metadata)
-        for fsdp_wrapper_index in range(num_fsdp_wrappers):
-            fsdp_path = shard_0_metadata[fsdp_wrapper_index]["fsdp_path"]
-            param_names = shard_0_metadata[fsdp_wrapper_index]["param_names"]
-            param_numels = shard_0_metadata[fsdp_wrapper_index]["param_numels"]
-            param_shapes = shard_0_metadata[fsdp_wrapper_index]["param_shapes"]
-
-            # Dealing with FSDP(flatten_parameter=False)
-            # For each parameter of the FSDP wrapper, get rid of the padding on each shard,
-            # concatenate the shards and reshape them to their initial shape
-            if not shard_0_metadata[fsdp_wrapper_index]["is_flat"]:
-                for i in range(len(param_names)):
-                    param_name = param_names[i]
-                    param_name = ".".join([fsdp_path, param_name]) if fsdp_path else param_name
-                    shards = []
-                    for rank in range(original_world_size):
-                        shard = shard_weights[rank][param_name]
-                        pad = shard_metadata[rank]["param_metadata"][fsdp_wrapper_index]["num_padded"][i]
-                        shards.append(_unpad(shard, pad))
-                    full_flatten_param = torch.cat(shards, dim=0)
-                    consolidated_weights[param_name] = full_flatten_param.view(param_shapes[i])
-
-            # Dealing with FSDP(flatten_parameter=True)
-            # Concatenate the merged flat_param after removing the padding
-            # and then split the flat_param by using numel, before reshaping each
-            # split to the original shape
-            else:
-                # Concatenate the flat_param parameter after removing the padding
-                flat_param_name = ".".join([fsdp_path, "flat_param_0"]) if fsdp_path else "flat_param_0"
+        # For every FSDP instance.
+        for fsdp_obj_idx, metadata in enumerate(shard_metadata[0]["param_metadata"]):
+            fsdp_path = metadata["fsdp_path"]
+            params = metadata["params"]
+            # For every this-FSDP-owned param, flattened or not.
+            for backing_param_name, v in params.items():
+                in_state_dict_key = ".".join([fsdp_path, backing_param_name]) if fsdp_path else backing_param_name
+                # Get full param back with pad removed.
                 shards = []
                 for rank in range(original_world_size):
-                    shard = shard_weights[rank][flat_param_name]
-                    pad = shard_metadata[rank]["param_metadata"][fsdp_wrapper_index]["num_padded"][0]
+                    shard = shard_weights[rank][in_state_dict_key]
+                    pad = shard_metadata[rank]["param_metadata"][fsdp_obj_idx]["params"][backing_param_name][
+                        "padding_of_backing"
+                    ]
                     shards.append(_unpad(shard, pad))
-                full_flatten_param = torch.cat(shards, dim=0)
-
-                # Split the flat_param into its constituents
-                assert sum(param_numels) == full_flatten_param.size(0)
-                for n, t, s in zip(param_names, full_flatten_param.split(param_numels), param_shapes):
-                    full_name = fsdp_path + "." + n if fsdp_path else n
-                    consolidated_weights[full_name] = t.view(s)
+                full_param = torch.cat(shards, dim=0)
+                # (Potentially), split the full param and create original params.
+                names, shapes, numels, _ = v.values()
+                assert sum(numels) == full_param.size(0)
+                for n, t, s in zip(names, full_param.split(numels), shapes):
+                    out_state_dict_key = ".".join([fsdp_path, n]) if fsdp_path else n
+                    consolidated_weights[out_state_dict_key] = t.view(s)
 
         # Deal with the buffers, which are not parameters and are not sharded by FSDP
         # and therefore are replicated among the different shards.
