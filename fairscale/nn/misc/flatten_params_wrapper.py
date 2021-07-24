@@ -95,9 +95,9 @@ class FlatParameter(nn.Parameter):
         names = [".".join([m, n]) if m else n for (m, _, n) in self._param_infos]
         return names, self._param_shapes, self._param_numels
 
-    def __setstate__(self, state: Tuple[Any, Any]) -> None:
+    def __setstate__(self, state: Tuple[Any, Any, Any, Any]) -> None:
         """ Use by pickle to set the internal states. """
-        self._param_numels, self._param_shapes = state
+        (self._param_numels, self._param_shapes, self._param_infos, self._shared_param_infos) = state
         assert self.numel() <= sum(
             self._param_numels
         ), f"Incorrect pickling {self.numel()} vs. {sum(self._param_numels)}"
@@ -106,8 +106,10 @@ class FlatParameter(nn.Parameter):
         """ Support pickling between ranks. """
         return (
             FlatParameter,  # Callable
-            ([self.data], self.requires_grad),  # Args to the callable above
-            (self._param_numels, self._param_shapes),  # Args to __setstate__
+            # Args to the callable above
+            ([self.data], self.requires_grad),
+            # Args to __setstate__
+            (self._param_numels, self._param_shapes, self._param_infos, self._shared_param_infos),
         )
 
 
