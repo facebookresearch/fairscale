@@ -322,12 +322,12 @@ class FullyShardedDataParallel(nn.Module):
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=to_be_flatten_params)
         del module  # free original module in case it helps garbage collection
 
-        # Now, keep a list of to the flatten and remining params for doing sharding, gradient
-        # hooks, etc. in this FSDP wrapper class. Note, the ordering of the
-        # list matters; flatten params are in the front.
+        # Now, in this FSDP wrapper class, we keep a list of to-be-flatten and remining params
+        # for doing sharding, gradient hooks, etc. Note, the ordering of the
+        # list matters: flatten params are always in the front.
         #
         # The self._num_flatten_params and self._param_name_groups are computed
-        # and kept to support summon_full_params and shard-to-full weight
+        # and kept here to support summon_full_params and shard-to-full weight
         # consolidation.
         self.params = cast(List[Parameter], self._fsdp_wrapped_module.flat_params) + non_flatten_params
         self._num_flatten_params = len(self._fsdp_wrapped_module.flat_params)
