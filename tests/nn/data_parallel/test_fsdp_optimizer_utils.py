@@ -41,13 +41,69 @@ class TestOptimizerUtils(DistributedTest):
         name_func=rename_test,
     )
     def test_consolidate_optimizer(self, optim_fn, transformer):
-        config = {"mixed_precision": True, "flatten_parameters": True}
+        config = {"mixed_precision": True, "flatten_parameters": True, 'compute_dtype': torch.float32}
         config["compute_dtype"] = torch.float32
         test_fn = functools.partial(
             self._test_consolidated_optimizer, config, optim_fn=optim_fn, transformer=transformer
         )
 
         spawn_and_init(test_fn, world_sizes=[min(torch.cuda.device_count(), 4)])
+
+    @parameterized.expand([[True], [False]], name_func=rename_test,)
+    def test_consolidate_weights(self, transformer):
+        config = {"mixed_precision": True, "flatten_parameters": True, 'compute_dtype': torch.float32}
+        test_fn = functools.partial(
+            self._test_consolidate_weights, config, transformer=transformer
+        )
+
+        spawn_and_init(test_fn, world_sizes=[min(torch.cuda.device_count(), 4)])
+
+    @classmethod
+    def _test_consolidate_weights(self, config, rank, group, transformer=False):
+        """FSDP.gather_full_optim_state_dict() should return something very similar to optimizer.state_dict()"""
+        # Establish reference behavior.
+
+        if transformer:
+            fsdp = self.get_wrapped_model(group, config=config).cuda()
+        else:
+            fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config)).cuda()
+
+
+        optim = Adam(fsdp.parameters(), lr=0.01,)
+        optim.zero_grad()
+        with torch.cuda.amp.autocast(enabled=True):
+            x = fsdp.module.get_input(torch.device("cuda"))
+            output = fsdp(*x)
+            loss = fsdp.module.get_loss(x, output).to("cuda")
+            fsdp.module.run_backward(loss)
+            optim.step()
+        # Save a bunch of checkpoint, one by shard
+        cp_data = {
+            "weights": {k: v.cpu() for k, v in fsdp.local_state_dict().items()},
+            "meta": fsdp.local_metadata_dict(),
+        }
+        torch.save(cp_data, f"checkpoint_{fsdp.rank}.torch")
+        # Note[@sshleifer]: torch.distributed.barrier() here causes test to hang.
+        if fsdp.rank > 0:
+            return
+        all_checkpoints = [torch.load(f"checkpoint_{rank}.torch") for rank in range(fsdp.world_size)]
+        consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
+            shard_weights=[c["weights"] for c in all_checkpoints],
+            shard_metadata=[c["meta"] for c in all_checkpoints],
+        )
+        print(f'Done consolidating')
+
+        full_model_state_dict = fsdp.state_dict()
+        print(f'Done calling state dict')
+        full_model_extra = set(full_model_state_dict).difference(set(consolidated_checkpoint))
+        consolidated_extra = set(consolidated_checkpoint).difference(set(full_model_state_dict))
+
+        msg = f'full model extra keys: {full_model_extra}, consolidated extra {consolidated_extra}'
+
+        for k in full_model_state_dict.keys():
+            assert consolidated_checkpoint[k].shape == full_model_state_dict[k].shape
+        assert set(full_model_state_dict.keys()) == set(consolidated_checkpoint.keys()), msg
+        print('Done')
 
     @classmethod
     def _test_consolidated_optimizer(self, config, rank, group, optim_fn=torch.optim.SGD, transformer=False):
@@ -83,13 +139,7 @@ class TestOptimizerUtils(DistributedTest):
             optim_unwrapped.step()
         unwrapped_sd = optim_unwrapped.state_dict()
 
-        # Save a bunch of checkpoint, one by shard
-        cp_data = {
-            "weights": {k: v.cpu() for k, v in fsdp.local_state_dict().items()},
-            "meta": fsdp.local_metadata_dict(),
-        }
-        torch.save(cp_data, f"checkpoint_{fsdp.rank}.torch")
-        #torch.distributed.barrier()  # type: ignore
+
 
         if not transformer:
             no_broadcast_children = [x for x in fsdp._fsdp_instances if x.no_broadcast_optim_state]
@@ -112,27 +162,12 @@ class TestOptimizerUtils(DistributedTest):
             assert sd is None
             return
 
-        all_checkpoints = [torch.load(f"checkpoint_{rank}.torch") for rank in range(fsdp.world_size)]
-        consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
-            shard_weights=[c["weights"] for c in all_checkpoints],
-            shard_metadata=[c["meta"] for c in all_checkpoints],
-        )
-        full_model_state_dict = fsdp.state_dict()
-        full_model_extra = set(full_model_state_dict).difference(set(consolidated_checkpoint))
-        consolidated_extra = set(consolidated_checkpoint).difference(set(full_model_state_dict))
-
-        msg = f'full model extra keys: {full_model_extra}, consolidated extra {consolidated_extra}'
-
-        for k in full_model_state_dict.keys():
-            assert consolidated_checkpoint[k].shape == full_model_state_dict[k].shape
-        assert set(full_model_state_dict.keys()) == set(consolidated_checkpoint.keys()), msg
         # assert whole state dict on CPU
         for k, v in sd["state"].items():
             for buffer_name, t in v.items():
                 if torch.is_tensor(t):
                     msg = f"got device {t.device} for {k}: {buffer_name}. expected CPU"
                     assert t.device == torch.device("cpu"), msg
-
         unflat_state = sd["state"]
         assert "uncollected_local_ids" in sd
         shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
