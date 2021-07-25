@@ -10,7 +10,7 @@ import torch.nn as nn
 
 from fairscale.nn import FullyShardedDataParallel
 from fairscale.utils.testing import in_temporary_directory, skip_if_single_gpu, temp_files_ctx
-from .test_fsdp import MixtureOfExperts
+
 
 class ConvolutionalModel(nn.Module):
     def __init__(self, embedding_size: int, with_fsdp: bool, process_group):
@@ -53,11 +53,8 @@ class ConvolutionalModel(nn.Module):
         return x
 
 
-def _create_model(embedding_size: int, with_fsdp: bool, process_group, flatten_parameters: bool = True, is_moe=False):
-    if is_moe:
-        model = MixtureOfExperts(process_group, wrapper_config={'flatten_parameters': flatten_parameters}, d_input=embedding_size).cuda()
-    else:
-        model = ConvolutionalModel(with_fsdp=with_fsdp, process_group=process_group, embedding_size=embedding_size).cuda()
+def _create_model(embedding_size: int, with_fsdp: bool, process_group, flatten_parameters: bool = True):
+    model = ConvolutionalModel(with_fsdp=with_fsdp, process_group=process_group, embedding_size=embedding_size).cuda()
     if with_fsdp:
         return FullyShardedDataParallel(model, process_group=process_group, flatten_parameters=flatten_parameters)
     else:
@@ -68,7 +65,7 @@ def _load_sharded_checkpoint(rank: int):
     return torch.load(f"checkpoint_{rank}.torch")  # type: ignore
 
 
-def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, flatten_parameters: bool, is_moe: bool):
+def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, flatten_parameters: bool):
     torch.manual_seed(0)
     torch.cuda.set_device(gpu_id)
     torch.distributed.init_process_group(
@@ -85,7 +82,6 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, f
         process_group=process_group,
         embedding_size=embedding_size,
         flatten_parameters=flatten_parameters,
-        is_moe=is_moe,
     )
     criterion = nn.MSELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
@@ -143,10 +139,9 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, f
 @skip_if_single_gpu
 @pytest.mark.parametrize("embedding_size", [128, 129])
 @pytest.mark.parametrize("flatten_parameters", [True, False])
-@pytest.mark.parametrize("is_moe", [True, False])
-def test_consolidation(embedding_size: int, flatten_parameters: bool, is_moe: bool):
+def test_consolidation(embedding_size: int, flatten_parameters: bool):
 
     world_size = 2
     with in_temporary_directory():
         with temp_files_ctx(num=1) as temp_files:
-            mp.spawn(_worker, (temp_files[0], world_size, embedding_size, flatten_parameters, is_moe), nprocs=world_size)
+            mp.spawn(_worker, (temp_files[0], world_size, embedding_size, flatten_parameters), nprocs=world_size)

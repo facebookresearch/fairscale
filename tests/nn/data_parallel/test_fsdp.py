@@ -624,7 +624,7 @@ class DummyDDP(nn.Module):
 
 
 class MixtureOfExperts(NestedWrappedModule):
-    def __init__(self, group, wrapper_config, checkpoint_act=False, delay_before_free_ms=0, d_input = 8):
+    def __init__(self, group, wrapper_config, checkpoint_act=False, delay_before_free_ms=0):
         super().__init__(group, wrapper_config)
         self.group = group
         self.delay_before_free_ms = delay_before_free_ms
@@ -633,7 +633,7 @@ class MixtureOfExperts(NestedWrappedModule):
         torch.manual_seed(42 + group.rank())
         d_expert = 23
         d_shared = 12
-
+        d_input = 8
         expert = nn.Linear(d_expert, d_shared)
 
         self.num_expert_params = sum([p.numel() for p in expert.parameters()])
