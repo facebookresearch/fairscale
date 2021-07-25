@@ -1576,7 +1576,7 @@ class FullyShardedDataParallel(nn.Module):
                     src_param_path = _clean_path(mpath_src + "." + src_name if mpath_src else src_name)
                     dst_param_path = _clean_path(mpath_dst + "." + dst_name if mpath_dst else dst_name)
                     shared_param_info.append((src_param_path, dst_param_path))
-                metadata["shared_param_info"] =  shared_param_info
+                metadata["shared_param_info"] = shared_param_info
 
                 for i, p in enumerate(m.params):
                     if i < m._num_flatten_params:
@@ -1654,7 +1654,8 @@ class FullyShardedDataParallel(nn.Module):
                         "padding_of_backing"
                     ]
                     shards.append(_unpad(shard, pad))
-                    if metadata["no_broadcast_optim_state"]: break
+                    if metadata["no_broadcast_optim_state"]:
+                        break
                 full_param = torch.cat(shards, dim=0)
                 # (Potentially), split the full param and create original params.
                 names, shapes, numels, _ = v.values()
@@ -1664,7 +1665,7 @@ class FullyShardedDataParallel(nn.Module):
                     consolidated_weights[out_state_dict_key] = t.view(s)
 
         # copy shared parameters
-        for src_path, dest_path in metadata['shared_param_info']:
+        for src_path, dest_path in metadata["shared_param_info"]:
             consolidated_weights[dest_path] = consolidated_weights[src_path]
 
         # Deal with the buffers, which are not parameters and are not sharded by FSDP
