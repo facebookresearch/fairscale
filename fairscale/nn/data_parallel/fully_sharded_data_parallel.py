@@ -37,6 +37,8 @@ from fairscale.utils.state_dict import replace_by_prefix_
 
 from . import fsdp_optim_utils as ou
 
+
+
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
 
@@ -1542,6 +1544,7 @@ class FullyShardedDataParallel(nn.Module):
             # consolidated model, so we only need to export how to reshape the
             # parameters to their orginal shape and take care of the padding
             if not m.flatten_parameters:
+
                 params_metadata.append(
                     {
                         "fsdp_path": _clean_path(path),
@@ -1553,7 +1556,6 @@ class FullyShardedDataParallel(nn.Module):
                         "no_broadcast_optim_state": m.no_broadcast_optim_state,
                     }
                 )
-
             # Dealing with FSDP(flatten_parameter=True)
             # Now, there is just one flattened parameter mapped to N different
             # parameters, so we need to export additional information (numels)
@@ -1622,17 +1624,19 @@ class FullyShardedDataParallel(nn.Module):
         shard_0_metadata = shard_metadata[0]["param_metadata"]
         num_fsdp_wrappers = len(shard_0_metadata)
         for fsdp_wrapper_index in range(num_fsdp_wrappers):
-            fsdp_path = shard_0_metadata[fsdp_wrapper_index]["fsdp_path"]
-            param_names = shard_0_metadata[fsdp_wrapper_index]["param_names"]
-            param_numels = shard_0_metadata[fsdp_wrapper_index]["param_numels"]
-            param_shapes = shard_0_metadata[fsdp_wrapper_index]["param_shapes"]
-            shared_param_info = shard_0_metadata[fsdp_wrapper_index]["shared_param_info"]
+            m = shard_0_metadata[fsdp_wrapper_index]
+            fsdp_path = m["fsdp_path"]
+            param_names = m["param_names"]
+            param_numels = m["param_numels"]
+            param_shapes = m["param_shapes"]
+            shared_param_info = m["shared_param_info"]
+            #print()
 
 
             # Dealing with FSDP(flatten_parameter=False)
             # For each parameter of the FSDP wrapper, get rid of the padding on each shard,
             # concatenate the shards and reshape them to their initial shape
-            if not shard_0_metadata[fsdp_wrapper_index]["is_flat"]:
+            if not m["is_flat"]:
                 for i in range(len(param_names)):
                     param_name = param_names[i]
                     param_name = ".".join([fsdp_path, param_name]) if fsdp_path else param_name
@@ -1641,6 +1645,8 @@ class FullyShardedDataParallel(nn.Module):
                         shard = shard_weights[rank][param_name]
                         pad = shard_metadata[rank]["param_metadata"][fsdp_wrapper_index]["num_padded"][i]
                         shards.append(_unpad(shard, pad))
+                        if m["no_broadcast_optim_state"]: break
+
                     full_flatten_param = torch.cat(shards, dim=0)
                     consolidated_weights[param_name] = full_flatten_param.view(param_shapes[i])
 
@@ -1656,6 +1662,7 @@ class FullyShardedDataParallel(nn.Module):
                     shard = shard_weights[rank][flat_param_name]
                     pad = shard_metadata[rank]["param_metadata"][fsdp_wrapper_index]["num_padded"][0]
                     shards.append(_unpad(shard, pad))
+                    if m["no_broadcast_optim_state"]: break
                     print(f'R{rank}: {pad}, shard_shape: {shard.shape}')
                 print(f'{[x.shape for x in shards]}')
                 full_flatten_param = torch.cat(shards, dim=0)
@@ -1668,7 +1675,6 @@ class FullyShardedDataParallel(nn.Module):
                     consolidated_weights[full_name] = t.view(s)
             print(f'dealing with shared params')
             for src_path, dest_path in shared_param_info:
-                assert src_path in consolidated_weights
                 consolidated_weights[dest_path] = consolidated_weights[src_path]
             print(f'done with shared params')
 

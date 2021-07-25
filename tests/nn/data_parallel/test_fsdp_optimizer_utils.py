@@ -83,18 +83,28 @@ class TestOptimizerUtils(DistributedTest):
             "meta": fsdp.local_metadata_dict(),
         }
         torch.save(cp_data, f"checkpoint_{fsdp.rank}.torch")
+        print(f'R{fsdp.rank}: done save')
+        full_model_state_dict = fsdp.state_dict()
+        print(f'Done calling state dict')
+        torch.distributed.barrier()
         # Note[@sshleifer]: torch.distributed.barrier() here causes test to hang.
         if fsdp.rank > 0:
             return
-        all_checkpoints = [torch.load(f"checkpoint_{rank}.torch") for rank in range(fsdp.world_size)]
+        paths = [f"checkpoint_{rank}.torch" for rank in range(fsdp.world_size)]
+        for _ in range(5):
+            import os
+            if all([os.path.exists(p) for p in paths]): break
+            from time import sleep
+            sleep(1)
+
+        all_checkpoints = [torch.load(p) for p in paths]
         consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
             shard_weights=[c["weights"] for c in all_checkpoints],
             shard_metadata=[c["meta"] for c in all_checkpoints],
         )
         print(f'Done consolidating')
 
-        full_model_state_dict = fsdp.state_dict()
-        print(f'Done calling state dict')
+
         full_model_extra = set(full_model_state_dict).difference(set(consolidated_checkpoint))
         consolidated_extra = set(consolidated_checkpoint).difference(set(full_model_state_dict))
 
