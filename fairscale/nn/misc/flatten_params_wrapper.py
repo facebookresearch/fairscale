@@ -75,8 +75,7 @@ class FlatParameter(nn.Parameter):
 
         # These are set by FPW class below, not by this class itself.
         self._param_infos: List[Tuple[str, nn.Module, str]] = []
-        self._shared_param_infos: List[Tuple[nn.Module, str, nn.Module, str]] = []
-
+        self._shared_param_infos: List[Tuple[str, str, nn.Module, str, nn.Module, str]] = []
     def get_param_views(self, external_data: Optional[Tensor] = None) -> Iterator[Tensor]:
         """ Return a generator of views that map to the original parameters. """
         # Note, self.data could be sharded, so its numel is <= to the sum.
@@ -263,10 +262,10 @@ class FlattenParamsWrapper(nn.Module):
             for n, p in m.named_parameters(recurse=False):
                 if p is not None and (m, n) in p_set:
                     if p in shared_param_memo:
-                        shared_m, shared_n = shared_param_memo[p]
-                        shared_param_infos.append((m, n, shared_m, shared_n))
+                        mname, shared_m, shared_n = shared_param_memo[p]
+                        shared_param_infos.append((module_name, mname, m, n, shared_m, shared_n))
                     else:
-                        shared_param_memo[p] = (m, n)
+                        shared_param_memo[p] = (module_name, m, n)
                         param_infos.append((module_name, m, n))
                         params.append(p)
         del shared_param_memo
@@ -300,7 +299,7 @@ class FlattenParamsWrapper(nn.Module):
         # deregister the names as parameters
         for _, m, n in self._param_infos:
             delattr(m, n)
-        for m, n, _, _ in self._shared_param_infos:
+        for _, _, m, n, _, _ in self._shared_param_infos:
             delattr(m, n)
 
         # register the views as plain attributes
@@ -318,7 +317,7 @@ class FlattenParamsWrapper(nn.Module):
             if hasattr(m, n):
                 delattr(m, n)
             m.register_parameter(n, nn.Parameter(p))
-        for (m, n, shared_m, shared_n) in self._shared_param_infos:
+        for (_, _, m, n, shared_m, shared_n) in self._shared_param_infos:
             if hasattr(m, n):
                 delattr(m, n)
             m.register_parameter(n, getattr(shared_m, shared_n))
@@ -336,7 +335,7 @@ class FlattenParamsWrapper(nn.Module):
         ps = self.get_param_views()
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(m, n, p)  # This will set as plain attr
-        for (m, n, shared_m, shared_n) in self._shared_param_infos:
+        for (_, _, m, n, shared_m, shared_n) in self._shared_param_infos:
             setattr(m, n, getattr(shared_m, shared_n))
 
     @contextmanager
