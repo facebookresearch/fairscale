@@ -37,8 +37,6 @@ from fairscale.utils.state_dict import replace_by_prefix_
 
 from . import fsdp_optim_utils as ou
 
-
-
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
 
@@ -1544,7 +1542,6 @@ class FullyShardedDataParallel(nn.Module):
             # consolidated model, so we only need to export how to reshape the
             # parameters to their orginal shape and take care of the padding
             if not m.flatten_parameters:
-
                 params_metadata.append(
                     {
                         "fsdp_path": _clean_path(path),
@@ -1554,6 +1551,7 @@ class FullyShardedDataParallel(nn.Module):
                         "param_shapes": [p._orig_size for p in m.params],
                         "param_numels": [_numel_from_size(p._orig_size) for p in m.params],
                         "no_broadcast_optim_state": m.no_broadcast_optim_state,
+                        "shared_param_info": [],
                     }
                 )
             # Dealing with FSDP(flatten_parameter=True)
@@ -1566,12 +1564,13 @@ class FullyShardedDataParallel(nn.Module):
                 for module_path, param_name in m.param_path_infos:
                     full_param_path = module_path + "." + param_name if module_path else param_name
                     param_names.append(_clean_path(full_param_path))
+
                 shared_param_info = []
-                print(f'shared info: {m._shared_param_infos}')
-                for (module_path, mpath_src, m1, n1, shared_m, shared_n) in m._shared_param_infos:
-                    src_param_path = _clean_path(mpath_src + "." + n1 if module_path else n1)
-                    dst_param_path = _clean_path(module_path + "." + shared_n if module_path else shared_n)
+                for (mpath_dst, mpath_src, _, src_name, _, dst_name) in m._shared_param_infos:
+                    src_param_path = _clean_path(mpath_src + "." + src_name if mpath_src else src_name)
+                    dst_param_path = _clean_path(mpath_dst + "." + dst_name if mpath_dst else dst_name)
                     shared_param_info.append((src_param_path, dst_param_path))
+
                 params_metadata.append(
                     {
                         "fsdp_path": _clean_path(path),
@@ -1587,7 +1586,6 @@ class FullyShardedDataParallel(nn.Module):
                         "shared_param_info": shared_param_info,
                     }
                 )
-                print(f'shared_info: {shared_param_info}')
 
         buffer_names = [_clean_path(buffer_name) for buffer_name, _ in self.named_buffers(recurse=True)]
         return dict(param_metadata=params_metadata, buffer_names=buffer_names)
@@ -1630,8 +1628,6 @@ class FullyShardedDataParallel(nn.Module):
             param_numels = m["param_numels"]
             param_shapes = m["param_shapes"]
             shared_param_info = m["shared_param_info"]
-            #print()
-
 
             # Dealing with FSDP(flatten_parameter=False)
             # For each parameter of the FSDP wrapper, get rid of the padding on each shard,
@@ -1645,7 +1641,9 @@ class FullyShardedDataParallel(nn.Module):
                         shard = shard_weights[rank][param_name]
                         pad = shard_metadata[rank]["param_metadata"][fsdp_wrapper_index]["num_padded"][i]
                         shards.append(_unpad(shard, pad))
-                        if m["no_broadcast_optim_state"]: break
+                        if m["no_broadcast_optim_state"]:
+                            break
+                        # We do not want to concatenate experts, we just want rank 0's copy
 
                     full_flatten_param = torch.cat(shards, dim=0)
                     consolidated_weights[param_name] = full_flatten_param.view(param_shapes[i])
@@ -1662,21 +1660,23 @@ class FullyShardedDataParallel(nn.Module):
                     shard = shard_weights[rank][flat_param_name]
                     pad = shard_metadata[rank]["param_metadata"][fsdp_wrapper_index]["num_padded"][0]
                     shards.append(_unpad(shard, pad))
-                    if m["no_broadcast_optim_state"]: break
-                    print(f'R{rank}: {pad}, shard_shape: {shard.shape}')
-                print(f'{[x.shape for x in shards]}')
+                    if m["no_broadcast_optim_state"]:
+                        break
+                    # We do not want to concatenate experts, we just want rank 0's copy
                 full_flatten_param = torch.cat(shards, dim=0)
 
                 # Split the flat_param into its constituents
 
-                assert sum(param_numels) == full_flatten_param.size(0), f'{sum(param_numels)} != {full_flatten_param.size(0)}'
+                assert sum(param_numels) == full_flatten_param.size(
+                    0
+                ), f"{sum(param_numels)} != {full_flatten_param.size(0)}"
                 for n, t, s in zip(param_names, full_flatten_param.split(param_numels), param_shapes):
                     full_name = fsdp_path + "." + n if fsdp_path else n
                     consolidated_weights[full_name] = t.view(s)
-            print(f'dealing with shared params')
+
+            # copy shared parameters
             for src_path, dest_path in shared_param_info:
                 consolidated_weights[dest_path] = consolidated_weights[src_path]
-            print(f'done with shared params')
 
         # Deal with the buffers, which are not parameters and are not sharded by FSDP
         # and therefore are replicated among the different shards.
@@ -1685,7 +1685,7 @@ class FullyShardedDataParallel(nn.Module):
         if with_module_buffers:
             for buffer_name in shard_metadata[0]["buffer_names"]:
                 consolidated_weights[buffer_name] = shard_weights[0][buffer_name]
-        #
+
         return consolidated_weights
 
     @torch.no_grad()
