@@ -83,6 +83,22 @@ class TestOptimizerUtils(DistributedTest):
             optim_unwrapped.step()
         unwrapped_sd = optim_unwrapped.state_dict()
 
+        # Save a bunch of checkpoint, one by shard
+        cp_data = {
+            "weights": {k: v.cpu() for k, v in fsdp.local_state_dict().items()},
+            "meta": fsdp.local_metadata_dict(),
+        }
+        torch.save(cp_data, f"checkpoint_{fsdp.rank}.torch")
+        torch.distributed.barrier()  # type: ignore
+        all_checkpoints = [torch.load(f"checkpoint_{fsdp.rank}.torch") for rank in range(fsdp.world_size)]
+        consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
+            shard_weights=[c["weights"] for c in all_checkpoints], shard_metadata=[c["meta"] for c in all_checkpoints],
+        )
+        full_model_state_dict = fsdp.state_dict()
+        assert set(full_model_state_dict.keys()) == set(consolidated_checkpoint.keys())
+        for k in full_model_state_dict.keys():
+            assert consolidated_checkpoint[k].shape == full_model_state_dict[k].shape
+
         if not transformer:
             no_broadcast_children = [x for x in fsdp._fsdp_instances if x.no_broadcast_optim_state]
             assert len(no_broadcast_children) == 1

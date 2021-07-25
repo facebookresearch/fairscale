@@ -1741,6 +1741,8 @@ class FullyShardedDataParallel(nn.Module):
         """For each value in state[i], if the value is a tensor, collect it from the world. Else use rank 0's entry."""
         gathered_state: Dict[int, Dict[str, List[Any]]] = {}
         singleton_state: Dict[int, Dict[str, List[Any]]] = {}  # Dimensionless tensor
+        if self.rank == 0:
+            torch.save(sd_state, '8bit_state_r0_blockwise_d512.pt')
         for k, v in sd_state.items():
             gathered_state[k] = {}
             singleton_state[k] = {}
@@ -1750,6 +1752,7 @@ class FullyShardedDataParallel(nn.Module):
             for buffer_name, t in v.items():
                 if torch.is_tensor(t):
                     t = t.to(self.compute_device)
+
 
                 if ou.is_singleton_tensor(t):
                     if singleton_buffer is None:
@@ -1761,7 +1764,13 @@ class FullyShardedDataParallel(nn.Module):
                 elif torch.is_tensor(t):
                     if buffer is None:
                         buffer = list(t.new_zeros(*desired_buffer_size).chunk(self.world_size))
-                    dist.all_gather(buffer, t, group=self.process_group)
+                    # passes the problem down the line: buffer = list(t.new_zeros(t.numel() * self.world_size).chunk(self.world_size))  # TODO(reuse?)
+                    print(f'R{self.rank}/{k}/{buffer_name}: {t.shape}: desired_buffer_size:{desired_buffer_size}', flush=True)
+                    try:
+                        dist.all_gather(buffer, t, group=self.process_group)
+                    except RuntimeError:
+                        raise RuntimeError(f'R{self.rank}/{k}/{buffer_name}: {t.shape}: desired_buffer_size:{desired_buffer_size}')
+
                     if self.rank == 0:
                         gathered_state[k][buffer_name] = [x.cpu() for x in buffer]
                 elif self.rank == 0:  # Add non tensor state
