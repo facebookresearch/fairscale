@@ -1646,10 +1646,13 @@ class FullyShardedDataParallel(nn.Module):
                     shard = shard_weights[rank][flat_param_name]
                     pad = shard_metadata[rank]["param_metadata"][fsdp_wrapper_index]["num_padded"][0]
                     shards.append(_unpad(shard, pad))
+                    print(f'R{rank}: {pad}, shard_shape: {shard.shape}')
+                print(f'{[x.shape for x in shards]}')
                 full_flatten_param = torch.cat(shards, dim=0)
 
                 # Split the flat_param into its constituents
-                assert sum(param_numels) == full_flatten_param.size(0)
+
+                assert sum(param_numels) == full_flatten_param.size(0), f'{sum(param_numels)} != {full_flatten_param.size(0)}'
                 for n, t, s in zip(param_names, full_flatten_param.split(param_numels), param_shapes):
                     full_name = fsdp_path + "." + n if fsdp_path else n
                     consolidated_weights[full_name] = t.view(s)

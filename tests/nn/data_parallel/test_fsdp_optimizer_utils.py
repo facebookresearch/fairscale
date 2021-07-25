@@ -89,15 +89,7 @@ class TestOptimizerUtils(DistributedTest):
             "meta": fsdp.local_metadata_dict(),
         }
         torch.save(cp_data, f"checkpoint_{fsdp.rank}.torch")
-        torch.distributed.barrier()  # type: ignore
-        all_checkpoints = [torch.load(f"checkpoint_{fsdp.rank}.torch") for rank in range(fsdp.world_size)]
-        consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
-            shard_weights=[c["weights"] for c in all_checkpoints], shard_metadata=[c["meta"] for c in all_checkpoints],
-        )
-        full_model_state_dict = fsdp.state_dict()
-        assert set(full_model_state_dict.keys()) == set(consolidated_checkpoint.keys())
-        for k in full_model_state_dict.keys():
-            assert consolidated_checkpoint[k].shape == full_model_state_dict[k].shape
+        #torch.distributed.barrier()  # type: ignore
 
         if not transformer:
             no_broadcast_children = [x for x in fsdp._fsdp_instances if x.no_broadcast_optim_state]
@@ -120,6 +112,20 @@ class TestOptimizerUtils(DistributedTest):
             assert sd is None
             return
 
+        all_checkpoints = [torch.load(f"checkpoint_{rank}.torch") for rank in range(fsdp.world_size)]
+        consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
+            shard_weights=[c["weights"] for c in all_checkpoints],
+            shard_metadata=[c["meta"] for c in all_checkpoints],
+        )
+        full_model_state_dict = fsdp.state_dict()
+        full_model_extra = set(full_model_state_dict).difference(set(consolidated_checkpoint))
+        consolidated_extra = set(consolidated_checkpoint).difference(set(full_model_state_dict))
+
+        msg = f'full model extra keys: {full_model_extra}, consolidated extra {consolidated_extra}'
+
+        for k in full_model_state_dict.keys():
+            assert consolidated_checkpoint[k].shape == full_model_state_dict[k].shape
+        assert set(full_model_state_dict.keys()) == set(consolidated_checkpoint.keys()), msg
         # assert whole state dict on CPU
         for k, v in sd["state"].items():
             for buffer_name, t in v.items():
