@@ -215,3 +215,48 @@ class TestConsolidatedWeights(DistributedTest):
         for k in full_model_state_dict.keys():
             assert consolidated_checkpoint[k].shape == full_model_state_dict[k].shape
         assert set(full_model_state_dict.keys()) == set(consolidated_checkpoint.keys()), msg
+
+
+def test_consolidate_missing_params():
+    """This tests that fairseq experts, which are saved independently from the rest of the model, can be consolidated."""
+    desired_path = "decoder.layers.1.moe_layer.experts.0"
+    shard_metadata = {
+        "param_metadata": [
+            {
+                "fsdp_path": "",
+                "params": {
+                    "flat_param_0": {
+                        "names": ["missing"],
+                        "shapes": [(12, 4)],
+                        "numels": [12 * 4],
+                        "padding_of_backing": 0,
+                    }
+                },
+                "no_broadcast_optim_state": False,
+                "shared_param_info": [],
+            },
+            {
+                "fsdp_path": desired_path,
+                "params": {
+                    "flat_param_0": {
+                        "names": ["fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"],
+                        "shapes": [(4, 4), (4,), (4, 4), (4,)],
+                        "numels": [16, 4, 16, 4],
+                        "padding_of_backing": 0,
+                    }
+                },
+                "no_broadcast_optim_state": True,
+                "shared_param_info": [],
+            },
+        ],
+        "buffer_names": ["missing.buffer"],
+    }
+    shard_weights = {
+        "decoder.layers.1.moe_layer.experts.0.flat_param_0": torch.tensor(torch.randn(40, dtype=torch.float16))
+    }
+    consolidated_weights = FullyShardedDataParallel.consolidate_shard_weights(
+        [shard_weights], [shard_metadata], strict=False
+    )
+    assert len(consolidated_weights) == 4
+    for k in consolidated_weights:
+        assert k.startswith(desired_path), f"{k} doesnt start with {desired_path}"
