@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+
+### Added
+
+## [0.3.9] - 2021-07-26
+### Fixed
 - FSDP: fixed metadata saving and shard consolidation for MoE cases [#746]
 
 ### Added
