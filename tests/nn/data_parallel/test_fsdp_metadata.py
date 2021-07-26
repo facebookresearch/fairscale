@@ -251,9 +251,7 @@ def test_consolidate_missing_params():
         ],
         "buffer_names": ["missing.buffer"],
     }
-    shard_weights = {
-        "decoder.layers.1.moe_layer.experts.0.flat_param_0": torch.tensor(torch.randn(40, dtype=torch.float16))
-    }
+    shard_weights = {"decoder.layers.1.moe_layer.experts.0.flat_param_0": torch.randn(40, dtype=torch.float16)}
     consolidated_weights = FullyShardedDataParallel.consolidate_shard_weights(
         [shard_weights], [shard_metadata], strict=False
     )
