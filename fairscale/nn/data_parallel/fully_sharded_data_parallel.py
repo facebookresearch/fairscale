@@ -322,8 +322,8 @@ class FullyShardedDataParallel(nn.Module):
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=to_be_flatten_params)
         del module  # free original module in case it helps garbage collection
 
-        # Now, in this FSDP wrapper class, we keep a list of to-be-flatten and remining params
-        # for doing sharding, gradient hooks, etc. Note, the ordering of the
+        # Now, in this FSDP wrapper class, we keep a list of to-be-flatten and not-to-be-flatten
+        # params for doing sharding, gradient hooks, etc. Note, the ordering of the
         # list matters: flatten params are always in the front.
         #
         # The self._num_flatten_params and self._param_name_groups are computed
@@ -1590,10 +1590,10 @@ class FullyShardedDataParallel(nn.Module):
                         numels = [p._orig_size.numel()]
                     backing_param_name = _clean_path(backing_param_name)
                     metadata["params"][backing_param_name] = {
-                        "names": [_clean_path(n) for n in names],
-                        "shapes": shapes,
-                        "numels": numels,
-                        "padding_of_backing": m.numel_padded_per_param[i],
+                        "names": [_clean_path(n) for n in names],  # A list of str.
+                        "shapes": shapes,  # A list of torch.Size.
+                        "numels": numels,  # A list of int.
+                        "padding": m.numel_padded_per_param[i],  # An int for padding added to the backing parameter.
                     }
                 param_metadata.append(metadata)
 
@@ -1656,9 +1656,7 @@ class FullyShardedDataParallel(nn.Module):
                 shards = []
                 for rank in range(original_world_size):
                     shard = shard_weights[rank][in_state_dict_key]
-                    pad = shard_metadata[rank]["param_metadata"][fsdp_obj_idx]["params"][backing_param_name][
-                        "padding_of_backing"
-                    ]
+                    pad = shard_metadata[rank]["param_metadata"][fsdp_obj_idx]["params"][backing_param_name]["padding"]
                     shards.append(_unpad(shard, pad))
                     if metadata["no_broadcast_optim_state"]:
                         break

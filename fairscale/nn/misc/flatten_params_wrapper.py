@@ -143,7 +143,7 @@ class FlattenParamsWrapper(nn.Module):
             original param is removed and replaced with the flatten one.
             Default: None, flatten all parameters (if any)
         flat_param_names (Optional[List[str]]):
-            orignally, give each flat_param a unique name. Note a "flat_param_"
+            originally, give each flat_param a unique name. Note a "flat_param_"
             prefix will be added to those names.
     """
 
