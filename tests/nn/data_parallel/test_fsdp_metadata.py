@@ -225,12 +225,7 @@ def test_consolidate_missing_params():
             {
                 "fsdp_path": "",
                 "params": {
-                    "flat_param_0": {
-                        "names": ["missing"],
-                        "shapes": [(12, 4)],
-                        "numels": [12 * 4],
-                        "padding_of_backing": 0,
-                    }
+                    "flat_param_0": {"names": ["missing"], "shapes": [(12, 4)], "numels": [12 * 4], "padding": 0}
                 },
                 "no_broadcast_optim_state": False,
                 "shared_param_info": [],
@@ -242,7 +237,7 @@ def test_consolidate_missing_params():
                         "names": ["fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"],
                         "shapes": [(4, 4), (4,), (4, 4), (4,)],
                         "numels": [16, 4, 16, 4],
-                        "padding_of_backing": 0,
+                        "padding": 0,
                     }
                 },
                 "no_broadcast_optim_state": True,
