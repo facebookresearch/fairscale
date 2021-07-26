@@ -2,14 +2,23 @@
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
+import functools
+import os
+import tempfile
+
+from parameterized import parameterized
 import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
+from torch.optim import Adam
 
 from fairscale.nn import FullyShardedDataParallel
 from fairscale.utils.testing import in_temporary_directory, skip_if_single_gpu, temp_files_ctx
+from tests.nn.data_parallel.test_fsdp import DistributedTest, MixtureOfExperts, rename_test, spawn_and_init
+
+USE_TEMPFILE = True  # False for debugging
 
 
 class ConvolutionalModel(nn.Module):
@@ -145,3 +154,102 @@ def test_consolidation(embedding_size: int, flatten_parameters: bool):
     with in_temporary_directory():
         with temp_files_ctx(num=1) as temp_files:
             mp.spawn(_worker, (temp_files[0], world_size, embedding_size, flatten_parameters), nprocs=world_size)
+
+
+@skip_if_single_gpu
+class TestConsolidatedWeights(DistributedTest):
+    @parameterized.expand(
+        [[True], [False]], name_func=rename_test,
+    )
+    def test_consolidate_weights(self, transformer):
+        config = {"mixed_precision": True, "flatten_parameters": True, "compute_dtype": torch.float32}
+        world_size = min(torch.cuda.device_count(), 4)
+        if USE_TEMPFILE:
+            with tempfile.TemporaryDirectory() as d:
+                paths = [os.path.join(d, f"checkpoint_{rank}.pt") for rank in range(world_size)]
+                test_fn = functools.partial(
+                    self._test_consolidate_weights, config, transformer=transformer, paths=paths
+                )
+                spawn_and_init(test_fn, world_sizes=[world_size])
+        else:
+            paths = [f"checkpoint_{rank}.pt" for rank in range(world_size)]
+            test_fn = functools.partial(self._test_consolidate_weights, config, transformer=transformer, paths=paths)
+            spawn_and_init(test_fn, world_sizes=[world_size])
+
+    @classmethod
+    def _test_consolidate_weights(self, config, rank, group, paths=None, transformer=False):
+        """FSDP.gather_full_optim_state_dict() should return something very similar to optimizer.state_dict()"""
+        # Establish reference behavior.
+
+        if transformer:
+            fsdp = self.get_wrapped_model(group, config=config).cuda()
+        else:
+            fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config)).cuda()
+
+        optim = Adam(fsdp.parameters(), lr=0.01,)
+        optim.zero_grad()
+        with torch.cuda.amp.autocast(enabled=True):
+            x = fsdp.module.get_input(torch.device("cuda"))
+            output = fsdp(*x)
+            loss = fsdp.module.get_loss(x, output).to("cuda")
+            fsdp.module.run_backward(loss)
+            optim.step()
+
+        # each worker saves a checkpoint with local_state_dict
+        cp_data = {
+            "weights": {k: v.cpu() for k, v in fsdp.local_state_dict().items()},
+            "meta": fsdp.local_metadata_dict(),
+        }
+        torch.save(cp_data, paths[fsdp.rank])
+        full_model_state_dict = fsdp.state_dict()
+        torch.distributed.barrier()
+        if fsdp.rank > 0:
+            return
+        all_checkpoints = [torch.load(p) for p in paths]
+        consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
+            shard_weights=[c["weights"] for c in all_checkpoints], shard_metadata=[c["meta"] for c in all_checkpoints],
+        )
+        full_model_extra = set(full_model_state_dict).difference(set(consolidated_checkpoint))
+        consolidated_extra = set(consolidated_checkpoint).difference(set(full_model_state_dict))
+        msg = f"full model extra keys: {full_model_extra}, consolidated extra {consolidated_extra}"
+        for k in full_model_state_dict.keys():
+            assert consolidated_checkpoint[k].shape == full_model_state_dict[k].shape
+        assert set(full_model_state_dict.keys()) == set(consolidated_checkpoint.keys()), msg
+
+
+def test_consolidate_missing_params():
+    """This tests that fairseq experts, which are saved independently from the rest of the model, can be consolidated."""
+    desired_path = "decoder.layers.1.moe_layer.experts.0"
+    shard_metadata = {
+        "param_metadata": [
+            {
+                "fsdp_path": "",
+                "params": {
+                    "flat_param_0": {"names": ["missing"], "shapes": [(12, 4)], "numels": [12 * 4], "padding": 0}
+                },
+                "no_broadcast_optim_state": False,
+                "shared_param_info": [],
+            },
+            {
+                "fsdp_path": desired_path,
+                "params": {
+                    "flat_param_0": {
+                        "names": ["fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"],
+                        "shapes": [(4, 4), (4,), (4, 4), (4,)],
+                        "numels": [16, 4, 16, 4],
+                        "padding": 0,
+                    }
+                },
+                "no_broadcast_optim_state": True,
+                "shared_param_info": [],
+            },
+        ],
+        "buffer_names": ["missing.buffer"],
+    }
+    shard_weights = {"decoder.layers.1.moe_layer.experts.0.flat_param_0": torch.randn(40, dtype=torch.float16)}
+    consolidated_weights = FullyShardedDataParallel.consolidate_shard_weights(
+        [shard_weights], [shard_metadata], strict=False
+    )
+    assert len(consolidated_weights) == 4
+    for k in consolidated_weights:
+        assert k.startswith(desired_path), f"{k} doesnt start with {desired_path}"

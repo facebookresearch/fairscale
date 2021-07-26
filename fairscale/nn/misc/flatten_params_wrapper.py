@@ -14,6 +14,7 @@ from typing import (
     Any,
     Dict,
     Generator,
+    Iterator,
     List,
     Mapping,
     NamedTuple,
@@ -72,7 +73,11 @@ class FlatParameter(nn.Parameter):
         ), f"Something wrong with __new__ method, {self.numel()} vs. {sum(self._param_numels)}"
         self._param_shapes = [p.size() for p in params]
 
-    def get_param_views(self, external_data: Optional[Tensor] = None) -> Generator[Tensor, None, None]:
+        # These are set by FPW class below, not by this class itself.
+        self._param_infos: List[Tuple[str, nn.Module, str]] = []
+        self._shared_param_infos: List[Tuple[str, str, nn.Module, str, nn.Module, str]] = []
+
+    def get_param_views(self, external_data: Optional[Tensor] = None) -> Iterator[Tensor]:
         """ Return a generator of views that map to the original parameters. """
         # Note, self.data could be sharded, so its numel is <= to the sum.
         assert self.data.numel() <= sum(
@@ -85,9 +90,14 @@ class FlatParameter(nn.Parameter):
             )
         return (t.view(s) for (t, s) in zip(data.split(self._param_numels), self._param_shapes))
 
-    def __setstate__(self, state: Tuple[Any, Any]) -> None:
+    def metadata(self) -> Tuple[List[str], List[torch.Size], List[int]]:
+        """Return tuple of (names, shapes, numels) metadata for this flat parameter."""
+        names = [".".join([m, n]) if m else n for (m, _, n) in self._param_infos]
+        return names, self._param_shapes, self._param_numels
+
+    def __setstate__(self, state: Tuple[Any, Any, Any, Any]) -> None:
         """ Use by pickle to set the internal states. """
-        self._param_numels, self._param_shapes = state
+        (self._param_numels, self._param_shapes, self._param_infos, self._shared_param_infos) = state
         assert self.numel() <= sum(
             self._param_numels
         ), f"Incorrect pickling {self.numel()} vs. {sum(self._param_numels)}"
@@ -96,8 +106,10 @@ class FlatParameter(nn.Parameter):
         """ Support pickling between ranks. """
         return (
             FlatParameter,  # Callable
-            ([self.data], self.requires_grad),  # Args to the callable above
-            (self._param_numels, self._param_shapes),  # Args to __setstate__
+            # Args to the callable above
+            ([self.data], self.requires_grad),
+            # Args to __setstate__
+            (self._param_numels, self._param_shapes, self._param_infos, self._shared_param_infos),
         )
 
 
@@ -115,19 +127,27 @@ class FlattenParamsWrapper(nn.Module):
     - handles state_dict/load_state_dict transparently
     - is renamed to FlattenParamsWrapper
     - refactored to use the FlatParameter class
-    - extended to support flattening multiple groups of params
+    - extended to support flattening multiple groups of params (useful
+      when different groups of params need different hyperparameters, like
+      learning rate or weight decay)
 
     [1] https://github.com/SsnL/PyTorch-Reparam-Module
 
     Args:
         module (nn.Module):
-            module to wrap.
+            The module to wrap.
         param_list (Optional[List[List[nn.Parameter]]]):
-            only flatten parameters appearing in the given groups
+            Only flatten parameters appearing in the given groups.
+            If the param_list is an empty list, then no parameters will get flattened.
+            Note, if a single param is in one of the list, it still get flattened and the
+            original param is removed and replaced with the flatten one.
             Default: None, flatten all parameters (if any)
+        flat_param_names (Optional[List[str]]):
+            originally, give each flat_param a unique name. Note a "flat_param_"
+            prefix will be added to those names.
     """
 
-    def __init__(self, module: nn.Module, param_list: ParamGroups = None):
+    def __init__(self, module: nn.Module, param_list: ParamGroups = None, flat_param_names: Optional[List[str]] = None):
         super().__init__()
         self._fpw_module = module
         self.is_flattened = False
@@ -176,16 +196,22 @@ class FlattenParamsWrapper(nn.Module):
             raise ValueError(f"Incorrect param groups {len(overall_param_set)} vs {self.num_param_managed}")
 
         self.flat_params: List[FlatParameter] = []
-        self._param_infos: List[Tuple[str, nn.Module, str]] = []
-        self._shared_param_infos: List[Tuple[nn.Module, str, nn.Module, str]] = []
+
+        # Prepare flat param names.
+        if flat_param_names is None:
+            flat_param_names = [f"{i}" for i, _ in enumerate(self._param_sets)]
+        if len(flat_param_names) != len(self._param_sets):
+            raise ValueError("Names and number of param lists must be equal")
+        if len(flat_param_names) != len(set(flat_param_names)):
+            raise ValueError("Each flat param must be given a unique name")
+        self.flat_param_names = [f"flat_param_{n}" for n in flat_param_names]
 
         # Init all flat_params.
         for new_p_set in self._param_sets:
-            params = self._init_flatten_params(new_p_set)
-            assert (
-                len(set(p.requires_grad for p in params)) == 1
-            ), "expects all parameters in the same parameter group of the module to have same requires_grad"
+            params, param_infos, shared_param_infos = self._init_flatten_params(new_p_set)
             flat_param = FlatParameter(params, params[0].requires_grad)
+            flat_param._param_infos = param_infos
+            flat_param._shared_param_infos = shared_param_infos
             self.flat_params.append(flat_param)
 
         self._flatten_params(self.flat_params)
@@ -201,16 +227,11 @@ class FlattenParamsWrapper(nn.Module):
         self._auto_unflatten_state_dict = True
 
     @property
-    def module(self) -> nn.Module:
+    def module(self) -> Any:
         """ Support fpw.module in case we are immitating DDP, which has .module
             property to the underlying module.
         """
         return self._fpw_module
-
-    @property
-    def param_path_infos(self) -> List[Tuple[str, str]]:
-        """ Returns the list of tuples that contains (module_name, param_name). """
-        return [(m, n) for (m, _, n) in self._param_infos]
 
     @property
     def flat_param(self) -> nn.Parameter:
@@ -220,11 +241,16 @@ class FlattenParamsWrapper(nn.Module):
         assert len(self.flat_params) == 1, "Incorrect access to flat_param"
         return self.flat_params[0]
 
-    def _init_flatten_params(self, p_set: Set[Tuple[nn.Module, str]]) -> List[nn.Parameter]:
+    def _init_flatten_params(
+        self, p_set: Set[Tuple[nn.Module, str]]
+    ) -> Tuple[
+        List[nn.Parameter], List[Tuple[str, nn.Module, str]], List[Tuple[str, str, nn.Module, str, nn.Module, str]]
+    ]:
         """ Build metadata for need-to-be-flatten parameters and returns a list
             contains the need-to-be-flatten parameters.
 
-            This extends self._param_infos and self._shared_param_infos lists.
+            This also returns param_infos and shared_param_infos, which
+            will be attached to the flat parameter object.
 
         Args:
             p_set (set):
@@ -232,29 +258,33 @@ class FlattenParamsWrapper(nn.Module):
                 to be flattened. There could be shared params in this set.
         """
         param_infos = []
-        shared_param_memo: Dict[nn.Parameter, Tuple[nn.Module, str]] = {}
+        shared_param_memo: Dict[nn.Parameter, Tuple[str, nn.Module, str]] = {}
         shared_param_infos = []
         params = []
         for module_name, m in self.named_modules():
             for n, p in m.named_parameters(recurse=False):
                 if p is not None and (m, n) in p_set:
                     if p in shared_param_memo:
-                        shared_m, shared_n = shared_param_memo[p]
-                        shared_param_infos.append((m, n, shared_m, shared_n))
+                        mname, shared_m, shared_n = shared_param_memo[p]
+                        shared_param_infos.append((module_name, mname, m, n, shared_m, shared_n))
                     else:
-                        shared_param_memo[p] = (m, n)
+                        shared_param_memo[p] = (module_name, m, n)
                         param_infos.append((module_name, m, n))
                         params.append(p)
         del shared_param_memo
 
-        assert len(set(p.dtype for p in params)) == 1, "expects all parameters in module to have same dtype"
-
-        # store the info for unflatten
-        self._param_infos += param_infos
-        self._shared_param_infos += shared_param_infos
-
+        assert len(set(p.dtype for p in params)) == 1, "expects all parameters to have same dtype"
+        assert len(set(p.requires_grad for p in params)) == 1, "expects all parameters to have same requires_grad"
         assert len(params) == len(set(params)), "params list should not have dups"
-        return params
+        return params, param_infos, shared_param_infos
+
+    @property
+    def _param_infos(self) -> Iterator[Tuple[str, nn.Module, str]]:
+        return chain(*[p._param_infos for p in self.flat_params])
+
+    @property
+    def _shared_param_infos(self) -> Iterator[Tuple[str, str, nn.Module, str, nn.Module, str]]:
+        return chain(*[p._shared_param_infos for p in self.flat_params])
 
     def _flatten_params(self, flat_params: List[FlatParameter]) -> None:
         """ Flatten the managed parameters and replaced the original
@@ -263,15 +293,16 @@ class FlattenParamsWrapper(nn.Module):
         assert not self.is_flattened
         self.is_flattened = True
 
-        # flatten
+        # register the flatten ones and save it to self.
+        assert len(self.flat_param_names) == len(flat_params), f"{len(self.flat_param_names)} vs. {len(flat_params)}"
+        for n, flat_param in zip(self.flat_param_names, flat_params):
+            self.register_parameter(n, flat_param)
         self.flat_params = flat_params
-        for i, flat_param in enumerate(flat_params):
-            self.register_parameter(f"flat_param_{i}", flat_param)
 
         # deregister the names as parameters
         for _, m, n in self._param_infos:
             delattr(m, n)
-        for m, n, _, _ in self._shared_param_infos:
+        for _, _, m, n, _, _ in self._shared_param_infos:
             delattr(m, n)
 
         # register the views as plain attributes
@@ -289,14 +320,14 @@ class FlattenParamsWrapper(nn.Module):
             if hasattr(m, n):
                 delattr(m, n)
             m.register_parameter(n, nn.Parameter(p))
-        for (m, n, shared_m, shared_n) in self._shared_param_infos:
+        for (_, _, m, n, shared_m, shared_n) in self._shared_param_infos:
             if hasattr(m, n):
                 delattr(m, n)
             m.register_parameter(n, getattr(shared_m, shared_n))
 
-        for i, _ in enumerate(self.flat_params):
+        for n in self.flat_param_names:
             # This ensures the flat params are removed from the module.
-            delattr(self, f"flat_param_{i}")
+            delattr(self, n)
         self.flat_params = []
 
     def _unflatten_params_as_views(self) -> None:
@@ -307,7 +338,7 @@ class FlattenParamsWrapper(nn.Module):
         ps = self.get_param_views()
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(m, n, p)  # This will set as plain attr
-        for (m, n, shared_m, shared_n) in self._shared_param_infos:
+        for (_, _, m, n, shared_m, shared_n) in self._shared_param_infos:
             setattr(m, n, getattr(shared_m, shared_n))
 
     @contextmanager
@@ -349,6 +380,10 @@ class FlattenParamsWrapper(nn.Module):
             return super().__getattr__(name)  # defer to nn.Module's logic
         except AttributeError:
             return getattr(self.module, name)  # fallback to wrapped module
+
+    def __getitem__(self, key: int) -> Any:
+        """Forward indexing calls in case the module is a nn.Sequential."""
+        return self.module.__getitem__(key)
 
     @typing.overload
     def state_dict(
@@ -411,9 +446,7 @@ class FlattenParamsWrapper(nn.Module):
         self._unflatten_params_as_views()
         return self.module(*inputs, **kwinputs)
 
-    def get_param_views(
-        self, external_data_list: Optional[List[Optional[Tensor]]] = None
-    ) -> Generator[Tensor, None, None]:
+    def get_param_views(self, external_data_list: Optional[List[Optional[Tensor]]] = None) -> Iterator[Tensor]:
         """ Used to get a generator over all views from a list of external data list. """
         params = self.flat_params
         if external_data_list is None:
@@ -426,7 +459,11 @@ class FlattenParamsWrapper(nn.Module):
         for p, data in zip(params, external_data_list):
             gens.append(p.get_param_views(data))
 
-        return chain(*gens)  # type: ignore
+        return chain(*gens)
+
+    def metadata(self, flat_param_idx: int) -> Tuple[List[str], List[torch.Size], List[int]]:
+        """Return metadata for a flat param given its index in the flat_params list."""
+        return self.flat_params[flat_param_idx].metadata()
 
 
 def _post_state_dict_hook(
