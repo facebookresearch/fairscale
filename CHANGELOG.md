@@ -6,8 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+- FSDP: fixed metadata saving and shard consolidation for MoE cases [#746]
 
 ### Added
+- FSDP: better performance; use `_allgather_base` and `_reduce_scatter_base` when available [#729]
+- FSDP: prepared FSDP internals for supporting multiple groups of flatten parameters (to support more general optimization) [#746]
 
 - FSDP: better performance; use `_allgather_base` and `_reduce_scatter_base` when available [#729]
 
