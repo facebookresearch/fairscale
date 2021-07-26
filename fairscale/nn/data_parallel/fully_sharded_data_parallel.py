@@ -1605,6 +1605,7 @@ class FullyShardedDataParallel(nn.Module):
         shard_weights: List[Dict[str, torch.Tensor]],
         shard_metadata: List[Dict[str, Any]],
         with_module_buffers: bool = True,
+        strict: bool = True,
     ) -> Dict[str, torch.Tensor]:
         """
         Given a list of weights and meta data associated to N shards, reconstruct
@@ -1632,6 +1633,9 @@ class FullyShardedDataParallel(nn.Module):
                 If shard 0's buffer should be returned in the consolidated
                 weight dict.
                 Default: True.
+            strict (bool):
+                allow incomplete shard weights. if True, every key in the metadata must be present in the weights.
+
         """
         if len(shard_weights) != len(shard_metadata) or not len(shard_weights):
             raise ValueError("Require metadata for each shard and non-empty shards")
@@ -1647,6 +1651,7 @@ class FullyShardedDataParallel(nn.Module):
             for backing_param_name, v in params.items():
                 in_state_dict_key = ".".join([fsdp_path, backing_param_name]) if fsdp_path else backing_param_name
                 # Get full param back with pad removed.
+                if in_state_dict_key not in shard_weights[0] and (not strict): continue
                 shards = []
                 for rank in range(original_world_size):
                     shard = shard_weights[rank][in_state_dict_key]
@@ -1674,6 +1679,7 @@ class FullyShardedDataParallel(nn.Module):
         # of synchronization between shards or that all shards buffers are equivalent).
         if with_module_buffers:
             for buffer_name in shard_metadata[0]["buffer_names"]:
+                if buffer_name not in shard_weights[0] and (not strict): continue
                 consolidated_weights[buffer_name] = shard_weights[0][buffer_name]
 
         return consolidated_weights
