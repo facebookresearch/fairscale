@@ -1,4 +1,4 @@
-Model sharding using Pipeline Parallel 
+Model sharding using Pipeline Parallel
 ======================================
 
 Let us start with a toy model that contains two linear layers.
@@ -57,12 +57,12 @@ You can then define any optimizer and loss function
     optimizer.zero_grad()
     target = torch.randint(0,2,size=(20,1)).squeeze()
     data = torch.randn(20, 10)
-    
+
 
 
 Finally, to run the model and compute the loss function, make sure that outputs and target are on the same device.
 
-.. code-block:: default   
+.. code-block:: default
 
     device = model.devices[0]
     ## outputs and target need to be on the same device

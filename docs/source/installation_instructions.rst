@@ -13,12 +13,12 @@ from source using the instructions below.
 .. code-block:: bash
 
 	pip install fairscale
-	
+
 
 ### Installing from source
 
 .. code-block:: bash
-    
+
     git clone https://github.com/facebookresearch/fairscale.git
     cd fairscale
     pip install -r requirements.txt
