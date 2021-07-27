@@ -396,7 +396,7 @@ class OSS(Optimizer):
         OSS._sync_param_groups(self.param_groups, self.optim.param_groups)
 
     def refresh_trainable(self) -> None:
-        """ Updates the partitioning and communication patterns if the trainability (`requires_grad`)
+        """Updates the partitioning and communication patterns if the trainability (`requires_grad`)
         of some parameters changed.
         """
 
@@ -551,7 +551,7 @@ class OSS(Optimizer):
             # Populate back the fp32 shards
             if self.broadcast_fp16:
                 for device in self.buckets.keys():
-                    for dst_rank in self.buckets[device].keys():
+                    for dst_rank, bucket in self.buckets[device].items():
                         bucket.to(dtype=torch.float32, device=device, non_blocking=True, keep_param_alignment=True)
 
     def _setup_flat_buffers(self) -> None:
