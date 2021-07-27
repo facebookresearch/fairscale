@@ -520,6 +520,10 @@ def run_test_reproducibility(rank, world_size, tempfile_name, broadcast_fp16):
 
     assert torch.allclose(reference_loss, test_loss), f"{reference_loss} vs {test_loss}. Reproducibility is broken"
 
+    # Check that no matter what the buffer is back to fp32
+    for device in optimizer.buckets.keys():
+        for bucket in optimizer.buckets[device].values():
+            assert bucket.buffer.dtype == torch.float32
     dist.destroy_process_group()
 
 
