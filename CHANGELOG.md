@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.9] - 2021-07-26
 ### Fixed
 - FSDP: fixed metadata saving and shard consolidation for MoE cases [#746]
+- OSS: fixed the buckets which would stay in fp16 if `broadcast fp16` was required (#751)
 
 ### Added
 - FSDP: better performance; use `_allgather_base` and `_reduce_scatter_base` when available [#729]
@@ -26,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FSDP: Ensure requires_grad of FlatParameter is consistent with requires_grad of the original parameters. [#721]
 - doc: Thoroughly improved the doc for FSDP. [#711]
 - cleanup: Remove examples/ doc from the repo. [#712]
-- cleanup: Future proof storage size test. [#735] 
+- cleanup: Future proof storage size test. [#735]
 - cleanup: Migrate away from legacy torchtext iterators. [#713]
 - chore: Updated torch 1.9 to release version. [#717]
 
