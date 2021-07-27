@@ -6,11 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
-- FSDP: fixed metadata saving and shard consolidation for MoE cases [#746]
+
+### Added
+
+## [0.3.9] - 2021-07-26
+### Fixed
+- FSDP: fixed metadata saving and shard consolidation for MoE cases. When a model has
+        shared parameters or mixture of expert layers, the handling of state dict
+        metadata was broken. This release fixes that. [#746]
 - OSS: fixed the buckets which would stay in fp16 if `broadcast fp16` was required (#751)
 
 ### Added
-- FSDP: better performance; use `_allgather_base` and `_reduce_scatter_base` when available [#729]
+- FSDP: better performance; use `_allgather_base` and `_reduce_scatter_base` when they are
+        available from pytorch nightly version (will be in 1.10 releases) [#729]
 - FSDP: prepared FSDP internals for supporting multiple groups of flatten parameters (to support more general optimization) [#746]
 
 ## [0.3.8] - 2021-07-12
