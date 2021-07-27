@@ -591,12 +591,15 @@ class NestedWrappedModule(nn.Module):
         )
 
         # Wrap all modules triggers a corner case where root FSDP doesn't have any params.
+        # Test it with checkpoint_wrapper as well to validate final backward callback
+        # is queued correctly when root FSDP does not have any params and every layer is
+        # wrapped as FSDP(checkpoint(module)).
         if wrap_everything:
             self.module = nn.Sequential(
-                _maybe_wrap(nn.Linear(8, 4)),
-                _maybe_wrap(nn.Linear(4, 16)),
-                _maybe_wrap(nn.Linear(16, 4)),
-                _maybe_wrap(nn.Linear(4, 8)),
+                _maybe_wrap(checkpoint_wrapper(nn.Linear(8, 4))),
+                _maybe_wrap(checkpoint_wrapper(nn.Linear(4, 16))),
+                _maybe_wrap(checkpoint_wrapper(nn.Linear(16, 4))),
+                _maybe_wrap(checkpoint_wrapper(nn.Linear(4, 8))),
             )
 
     def get_input(self, device):
