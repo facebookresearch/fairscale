@@ -1005,6 +1005,8 @@ class FullyShardedDataParallel(nn.Module):
             return
         # No FullyShardedDataParallel instance wraps this, else _is_root would be set to False.
         self._is_root = True
+        # Do not allow to checkpoint root instance and run forward multiple times.
+        assert getattr(self, "_checkpoint_fwd_counter", 0) == 0
         # As the root, we now set all children instances to False and
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
@@ -1122,22 +1124,14 @@ class FullyShardedDataParallel(nn.Module):
 
         return outputs
 
-    def _checkpoint_module_last_backward_call(self) -> bool:
-        # If this is a checkpointed FSDP module, e.g. checkpoint(FSDP(module)),
-        # we check if the following counter reaches 0. If it is, it is the last
-        # inner backward call for this FSDP module.
-        return getattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter", 0) == 0
-
+    @property
     def _require_final_backward(self) -> bool:
+        """Returns if this FSDP instance requires a final callback because
+        there are trainable parameters inside of it or not.
+        """
         assert self._is_root
-        for m in self.modules():  # includes self
-            if (
-                isinstance(m, FullyShardedDataParallel)
-                and any(p.requires_grad for p in m.parameters())
-                and self._require_backward_grad_sync
-            ):
-                return True
-        return False
+        return (any(p.requires_grad for p in m.parameters())
+                and self._require_backward_grad_sync)
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
         """Register pre-backward hook to run before the wrapped module's
@@ -1374,7 +1368,7 @@ class FullyShardedDataParallel(nn.Module):
         outer most backward.
         """
         assert self._is_root
-        if not self._post_backward_callback_queued and self._checkpoint_module_last_backward_call():
+        if not self._post_backward_callback_queued:
             self.assert_state([TrainingState.IDLE])
             self._post_backward_callback_queued = True
             Variable._execution_engine.queue_callback(self._wait_for_post_backward)
