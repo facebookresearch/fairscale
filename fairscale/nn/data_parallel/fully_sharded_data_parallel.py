@@ -1005,8 +1005,11 @@ class FullyShardedDataParallel(nn.Module):
             return
         # No FullyShardedDataParallel instance wraps this, else _is_root would be set to False.
         self._is_root = True
-        # Do not allow to checkpoint root instance and run forward multiple times.
-        assert getattr(self, "_checkpoint_fwd_counter", 0) == 0
+        # Check if the root instance is being checkpointed. It doesn't make sense to
+        # checkpoint the root instance since it won't save GPU memory.
+        assert (
+            getattr(self, "_checkpoint_fwd_counter", 0) == 0
+        ), "Is the root FSDP module wrapping an activation checkpointed module? If so, please remove that."
         # As the root, we now set all children instances to False and
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
