@@ -1130,8 +1130,7 @@ class FullyShardedDataParallel(nn.Module):
         there are trainable parameters inside of it or not.
         """
         assert self._is_root
-        return (any(p.requires_grad for p in self.parameters())
-                and self._require_backward_grad_sync)
+        return any(p.requires_grad for p in self.parameters()) and self._require_backward_grad_sync
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
         """Register pre-backward hook to run before the wrapped module's
@@ -1152,7 +1151,7 @@ class FullyShardedDataParallel(nn.Module):
             assert self._post_backward_callback_fired
             # Reset flag if require final backwward callback to be fired,
             # this helps checking whether post backward callback was fired later on
-            if self._require_final_backward():
+            if self._require_final_backward:
                 self._post_backward_callback_fired = False
 
         def _pre_backward_hook(*unused: Any) -> None:
