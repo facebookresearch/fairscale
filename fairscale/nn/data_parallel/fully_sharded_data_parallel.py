@@ -1126,12 +1126,7 @@ class FullyShardedDataParallel(nn.Module):
         # If this is a checkpointed FSDP module, e.g. checkpoint(FSDP(module)),
         # we check if the following counter reaches 0. If it is, it is the last
         # inner backward call for this FSDP module.
-        if (
-            hasattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter")
-            and self._fsdp_wrapped_module._checkpoint_fwd_counter != 0
-        ):
-            return False
-        return True
+        return getattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter", 0) == 0
 
     def _require_final_backward(self) -> bool:
         assert self._is_root
@@ -1155,9 +1150,9 @@ class FullyShardedDataParallel(nn.Module):
             return outputs  # don't register hooks if grad isn't enabled
 
         if self._is_root:
-            # This actually means that only root instance has this field
-            # defined. Accidentally accessing this field will assert on all
-            # other instances, giving us a nice bug checker.
+            # This actually means that only root instance has
+            # _post_backward_callback_queued defined. Accidentally accessing this field
+            # will assert on all other instances, giving us a nice bug checker.
             self._post_backward_callback_queued = False
             # Make sure post backward callback was fired in the preivous iteration
             assert self._post_backward_callback_fired
@@ -1430,12 +1425,12 @@ class FullyShardedDataParallel(nn.Module):
                         m.assert_state(TrainingState.BACKWARD_PRE)
                 else:
                     # When `m` and its children has no params or has params but
-                    # none with `requires_grad==True`, it is possible that
-                    # output tensors are `requires_grad==True`. In this case,
-                    # pre-backward hook is still registered and '_wait_for_post_backward'
-                    # is queued in the pre-backward hook.
-                    # Therefore, it is in BACKWARD_PRE state.
-                    m.assert_state(TrainingState.BACKWARD_PRE)
+                    # none with `requires_grad==True`, there are two cases:
+                    # 1. output tensors are `requires_grad==True`. In this case,
+                    # pre-backward hook is still registered, so it is in BACKWARD_PRE state.
+                    # 2. output tensors are `requires_grad==False`. In this case,
+                    # pre-backward hook is not registered, so it is in IDLE state.
+                    m.assert_state([TrainingState.BACKWARD_PRE, TrainingState.IDLE])
                 m.training_state = TrainingState.IDLE
 
                 if m._is_root:
