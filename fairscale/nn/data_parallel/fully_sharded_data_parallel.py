@@ -1130,7 +1130,7 @@ class FullyShardedDataParallel(nn.Module):
         there are trainable parameters inside of it or not.
         """
         assert self._is_root
-        return (any(p.requires_grad for p in m.parameters())
+        return (any(p.requires_grad for p in self.parameters())
                 and self._require_backward_grad_sync)
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
