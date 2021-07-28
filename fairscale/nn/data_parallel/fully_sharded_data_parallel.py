@@ -1122,19 +1122,22 @@ class FullyShardedDataParallel(nn.Module):
 
         return outputs
 
-    def _checkpoint_module_last_backward_call(self):
+    def _checkpoint_module_last_backward_call(self) -> bool:
         # If this is a checkpointed FSDP module, e.g. checkpoint(FSDP(module)),
         # we check if the following counter reaches 0. If it is, it is the last
         # inner backward call for this FSDP module.
-        if (hasattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter")
-            and self._fsdp_wrapped_module._checkpoint_fwd_counter != 0):
+        if (
+            hasattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter")
+            and self._fsdp_wrapped_module._checkpoint_fwd_counter != 0
+        ):
             return False
         return True
 
-    def _require_final_backward(self):
+    def _require_final_backward(self) -> bool:
         assert self._is_root
         for m in self.modules():  # includes self
-            if (isinstance(m, FullyShardedDataParallel)
+            if (
+                isinstance(m, FullyShardedDataParallel)
                 and any(p.requires_grad for p in m.parameters())
                 and self._require_backward_grad_sync
             ):
