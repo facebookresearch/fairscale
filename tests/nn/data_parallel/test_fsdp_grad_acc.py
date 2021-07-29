@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextlib
 import functools
 import itertools
 import unittest
@@ -22,8 +23,8 @@ class TestNoSync(DistributedTest):
         fn = functools.partial(self._test_transformer, config={})
         spawn_and_init(fn)
 
-    def test_transformer_without_no_sync(self):
-        fn = functools.partial(self._test_transformer, config={}, use_no_sync=False)
+    def test_transformer_grad_acc_without_no_sync(self):
+        fn = functools.partial(self._test_transformer, config={}, use_no_sync_context=False)
         spawn_and_init(fn)
 
     def test_transformer_no_flat_params(self):
@@ -48,22 +49,25 @@ class TestNoSync(DistributedTest):
         loss.backward()
 
     @classmethod
-    def _test_transformer(self, rank, group, config, use_no_sync=True):
+    def _test_transformer(self, rank, group, config, use_no_sync_context=True):
         model = self.get_wrapped_model(group, config=config, add_bn=False)
         model.eval()  # turn off dropout for the test
-        self._test_no_sync(model, batch_dim=1, use_no_sync=use_no_sync)
+        self._test_grad_acc(model, batch_dim=1, use_no_sync_context=use_no_sync_context)
 
     @classmethod
     def _test_nested_wrapper(self, rank, group, config):
         model = NestedWrappedModule(group, config)
         model = FullyShardedDataParallel(model, group, **config).cuda()
-        self._test_no_sync(model, batch_dim=0)
+        self._test_grad_acc(model, batch_dim=0)
 
     @classmethod
-    def _test_no_sync(self, model, batch_dim, use_no_sync=True):
+    def _test_grad_acc(self, model, batch_dim, use_no_sync_context=True):
         # Generate two input batches. We'll test that we get the same grads if
-        # we train on them sequentially while accumulating grads (with no_sync)
-        # vs. concatenating the batches and training in one go.
+        # we train on them sequentially while accumulating grads (with no_sync
+        # or without no_sync) vs. concatenating the batches and training in one go.
+        #
+        # The difference between with no_sync and without is GPU memory vs. networking
+        # bandwidth tradeoff.
         batch1 = model.module.get_input(torch.device("cuda"))
         assert isinstance(batch1, tuple)
         batch2 = tuple(
@@ -86,12 +90,10 @@ class TestNoSync(DistributedTest):
 
         # Test that we get the same results by accumulating grads.
         model.zero_grad()
-        if use_no_sync:
-            with model.no_sync():  # accumulate gradients from the first batch
-                output = model(*batch1)
-                loss1 = model.module.get_loss(batch1, output)
-                loss1.backward()
-        else:
+        context = contextlib.suppress()
+        if use_no_sync_context:
+            context = model.no_sync()
+        with context:  # accumulate gradients from the first batch
             output = model(*batch1)
             loss1 = model.module.get_loss(batch1, output)
             loss1.backward()
