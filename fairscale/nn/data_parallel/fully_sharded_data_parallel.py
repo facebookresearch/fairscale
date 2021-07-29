@@ -12,7 +12,7 @@ from math import inf
 import time
 import traceback
 import typing
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Mapping, NamedTuple, Optional, Set, Tuple, Union, Iterator
 
 import torch
 from torch.autograd import Variable
@@ -21,6 +21,7 @@ from torch.distributed import ProcessGroup
 import torch.nn as nn
 from torch.nn import Parameter
 import torch.nn.functional as F
+from torch.nn.parameter import Parameter
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
@@ -593,6 +594,7 @@ class FullyShardedDataParallel(nn.Module):
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
         try:
+            # print(f"fsdp __getattr__ {name}")
             return super().__getattr__(name)  # defer to nn.Module's logic
         except AttributeError:
             return getattr(self.module, name)
@@ -628,6 +630,20 @@ class FullyShardedDataParallel(nn.Module):
         del self.is_sharded
         del self.orig_sizes
         self._reset_lazy_init()
+
+    def _named_parameters(self, *args, **kwargs) -> Any:
+        # print( str(hasattr(self, "_is_root")) +  str(hasattr(self, "_is_root")) + str(hasattr(self, "training_state")) + str(type(self)))
+        if (not hasattr(self, "_is_root") and not hasattr(self._fsdp_wrapped_module, "_is_root")) or (hasattr(self, "training_state") and self.training_state==TrainingState.BACKWARD_POST):
+            return super().named_parameters()
+        
+        # print(f"type(self) {type(self._fsdp_wrapped_module)} \n self._parameters {[p for p in self._parameters.items()]} \n")
+        # raise RuntimeError()
+        nm_clone = []
+        with self.summon_full_params():
+            nm = super().named_parameters(*args, **kwargs)
+            for nm_tup in nm:
+                nm_clone.append(nm_tup)
+        return nm_clone
 
     @typing.overload
     def state_dict(
@@ -1877,7 +1893,7 @@ class FullyShardedDataParallel(nn.Module):
     @property
     def cpu_offload(self) -> bool:
         return self.move_params_to_cpu
-
+        
 
 def _get_default_cuda_device(module: nn.Module) -> torch.device:
     """Try to infer CUDA device from module parameters."""

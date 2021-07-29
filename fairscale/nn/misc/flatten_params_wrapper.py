@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from itertools import chain
 import typing
 from typing import (
+    Iterator,
     TYPE_CHECKING,
     Any,
     Dict,
@@ -28,6 +29,7 @@ from typing import (
 import torch
 from torch import Tensor
 import torch.nn as nn
+from torch.nn.parameter import Parameter
 
 from fairscale.utils.state_dict import replace_by_prefix_
 
@@ -309,7 +311,7 @@ class FlattenParamsWrapper(nn.Module):
             setattr(m, n, p)  # This will set as plain attr
         for (m, n, shared_m, shared_n) in self._shared_param_infos:
             setattr(m, n, getattr(shared_m, shared_n))
-
+        
     @contextmanager
     def unflatten_params(self, flat_params: Optional[List[Tensor]] = None) -> Generator:
         """
@@ -346,9 +348,14 @@ class FlattenParamsWrapper(nn.Module):
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
         try:
+            # print(f"__getattr___ {name}\n")
             return super().__getattr__(name)  # defer to nn.Module's logic
         except AttributeError:
             return getattr(self.module, name)  # fallback to wrapped module
+
+    # def _named_parameters(self, *args: Any, **kwargs: Any) -> Iterator[Tuple[str, Parameter]]:
+    #     with self.unflatten_params():
+    #         return super().named_parameters(*args, **kwargs)
 
     @typing.overload
     def state_dict(
