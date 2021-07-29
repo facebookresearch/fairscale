@@ -18,7 +18,7 @@ from fairscale.utils.testing import DummyProcessGroup, objects_are_equal
 from .test_fsdp import DistributedTest, NestedWrappedModule, rename_test, spawn_and_init
 
 
-class TestNoSync(DistributedTest):
+class TestGradAcc(DistributedTest):
     def test_transformer(self):
         fn = functools.partial(self._test_transformer, config={})
         spawn_and_init(fn)
@@ -111,7 +111,7 @@ keys = ["reshard_after_forward", "mixed_precision"]
 COMM_CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
 
 
-class TestNoSyncCommunication(DistributedTest):
+class TestGradAccCommunication(DistributedTest):
     @parameterized.expand(COMM_CONFIG_OPTIONS, name_func=rename_test)
     def test_communication(self, config):
         fn = functools.partial(self._test_communication, config=config)
