@@ -10,7 +10,6 @@ from contextlib import contextmanager
 from itertools import chain
 import typing
 from typing import (
-    Iterator,
     TYPE_CHECKING,
     Any,
     Dict,
@@ -342,7 +341,7 @@ class FlattenParamsWrapper(nn.Module):
             setattr(m, n, p)  # This will set as plain attr
         for (_, _, m, n, shared_m, shared_n) in self._shared_param_infos:
             setattr(m, n, getattr(shared_m, shared_n))
-        
+
     @contextmanager
     def unflatten_params(self, flat_params: Optional[List[Tensor]] = None) -> Generator:
         """

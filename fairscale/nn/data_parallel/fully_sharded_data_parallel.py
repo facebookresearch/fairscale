@@ -11,7 +11,6 @@ import logging
 from math import inf
 import time
 import traceback
-from itertools import chain
 import typing
 from typing import (
     TYPE_CHECKING,
@@ -19,6 +18,7 @@ from typing import (
     Callable,
     Dict,
     Generator,
+    Iterator,
     List,
     Mapping,
     NamedTuple,
@@ -27,7 +27,6 @@ from typing import (
     Tuple,
     Union,
     cast,
-    Iterator,
 )
 
 import torch
@@ -35,7 +34,6 @@ from torch.autograd import Variable
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
 import torch.nn as nn
-from torch.nn import Parameter
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
@@ -663,7 +661,7 @@ class FullyShardedDataParallel(nn.Module):
 
     def named_parameters(self, *args, **kwargs) -> Iterator[Tuple[str, Parameter]]:
         if "all_shards" not in kwargs or not kwargs["all_shards"]:
-            named_param  = super().named_parameters()
+            named_param = super().named_parameters()
             for name, param in named_param:
                 yield _clean_path(name), param
         else:
@@ -1920,7 +1918,7 @@ class FullyShardedDataParallel(nn.Module):
     @property
     def cpu_offload(self) -> bool:
         return self.move_params_to_cpu
-        
+
 
 def _get_default_cuda_device(module: nn.Module) -> torch.device:
     """Try to infer CUDA device from module parameters."""
