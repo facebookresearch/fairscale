@@ -1005,7 +1005,7 @@ class FullyShardedDataParallel(nn.Module):
         # If final backward callback is queued, the callback should be finished
         # and the state was reset to be IDLE.
         # This should be asserted at the beginning of forward pass in the root instance only.
-        # For children instances, if they are checkpointed, state will not be reset as
+        # For children instances, if they are checkpointed, state will not be reset to
         # IDLE after each inner forward/backward.
         self.assert_state(TrainingState.IDLE)
         # Check if the root instance is being checkpointed. It doesn't make sense to
