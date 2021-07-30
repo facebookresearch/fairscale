@@ -258,7 +258,6 @@ CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([Tru
 
 
 def rename_test(testcase_func, param_num, param):
-    print(f"param.args {param.args}")
     return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
 
 
