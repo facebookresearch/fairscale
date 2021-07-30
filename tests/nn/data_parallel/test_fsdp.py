@@ -528,23 +528,21 @@ class TestNoGrad(DistributedTest):
 
 
 class TestModuleProperties(DistributedTest):
-
     @parameterized.expand([[{"flatten_parameters": False}], [{"flatten_parameters": True}]], name_func=rename_test)
     def test_named_parameters(self, config):
         test_fn = functools.partial(self._test_named_params, config=config)
         spawn_and_init(test_fn)
-
 
     @classmethod
     def _test_named_params(self, rank, group, config):
         # Get the named parameters before wrapping.
         before_wrap_model = TransformerWithSharedParams(group)
         before_wrap_params = before_wrap_model.named_parameters()
-        
+
         # Train the model for 1 step.
         model = self.get_wrapped_model(group, cuda_first=False, config=config)
         self._train_for_several_steps(model, 1, autocast=False)
-        
+
         # Get the named parameters after to compare.
         # all_shards gets the named parameters from all the workers with the original names.
         after_wrap_params = model.named_parameters(all_shards=True)
