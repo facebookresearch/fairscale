@@ -6,12 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+- FSDP: fixed final backward callback in certain activation checkpointed cases. Before this fix,
+        if a model is activation checkpointed in a certain way, the final backward
+        callback can fire incorrectly. That's due to autograd and reentrant backward
+        graphs. With this fix, the final callback is always registered on the outer
+        most root FSDP instance (i.e. the outer most backward graph), which result
+        in reliably firing. This makes FSDP much more robust with respect to different
+        models and activation checkpoints. [#753]
 
 ### Added
 - FSDP: support gradient accumulation without the `no_sync` context. This is useful
         in training with smaller number of GPU with same overall batch size as large
         number of GPUs. Compared with the `no_sync` context, this mode consumes less
-        GPU memory but more networking bandwidth.
+        GPU memory but uses more networking bandwidth. [#752]
 
 ## [0.3.9] - 2021-07-26
 ### Fixed
