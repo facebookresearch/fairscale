@@ -1001,6 +1001,10 @@ class FullyShardedDataParallel(nn.Module):
             return
         # No FullyShardedDataParallel instance wraps this, else _is_root would be set to False.
         self._is_root = True
+        # If final backward callback is never been queued, state should be IDLE.
+        # If final backward callback is queued, the callback should be finished
+        # and the state was reset to be IDLE.
+        self.assert_state(TrainingState.IDLE)
         # Check if the root instance is being checkpointed. It doesn't make sense to
         # checkpoint the root instance since it won't save GPU memory.
         assert (
@@ -1064,8 +1068,6 @@ class FullyShardedDataParallel(nn.Module):
             self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        self.assert_state(TrainingState.IDLE)
-
         self._lazy_init()
 
         # Start of a forward pass.
