@@ -93,6 +93,9 @@ def _distributed_worker(
     # Save the original torch.distributed.all_gather function since we will
     # patch it to include an artificial delay.
     orig_all_gather = torch.distributed.all_gather
+    orig_all_gather_base = (
+        torch.distributed._all_gather_base if hasattr(torch.distributed, "_all_gather_base") else None
+    )
 
     def run(compute_cycles, all_gather_cycles):
         has_params = all_gather_cycles > 0
@@ -117,6 +120,7 @@ def _distributed_worker(
             cpu_start = time.process_time()
 
             all_gather_called = False
+            all_gather_base_called = False
 
             def _delayed_all_gather(*args, **kwargs):
                 nonlocal all_gather_called
@@ -124,17 +128,30 @@ def _distributed_worker(
                 torch.cuda._sleep(all_gather_cycles)
                 return orig_all_gather(*args, **kwargs)
 
+            def _delayed_all_gather_base(*args, **kwargs):
+                nonlocal all_gather_base_called
+                all_gather_base_called = True
+                torch.cuda._sleep(all_gather_cycles)
+                assert orig_all_gather_base
+                return orig_all_gather_base(*args, **kwargs)
+
+            method_string_all_gather_base = "torch.distributed._all_gather_base"
+            if hasattr(torch.distributed, "_all_gather_base") is False:
+                # no such method, to make mock_all_gather_base 0 invocation, use an impossible name
+                method_string_all_gather_base = "math.nan"
+                pass
             # forward pass
             #
             # Even though both e1 & e2 are on the compute stream, since
             # compute depends on all_gather, e2-e1 includes all_gather time.
             e1.record()
             with patch("torch.distributed.all_gather", _delayed_all_gather):
-                out = model(batch)
-                if has_params and world_size > 1:
-                    assert all_gather_called
-                else:
-                    assert not all_gather_called
+                with patch(method_string_all_gather_base, _delayed_all_gather_base):
+                    out = model(batch)
+                    if has_params and world_size > 1:
+                        assert all_gather_called or all_gather_base_called
+                    else:
+                        assert not all_gather_called and not all_gather_base_called
             e2.record()
 
             # backward pass

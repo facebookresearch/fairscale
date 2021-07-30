@@ -26,9 +26,14 @@ class Bucket:
             assert len(self.callbacks) == 0
             return
         # reduce-scatter bucket
-        dist.reduce_scatter(
-            self.output_shard[: self.offset], list(self.data[:, : self.offset].unbind(0)), group=self.group
-        )
+        if hasattr(dist, "_reduce_scatter_base"):
+            dist._reduce_scatter_base(  # type: ignore
+                self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
+            )
+        else:
+            dist.reduce_scatter(
+                self.output_shard[: self.offset], list(self.data[:, : self.offset].unbind(0)), group=self.group
+            )
         # execute post-reduction callbacks
         for callback_fn in self.callbacks:
             callback_fn()
@@ -39,12 +44,12 @@ class Bucket:
         self.output_shard = torch.zeros_like(self.data[0])
 
     def setup(self) -> None:
-        """ Setup the buffers if they are not allocated.
+        """Setup the buffers if they are not allocated.
 
-            Using ``setup`` and ``teardown``, we can ensure that the bucket
-            buffers are only allocated during the backward pass, hence saving more
-            memory to other parts of the training process, such as the forward pass
-            for activation memory.
+        Using ``setup`` and ``teardown``, we can ensure that the bucket
+        buffers are only allocated during the backward pass, hence saving more
+        memory to other parts of the training process, such as the forward pass
+        for activation memory.
         """
         for tensor in [self.data, self.output_shard]:
             if tensor.storage().size() == 0:
@@ -122,9 +127,15 @@ class ReduceScatterBucketer:
 
         bucket_shard_size = self._get_shard_size(first_input.element_size(), world_size)
         if first_input_size > bucket_shard_size:
+            # TODO: investigate how to avoid using torch.cat (because it seems to be slow for CPU tensors)
             # input is too big to fit in the bucket, reduce-scatter directly
             output = torch.zeros_like(input_list[0])
-            dist.reduce_scatter(output, input_list, group=group)
+            if hasattr(dist, "_reduce_scatter_base"):
+                input_flattened = torch.cat(input_list)
+                dist._reduce_scatter_base(output, input_flattened, group=group)  # type: ignore
+            else:
+                # fallback
+                dist.reduce_scatter(output, input_list, group=group)
             if callback_fn is not None:
                 callback_fn(output)
             return
