@@ -1160,7 +1160,7 @@ class FullyShardedDataParallel(nn.Module):
             else:
                 self._use_full_params()
 
-            # Make sure p.grad has the correct size/device (or set it to None).
+            # Prepare p.grad.
             self._prep_grads_for_backward()
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
