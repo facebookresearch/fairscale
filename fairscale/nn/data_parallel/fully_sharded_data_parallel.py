@@ -1565,7 +1565,7 @@ class FullyShardedDataParallel(nn.Module):
                     p._saved_grad_shard = p.grad.data
                     p.grad = None
                 else:
-                    assert False, "unexpected grad shape"
+                    raise AssertionError(f"unexpected grad shape: {p.grad.size()}"
 
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
