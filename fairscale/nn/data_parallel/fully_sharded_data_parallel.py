@@ -371,10 +371,6 @@ class FullyShardedDataParallel(nn.Module):
         # This is reset at the end of the backward pass.
         self._pre_backward_hook_has_run = False
 
-        # Flag to check post backward callback was fired in previous backward pass.
-        # This is checked and reset at each forward pass.
-        self._post_backward_callback_fired = True
-
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
         while world_size % factor == 0 and world_size / factor > factor:
@@ -1068,6 +1064,8 @@ class FullyShardedDataParallel(nn.Module):
             self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
+        self.assert_state(TrainingState.IDLE)
+
         self._lazy_init()
 
         # Start of a forward pass.
@@ -1127,14 +1125,6 @@ class FullyShardedDataParallel(nn.Module):
 
         return outputs
 
-    @property
-    def _require_final_backward(self) -> bool:
-        """Returns if this FSDP instance requires a final callback because
-        there are trainable parameters inside of it or not.
-        """
-        assert self._is_root
-        return any(p.requires_grad for p in self.parameters()) and self._require_backward_grad_sync
-
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
         """Register pre-backward hook to run before the wrapped module's
         backward. Hooks should be attached to all outputs from the forward.
@@ -1150,12 +1140,6 @@ class FullyShardedDataParallel(nn.Module):
             # _post_backward_callback_queued defined. Accidentally accessing this field
             # will assert on all other instances, giving us a nice bug checker.
             self._post_backward_callback_queued = False
-            # Make sure post backward callback was fired in the preivous iteration
-            assert self._post_backward_callback_fired
-            # Reset flag if require final backwward callback to be fired,
-            # this helps checking whether post backward callback was fired later on
-            if self._require_final_backward:
-                self._post_backward_callback_fired = False
 
         def _pre_backward_hook(*unused: Any) -> None:
             # try to queue final backward callback only once for root, so
@@ -1432,8 +1416,6 @@ class FullyShardedDataParallel(nn.Module):
                 if m._is_root:
                     # reset this flag for cases like "one forward pass + multiple backward passes"
                     self._post_backward_callback_queued = False
-                    # indicate this post backward callback was fired
-                    self._post_backward_callback_fired = True
 
     @torch.no_grad()
     def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
