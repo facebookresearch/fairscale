@@ -29,7 +29,6 @@ from typing import (
 import torch
 from torch import Tensor
 import torch.nn as nn
-from torch.nn.parameter import Parameter
 
 from fairscale.utils.state_dict import replace_by_prefix_
 

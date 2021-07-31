@@ -18,7 +18,6 @@ from typing import (
     Callable,
     Dict,
     Generator,
-    Iterator,
     List,
     Mapping,
     NamedTuple,
@@ -659,7 +658,9 @@ class FullyShardedDataParallel(nn.Module):
         del self.orig_sizes
         self._reset_lazy_init()
 
-    def named_parameters(self, *args, **kwargs) -> Iterator[Tuple[str, Parameter]]:
+    # This function cannot have the same signature as the `named_parameters` function on `nn.Module`.
+    # This is because we need to clone the parameter before returning from the `summon_params` context.
+    def named_parameters(self, *args: Any, **kwargs: Any) -> Any:
         if "all_shards" not in kwargs or not kwargs["all_shards"]:
             named_param = super().named_parameters()
             for name, param in named_param:
@@ -672,8 +673,8 @@ class FullyShardedDataParallel(nn.Module):
                 nm = super().named_parameters(*args, **updated_kwargs)
                 for name, param in nm:
                     nm_clone.append((_clean_path(name), param.clone()))
-            for name, param in nm_clone:
-                yield name, param
+            for nm_tup in nm_clone:
+                yield nm_tup
 
     def __getitem__(self, key: int) -> Any:
         """Forward indexing calls in case the module is a nn.Sequential."""
