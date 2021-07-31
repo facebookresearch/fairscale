@@ -87,6 +87,7 @@ class FullyShardedDataParallel(nn.Module):
     """
     A wrapper for sharding Module parameters across data parallel workers. This
     is inspired by `Xu et al.`_ as well as the ZeRO Stage 3 from DeepSpeed_.
+    FullyShardedDataParallel is commonly shorten to FSDP.
 
     .. _`Xu et al.`: https://arxiv.org/abs/2004.13336
     .. _DeepSpeed: https://www.deepspeed.ai/
@@ -94,9 +95,9 @@ class FullyShardedDataParallel(nn.Module):
     Usage::
 
         import torch
-        from fairscale.nn.data_parallel import FullyShardedDataParallel
+        from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
         torch.cuda.set_device(device_id)
-        sharded_module = FullyShardedDataParallel(my_module)
+        sharded_module = FSDP(my_module)
         optim = torch.optim.Adam(sharded_module.parameters(), lr=0.0001)
         x = sharded_module(x, y=3, z=torch.Tensor([1]))
         loss = x.sum()
@@ -143,7 +144,7 @@ class FullyShardedDataParallel(nn.Module):
 
     Args:
         module (nn.Module):
-            module to be wrapped with FullyShardedDataParallel.
+            module to be wrapped with FSDP.
         process_group (Optional):
             process group for sharding
         reshard_after_forward (bool, Optional):
@@ -627,7 +628,7 @@ class FullyShardedDataParallel(nn.Module):
             return getattr(self.module, name)
 
     def __getstate__(self) -> Dict[str, str]:
-        """Serialize the state of the current FullyShardedDataParallel instance.
+        """Serialize the state of the current FSDP instance.
 
         Some properties are not serializable (e.g., process groups, streams), so
         we remove them and try to reconstruct them in :func:`__setstate__`.
@@ -726,7 +727,7 @@ class FullyShardedDataParallel(nn.Module):
         """
         Returns the local (sharded) state of the module. Parameters are sharded,
         so the resulting state_dict can only be loaded after the Module has been
-        wrapped with FullyShardedDataParallel.
+        wrapped with FSDP.
         """
         with contextlib.ExitStack() as stack:
             # Tell any nested FSDP instances not to auto summon full params.
@@ -783,19 +784,23 @@ class FullyShardedDataParallel(nn.Module):
     @contextlib.contextmanager
     def no_sync(self) -> Generator:
         """
-        A context manager to disable gradient synchronizations across DDP
+        A context manager to disable gradient synchronizations across FSDP
         processes. Within this context, gradients will be accumulated on module
         variables, which will later be synchronized in the first
         forward-backward pass after exiting the context.
 
-        .. note:: This may result in higher memory usage because we will
+        .. note:: This likely results in higher memory usage because FSDP will
             accumulate the full model gradients (instead of gradient shards)
             until the eventual sync.
+
+        .. note:: Gradient accumulation can be done without this context,
+            avoiding the extra GPU memory overhead, but with the extra
+            networking overhead.
         """
         self._lazy_init()
         assert self._is_root, "no_sync on inner FSDP is not supported"
         self.assert_state(TrainingState.IDLE)
-        # This instance may wrap other FullyShardedDataParallel instances and we
+        # This instance may wrap other FSDP instances and we
         # need to set all of them to accumulate gradients.
         old_flags = []
         for m in self.modules():  # includes self
@@ -806,6 +811,7 @@ class FullyShardedDataParallel(nn.Module):
             yield
         finally:
             for m, old_flag in old_flags:
+                assert m._require_backward_grad_sync is False
                 m._require_backward_grad_sync = old_flag
 
     @contextlib.contextmanager
@@ -999,7 +1005,7 @@ class FullyShardedDataParallel(nn.Module):
         """
         if self._is_root is not None:
             return
-        # No FullyShardedDataParallel instance wraps this, else _is_root would be set to False.
+        # No FSDP instance wraps this, else _is_root would be set to False.
         self._is_root = True
         # If final backward callback is never been queued, state should be IDLE.
         # If final backward callback is queued, the callback should be finished
@@ -1168,7 +1174,7 @@ class FullyShardedDataParallel(nn.Module):
             else:
                 self._use_full_params()
 
-            # Make sure p.grad has the correct size/device (or set it to None).
+            # Prepare p.grad.
             self._prep_grads_for_backward()
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
@@ -1265,7 +1271,7 @@ class FullyShardedDataParallel(nn.Module):
             return
 
         if param.grad.requires_grad:
-            raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require gradients")
+            raise RuntimeError("FSDP only works with gradients that don't require gradients")
 
         # If this is a checkpointed module, we check if the following
         # counter reaches 0. If not, it is not the final backward call
@@ -1278,7 +1284,8 @@ class FullyShardedDataParallel(nn.Module):
             # Free full params. As a special case, we don't free the full params
             # when in a ``no_sync`` context (as inversely indicated by
             # ``self._require_backward_grad_sync``), since the params will not
-            # get updated before the next forward.
+            # get updated before the next forward. This saves networking
+            # bandwidth but uses more GPU memory.
             self._free_full_params([param])
 
         if self.mixed_precision:
@@ -1344,6 +1351,12 @@ class FullyShardedDataParallel(nn.Module):
             param.grad.data = param.grad.data.to(dtype=param.data.dtype)
             # Don't let this memory get reused until after the transfer.
             orig_param_grad_data.record_stream(torch.cuda.current_stream())
+        if hasattr(param, "_saved_grad_shard") and param._saved_grad_shard is not None:
+            assert (
+                param._saved_grad_shard.shape == param.grad.shape
+            ), f"{param._saved_grad_shard.shape} vs {param.grad.shape}"
+            param.grad.data += param._saved_grad_shard
+            delattr(param, "_saved_grad_shard")
         # Optionally move gradients to CPU, typically used if one is running
         # the optimizer on the CPU.
         if self.move_grads_to_cpu:
@@ -1536,10 +1549,23 @@ class FullyShardedDataParallel(nn.Module):
 
     @torch.no_grad()
     def _prep_grads_for_backward(self) -> None:
-        """Make sure p.grad has the correct size/device, otherwise set it to None."""
+        """Make sure p.grad is correctly prepared for the backward."""
         for p in self.params:
-            if p.grad is not None and (p.grad.size() != p._orig_size or p.grad.device != p.data.device):
-                p.grad = None
+            if p.grad is not None:
+                if p.grad.device != p.data.device:
+                    p.grad = None
+                elif p.grad.size() == p._orig_size:
+                    # This is gradient accumulation with no_sync context.
+                    pass
+                elif p.grad.size() == p._fp32_shard.shape:
+                    # This is gradient accumulation without no_sync context.
+                    # We save the grad shard and set p.grad to None for this backward pass.
+                    # We will accumulate after this pass's grad is generated and reduced and
+                    # sharded.
+                    p._saved_grad_shard = p.grad.data
+                    p.grad = None
+                else:
+                    raise AssertionError(f"unexpected grad shape: {p.grad.size()}")
 
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
