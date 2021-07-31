@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+
+
+### Added
+
+
+## [0.4.0] - 2021-07-31
+### Fixed
 - FSDP: fixed final backward callback in certain activation checkpointed cases. Before this fix,
         if a model is activation checkpointed in a certain way, the final backward
         callback can fire incorrectly. That's due to autograd and reentrant backward
@@ -19,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         in training with smaller number of GPU with same overall batch size as large
         number of GPUs. Compared with the `no_sync` context, this mode consumes less
         GPU memory but uses more networking bandwidth. [#752]
+
 
 ## [0.3.9] - 2021-07-26
 ### Fixed
