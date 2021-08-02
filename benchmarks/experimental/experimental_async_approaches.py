@@ -815,8 +815,8 @@ def bench_mpi(args):
         f"Test{rank}",
         rank=rank,
         world_size=world_size,
-        backend=rpc.BackendType.PROCESS_GROUP,
-        rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(rpc_timeout=20, init_method=init_method),
+        backend=rpc.BackendType.TENSORPIPE,
+        rpc_backend_options=rpc.TensorPipeRpcBackendOptions(rpc_timeout=20, init_method=init_method),
     )
 
     backends = {"model_parallel_backend": "nccl", "pipeline_backend": "mpi", "ddp_backend": "nccl"}
