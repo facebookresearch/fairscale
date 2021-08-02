@@ -545,9 +545,14 @@ class TestModuleProperties(DistributedTest):
 
         # Get the named parameters after to compare.
         # all_shards gets the named parameters from all the workers with the original names.
-        after_wrap_params = model.named_parameters(all_shards=True)
+        after_wrap_params_from_all_shards = model.named_parameters(all_shards=True)
+        after_wrap_params = model.named_parameters()
 
-        for before_nm, after_nm in zip(before_wrap_params, after_wrap_params):
+        if not config["flatten_parameters"]:
+            for before_nm, after_nm in zip(before_wrap_params, after_wrap_params):
+                assert before_nm[0] == after_nm[0]
+
+        for before_nm, after_nm in zip(before_wrap_params, after_wrap_params_from_all_shards):
             assert before_nm[0] == after_nm[0]
             torch.testing.assert_allclose(before_nm[1].shape, after_nm[1].cpu().shape)
 

@@ -662,7 +662,10 @@ class FullyShardedDataParallel(nn.Module):
     # This is because we need to clone the parameter before returning from the `summon_params` context.
     def named_parameters(self, *args: Any, **kwargs: Any) -> Any:
         if "all_shards" not in kwargs or not kwargs["all_shards"]:
-            named_param = super().named_parameters()
+            updated_kwargs = kwargs.copy()
+            if "all_shards" in updated_kwargs:
+                del updated_kwargs["all_shards"]
+            named_param = super().named_parameters(*args, **updated_kwargs)
             for name, param in named_param:
                 yield _clean_path(name), param
         else:
