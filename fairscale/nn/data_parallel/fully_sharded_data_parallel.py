@@ -111,7 +111,7 @@ class FullyShardedDataParallel(nn.Module):
     across the forward pass. For example::
 
         import torch
-        from fairscale.nn.auto_wrap import enable_wrap, auto_wrap
+        from fairscale.nn.auto_wrap import enable_wrap, auto_wrap, wrap
         from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
         fsdp_params = dict(wrapper_cls=FSDP, mixed_precision=True, flatten_parameters=True)
         with enable_wrap(**fsdp_params):
