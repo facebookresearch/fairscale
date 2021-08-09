@@ -543,18 +543,21 @@ class TestModuleProperties(DistributedTest):
         model = self.get_wrapped_model(group, cuda_first=False, config=config)
         self._train_for_several_steps(model, 1, autocast=False)
 
-        # Get the named parameters after to compare.
-        # all_shards gets the named parameters from all the workers with the original names.
-        after_wrap_params_from_all_shards = model.named_parameters(all_shards=True)
+        # Get the named parameters after wrapping to compare.
         after_wrap_params = model.named_parameters()
 
         if not config["flatten_parameters"]:
             for before_nm, after_nm in zip(before_wrap_params, after_wrap_params):
                 assert before_nm[0] == after_nm[0]
+        else:
+            named_params_flat = [p for p in after_wrap_params][0][0]
+            assert "flat_param_0" in named_params_flat
 
-        for before_nm, after_nm in zip(before_wrap_params, after_wrap_params_from_all_shards):
-            assert before_nm[0] == after_nm[0]
-            torch.testing.assert_allclose(before_nm[1].shape, after_nm[1].cpu().shape)
+        with model.summon_full_params():
+            after_wrap_params = model.named_parameters()
+
+            for before_nm, after_nm_original in zip(before_wrap_params, after_wrap_params):
+                assert before_nm[0] == after_nm_original[0]
 
 
 class TransformerWithSharedParams(nn.Module):

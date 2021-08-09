@@ -18,6 +18,7 @@ from typing import (
     Callable,
     Dict,
     Generator,
+    Iterator,
     List,
     Mapping,
     NamedTuple,
@@ -658,26 +659,29 @@ class FullyShardedDataParallel(nn.Module):
         del self.orig_sizes
         self._reset_lazy_init()
 
-    # This function cannot have the same signature as the `named_parameters` function on `nn.Module`.
-    # This is because we need to clone the parameter before returning from the `summon_params` context.
-    def named_parameters(self, *args: Any, **kwargs: Any) -> Any:
-        if "all_shards" not in kwargs or not kwargs["all_shards"]:
-            updated_kwargs = kwargs.copy()
-            if "all_shards" in updated_kwargs:
-                del updated_kwargs["all_shards"]
-            named_param = super().named_parameters(*args, **updated_kwargs)
-            for name, param in named_param:
+    def named_parameters(self, *args: Any, **kwargs: Any) -> Iterator[Tuple[str, Parameter]]:
+        """Returns an iterator over the module parameters, yielding both the name of the
+        parameter as well as the parameter.
+
+        With FSDP, the `named_parameters` function implemented in `nn.Module` will not
+        be able to return the name and partial param when we use flattened parameters.
+        The only case where this function will return the name and either the partial 
+        or original param size is when we are in a SUMMON_FULL_PARAMS state.
+
+        If you want the full param to be returned, you should call this function 
+        under a `summon_full_params` context.
+        """
+        named_param = super().named_parameters(*args, **kwargs)
+        for name, param in named_param:
+            if (
+                hasattr(self, "flatten_parameters")
+                and self.flatten_parameters
+                and hasattr(self, "training_state")
+                and self.training_state != TrainingState.SUMMON_FULL_PARAMS
+            ):
+                yield name, param
+            else:
                 yield _clean_path(name), param
-        else:
-            updated_kwargs = kwargs.copy()
-            del updated_kwargs["all_shards"]
-            nm_clone = []
-            with self.summon_full_params():
-                nm = super().named_parameters(*args, **updated_kwargs)
-                for name, param in nm:
-                    nm_clone.append((_clean_path(name), param.clone()))
-            for nm_tup in nm_clone:
-                yield nm_tup
 
     def __getitem__(self, key: int) -> Any:
         """Forward indexing calls in case the module is a nn.Sequential."""
