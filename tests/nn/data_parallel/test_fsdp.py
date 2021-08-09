@@ -553,11 +553,13 @@ class TestModuleProperties(DistributedTest):
             named_params_flat = [p for p in after_wrap_params][0][0]
             assert "flat_param_0" in named_params_flat
 
+        # Compare name and size under the `summon_full_params` context.
         with model.summon_full_params():
             after_wrap_params = model.named_parameters()
 
             for before_nm, after_nm_original in zip(before_wrap_params, after_wrap_params):
                 assert before_nm[0] == after_nm_original[0]
+                torch.testing.assert_allclose(before_nm[1].shape, after_nm_original[1].cpu().shape)
 
 
 class TransformerWithSharedParams(nn.Module):

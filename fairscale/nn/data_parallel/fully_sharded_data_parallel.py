@@ -664,12 +664,11 @@ class FullyShardedDataParallel(nn.Module):
         parameter as well as the parameter.
 
         With FSDP, the `named_parameters` function implemented in `nn.Module` will not
-        be able to return the name and partial param when we use flattened parameters.
-        The only case where this function will return the name and either the partial 
-        or original param size is when we are in a SUMMON_FULL_PARAMS state.
+        be able to return the name and param when we use flattened parameters unless 
+        we call this function under a `summon_full_params` context.
 
         If you want the full param to be returned, you should call this function 
-        under a `summon_full_params` context.
+        under a `summon_full_params` context when using flattened or original params.
         """
         named_param = super().named_parameters(*args, **kwargs)
         for name, param in named_param:
