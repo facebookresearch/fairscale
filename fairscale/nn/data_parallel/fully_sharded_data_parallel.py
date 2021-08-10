@@ -1383,7 +1383,7 @@ class FullyShardedDataParallel(nn.Module):
         assert self._is_root
         # Check if the root module has params and if any of them has
         # the `requires_grad` field set. If `requires_grad=False` for
-        # all the params, the post_backward hook will not fire and the 
+        # all the params, the post_backward hook will not fire and the
         # state will remain in `TrainingState.BACKWARD_PRE`.
         if self._has_params and any([p.requires_grad for p in self.params]):
             self.assert_state(TrainingState.BACKWARD_POST)
@@ -1423,7 +1423,7 @@ class FullyShardedDataParallel(nn.Module):
                 if any(p.requires_grad for p in m.parameters()):
                     # Check if the module has params and if any of them has
                     # the `requires_grad` field set. If `requires_grad=False` for
-                    # all the params, the post_backward hook will not fire and the 
+                    # all the params, the post_backward hook will not fire and the
                     # state will remain in `TrainingState.BACKWARD_PRE`.
                     if m._has_params and any([p.requires_grad for p in m.params]):
                         m.assert_state(TrainingState.BACKWARD_POST)
