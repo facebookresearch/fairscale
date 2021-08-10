@@ -1381,7 +1381,11 @@ class FullyShardedDataParallel(nn.Module):
     def _wait_for_post_backward(self) -> None:
         """Wait for post-backward to finish. Only called on root instance."""
         assert self._is_root
-        if self._has_params:
+        # Check if the root module has params and if any of them has
+        # the `requires_grad` field set. If `requires_grad=False` for
+        # all the params, the post_backward hook will not fire and the 
+        # state will remain in `TrainingState.BACKWARD_PRE`.
+        if self._has_params and any([p.requires_grad for p in self.params]):
             self.assert_state(TrainingState.BACKWARD_POST)
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
@@ -1417,7 +1421,11 @@ class FullyShardedDataParallel(nn.Module):
                 _remove_shard_bwd_hook(m)
                 m._pre_backward_hook_has_run = False
                 if any(p.requires_grad for p in m.parameters()):
-                    if m._has_params:
+                    # Check if the module has params and if any of them has
+                    # the `requires_grad` field set. If `requires_grad=False` for
+                    # all the params, the post_backward hook will not fire and the 
+                    # state will remain in `TrainingState.BACKWARD_PRE`.
+                    if m._has_params and any([p.requires_grad for p in m.params]):
                         m.assert_state(TrainingState.BACKWARD_POST)
                     else:
                         m.assert_state(TrainingState.BACKWARD_PRE)
