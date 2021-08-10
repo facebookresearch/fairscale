@@ -2,9 +2,9 @@ Scale your model on a single GPU using OffloadModel
 ====================================================
 
 `fairscale.experimental.nn.offload.OffloadModel` API democratizes large scale distributed training by enabling
-users to train large models on limited GPU resources that would have traditionally resulted in OOM errors. 
-`OffloadModel` API wraps the given model and shards it almost equally. Each shard of the model is copied 
-from the CPU to the GPU for the forward pass and then copied back. The same process is repeated in the reverse 
+users to train large models on limited GPU resources that would have traditionally resulted in OOM errors.
+`OffloadModel` API wraps the given model and shards it almost equally. Each shard of the model is copied
+from the CPU to the GPU for the forward pass and then copied back. The same process is repeated in the reverse
 order for the backward pass. `OffloadModel` supports mixed precision training, activation checkpointing for reducing
 the memory footprint and using micro batches to reduce throughput.
 
@@ -24,7 +24,7 @@ Consider a training loop as described below:
 
     num_inputs = 8
     num_outputs = 8
-    num_hidden =  4 
+    num_hidden =  4
     num_layers =  2
     batch_size =  8
 
@@ -45,8 +45,8 @@ Consider a training loop as described below:
     )
 
 
-To use the `OffloadModel` API, we should wrap the model as shown below. You can specify the device that you want 
-to use for computing the forward and backward pass, the offload device on which the model will be stored and the number 
+To use the `OffloadModel` API, we should wrap the model as shown below. You can specify the device that you want
+to use for computing the forward and backward pass, the offload device on which the model will be stored and the number
 of slices that the model should be sharded into. By default activation checkpointing is turned off and number of microbatches is 1.
 
 .. code-block:: python
