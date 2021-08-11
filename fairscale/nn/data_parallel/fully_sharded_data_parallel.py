@@ -1385,7 +1385,7 @@ class FullyShardedDataParallel(nn.Module):
         # the `requires_grad` field set. If `requires_grad=False` for
         # all the params, the post_backward hook will not fire and the
         # state will remain in `TrainingState.BACKWARD_PRE`.
-        if self._has_params and any([p.requires_grad for p in self.params]):
+        if any([p.requires_grad for p in self.params]):
             self.assert_state(TrainingState.BACKWARD_POST)
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
@@ -1425,7 +1425,7 @@ class FullyShardedDataParallel(nn.Module):
                     # the `requires_grad` field set. If `requires_grad=False` for
                     # all the params, the post_backward hook will not fire and the
                     # state will remain in `TrainingState.BACKWARD_PRE`.
-                    if m._has_params and any([p.requires_grad for p in m.params]):
+                    if any([p.requires_grad for p in m.params]):
                         m.assert_state(TrainingState.BACKWARD_POST)
                     else:
                         m.assert_state(TrainingState.BACKWARD_PRE)
