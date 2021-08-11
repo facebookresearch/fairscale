@@ -4,7 +4,7 @@ Efficient memory usage using Activation Checkpointing
 Adaped from `torch.utils.checkpoint`, this is a friendlier wrapper for performing activation checkpointing.
 
 Compared to the PyTorch version, this version wraps a `nn.Module` and allows for all subsequent calls to be
-checkpointed. 
+checkpointed.
 
 .. code-block:: python
 
@@ -22,7 +22,7 @@ checkpointed.
                 nn.Dropout(p=0.5),
                 nn.Linear(128, 32),
             )
-            
+
             self.ffn_module = checkpoint_wrapper(self.ffn_module, **kwargs)
             self.last_linear = nn.Linear(32, 1)
 

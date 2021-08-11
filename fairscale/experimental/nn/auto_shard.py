@@ -117,17 +117,17 @@ def shard_model(model: torch.nn.Module, shard_count: int = 3) -> List[torch.fx.G
 
     This function traces the model twice in an attempt to identify the
     right cutpoints and then shard the model. In the first pass we calculate
-    the number of parameters as we are tracing the graph and mark nodes at 
-    which we might want to create a new module. In the second pass we 
+    the number of parameters as we are tracing the graph and mark nodes at
+    which we might want to create a new module. In the second pass we
     modify the graph by inserting placeholders and output nodes to essentially
     shard the graph.
 
-    We don't support skip connections between shards. This means that all 
+    We don't support skip connections between shards. This means that all
     input and output is self contained within a given shard. A node from
     shard 1 cannot be an input to a node from shard 3. We expect all inputs
     to a given shard to be coming from the last node in the previous shard.
     This means that we may not be able to shard models by the specified
-    `shard_count` mentioned by the user. 
+    `shard_count` mentioned by the user.
 
     Args:
         model (nn.Module): Model to be sharded as specified by the device count.
