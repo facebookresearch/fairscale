@@ -18,6 +18,7 @@ from typing import (
     Callable,
     Dict,
     Generator,
+    Iterator,
     List,
     Mapping,
     NamedTuple,
@@ -33,8 +34,8 @@ from torch.autograd import Variable
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
 import torch.nn as nn
-from torch.nn import Parameter
 import torch.nn.functional as F
+from torch.nn.parameter import Parameter
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
@@ -658,6 +659,29 @@ class FullyShardedDataParallel(nn.Module):
         del self.is_sharded
         del self.orig_sizes
         self._reset_lazy_init()
+
+    def named_parameters(self, *args: Any, **kwargs: Any) -> Iterator[Tuple[str, Parameter]]:
+        """Returns an iterator over the module parameters, yielding both the name of the
+        parameter as well as the parameter.
+
+        With FSDP, the `named_parameters` function implemented in `nn.Module` will not
+        be able to return the name and param when we use flattened parameters unless 
+        we call this function under a `summon_full_params` context.
+
+        If you want the full param to be returned, you should call this function 
+        under a `summon_full_params` context when using flattened or original params.
+        """
+        named_param = super().named_parameters(*args, **kwargs)
+        for name, param in named_param:
+            if (
+                hasattr(self, "flatten_parameters")
+                and self.flatten_parameters
+                and hasattr(self, "training_state")
+                and self.training_state != TrainingState.SUMMON_FULL_PARAMS
+            ):
+                yield name, param
+            else:
+                yield _clean_path(name), param
 
     def __getitem__(self, key: int) -> Any:
         """Forward indexing calls in case the module is a nn.Sequential."""
@@ -2009,7 +2033,7 @@ def _post_state_dict_hook(
     # each tensor so that it does not get freed (in-place) when the context
     # exits. At the same time, this hook can be called multiple times
     # recursively, so we need to make sure that we only clone each tensor at
-    # mostonce. Thus we add an attribute on the tensor called "_has_been_cloned"
+    # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
     # which keeps track of tensors that are no longer at risk of being freed.
     for key in state_dict.keys():
         if not key.startswith(prefix) or getattr(state_dict[key], "_has_been_cloned", False):
