@@ -25,6 +25,73 @@ from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.utils.testing import dist_init, objects_are_equal, rmf, skip_if_single_gpu, teardown
 
 
+class FreezeModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.trunk = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(output_size=(1, 1)),
+            nn.Flatten(),
+        )
+        self.head = nn.Linear(64, 10)
+
+        self.trunk = FSDP(self.trunk)
+
+    def forward(self, x):
+        return self.head(self.trunk(x))
+
+
+def _freeze_distributed_worker(
+    gpu_id, world_size, tempfile_name, unused,
+):
+    torch.cuda.set_device(gpu_id)
+
+    rank = gpu_id
+    result = dist_init(rank, world_size, tempfile_name, unused)
+    assert result, "Dist init failed"
+
+    torch.manual_seed(0)
+    torch.backends.cudnn.deterministic = True
+    batch = torch.randn(size=(2, 3, 224, 224)).cuda()
+
+    # The use case for this test is where the weights in the submodule
+    # are not frozen but the leftover weights or those contained by the
+    # root module are frozen. Refer to issue #758 for a real world example.
+    model = FreezeModel()
+    model = model.cuda()
+
+    for param in model.head.parameters():
+        param.requires_grad = False
+
+    model = FSDP(model)
+
+    if gpu_id == 0:
+        print(model)
+
+    target = torch.tensor([0, 1], dtype=torch.long).cuda()
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+
+    for iteration in range(3):
+        out = model(batch)
+        fake_loss = criterion(out, target)
+        print("Loss", iteration, ":", fake_loss.item())
+        optimizer.zero_grad()
+        fake_loss.backward()
+        optimizer.step()
+
+    teardown()
+
+
+@skip_if_single_gpu
+def test_submodule_freezing_weights(temp_files):
+    world_size = 2
+    mp.spawn(
+        _freeze_distributed_worker, (world_size, temp_files[0], temp_files[1]), nprocs=world_size,
+    )
+
+
 class Model(nn.Module):
     def __init__(self, with_fsdp, freeze_after_wrap_fsdp):
         super().__init__()
