@@ -1,3 +1,6 @@
+# If you change the versions below, please make sure they are in-sync
+# with requirements-test.txt
+
 exclude: 'build|stubs'
 
 default_language_version:
