@@ -4,6 +4,8 @@
 # Tools for static checking.
 #   - flake8-annotations is needed to avoid F811 error with overload
 #     function typing with mypy.
+#   - if you change versions below, please make sure it is in-sync with
+#     .pre-commit-config.yaml for pre-commit.
 black == 19.10b0
 flake8 == 3.7.9
 flake8-annotations == 2.6.2
