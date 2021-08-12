@@ -6,8 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+- FSDP: We don't attach post backward hooks for params that don't require grad. However in the hook
+        triggered after the post backward hook, we assert on the POST_BACKWARD state which can only
+        be set in the post backward hook. Modified the assert to account for the fact that the root
+        FSDP module can have child modules with params that require grad and it can contain params
+        that don't require grad and hence can fail the previous assert. [#761]
 
 ### Added
+- FSDP: Added support for returning the original names of parameters when `named_parameters` is called on
+        the module. To retrieve the orginal names of the parameters along with the params, you need to 
+        call `named_parameters` under the `summon_full_params` context when using flattened params or original
+        params. If you are using original params (i.e flatten_params=False), calling `named_parameters` outside
+        of the `summon_full_params` context will still return the original param names along with the local shards. [#755]
 
 
 ## [0.4.0] - 2021-07-31
