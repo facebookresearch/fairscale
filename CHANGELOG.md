@@ -6,8 +6,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
-- FSDP: fixed an assert for checking if the params of a module requires_grad=True [#761]
-- FSDP: fixed handling of `model.named_parameters()` so that it is consistent with DDP [#755]
 
 ### Added
 
