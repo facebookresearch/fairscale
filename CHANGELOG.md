@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Added
+- FSDP: Added reflatten API to allow better control over optimizations of parameters
+        while they are flattened. This is useful for different optimizer groups as well
+        as finetuning subset of parameters.
 
 
 ## [0.4.0] - 2021-07-31
