@@ -7,3 +7,5 @@
 - git push --tags origin [your/branch]
 - `python3 setup.py sdist` to build a new package (will be in dist/)
 - `python3 -m twine upload --repository pypi dist/*` to upload to pypi
+- visit [this page](https://github.com/facebookresearch/fairscale/tags) and create the newly
+  tagged release.
