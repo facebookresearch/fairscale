@@ -7,14 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## NEXT - TBD
 ### Fixed
 
+
 ### Added
+
+
+## [0.4.0] - 2021-07-31
+### Fixed
+- FSDP: fixed final backward callback in certain activation checkpointed cases. Before this fix,
+        if a model is activation checkpointed in a certain way, the final backward
+        callback can fire incorrectly. That's due to autograd and reentrant backward
+        graphs. With this fix, the final callback is always registered on the outer
+        most root FSDP instance (i.e. the outer most backward graph), which result
+        in reliably firing. This makes FSDP much more robust with respect to different
+        models and activation checkpoints. [#753]
+
+### Added
+- FSDP: support gradient accumulation without the `no_sync` context. This is useful
+        in training with smaller number of GPU with same overall batch size as large
+        number of GPUs. Compared with the `no_sync` context, this mode consumes less
+        GPU memory but uses more networking bandwidth. [#752]
+
 
 ## [0.3.9] - 2021-07-26
 ### Fixed
 - FSDP: fixed metadata saving and shard consolidation for MoE cases. When a model has
         shared parameters or mixture of expert layers, the handling of state dict
         metadata was broken. This release fixes that. [#746]
-- OSS: fixed the buckets which would stay in fp16 if `broadcast fp16` was required (#751)
+- OSS: fixed the buckets which would stay in fp16 if `broadcast fp16` was required [#751]
 
 ### Added
 - FSDP: better performance; use `_allgather_base` and `_reduce_scatter_base` when they are

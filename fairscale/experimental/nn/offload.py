@@ -75,7 +75,7 @@ def _split(modules: nn.Sequential, number_splits: int) -> List[List[nn.Module]]:
 
 class ModelShard(nn.Module):
     """
-    Wrap one shard of the model, make it possible to load parameters on the 
+    Wrap one shard of the model, make it possible to load parameters on the
     fly for the FW and BW pass on the given device.
     """
 
@@ -146,8 +146,8 @@ class OffloadFunction(torch.autograd.Function):
      This enables us to offload intermediate activations present at the shard
      boundaries.
 
-     - In the BW pass, it does the reverse. We run the forward pass using the 
-     saved intermediate activations and calculate gradients as needed. 
+     - In the BW pass, it does the reverse. We run the forward pass using the
+     saved intermediate activations and calculate gradients as needed.
      The trade-off is latency vs memory when using activation checkpointing.
 
      - Follows heavily from https://pytorch.org/docs/stable/_modules/torch/utils/checkpoint.html#checkpoint.
@@ -382,8 +382,8 @@ class OffloadModel(nn.Module):
         model = get_model()
         offload_model = OffloadModel(model, device,
                                     offload_device=torch.device(“cpu”),
-                                    num_slices=3, 
-                                    checkpoint_activation=True,   
+                                    num_slices=3,
+                                    checkpoint_activation=True,
                                     num_microbatches=5)
 
     .. _L2L: https://arxiv.org/abs/2002.05645

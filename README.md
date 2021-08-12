@@ -6,24 +6,24 @@
 --------------------------------------------------------------------------------
 
 ## Description
-FairScale is a PyTorch extension library for high performance and large scale training. 
-This library extends basic PyTorch capabilities while adding new SOTA scaling techniques. 
-FairScale makes available the latest distributed training techniques in the form of composable 
-modules and easy to use APIs. These APIs are a fundamental part of a researcher's toolbox as 
+FairScale is a PyTorch extension library for high performance and large scale training.
+This library extends basic PyTorch capabilities while adding new SOTA scaling techniques.
+FairScale makes available the latest distributed training techniques in the form of composable
+modules and easy to use APIs. These APIs are a fundamental part of a researcher's toolbox as
 they attempt to scale models with limited resources.
 
 FairScale was designed with the following values in mind:
 
 * **Usability** -  Users should be able to understand and use FairScale APIs with minimum cognitive overload.
 
-* **Modularity** - Users should be able to combine multiple FairScale APIs as part of their training loop seamlessly. 
+* **Modularity** - Users should be able to combine multiple FairScale APIs as part of their training loop seamlessly.
 
 * **Performance** - FairScale APIs provide the best performance in terms of scaling and efficiency.
 
 
 ## Installation
 
-To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/master/docs/source/installation_instructions.rst). You should be able to install a pip package or 
+To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/master/docs/source/installation_instructions.rst). You should be able to install a pip package or
 build directly from source.
 
 ## Getting Started

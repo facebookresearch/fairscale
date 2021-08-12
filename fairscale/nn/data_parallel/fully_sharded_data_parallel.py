@@ -88,6 +88,7 @@ class FullyShardedDataParallel(nn.Module):
     """
     A wrapper for sharding Module parameters across data parallel workers. This
     is inspired by `Xu et al.`_ as well as the ZeRO Stage 3 from DeepSpeed_.
+    FullyShardedDataParallel is commonly shorten to FSDP.
 
     .. _`Xu et al.`: https://arxiv.org/abs/2004.13336
     .. _DeepSpeed: https://www.deepspeed.ai/
@@ -95,9 +96,9 @@ class FullyShardedDataParallel(nn.Module):
     Usage::
 
         import torch
-        from fairscale.nn.data_parallel import FullyShardedDataParallel
+        from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
         torch.cuda.set_device(device_id)
-        sharded_module = FullyShardedDataParallel(my_module)
+        sharded_module = FSDP(my_module)
         optim = torch.optim.Adam(sharded_module.parameters(), lr=0.0001)
         x = sharded_module(x, y=3, z=torch.Tensor([1]))
         loss = x.sum()
@@ -111,7 +112,7 @@ class FullyShardedDataParallel(nn.Module):
     across the forward pass. For example::
 
         import torch
-        from fairscale.nn.auto_wrap import enable_wrap, auto_wrap
+        from fairscale.nn.auto_wrap import enable_wrap, auto_wrap, wrap
         from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
         fsdp_params = dict(wrapper_cls=FSDP, mixed_precision=True, flatten_parameters=True)
         with enable_wrap(**fsdp_params):
@@ -144,7 +145,7 @@ class FullyShardedDataParallel(nn.Module):
 
     Args:
         module (nn.Module):
-            module to be wrapped with FullyShardedDataParallel.
+            module to be wrapped with FSDP.
         process_group (Optional):
             process group for sharding
         reshard_after_forward (bool, Optional):
@@ -628,7 +629,7 @@ class FullyShardedDataParallel(nn.Module):
             return getattr(self.module, name)
 
     def __getstate__(self) -> Dict[str, str]:
-        """Serialize the state of the current FullyShardedDataParallel instance.
+        """Serialize the state of the current FSDP instance.
 
         Some properties are not serializable (e.g., process groups, streams), so
         we remove them and try to reconstruct them in :func:`__setstate__`.
@@ -750,7 +751,7 @@ class FullyShardedDataParallel(nn.Module):
         """
         Returns the local (sharded) state of the module. Parameters are sharded,
         so the resulting state_dict can only be loaded after the Module has been
-        wrapped with FullyShardedDataParallel.
+        wrapped with FSDP.
         """
         with contextlib.ExitStack() as stack:
             # Tell any nested FSDP instances not to auto summon full params.
@@ -807,19 +808,23 @@ class FullyShardedDataParallel(nn.Module):
     @contextlib.contextmanager
     def no_sync(self) -> Generator:
         """
-        A context manager to disable gradient synchronizations across DDP
+        A context manager to disable gradient synchronizations across FSDP
         processes. Within this context, gradients will be accumulated on module
         variables, which will later be synchronized in the first
         forward-backward pass after exiting the context.
 
-        .. note:: This may result in higher memory usage because we will
+        .. note:: This likely results in higher memory usage because FSDP will
             accumulate the full model gradients (instead of gradient shards)
             until the eventual sync.
+
+        .. note:: Gradient accumulation can be done without this context,
+            avoiding the extra GPU memory overhead, but with the extra
+            networking overhead.
         """
         self._lazy_init()
         assert self._is_root, "no_sync on inner FSDP is not supported"
         self.assert_state(TrainingState.IDLE)
-        # This instance may wrap other FullyShardedDataParallel instances and we
+        # This instance may wrap other FSDP instances and we
         # need to set all of them to accumulate gradients.
         old_flags = []
         for m in self.modules():  # includes self
@@ -830,6 +835,7 @@ class FullyShardedDataParallel(nn.Module):
             yield
         finally:
             for m, old_flag in old_flags:
+                assert m._require_backward_grad_sync is False
                 m._require_backward_grad_sync = old_flag
 
     @contextlib.contextmanager
@@ -909,7 +915,6 @@ class FullyShardedDataParallel(nn.Module):
     def _reset_lazy_init(self) -> None:
         """Reset instance so :func:`_lazy_init` will run on the next forward."""
         self._is_root: Optional[bool] = None
-        self._queue_wait_for_post_backward_closure: Optional[Callable] = None
         self._streams: Dict[str, torch.cuda.Stream] = {}
         self._reducer: Optional[ReduceScatterBucketer] = None
         for p in self.params:
@@ -1024,10 +1029,20 @@ class FullyShardedDataParallel(nn.Module):
         """
         if self._is_root is not None:
             return
-        # No FullyShardedDataParallel instance wraps this, else _is_root would be set to False.
+        # No FSDP instance wraps this, else _is_root would be set to False.
         self._is_root = True
-        assert self._queue_wait_for_post_backward_closure is None
-        self._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
+        # If final backward callback is never been queued, state should be IDLE.
+        # If final backward callback is queued, the callback should be finished
+        # and the state was reset to be IDLE.
+        # This should be asserted at the beginning of forward pass in the root instance only.
+        # For children instances, if they are checkpointed, state will not be reset to
+        # IDLE after each inner forward/backward.
+        self.assert_state(TrainingState.IDLE)
+        # Check if the root instance is being checkpointed. It doesn't make sense to
+        # checkpoint the root instance since it won't save GPU memory.
+        assert (
+            getattr(self, "_checkpoint_fwd_counter", 0) == 0
+        ), "Is the root FSDP module wrapping an activation checkpointed module? If so, please remove that."
         # As the root, we now set all children instances to False and
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
@@ -1039,14 +1054,6 @@ class FullyShardedDataParallel(nn.Module):
                 assert m._is_root is None or not m._is_root
                 if m._is_root is None:
                     m._is_root = False
-                    # When root instance doesn't have params, allow children instances
-                    # to queue the post_backward hook.
-                    #
-                    # TODO (Min): we should think if we can have a empty param at the root
-                    #             so that root always have a callback on the backward graph.
-                    if not self._has_params:
-                        assert m._queue_wait_for_post_backward_closure is None
-                        m._queue_wait_for_post_backward_closure = self._queue_wait_for_post_backward
                 if m.process_group != self.process_group:
                     self.children_share_process_group = False
 
@@ -1163,7 +1170,20 @@ class FullyShardedDataParallel(nn.Module):
         if not torch.is_grad_enabled():
             return outputs  # don't register hooks if grad isn't enabled
 
+        if self._is_root:
+            # This actually means that only root instance has
+            # _post_backward_callback_queued defined. Accidentally accessing this field
+            # will assert on all other instances, giving us a nice bug checker.
+            self._post_backward_callback_queued = False
+
         def _pre_backward_hook(*unused: Any) -> None:
+            # try to queue final backward callback only once for root, so
+            # that final backward callback is attached to the outer most
+            # backward graph task and called after all the backward
+            # calls are completed.
+            if self._is_root:
+                self._queue_wait_for_post_backward()
+
             if self._pre_backward_hook_has_run:
                 return  # only run once (from multiple outputs or multiple forward passes)
             self._pre_backward_hook_has_run = True
@@ -1178,7 +1198,7 @@ class FullyShardedDataParallel(nn.Module):
             else:
                 self._use_full_params()
 
-            # Make sure p.grad has the correct size/device (or set it to None).
+            # Prepare p.grad.
             self._prep_grads_for_backward()
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
@@ -1228,11 +1248,6 @@ class FullyShardedDataParallel(nn.Module):
         """
         if not torch.is_grad_enabled():
             return  # don't register grad hooks if grad isn't enabled
-        if self._is_root:
-            # This actually means that only root instance has this field
-            # defined. Accidentally accessing this field will assert on all
-            # other instances, giving us a nice bug checker.
-            self._post_backward_callback_queued = False
         for p in self.params:
             if p.requires_grad:
                 if hasattr(p, "_shard_bwd_hook"):
@@ -1280,7 +1295,7 @@ class FullyShardedDataParallel(nn.Module):
             return
 
         if param.grad.requires_grad:
-            raise RuntimeError("FullyShardedDataParallel only works with gradients that don't require gradients")
+            raise RuntimeError("FSDP only works with gradients that don't require gradients")
 
         # If this is a checkpointed module, we check if the following
         # counter reaches 0. If not, it is not the final backward call
@@ -1293,7 +1308,8 @@ class FullyShardedDataParallel(nn.Module):
             # Free full params. As a special case, we don't free the full params
             # when in a ``no_sync`` context (as inversely indicated by
             # ``self._require_backward_grad_sync``), since the params will not
-            # get updated before the next forward.
+            # get updated before the next forward. This saves networking
+            # bandwidth but uses more GPU memory.
             self._free_full_params([param])
 
         if self.mixed_precision:
@@ -1304,14 +1320,6 @@ class FullyShardedDataParallel(nn.Module):
 
         # Switch to FP32 shard after backward.
         self._use_fp32_param_shard([param])
-
-        # (try to) Enqueue a callback at the end of the backward pass to ensure that all
-        # post-backward work has finished. We only need one callback and all instances
-        # of FSDP (root and children) make this attempt here to queue to ensure it is queued
-        # no matter which instance(s) has(have) params.
-        assert self._queue_wait_for_post_backward_closure is not None or not self._is_root
-        if self._queue_wait_for_post_backward_closure is not None:
-            self._queue_wait_for_post_backward_closure()
 
         if not self._require_backward_grad_sync:
             return
@@ -1367,6 +1375,12 @@ class FullyShardedDataParallel(nn.Module):
             param.grad.data = param.grad.data.to(dtype=param.data.dtype)
             # Don't let this memory get reused until after the transfer.
             orig_param_grad_data.record_stream(torch.cuda.current_stream())
+        if hasattr(param, "_saved_grad_shard") and param._saved_grad_shard is not None:
+            assert (
+                param._saved_grad_shard.shape == param.grad.shape
+            ), f"{param._saved_grad_shard.shape} vs {param.grad.shape}"
+            param.grad.data += param._saved_grad_shard
+            delattr(param, "_saved_grad_shard")
         # Optionally move gradients to CPU, typically used if one is running
         # the optimizer on the CPU.
         if self.move_grads_to_cpu:
@@ -1378,13 +1392,12 @@ class FullyShardedDataParallel(nn.Module):
     def _queue_wait_for_post_backward(self) -> None:
         """Try to queue a `wait_for_post_backward` callback.
 
-        Only called on root and only queue one callback. But can be called by
-        children FSDPs via a closure in case the root instance doesn't own any
-        params.
+        Only called on root and only queue one callback at the beginning of
+        outer most backward.
         """
         assert self._is_root
-        self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         if not self._post_backward_callback_queued:
+            self.assert_state([TrainingState.IDLE])
             self._post_backward_callback_queued = True
             Variable._execution_engine.queue_callback(self._wait_for_post_backward)
 
@@ -1433,11 +1446,18 @@ class FullyShardedDataParallel(nn.Module):
                     else:
                         m.assert_state(TrainingState.BACKWARD_PRE)
                 else:
-                    # Unlikely case. When `m` and its children has no params or has params but
-                    # none with `requires_grad==True`, then m's pre-backward and post-backward
-                    # hooks aren't called by autograd. Therefore, it is in IDLE state.
-                    m.assert_state(TrainingState.IDLE)
+                    # When `m` and its children has no params or has params but
+                    # none with `requires_grad==True`, there are two cases:
+                    # 1. output tensors are `requires_grad==True`. In this case,
+                    # pre-backward hook is still registered, so it is in BACKWARD_PRE state.
+                    # 2. output tensors are `requires_grad==False`. In this case,
+                    # pre-backward hook is not registered, so it is in IDLE state.
+                    m.assert_state([TrainingState.BACKWARD_PRE, TrainingState.IDLE])
                 m.training_state = TrainingState.IDLE
+
+                if m._is_root:
+                    # reset this flag for cases like "one forward pass + multiple backward passes"
+                    self._post_backward_callback_queued = False
 
     @torch.no_grad()
     def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
@@ -1553,10 +1573,23 @@ class FullyShardedDataParallel(nn.Module):
 
     @torch.no_grad()
     def _prep_grads_for_backward(self) -> None:
-        """Make sure p.grad has the correct size/device, otherwise set it to None."""
+        """Make sure p.grad is correctly prepared for the backward."""
         for p in self.params:
-            if p.grad is not None and (p.grad.size() != p._orig_size or p.grad.device != p.data.device):
-                p.grad = None
+            if p.grad is not None:
+                if p.grad.device != p.data.device:
+                    p.grad = None
+                elif p.grad.size() == p._orig_size:
+                    # This is gradient accumulation with no_sync context.
+                    pass
+                elif p.grad.size() == p._fp32_shard.shape:
+                    # This is gradient accumulation without no_sync context.
+                    # We save the grad shard and set p.grad to None for this backward pass.
+                    # We will accumulate after this pass's grad is generated and reduced and
+                    # sharded.
+                    p._saved_grad_shard = p.grad.data
+                    p.grad = None
+                else:
+                    raise AssertionError(f"unexpected grad shape: {p.grad.size()}")
 
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:

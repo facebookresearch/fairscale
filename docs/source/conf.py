@@ -29,7 +29,7 @@ copyright = "2020-2021, Facebook AI Research"
 author = "Facebook AI Research"
 
 # The full version, including alpha/beta/rc tags
-release = "0.3.9"
+release = "0.4.0"
 
 
 # -- General configuration ---------------------------------------------------
@@ -129,7 +129,7 @@ def setup(app):
     app.add_config_value(
         "recommonmark_config",
         {
-            "url_resolver": lambda url: github_doc_root + url, 
+            "url_resolver": lambda url: github_doc_root + url,
             "auto_toc_tree_section": "Contents",
             "enable_math": True,
             "enable_inline_math": True,

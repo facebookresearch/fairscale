@@ -15,6 +15,7 @@ class Parameter(Tensor):
     _fp32_shard: Tensor
     _fp16_shard: Optional[Tensor]
     _shard_bwd_hook: Tuple[Any, Any]
+    _saved_grad_shard: Tensor
 
     def __new__(cls, data: Tensor, requires_grad: builtins.bool = True): ...
 

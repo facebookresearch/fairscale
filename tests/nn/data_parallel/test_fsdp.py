@@ -279,6 +279,12 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         spawn_and_init(test_fn)
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_nested_all_wrapped_model_checkpoint(self, config):
+        model_fn = functools.partial(NestedWrappedModule, wrap_everything=True, checkpoint=True)
+        test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
+        spawn_and_init(test_fn)
+
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_parameterized(self, config):
         # Test every combination of these options:
         spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config))
@@ -606,7 +612,7 @@ class TransformerWithSharedParams(nn.Module):
 
 
 class NestedWrappedModule(nn.Module):
-    def __init__(self, group, wrapper_config, wrap_everything=False):
+    def __init__(self, group, wrapper_config, wrap_everything=False, checkpoint=False):
         super().__init__()
         self.rank = group.rank()
         self.world_size = group.size()
@@ -626,13 +632,24 @@ class NestedWrappedModule(nn.Module):
         )
 
         # Wrap all modules triggers a corner case where root FSDP doesn't have any params.
+        # Test it with checkpoint_wrapper as well to validate final backward callback
+        # is queued correctly when root FSDP does not have any params and every layer is
+        # wrapped as FSDP(checkpoint(module)).
         if wrap_everything:
-            self.module = nn.Sequential(
-                _maybe_wrap(nn.Linear(8, 4)),
-                _maybe_wrap(nn.Linear(4, 16)),
-                _maybe_wrap(nn.Linear(16, 4)),
-                _maybe_wrap(nn.Linear(4, 8)),
-            )
+            if checkpoint:
+                self.module = nn.Sequential(
+                    _maybe_wrap(checkpoint_wrapper(nn.Linear(8, 4))),
+                    _maybe_wrap(checkpoint_wrapper(nn.Linear(4, 16))),
+                    _maybe_wrap(checkpoint_wrapper(nn.Linear(16, 4))),
+                    _maybe_wrap(checkpoint_wrapper(nn.Linear(4, 8))),
+                )
+            else:
+                self.module = nn.Sequential(
+                    _maybe_wrap(nn.Linear(8, 4)),
+                    _maybe_wrap(nn.Linear(4, 16)),
+                    _maybe_wrap(nn.Linear(16, 4)),
+                    _maybe_wrap(nn.Linear(4, 8)),
+                )
 
     def get_input(self, device):
         torch.manual_seed(1 + self.rank)  # keep everything deterministic
