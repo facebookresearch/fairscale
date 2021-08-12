@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         call `named_parameters` under the `summon_full_params` context when using flattened params or original
         params. If you are using original params (i.e flatten_params=False), calling `named_parameters` outside
         of the `summon_full_params` context will still return the original param names along with the local shards. [#755]
+- FSDP: Added reflatten API to allow better control over optimizations of parameters
+        while they are flattened. This is useful for different optimizer groups as well
+        as finetuning subset of parameters. [#763]
 
 
 ## [0.4.0] - 2021-07-31
