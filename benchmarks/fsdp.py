@@ -18,15 +18,12 @@ from models import transformer_lm
 import numpy as np
 import torch
 import torch.distributed as dist
-from torch.distributed import rpc
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
+
+from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
 from fairscale.nn import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
-from fairscale.nn import Pipe
-from fairscale.nn.model_parallel import initialize_model_parallel
-from fairscale.utils.testing import dist_init
 
 RPC_PORT = 29501
 
@@ -179,10 +176,9 @@ def train(model_config, model, benchmark_config, model_specs, args):
         input = source.cuda()
         target = target.cuda()
         output = model(input)
-        
+
         loss = criterion(output.view(-1, vocab_size), target.view(-1))
         loss.backward()
-
 
         torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
         optimizer.step()
@@ -260,10 +256,9 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
         logging.debug("Throughput(wps) is {:.2f}.".format(wps))
     logging.debug(
         "Peak allocated bytes on cuda:{}: {:4f}GB".format(
-            dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"]/2**30 
+            dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"] / 2 ** 30
         )
     )
-
 
 
 def get_synthetic_dataloaders(args, device, benchmark_config, model_specs):
