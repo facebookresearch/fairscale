@@ -22,10 +22,12 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
 from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
+import fairscale.experimental.nn.ssd_offload as so
 from fairscale.nn import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 
 RPC_PORT = 29501
+FILENAME = "/data/users/johnsonpaul/so_test.bin"
 
 
 def init_random_seed(seed: int):
@@ -176,6 +178,14 @@ def train(model_config, model, benchmark_config, model_specs, args):
         input = source.cuda()
         target = target.cuda()
         output = model(input)
+
+        # test ssd_offload code
+        # output_cpu = output.cpu()
+        output_cpu = torch.empty_like(output, device="cpu")
+        so.write(output_cpu, FILENAME)
+        output_ssd = torch.empty_like(output_cpu)
+        so.read(output_ssd, FILENAME)
+        # assert(torch.equal(output_cpu, output_ssd))
 
         loss = criterion(output.view(-1, vocab_size), target.view(-1))
         loss.backward()
