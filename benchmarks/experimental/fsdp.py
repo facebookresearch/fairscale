@@ -12,22 +12,22 @@ import math
 import operator
 import time
 
-from datasets.wikitext2_data import get_real_dataloaders as get_real_wikitext2_dataloaders
-from datasets.wikitext2_data import get_synthetic_dataloaders as get_synthetic_wikitext2_dataloaders
-from models import transformer_lm
 import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
+from benchmarks.datasets.wikitext2_data import get_real_dataloaders as get_real_wikitext2_dataloaders
+from benchmarks.datasets.wikitext2_data import get_synthetic_dataloaders as get_synthetic_wikitext2_dataloaders
 from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
+from benchmarks.models import transformer_lm
 import fairscale.experimental.nn.ssd_offload as so
 from fairscale.nn import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 
 RPC_PORT = 29501
-FILENAME = "/data/users/johnsonpaul/so_test.bin"
+DEFAULT_SSD_OFFLOAD_FILE = "/data/users/johnsonpaul/so_test.bin"
 
 
 def init_random_seed(seed: int):
@@ -179,13 +179,13 @@ def train(model_config, model, benchmark_config, model_specs, args):
         target = target.cuda()
         output = model(input)
 
-        # test ssd_offload code
-        # output_cpu = output.cpu()
-        output_cpu = torch.empty_like(output, device="cpu")
-        so.write(output_cpu, FILENAME)
-        output_ssd = torch.empty_like(output_cpu)
-        so.read(output_ssd, FILENAME)
-        # assert(torch.equal(output_cpu, output_ssd))
+        if args.test_ssd_offload:
+            # test ssd_offload code
+            output_cpu = output.cpu()
+            so.write(output_cpu, args.ssd_offload_file)
+            output_ssd = torch.empty_like(output_cpu)
+            so.read(output_ssd, args.ssd_offload_file)
+            assert torch.equal(output_cpu, output_ssd)
 
         loss = criterion(output.view(-1, vocab_size), target.view(-1))
         loss.backward()
@@ -368,7 +368,19 @@ parser = argparse.ArgumentParser(description="benchmark")
 parser.add_argument(
     "--lazy_construction", action="store_true", default=False, help="Number of decoder layers in the model"
 )
+parser.add_argument(
+    "--test_ssd_offload",
+    action="store_true",
+    default=False,
+    help="for every batch, write out and read back the output tensor of the model to test ssd offloading",
+)
 parser.add_argument("--max_batch", type=int, default=4, help="Max number of batches")
+parser.add_argument(
+    "--ssd_offload_file",
+    type=str,
+    default=DEFAULT_SSD_OFFLOAD_FILE,
+    help="when --test_ssd_offset is true, location of file to use to write/read output tensors",
+)
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
