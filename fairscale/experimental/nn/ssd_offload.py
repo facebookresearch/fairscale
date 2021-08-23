@@ -1,4 +1,5 @@
 import io
+import pickle
 
 import numpy as np
 import torch
@@ -41,3 +42,97 @@ def read(t: torch.Tensor, filename: str) -> None:
             chunk_end = min(size_in_bytes, chunk_start + chunk_size_bytes)
             data_read = f.readinto(t_mv[chunk_start:chunk_end])
             assert data_read == chunk_end - chunk_start
+
+
+# Classes supporting torch.save/load
+class TorchSaver:
+    def __init__(self):
+        self.pickle_module = DisableMemoizationPicklerModule
+
+    def save(self, obj, f, pickle_protocol=torch.serialization.DEFAULT_PROTOCOL):
+        torch.save(obj, f, self.pickle_module, pickle_protocol=pickle_protocol, _use_new_zipfile_serialization=False)
+
+
+class DisableMemoizationPicklerModule:
+    @classmethod
+    def Pickler(cls, data_buf, protocol):
+        p = pickle.Pickler(data_buf, protocol)
+        p.fast = True
+        return p
+
+    @classmethod
+    def dump(cls, obj, f, protocol):
+        pickle.dump(obj, f, protocol)
+
+
+class FileChunkingIterator:
+    """
+    chunk_size_bytes determines how large each chunk that we break the file
+    into. It is important to consider limiting the size because by when
+    python unpickles an object, by default it will read up to 1000 list
+    elements at a time. So memory usage while unpickling will be on the
+    order of O(min(file_size, 1000 * chunk_size_bytes)).
+    """
+
+    def __init__(self, filename, chunk_size_bytes=DEFAULT_CHUNK_SIZE):
+        self.filename = filename
+        self.file = None
+        self.chunk_size_bytes = chunk_size_bytes
+        self.num_chunks_read = 0
+
+    def __iter__(self):
+        self.file = io.open(self.filename, "rb", buffering=0)
+        self.num_chunks_read = 0
+        return self
+
+    def __next__(self):
+        next_chunk = self.file.read(self.chunk_size_bytes)
+
+        if len(next_chunk) == 0:
+            raise StopIteration
+        self.num_chunks_read += 1
+
+        return next_chunk
+
+
+class SsdTensor:
+    def __init__(self, shape, filename: str, dtype=torch.float):
+        self.filename = filename
+        self.f = None
+        self.shape = shape
+        self.dtype = dtype
+
+    @classmethod
+    def __unpickle__(cls, shape, filename, dtype):
+        result = cls(shape, dtype, filename)
+        result.f = io.open(result.filename, "wb")
+        return result
+
+    @classmethod
+    def fromtensor(cls, tensor, filename):
+        result = cls(tensor.shape, filename, tensor.dtype)
+        write(tensor, result.filename)
+        return result
+
+    def __reduce_ex__(self, protocol):
+        # adding _2 to the filename is just a hack to prevent overwriting the original SsdTensor data
+        return (
+            type(self).__unpickle__,
+            (self.shape, self.dtype, self.filename + "_2",),
+            None,
+            iter(FileChunkingIterator(self.filename)),
+        )
+
+    def _init_loading(self):
+        self.f = io.open(self.filename, "wb")
+
+    def append(self, item):
+        assert self.f
+        self.f.write(item)
+
+    def extend(self, items):
+        for i in items:
+            self.append(i)
+
+
+torch_saver = TorchSaver()
