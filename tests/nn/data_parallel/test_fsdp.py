@@ -65,6 +65,10 @@ class DistributedTest(unittest.TestCase):
                     model.clip_grad_norm_(clip_norm, norm_type)
                 else:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm, norm_type)
+            params = [p for p in model.parameters()]
+            print(f"params.device {params[0].device} param.grad.device {params[0].grad.device}")
+
+
             optim.step()
         if isinstance(model, FullyShardedDataParallel):
             model.assert_state(TrainingState.IDLE)
@@ -292,7 +296,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def test_cpu_offload_and_cpu_grads(self):
         # We don't test the False condition because that requires the optimizer to internally do
         # the device transfer and PyTorch optimizers don't support this.
-        config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": True}
+        config = {"mixed_precision": True, "cpu_offload": False, "move_grads_to_cpu": False}
         test_fn = functools.partial(
             self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
         )
@@ -300,7 +304,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
 
     def test_cpu_offload_and_cuda_grads_breaks(self):
         # If grads are on gpu, but model and optimizer are on cpu, backward breaks.
-        config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": False}
+        config = {"mixed_precision": False, "cpu_offload": True, "move_grads_to_cpu": False}
         with self.assertRaises(Exception):  # RuntimeError inside spawn
             test_fn = functools.partial(
                 self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False
