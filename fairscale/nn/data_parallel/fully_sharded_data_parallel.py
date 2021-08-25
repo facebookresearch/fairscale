@@ -51,6 +51,8 @@ from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
 
 from . import fsdp_optim_utils as ou
+import fairscale.experimental.nn.ssd_offload as ssd_offload
+
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -257,6 +259,7 @@ class FullyShardedDataParallel(nn.Module):
         force_input_to_fp32: bool = False,
         verbose: bool = False,
         cpu_offload: bool = False,
+        **kwargs,
     ):
         init_start = time.time()
         super().__init__()
@@ -279,6 +282,8 @@ class FullyShardedDataParallel(nn.Module):
         self.clear_autocast_cache = clear_autocast_cache
         self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
+        if 'ssd_offload' in kwargs:
+            self.ssd_offload = kwargs['ssd_offload']
 
         self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
@@ -340,6 +345,8 @@ class FullyShardedDataParallel(nn.Module):
 
         # Make sure all parameters are sharded.
         for n, p in self.named_parameters():
+            # TODO(anj): Find another way to set this attribute.
+            p._filename = n
             assert hasattr(p, "_is_sharded"), f"found unsharded parameter: {n} ; {p.size()}"
 
         self._reset_lazy_init()
@@ -581,7 +588,8 @@ class FullyShardedDataParallel(nn.Module):
             orig_data = p.data
             p.data, num_padded = self._get_shard(p.data)
             self.numel_padded_per_param.append(num_padded)
-            free_storage_(orig_data)
+            # TODO(anjs): FAILS to resize storage for some reason.
+            # free_storage_(orig_data)
         assert len(self.numel_padded_per_param) == len(self.params)
 
     def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
@@ -1013,6 +1021,19 @@ class FullyShardedDataParallel(nn.Module):
                 p.data.numel() * self.world_size, device=self.compute_device, dtype=self.compute_dtype
             )
             free_storage_(p._full_param_padded)
+
+        if self.ssd_offload:
+            # Copy params to a file
+            print(f"initializing from file {p._filename}")
+            p._fp32_shard_size = p._fp32_shard.size()
+            p._fp32_shard = p._fp32_shard.cpu()
+            p._ssd_tensor = ssd_offload.write(p._fp32_shard, p._filename)
+            # Set storage of param to be 0
+            # TODO(anj-s): this does not work for some reason.
+            # free_storage_(p._fp32_shard)
+            p._fp32_shard = torch.zeros_like(p._fp32_shard, device=torch.device("cpu"), dtype=p._fp32_shard.dtype)
+            free_storage_(p._fp32_shard)
+            p.data = p._fp32_shard
 
         if self.move_grads_to_cpu:
             # We can optionally move the grad shard to CPU during the backward
@@ -1522,6 +1543,16 @@ class FullyShardedDataParallel(nn.Module):
         self.has_full_params = True
 
         with torch.cuda.stream(self._streams["all_gather"]):
+            
+            if self.ssd_offload:
+                # The params are on disk and need to be moved to the CPU.
+                for p in self.params:
+                    alloc_storage_(p._fp32_shard, p._fp32_shard_size)
+                    print(f"Reinitializing from {p._filename}")
+                    ssd_offload.read(p._fp32_shard, p._filename)
+                    p._fp32_shard = p._fp32_shard.cuda()
+                    p.data = p._fp32_shard
+
             if self.mixed_precision and not force_full_precision:
                 self._cast_fp32_param_shards_to_fp16()
 

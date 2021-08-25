@@ -16,10 +16,10 @@ def _get_num_chunks(t: torch.Tensor, chunk_size_bytes: int = DEFAULT_CHUNK_SIZE)
 def _tensor_to_bytes_chunks(t: torch.Tensor, chunk_idx: int, chunk_size_bytes: int = DEFAULT_CHUNK_SIZE) -> bytes:
     size_in_bytes = t.nelement() * t.element_size()
     assert chunk_idx < _get_num_chunks(t, chunk_size_bytes)
-    t_np = t.detach().numpy().view(np.uint8).reshape(-1)
+    t_np = t.detach().view(t.dtype).reshape(-1)
     chunk_start = chunk_idx * chunk_size_bytes
     chunk_end = min(size_in_bytes, chunk_start + chunk_size_bytes)
-    return t_np[chunk_start:chunk_end].tobytes()
+    return t_np[chunk_start:chunk_end].numpy().tobytes()
 
 
 def write(t: torch.Tensor, filename: str) -> None:
@@ -42,7 +42,7 @@ def read(t: torch.Tensor, filename: str) -> None:
             chunk_end = min(size_in_bytes, chunk_start + chunk_size_bytes)
             data_read = f.readinto(t_mv[chunk_start:chunk_end])
             assert data_read == chunk_end - chunk_start
-
+    return fixed_mv
 
 # Classes supporting torch.save/load
 class TorchSaver:
