@@ -144,8 +144,7 @@ class TestSsdLoading(DistributedTest):
 
         model = TransformerWithSharedParams(group)
         state_dict = model.state_dict()
-        # print(f"state_dict {state_dict.keys()}")
-        # print(f"names {[n for n, p in model.named_parameters()]} ")
+
         for name, param in model.named_parameters():
             # print(f"p name {p.name}")
             filename = f"{name}"
