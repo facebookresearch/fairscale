@@ -37,6 +37,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
+import fairscale.experimental.nn.ssd_offload as ssd_offload
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
@@ -51,8 +52,6 @@ from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
 
 from . import fsdp_optim_utils as ou
-import fairscale.experimental.nn.ssd_offload as ssd_offload
-
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -282,8 +281,8 @@ class FullyShardedDataParallel(nn.Module):
         self.clear_autocast_cache = clear_autocast_cache
         self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
-        if 'ssd_offload' in kwargs:
-            self.ssd_offload = kwargs['ssd_offload']
+        if "ssd_offload" in kwargs:
+            self.ssd_offload = kwargs["ssd_offload"]
 
         self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
@@ -1540,7 +1539,7 @@ class FullyShardedDataParallel(nn.Module):
         self.has_full_params = True
 
         with torch.cuda.stream(self._streams["all_gather"]):
-            
+
             if self.ssd_offload:
                 # The params are on disk and need to be moved to the CPU.
                 for p in self.params:

@@ -44,6 +44,7 @@ def read(t: torch.Tensor, filename: str) -> None:
             assert data_read == chunk_end - chunk_start
     return fixed_mv
 
+
 # Classes supporting torch.save/load
 class TorchSaver:
     def __init__(self):

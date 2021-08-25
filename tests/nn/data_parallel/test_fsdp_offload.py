@@ -17,6 +17,7 @@ import torch
 from torch import nn
 import torch.distributed
 
+import fairscale.experimental.nn.ssd_offload as ssd_offload
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
 from fairscale.utils import torch_version
@@ -28,9 +29,6 @@ from fairscale.utils.testing import (
     objects_are_equal,
     spawn_for_all_world_sizes,
 )
-
-import fairscale.experimental.nn.ssd_offload as ssd_offload
-
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
@@ -127,6 +125,7 @@ class DistributedTest(unittest.TestCase):
             metadata = model.local_metadata_dict()
             assert isinstance(metadata, dict)
 
+
 keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters"]
 CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
 
@@ -136,24 +135,23 @@ def rename_test(testcase_func, param_num, param):
 
 
 class TestSsdLoading(DistributedTest):
-
     def test_ssd_offloading(self):
         test_fn = functools.partial(self._test_named_params, config={"mixed_precision": False})
         spawn_and_init(test_fn)
 
     @classmethod
     def _test_named_params(self, rank, group, config):
-        
+
         model = TransformerWithSharedParams(group)
         state_dict = model.state_dict()
         # print(f"state_dict {state_dict.keys()}")
         # print(f"names {[n for n, p in model.named_parameters()]} ")
         for name, param in model.named_parameters():
             # print(f"p name {p.name}")
-            filename = f'{name}'
+            filename = f"{name}"
             ssd_offload.write(param.data, filename)
-        
-        # TODO(anjs): Setting flatten_parameters=False causes this test to FAIL wrt to 
+
+        # TODO(anjs): Setting flatten_parameters=False causes this test to FAIL wrt to
         # freeing orig_data.
 
         # TODO(anjs): Support flatten_parameters=True and ssd_offload
@@ -165,7 +163,7 @@ class TestSsdLoading(DistributedTest):
         if not ssd_offload_bool:
             model = model.cuda()
         # print(f"model {model}")
-        self._train_for_several_steps(model, 2, autocast=False)
+        self._train_for_several_steps(model, 1000, autocast=False)
 
 
 class TransformerWithSharedParams(nn.Module):
