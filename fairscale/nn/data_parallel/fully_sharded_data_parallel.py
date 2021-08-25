@@ -1024,11 +1024,8 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.ssd_offload:
             # Copy params to a file
-            print(f"initializing from file {p._filename}")
+            # print(f"initializing from file {p._filename}")
             p._fp32_shard_size = p._fp32_shard.size()
-            p._fp32_shard = p._fp32_shard.cpu()
-            p._ssd_tensor = ssd_offload.write(p._fp32_shard, p._filename)
-            # Set storage of param to be 0
             # TODO(anj-s): this does not work for some reason.
             # free_storage_(p._fp32_shard)
             p._fp32_shard = torch.zeros_like(p._fp32_shard, device=torch.device("cpu"), dtype=p._fp32_shard.dtype)
@@ -1549,7 +1546,7 @@ class FullyShardedDataParallel(nn.Module):
                 for p in self.params:
                     alloc_storage_(p._fp32_shard, p._fp32_shard_size)
                     print(f"Reinitializing from {p._filename}")
-                    ssd_offload.read(p._fp32_shard, p._filename)
+                    ssd_offload.read(p._fp32_shard.cpu(), p._filename)
                     p._fp32_shard = p._fp32_shard.cuda()
                     p.data = p._fp32_shard
 
