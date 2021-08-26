@@ -19,7 +19,7 @@ def _tensor_to_bytes_chunks(t: torch.Tensor, chunk_idx: int, chunk_size_bytes: i
     t_np = t.detach().numpy().view(np.uint8).reshape(-1)
     chunk_start = chunk_idx * chunk_size_bytes
     chunk_end = min(size_in_bytes, chunk_start + chunk_size_bytes)
-    return t_np[chunk_start:chunk_end].numpy().tobytes()
+    return t_np[chunk_start:chunk_end].tobytes()
 
 
 def write(t: torch.Tensor, filename: str) -> None:
@@ -29,7 +29,7 @@ def write(t: torch.Tensor, filename: str) -> None:
             f.write(_tensor_to_bytes_chunks(t, i))
 
 
-def read(t: torch.Tensor, filename: str) -> None:
+def read(t: torch.Tensor, filename: str, num_padded: int=None) -> None:
     size_in_bytes = t.nelement() * t.element_size()
     chunk_size_bytes = DEFAULT_CHUNK_SIZE
     num_chunks = _get_num_chunks(t)

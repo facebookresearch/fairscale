@@ -20,6 +20,7 @@ import torch.distributed
 import fairscale.experimental.nn.ssd_offload as ssd_offload
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
+from fairscale.nn.wrap import wrap, enable_wrap
 from fairscale.utils import torch_version
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
@@ -28,6 +29,7 @@ from fairscale.utils.testing import (
     get_cycles_per_ms,
     objects_are_equal,
     spawn_for_all_world_sizes,
+    rmf,
 )
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
@@ -66,7 +68,9 @@ class DistributedTest(unittest.TestCase):
                     model.clip_grad_norm_(clip_norm, norm_type)
                 else:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm, norm_type)
-            optim.step()
+            # for name, param in model.named_parameters():
+                # print(f"name {name} param {param.device} {param.storage().size()}")
+            # optim.step()
         if isinstance(model, FullyShardedDataParallel):
             model.assert_state(TrainingState.IDLE)
         return loss.detach()
@@ -146,7 +150,6 @@ class TestSsdLoading(DistributedTest):
         state_dict = model.state_dict()
 
         for name, param in model.named_parameters():
-            # print(f"p name {p.name}")
             filename = f"{name}"
             ssd_offload.write(param.data, filename)
 
@@ -155,14 +158,16 @@ class TestSsdLoading(DistributedTest):
 
         # TODO(anjs): Support flatten_parameters=True and ssd_offload
 
-        ssd_offload_bool = False
+        ssd_offload_bool = True
 
         # Train the model for 1 step.
         model = FullyShardedDataParallel(model, flatten_parameters=False, ssd_offload=ssd_offload_bool)
         if not ssd_offload_bool:
             model = model.cuda()
-        # print(f"model {model}")
-        self._train_for_several_steps(model, 1000, autocast=False)
+        self._train_for_several_steps(model, 1, autocast=False)
+
+        for p in model.parameters():
+            rmf(p._filename)
 
 
 class TransformerWithSharedParams(nn.Module):
@@ -172,11 +177,11 @@ class TransformerWithSharedParams(nn.Module):
         self.world_size = group.size()
         torch.manual_seed(0)  # keep everything deterministic
         assert d_vocab >= 12  # we use torch.arange(12) as input
-        self.embed_tokens = nn.Embedding(d_vocab, d_model)
-        self.transformer = nn.Transformer(
+        self.embed_tokens = wrap(nn.Embedding(d_vocab, d_model))
+        self.transformer = wrap(nn.Transformer(
             d_model=d_model, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=8, dropout=0.1,
-        )
-        self.output_proj = nn.Linear(d_model, d_vocab)
+        ))
+        self.output_proj = wrap(nn.Linear(d_model, d_vocab))
 
         # share the embedding and output projection weights
         self.output_proj.weight = self.embed_tokens.weight

@@ -245,7 +245,7 @@ class FullyShardedDataParallel(nn.Module):
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
-        flatten_parameters: bool = True,
+        flatten_parameters: bool = False,
         move_params_to_cpu: bool = False,
         compute_dtype: Optional[torch.dtype] = None,
         buffer_dtype: Optional[torch.dtype] = None,
@@ -283,6 +283,7 @@ class FullyShardedDataParallel(nn.Module):
         self.verbose = verbose
         if "ssd_offload" in kwargs:
             self.ssd_offload = kwargs["ssd_offload"]
+        self.ssd_offload = True
 
         self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
@@ -339,13 +340,15 @@ class FullyShardedDataParallel(nn.Module):
         self._num_flatten_params = len(self._fsdp_wrapped_module.flat_params)
         self._param_name_groups = param_name_groups
 
+        for n, p in self.named_parameters():
+            p._filename = f"{n}_rank{self.rank}"
+            p._num_padded = 0
+
         # Shard module parameters in place
         self._shard_parameters_()
 
         # Make sure all parameters are sharded.
         for n, p in self.named_parameters():
-            # TODO(anj): Find another way to set this attribute.
-            p._filename = n
             assert hasattr(p, "_is_sharded"), f"found unsharded parameter: {n} ; {p.size()}"
 
         self._reset_lazy_init()
@@ -580,15 +583,27 @@ class FullyShardedDataParallel(nn.Module):
 
             if not p._is_sharded:
                 self.numel_padded_per_param.append(0)
+                if self.ssd_offload:
+                    p._shard_size = p.data.size()
+                    ssd_offload.write(p.data, p._filename)
                 continue
             p._is_sharded = True
 
             # Replace p.data with the relevant shard.
-            orig_data = p.data
-            p.data, num_padded = self._get_shard(p.data)
-            self.numel_padded_per_param.append(num_padded)
-            # TODO(anjs): FAILS to resize storage for some reason.
-            # free_storage_(orig_data)
+            if self.ssd_offload:
+                p.data, num_padded = self._get_shard(p.data)
+                p._num_padded = num_padded
+                p._shard_size = p.size()
+                ssd_offload.write(p.data, p._filename)
+                self.numel_padded_per_param.append(num_padded)
+                # TODO(anjs): Currently we free storage at the beginning of FW
+                # Should we be instead doing it here?    
+            else:
+                orig_data = p.data
+                p.data, num_padded = self._get_shard(p.data)
+                self.numel_padded_per_param.append(num_padded)
+                # TODO(anj): Unable to free storage
+                # free_storage_(orig_data)
         assert len(self.numel_padded_per_param) == len(self.params)
 
     def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
@@ -1021,12 +1036,9 @@ class FullyShardedDataParallel(nn.Module):
             )
             free_storage_(p._full_param_padded)
 
+        # Free storage attributed to p.data
         if self.ssd_offload:
-            # Copy params to a file
-            # print(f"initializing from file {p._filename}")
             p._fp32_shard_size = p._fp32_shard.size()
-            # TODO(anj-s): this does not work for some reason.
-            # free_storage_(p._fp32_shard)
             p._fp32_shard = torch.zeros_like(p._fp32_shard, device=torch.device("cpu"), dtype=p._fp32_shard.dtype)
             free_storage_(p._fp32_shard)
             p.data = p._fp32_shard
@@ -1148,6 +1160,13 @@ class FullyShardedDataParallel(nn.Module):
             self._free_full_params()
             if self.mixed_precision:
                 self._free_fp16_param_shard()
+        
+        if self.ssd_offload:
+            # Free storage of the fp32 shard
+            for p in self.params:
+                p._fp32_shard = torch.zeros_like(p._fp32_shard, device=torch.device("cpu"), dtype=p._fp32_shard.dtype)
+                free_storage_(p._fp32_shard)
+                p.data = p._fp32_shard
 
         # Switch to main FP32 param shard. We maintain this invariant throughout
         # the code, i.e., ``p.data == p._fp32_shard`` after each function. This
@@ -1537,15 +1556,14 @@ class FullyShardedDataParallel(nn.Module):
             return output_tensors
 
         self.has_full_params = True
-
+        print(f"all_gather")
         with torch.cuda.stream(self._streams["all_gather"]):
 
             if self.ssd_offload:
                 # The params are on disk and need to be moved to the CPU.
                 for p in self.params:
-                    alloc_storage_(p._fp32_shard, p._fp32_shard_size)
-                    print(f"Reinitializing from {p._filename}")
-                    ssd_offload.read(p._fp32_shard.cpu(), p._filename)
+                    alloc_storage_(p._fp32_shard, p._shard_size)
+                    ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
                     p._fp32_shard = p._fp32_shard.cuda()
                     p.data = p._fp32_shard
 
