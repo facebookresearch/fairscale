@@ -12,6 +12,7 @@ from math import inf
 import time
 import traceback
 import typing
+from random import randint
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -341,7 +342,8 @@ class FullyShardedDataParallel(nn.Module):
         self._param_name_groups = param_name_groups
 
         for n, p in self.named_parameters():
-            p._filename = f"{n}_rank{self.rank}"
+            if not hasattr(p, '_filename'):
+                p._filename = f"{randint(1, 10E6)}_rank{self.rank}"
             p._num_padded = 0
 
         # Shard module parameters in place
@@ -371,7 +373,10 @@ class FullyShardedDataParallel(nn.Module):
         # Flag to indicate whether state_dict() should automatically summon the
         # full params. This defaults to True, but may be set to False if the
         # user explicitly requests the local state dict via local_state_dict().
-        self._return_full_state_dict = True
+        if self.ssd_offload:
+            self._return_full_state_dict = False
+        else:    
+            self._return_full_state_dict = True
         init_end = time.time()
 
         logging.debug(
@@ -602,8 +607,7 @@ class FullyShardedDataParallel(nn.Module):
                 orig_data = p.data
                 p.data, num_padded = self._get_shard(p.data)
                 self.numel_padded_per_param.append(num_padded)
-                # TODO(anj): Unable to free storage
-                # free_storage_(orig_data)
+                free_storage_(orig_data)
         assert len(self.numel_padded_per_param) == len(self.params)
 
     def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
@@ -788,6 +792,15 @@ class FullyShardedDataParallel(nn.Module):
     def _no_return_full_state_dict(self) -> Generator:
         backup = self._return_full_state_dict
         self._return_full_state_dict = False
+
+        if self.ssd_offload:
+            for p in self.params:
+                alloc_storage_(p._fp32_shard, p._shard_size)
+                ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
+                p._fp32_shard = p._fp32_shard.cuda()
+                p.data = p._fp32_shard
+
+
         try:
             yield
         finally:
@@ -1556,7 +1569,6 @@ class FullyShardedDataParallel(nn.Module):
             return output_tensors
 
         self.has_full_params = True
-        print(f"all_gather")
         with torch.cuda.stream(self._streams["all_gather"]):
 
             if self.ssd_offload:

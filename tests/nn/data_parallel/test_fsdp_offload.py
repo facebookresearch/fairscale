@@ -149,21 +149,26 @@ class TestSsdLoading(DistributedTest):
         model = TransformerWithSharedParams(group)
         state_dict = model.state_dict()
 
-        for name, param in model.named_parameters():
-            filename = f"{name}"
-            ssd_offload.write(param.data, filename)
-
-        # TODO(anjs): Setting flatten_parameters=False causes this test to FAIL wrt to
-        # freeing orig_data.
-
-        # TODO(anjs): Support flatten_parameters=True and ssd_offload
-
-        ssd_offload_bool = True
+        nested_wrapping = False
 
         # Train the model for 1 step.
-        model = FullyShardedDataParallel(model, flatten_parameters=False, ssd_offload=ssd_offload_bool)
-        if not ssd_offload_bool:
+        fsdp_config = {
+            "ssd_offload": True,
+            "flatten_parameters": False,
+        }
+        if nested_wrapping:
+            model = FullyShardedDataParallel(NestedWrappedModule(group, wrap_everything=True, wrapper_config=fsdp_config))
+        else:
+            model = FullyShardedDataParallel(model, **fsdp_config)
+        if not fsdp_config['ssd_offload']:
             model = model.cuda()
+        self._train_for_several_steps(model, 1, autocast=False)
+    
+        # With SSD offload only local_state_dict will work. We can support global
+        # state dict if we think it is necessry
+        state_dict = model.local_state_dict()
+        model.load_local_state_dict(state_dict)
+
         self._train_for_several_steps(model, 1, autocast=False)
 
         for p in model.parameters():
@@ -177,11 +182,11 @@ class TransformerWithSharedParams(nn.Module):
         self.world_size = group.size()
         torch.manual_seed(0)  # keep everything deterministic
         assert d_vocab >= 12  # we use torch.arange(12) as input
-        self.embed_tokens = wrap(nn.Embedding(d_vocab, d_model))
-        self.transformer = wrap(nn.Transformer(
+        self.embed_tokens = nn.Embedding(d_vocab, d_model)
+        self.transformer = nn.Transformer(
             d_model=d_model, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=8, dropout=0.1,
-        ))
-        self.output_proj = wrap(nn.Linear(d_model, d_vocab))
+        )
+        self.output_proj = nn.Linear(d_model, d_vocab)
 
         # share the embedding and output projection weights
         self.output_proj.weight = self.embed_tokens.weight
