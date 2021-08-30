@@ -430,7 +430,7 @@ def benchmark_single_process(args):
 def run_worker(rank, world_size, args):
     if args.world_size != 0:
         world_size = args.world_size
-    dist_init(rank + args.rank_base, world_size, hostname=args.host)
+    dist_init(rank + args.rank_base, world_size)
     initialize_model_parallel(1, world_size)
     init_random_seed(0)
     run_mp_worker(args, world_size)
