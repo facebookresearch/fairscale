@@ -130,7 +130,7 @@ class DistributedTest(unittest.TestCase):
             assert isinstance(metadata, dict)
 
 
-keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters"]
+keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters", "nested_wrapping"]
 CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
 
 
@@ -139,8 +139,9 @@ def rename_test(testcase_func, param_num, param):
 
 
 class TestSsdLoading(DistributedTest):
-    def test_ssd_offloading(self):
-        test_fn = functools.partial(self._test_named_params, config={"mixed_precision": False})
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_ssd_offloading(self, config):
+        test_fn = functools.partial(self._test_named_params, config=config)
         spawn_and_init(test_fn)
 
     @classmethod
@@ -149,27 +150,25 @@ class TestSsdLoading(DistributedTest):
         model = TransformerWithSharedParams(group)
         state_dict = model.state_dict()
 
-        nested_wrapping = False
-
+        nested_wrapping = config["nested_wrapping"]
+        del config["nested_wrapping"]
         # Train the model for 1 step.
-        fsdp_config = {
-            "ssd_offload": True,
-            "flatten_parameters": False,
-        }
+
+        config["ssd_offload"] = True
         if nested_wrapping:
-            model = FullyShardedDataParallel(NestedWrappedModule(group, wrap_everything=True, wrapper_config=fsdp_config))
+            model = FullyShardedDataParallel(NestedWrappedModule(group, wrap_everything=True, wrapper_config=config))
         else:
-            model = FullyShardedDataParallel(model, **fsdp_config)
-        if not fsdp_config['ssd_offload']:
+            model = FullyShardedDataParallel(model, **config)
+        if not config['ssd_offload']:
             model = model.cuda()
-        self._train_for_several_steps(model, 1, autocast=False)
+        self._train_for_several_steps(model, 1, autocast=config["mixed_precision"])
     
         # With SSD offload only local_state_dict will work. We can support global
-        # state dict if we think it is necessry
+        # state dict if we think it is necessary.
         state_dict = model.local_state_dict()
         model.load_local_state_dict(state_dict)
 
-        self._train_for_several_steps(model, 1, autocast=False)
+        self._train_for_several_steps(model, 1, config["mixed_precision"])
 
         for p in model.parameters():
             rmf(p._filename)

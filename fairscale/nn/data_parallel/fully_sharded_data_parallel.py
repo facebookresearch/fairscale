@@ -1174,7 +1174,7 @@ class FullyShardedDataParallel(nn.Module):
             if self.mixed_precision:
                 self._free_fp16_param_shard()
         
-        if self.ssd_offload:
+        if self.reshard_after_forward and self.ssd_offload:
             # Free storage of the fp32 shard
             for p in self.params:
                 p._fp32_shard = torch.zeros_like(p._fp32_shard, device=torch.device("cpu"), dtype=p._fp32_shard.dtype)
