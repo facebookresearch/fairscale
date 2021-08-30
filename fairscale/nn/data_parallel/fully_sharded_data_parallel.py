@@ -9,10 +9,10 @@ from enum import Enum, auto
 import functools
 import logging
 from math import inf
+from random import randint
 import time
 import traceback
 import typing
-from random import randint
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -342,7 +342,7 @@ class FullyShardedDataParallel(nn.Module):
         self._param_name_groups = param_name_groups
 
         for n, p in self.named_parameters():
-            if not hasattr(p, '_filename'):
+            if not hasattr(p, "_filename"):
                 p._filename = f"{randint(1, 10E6)}_rank{self.rank}"
             p._num_padded = 0
 
@@ -375,7 +375,7 @@ class FullyShardedDataParallel(nn.Module):
         # user explicitly requests the local state dict via local_state_dict().
         if self.ssd_offload:
             self._return_full_state_dict = False
-        else:    
+        else:
             self._return_full_state_dict = True
         init_end = time.time()
 
@@ -602,7 +602,7 @@ class FullyShardedDataParallel(nn.Module):
                 ssd_offload.write(p.data, p._filename)
                 self.numel_padded_per_param.append(num_padded)
                 # TODO(anjs): Currently we free storage at the beginning of FW
-                # Should we be instead doing it here?    
+                # Should we be instead doing it here?
             else:
                 orig_data = p.data
                 p.data, num_padded = self._get_shard(p.data)
@@ -799,7 +799,6 @@ class FullyShardedDataParallel(nn.Module):
                 ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
                 p._fp32_shard = p._fp32_shard.cuda()
                 p.data = p._fp32_shard
-
 
         try:
             yield
@@ -1173,7 +1172,7 @@ class FullyShardedDataParallel(nn.Module):
             self._free_full_params()
             if self.mixed_precision:
                 self._free_fp16_param_shard()
-        
+
         if self.reshard_after_forward and self.ssd_offload:
             # Free storage of the fp32 shard
             for p in self.params:

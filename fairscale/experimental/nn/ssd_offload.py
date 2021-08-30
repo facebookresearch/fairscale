@@ -29,7 +29,7 @@ def write(t: torch.Tensor, filename: str) -> None:
             f.write(_tensor_to_bytes_chunks(t, i))
 
 
-def read(t: torch.Tensor, filename: str, num_padded: int=None) -> None:
+def read(t: torch.Tensor, filename: str, num_padded: int = None) -> None:
     size_in_bytes = t.nelement() * t.element_size()
     chunk_size_bytes = DEFAULT_CHUNK_SIZE
     num_chunks = _get_num_chunks(t)

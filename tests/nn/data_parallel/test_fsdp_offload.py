@@ -5,10 +5,7 @@
 
 import functools
 import itertools
-from math import inf
-import pickle
 import sys
-from typing import Dict
 import unittest
 from unittest import mock
 
@@ -17,20 +14,10 @@ import torch
 from torch import nn
 import torch.distributed
 
-import fairscale.experimental.nn.ssd_offload as ssd_offload
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
-from fairscale.nn.wrap import wrap, enable_wrap
 from fairscale.utils import torch_version
-from fairscale.utils.testing import (
-    DeviceAndTypeCheckModule,
-    DummyProcessGroup,
-    dist_init,
-    get_cycles_per_ms,
-    objects_are_equal,
-    spawn_for_all_world_sizes,
-    rmf,
-)
+from fairscale.utils.testing import dist_init, get_cycles_per_ms, objects_are_equal, rmf, spawn_for_all_world_sizes
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
@@ -69,7 +56,7 @@ class DistributedTest(unittest.TestCase):
                 else:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm, norm_type)
             # for name, param in model.named_parameters():
-                # print(f"name {name} param {param.device} {param.storage().size()}")
+            # print(f"name {name} param {param.device} {param.storage().size()}")
             # optim.step()
         if isinstance(model, FullyShardedDataParallel):
             model.assert_state(TrainingState.IDLE)
@@ -159,10 +146,10 @@ class TestSsdLoading(DistributedTest):
             model = FullyShardedDataParallel(NestedWrappedModule(group, wrap_everything=True, wrapper_config=config))
         else:
             model = FullyShardedDataParallel(model, **config)
-        if not config['ssd_offload']:
+        if not config["ssd_offload"]:
             model = model.cuda()
         self._train_for_several_steps(model, 1, autocast=config["mixed_precision"])
-    
+
         # With SSD offload only local_state_dict will work. We can support global
         # state dict if we think it is necessary.
         state_dict = model.local_state_dict()
