@@ -4,7 +4,9 @@
 # LICENSE file in the root directory of this source tree.
 
 import functools
+import glob
 import itertools
+import os
 import sys
 import unittest
 from unittest import mock
@@ -159,6 +161,10 @@ class TestSsdLoading(DistributedTest):
 
         for p in model.parameters():
             rmf(p._filename)
+
+        fileList = glob.glob(os.getcwd() + "/*_rank*")
+        for file in fileList:
+            rmf(file)
 
 
 class TransformerWithSharedParams(nn.Module):

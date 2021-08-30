@@ -284,7 +284,8 @@ class FullyShardedDataParallel(nn.Module):
         self.verbose = verbose
         if "ssd_offload" in kwargs:
             self.ssd_offload = kwargs["ssd_offload"]
-        self.ssd_offload = True
+        else:
+            self.ssd_offload = False
 
         self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
