@@ -128,11 +128,11 @@ def rename_test(testcase_func, param_num, param):
 class TestSsdLoading(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_ssd_offloading(self, config):
-        test_fn = functools.partial(self._test_named_params, config=config)
+        test_fn = functools.partial(self._test_ssd_offload, config=config)
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_named_params(self, rank, group, config):
+    def _test_ssd_offload(self, rank, group, config):
 
         model = TransformerWithSharedParams(group)
         state_dict = model.state_dict()
