@@ -27,7 +27,7 @@ from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.utils.testing import dist_init
 
-MPI_PORT = 29500
+PG_PORT = 29500
 RPC_PORT = 29501
 
 
@@ -404,7 +404,7 @@ def get_golden_config(model_name, args):
 def benchmark_single_process(args):
     """Benchmark a given model using a single process and multiple devices."""
 
-    init_method_pgroup = "tcp://localhost:{}".format(MPI_PORT)
+    init_method_pgroup = "tcp://localhost:{}".format(PG_PORT)
     torch.distributed.init_process_group(backend="gloo", rank=0, world_size=1, init_method=init_method_pgroup)
 
     num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
