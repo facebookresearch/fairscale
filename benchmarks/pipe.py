@@ -232,7 +232,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
     else:
         return 0.0, 0.0
 
-
+'''
 # TODO(anj-s): Add an option for users to be able to benchmark evaluate.
 def evaluate(eval_model, data_source, criterion, ntokens):
     eval_model.eval()
@@ -254,7 +254,7 @@ def evaluate(eval_model, data_source, criterion, ntokens):
             output_flat = output.view(-1, ntokens)
             total_loss += len(data) * criterion(output_flat, targets).item()
     return total_loss / (len(data_source) - 1)
-
+'''
 
 def get_number_of_words(data):
     return data.size()[0] * data.size()[1]
