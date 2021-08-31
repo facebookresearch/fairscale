@@ -1562,6 +1562,14 @@ class FullyShardedDataParallel(nn.Module):
             # Trim any padding and reshape to match original size.
             p.data = p.data[: p._orig_size.numel()].view(p._orig_size)
 
+        if self.ssd_offload:
+            # The params are on disk and need to be moved to the CPU.
+            for p in self.params:
+                alloc_storage_(p._fp32_shard, p._shard_size)
+                ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
+                p._fp32_shard = p._fp32_shard.cuda()
+                p.data = p._fp32_shard
+
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
             for p in self.params:
@@ -1570,14 +1578,6 @@ class FullyShardedDataParallel(nn.Module):
 
         self.has_full_params = True
         with torch.cuda.stream(self._streams["all_gather"]):
-
-            if self.ssd_offload:
-                # The params are on disk and need to be moved to the CPU.
-                for p in self.params:
-                    alloc_storage_(p._fp32_shard, p._shard_size)
-                    ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
-                    p._fp32_shard = p._fp32_shard.cuda()
-                    p.data = p._fp32_shard
 
             if self.mixed_precision and not force_full_precision:
                 self._cast_fp32_param_shards_to_fp16()

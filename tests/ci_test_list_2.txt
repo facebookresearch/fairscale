@@ -46,3 +46,4 @@ tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
 tests/experimental/nn/test_offload.py
 tests/experimental/nn/test_auto_shard.py
 tests/experimental/optim/test_dynamic_loss_scaler.py
+tests/experimental/nn/test_ssd_offload.py

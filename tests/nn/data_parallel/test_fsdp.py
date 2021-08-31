@@ -46,6 +46,8 @@ class DistributedTest(unittest.TestCase):
 
     @staticmethod
     def _train_for_several_steps(model, num_steps, autocast, lr=0.01, norm_type=None):
+        ssd_offload = getattr(model, "ssd_offload", False)
+        print(f"ssd_offload {ssd_offload}")
         model_device = next(model.parameters()).device
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
