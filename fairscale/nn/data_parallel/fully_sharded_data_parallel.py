@@ -342,6 +342,8 @@ class FullyShardedDataParallel(nn.Module):
         self._num_flatten_params = len(self._fsdp_wrapped_module.flat_params)
         self._param_name_groups = param_name_groups
 
+        self.training_state = None
+
         for n, p in self.named_parameters():
             if not hasattr(p, "_filename"):
                 p._filename = f"{randint(1, 10E6)}_rank{self.rank}"
@@ -687,7 +689,18 @@ class FullyShardedDataParallel(nn.Module):
         del self.orig_sizes
         self._reset_lazy_init()
 
-    def named_parameters(self, *args: Any, **kwargs: Any) -> Iterator[Tuple[str, Parameter]]:
+    def parameters(self, *args: Any, **kwargs: Any) -> Iterator[Parameter]:
+        """Returns an iterator over the module parameters, yielding all the parameters
+        part of the model. This call cannot be made when ssd_offload is set because
+        parameter data will not be loaded.
+        """
+        assert not self.ssd_offload or self.training_state is None
+
+        return super().parameters(*args, **kwargs)
+
+    def named_parameters(
+        self, i_promise_not_to_access_tensor_data=False, *args: Any, **kwargs: Any
+    ) -> Iterator[Tuple[str, Parameter]]:
         """Returns an iterator over the module parameters, yielding both the name of the
         parameter as well as the parameter.
 
@@ -698,6 +711,11 @@ class FullyShardedDataParallel(nn.Module):
         If you want the full param to be returned, you should call this function
         under a `summon_full_params` context when using flattened or original params.
         """
+
+        # named_params will not work as expected for ssd_offload because
+        # the actual tensor data will not be loaded
+        assert not self.ssd_offload or self.training_state is None
+
         named_param = super().named_parameters(*args, **kwargs)
         for name, param in named_param:
             if (

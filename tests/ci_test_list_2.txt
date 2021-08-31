@@ -44,7 +44,9 @@ tests/experimental/nn/test_multiprocess_pipe.py
 tests/experimental/nn/test_sync_batchnorm.py
 tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
 tests/experimental/nn/test_offload.py
+tests/experimental/nn/test_ssd_offload.py
 tests/experimental/nn/test_auto_shard.py
 tests/experimental/optim/test_dynamic_loss_scaler.py
 tests/nn/data_parallel/test_fsdp_offload.py
+tests/nn/data_parallel/test_fsdp_ssd_offload.py
 tests/experimental/nn/test_ssd_offload.py

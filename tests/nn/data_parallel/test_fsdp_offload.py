@@ -8,7 +8,6 @@ import glob
 import itertools
 import os
 import sys
-import time
 import unittest
 from unittest import mock
 
@@ -24,19 +23,6 @@ from fairscale.utils.testing import dist_init, get_cycles_per_ms, objects_are_eq
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
-
-
-class TimeKeeper:
-    def __init__(self):
-        self.start_time = time.time()
-
-    def print_time(self, s: str, wait_time: float = 5.0):
-        cur_time = time.time()
-        print(f"@time: {cur_time - self.start_time:0.2f} {s}")
-        time.sleep(wait_time)
-
-
-tk = TimeKeeper()
 
 
 class DistributedTest(unittest.TestCase):
@@ -77,18 +63,6 @@ class DistributedTest(unittest.TestCase):
         if isinstance(model, FullyShardedDataParallel):
             model.assert_state(TrainingState.IDLE)
         return loss.detach()
-
-    @staticmethod
-    def _eval_for_several_steps(model, num_steps, autocast, lr=0.01, norm_type=None):
-        model.eval()
-        # Inputs always cuda regardless of move_grads_cpu, or model.device
-        input = model.module.get_input(torch.device("cuda"))
-
-        for _ in range(num_steps):
-            with torch.cuda.amp.autocast(enabled=autocast):
-                output = model(*input)
-
-            tk.print_time(f"eval step: {_}", 1.0)
 
     @staticmethod
     def get_wrapped_model(group, cuda_first=False, config={}, **model_kwargs) -> FullyShardedDataParallel:
@@ -186,82 +160,9 @@ class TestSsdLoading(DistributedTest):
 
         self._train_for_several_steps(model, 1, config["mixed_precision"])
 
-        for p in model.parameters():
-            rmf(p._filename)
-
         fileList = glob.glob(os.getcwd() + "/*_rank*")
         for file in fileList:
             rmf(file)
-
-    @classmethod
-    def _test_simple_linear(self, rank, group, config):
-
-        SIZE = 1024 * 16
-        tk.print_time("START", 1.0)
-        a = torch.empty(1)
-        b = a.cuda()
-        # wait for cuda to fully load
-        time.sleep(5)
-        tk.print_time("INIT_CUDA", 1.0)
-        model = SimpleLinear(group, input_size=SIZE, output_size=SIZE, layers=4)
-        tk.print_time("CPU_MODEL", 1.0)
-
-        nested_wrapping = config["nested_wrapping"]
-        del config["nested_wrapping"]
-        # Train the model for 1 step.
-
-        config["ssd_offload"] = True
-        if nested_wrapping:
-            model = FullyShardedDataParallel(NestedWrappedModule(group, wrap_everything=True, wrapper_config=config))
-        else:
-            model = FullyShardedDataParallel(model, **config)
-        if not config["ssd_offload"]:
-            model = model.cuda()
-        tk.print_time("FSDP_MODEL", 1.0)
-
-        self._eval_for_several_steps(model, 4, autocast=config["mixed_precision"])
-        tk.print_time("TRAIN_1")
-
-        for p in model.parameters():
-            rmf(p._filename)
-
-        fileList = glob.glob(os.getcwd() + "/*_rank*")
-        for file in fileList:
-            rmf(file)
-
-        tk.print_time("RM_FILES")
-
-
-class SimpleLinear(nn.Module):
-    def __init__(self, group, input_size, output_size, layers=1, **unused_kwargs):
-        super().__init__()
-        self.rank = group.rank()
-        self.world_size = group.size()
-        self.input_size = input_size
-        self.output_size = output_size
-        torch.manual_seed(0)  # keep everything deterministic
-        seq_layers = []
-        for i in range(layers):
-            seq_layers.append(nn.Linear(input_size, output_size, bias=False))
-        self.module = nn.Sequential(*seq_layers)
-        self.bs = 2
-
-    def get_input(self, device):
-        torch.manual_seed(1 + self.rank)  # keep everything deterministic
-        src = torch.rand((self.bs, self.input_size), device=device, dtype=torch.float32)
-        tgt = torch.rand((self.bs, self.input_size), device=device, dtype=torch.float32)
-        return (src, tgt)
-
-    def forward(self, src_ids, tgt_ids):
-        return self.module(src_ids)
-
-    def get_loss(self, input, output):
-        _, tgt = input
-
-        return nn.functional.binary_cross_entropy_with_logits(output, tgt)
-
-    def run_backward(self, loss):
-        loss.backward()
 
 
 class TransformerWithSharedParams(nn.Module):
@@ -476,7 +377,6 @@ def spawn_and_init(fn, args=None, **spawn_kwargs):
         args = ()
 
     run_fn = functools.partial(init_and_run, fn, args)
-    # spawn_for_all_world_sizes(run_fn, **spawn_kwargs, world_sizes=[2])
     spawn_for_all_world_sizes(run_fn, **spawn_kwargs)
 
 
