@@ -10,6 +10,7 @@ import sys
 import time
 import unittest
 
+import pytest
 import torch
 from torch import nn
 import torch.distributed
@@ -96,9 +97,59 @@ class DistributedTest(unittest.TestCase):
 
 
 class TestSsdLoading(DistributedTest):
-    def test_ssd_offloading(self):
+    def test_memory_benchmark(self):
         test_fn = functools.partial(self._test_memory_benchmark, config={})
         spawn_and_init(test_fn)
+
+    def test_named_parameter(self):
+        test_fn = functools.partial(self._test_named_parameter, config={})
+        spawn_and_init(test_fn)
+
+    def test_parameter(self):
+        test_fn = functools.partial(self._test_parameter, config={})
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_named_parameter(self, rank, group, config):
+        SIZE = 128
+        model_orig = SimpleLinear(group, input_size=SIZE, output_size=SIZE, layers=1)
+
+        config["ssd_offload"] = True
+        model = FullyShardedDataParallel(model_orig, **config)
+
+        with pytest.raises(RuntimeError):
+            for n, p in model.named_parameters():
+                pass
+
+        config["ssd_offload"] = False
+        model = FullyShardedDataParallel(model_orig, **config)
+        for n, p in model.named_parameters():
+            pass
+
+        fileList = glob.glob(os.getcwd() + "/*_rank*")
+        for file in fileList:
+            rmf(file)
+
+    @classmethod
+    def _test_parameter(self, rank, group, config):
+        SIZE = 128
+        model_orig = SimpleLinear(group, input_size=SIZE, output_size=SIZE, layers=1)
+
+        config["ssd_offload"] = True
+        model = FullyShardedDataParallel(model_orig, **config)
+
+        with pytest.raises(RuntimeError):
+            for p in model.parameters():
+                pass
+
+        config["ssd_offload"] = False
+        model = FullyShardedDataParallel(model_orig, **config)
+        for p in model.parameters():
+            pass
+
+        fileList = glob.glob(os.getcwd() + "/*_rank*")
+        for file in fileList:
+            rmf(file)
 
     @classmethod
     def _test_memory_benchmark(self, rank, group, config):

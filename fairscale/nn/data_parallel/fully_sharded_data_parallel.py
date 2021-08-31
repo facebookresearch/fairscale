@@ -694,7 +694,12 @@ class FullyShardedDataParallel(nn.Module):
         part of the model. This call cannot be made when ssd_offload is set because
         parameter data will not be loaded.
         """
-        assert not self.ssd_offload or self.training_state is None
+        if self.ssd_offload and self.training_state:
+            raise RuntimeError(
+                "FSDP model doesn't support calling parameters() when "
+                + "ssd_offload is true. This is because the parameters returned will not "
+                + "contain tensor data since it is offloaded to disk."
+            )
 
         return super().parameters(*args, **kwargs)
 
@@ -712,9 +717,12 @@ class FullyShardedDataParallel(nn.Module):
         under a `summon_full_params` context when using flattened or original params.
         """
 
-        # named_params will not work as expected for ssd_offload because
-        # the actual tensor data will not be loaded
-        assert not self.ssd_offload or self.training_state is None
+        if self.ssd_offload and self.training_state:
+            raise RuntimeError(
+                "FSDP model doesn't support calling named_parameters() when "
+                + "ssd_offload is true. This is because the parameters returned will not "
+                + "contain tensor data since it is offloaded to disk."
+            )
 
         named_param = super().named_parameters(*args, **kwargs)
         for name, param in named_param:
