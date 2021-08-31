@@ -692,10 +692,10 @@ class FullyShardedDataParallel(nn.Module):
         parameter as well as the parameter.
 
         With FSDP, the `named_parameters` function implemented in `nn.Module` will not
-        be able to return the name and param when we use flattened parameters unless 
+        be able to return the name and param when we use flattened parameters unless
         we call this function under a `summon_full_params` context.
 
-        If you want the full param to be returned, you should call this function 
+        If you want the full param to be returned, you should call this function
         under a `summon_full_params` context when using flattened or original params.
         """
         named_param = super().named_parameters(*args, **kwargs)
@@ -1536,6 +1536,14 @@ class FullyShardedDataParallel(nn.Module):
         """
         output_tensors: List[Tuple[torch.Tensor, bool]] = []
 
+        if self.ssd_offload:
+            # The params are on disk and need to be moved to the CPU.
+            for p in self.params:
+                alloc_storage_(p._fp32_shard, p._shard_size)
+                ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
+                p._fp32_shard = p._fp32_shard.cuda()
+                p.data = p._fp32_shard
+
         def update_p_data(custom_output_tensor: Optional[torch.Tensor] = None) -> None:
             """
             Helper function to update p.data pointer.
@@ -1570,14 +1578,6 @@ class FullyShardedDataParallel(nn.Module):
 
         self.has_full_params = True
         with torch.cuda.stream(self._streams["all_gather"]):
-
-            if self.ssd_offload:
-                # The params are on disk and need to be moved to the CPU.
-                for p in self.params:
-                    alloc_storage_(p._fp32_shard, p._shard_size)
-                    ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
-                    p._fp32_shard = p._fp32_shard.cuda()
-                    p.data = p._fp32_shard
 
             if self.mixed_precision and not force_full_precision:
                 self._cast_fp32_param_shards_to_fp16()
