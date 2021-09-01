@@ -87,14 +87,6 @@ class DistributedTest(unittest.TestCase):
 
             tk.print_time(f"eval step: {_}", 1.0)
 
-    @staticmethod
-    def get_wrapped_model(group, cuda_first=False, config={}, **model_kwargs) -> FullyShardedDataParallel:
-        if cuda_first:
-            model = FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs).cuda(), group, **config)
-        else:
-            model = FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs), group, **config).cuda()
-        return model
-
 
 class TestSsdLoading(DistributedTest):
     def test_memory_benchmark(self):

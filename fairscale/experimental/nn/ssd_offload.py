@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import io
+import os
 import pickle
+from typing import IO, Any, BinaryIO, Callable, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from torch.serialization import DEFAULT_PROTOCOL as DEFAULT_PROTOCOL
 
 DEFAULT_CHUNK_SIZE = 1024 * 1024
 
@@ -42,27 +47,30 @@ def read(t: torch.Tensor, filename: str, num_padded: int = None) -> None:
             chunk_end = min(size_in_bytes, chunk_start + chunk_size_bytes)
             data_read = f.readinto(t_mv[chunk_start:chunk_end])
             assert data_read == chunk_end - chunk_start
-    return fixed_mv
 
 
 # Classes supporting torch.save/load
 class TorchSaver:
-    def __init__(self):
+    def __init__(self) -> None:
         self.pickle_module = DisableMemoizationPicklerModule
 
-    def save(self, obj, f, pickle_protocol=torch.serialization.DEFAULT_PROTOCOL):
-        torch.save(obj, f, self.pickle_module, pickle_protocol=pickle_protocol, _use_new_zipfile_serialization=False)
+    def save(
+        self, obj: Any, f: Union[str, os.PathLike, BinaryIO, IO[bytes]], pickle_protocol: int = DEFAULT_PROTOCOL
+    ) -> None:
+        torch.serialization.save(
+            obj, f, self.pickle_module, pickle_protocol=pickle_protocol, _use_new_zipfile_serialization=False
+        )
 
 
 class DisableMemoizationPicklerModule:
     @classmethod
-    def Pickler(cls, data_buf, protocol):
+    def Pickler(cls, data_buf: io.BytesIO, protocol: int) -> pickle.Pickler:
         p = pickle.Pickler(data_buf, protocol)
         p.fast = True
         return p
 
     @classmethod
-    def dump(cls, obj, f, protocol):
+    def dump(cls, obj: Any, f: io.BytesIO, protocol: int) -> None:
         pickle.dump(obj, f, protocol)
 
 
@@ -75,18 +83,19 @@ class FileChunkingIterator:
     order of O(min(file_size, 1000 * chunk_size_bytes)).
     """
 
-    def __init__(self, filename, chunk_size_bytes=DEFAULT_CHUNK_SIZE):
+    def __init__(self, filename: str, chunk_size_bytes: int = DEFAULT_CHUNK_SIZE) -> None:
         self.filename = filename
-        self.file = None
+        self.file: Optional[Union[BinaryIO, IO[bytes]]] = None
         self.chunk_size_bytes = chunk_size_bytes
         self.num_chunks_read = 0
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[bytes]:
         self.file = io.open(self.filename, "rb", buffering=0)
         self.num_chunks_read = 0
         return self
 
-    def __next__(self):
+    def __next__(self) -> bytes:
+        assert self.file
         next_chunk = self.file.read(self.chunk_size_bytes)
 
         if len(next_chunk) == 0:
@@ -97,41 +106,41 @@ class FileChunkingIterator:
 
 
 class SsdTensor:
-    def __init__(self, shape, filename: str, dtype=torch.float):
+    def __init__(self, shape: Tuple[int, ...], filename: str, dtype: torch.dtype = torch.float) -> None:
         self.filename = filename
-        self.f = None
+        self.f: Optional[Union[BinaryIO, IO[bytes]]] = None
         self.shape = shape
         self.dtype = dtype
 
     @classmethod
-    def __unpickle__(cls, shape, filename, dtype):
-        result = cls(shape, dtype, filename)
+    def __unpickle__(cls, shape: Tuple[int, ...], filename: str, dtype: torch.dtype) -> SsdTensor:
+        result = cls(shape, filename, dtype)
         result.f = io.open(result.filename, "wb")
         return result
 
     @classmethod
-    def fromtensor(cls, tensor, filename):
+    def fromtensor(cls, tensor: torch.Tensor, filename: str) -> SsdTensor:
         result = cls(tensor.shape, filename, tensor.dtype)
         write(tensor, result.filename)
         return result
 
-    def __reduce_ex__(self, protocol):
+    def __reduce_ex__(self, protocol: int) -> Tuple[Callable, Any, Any, Any]:
         # adding _2 to the filename is just a hack to prevent overwriting the original SsdTensor data
         return (
             type(self).__unpickle__,
-            (self.shape, self.dtype, self.filename + "_2",),
+            (self.shape, self.filename + "_2", self.dtype,),
             None,
             iter(FileChunkingIterator(self.filename)),
         )
 
-    def _init_loading(self):
+    def _init_loading(self) -> None:
         self.f = io.open(self.filename, "wb")
 
-    def append(self, item):
+    def append(self, item: bytes) -> None:
         assert self.f
         self.f.write(item)
 
-    def extend(self, items):
+    def extend(self, items: List[bytes]) -> None:
         for i in items:
             self.append(i)
 

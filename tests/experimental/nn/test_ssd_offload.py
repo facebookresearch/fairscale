@@ -39,7 +39,9 @@ def test_torch_save_load():
     orig_file = tempfile.NamedTemporaryFile()
     checkpoint_file = tempfile.NamedTemporaryFile()
 
-    TENSOR_SHAPE = (1024, 1024, 1024)
+    # TENSOR_SHAPE = (1024, 1024, 1024)
+    # use smaller shape for unit tests
+    TENSOR_SHAPE = (1024, 1024)
     ref_tensor = torch.rand(TENSOR_SHAPE, dtype=torch.float32)
     ref_ssd_tensor = so.SsdTensor.fromtensor(ref_tensor, orig_file.name)
     del ref_tensor

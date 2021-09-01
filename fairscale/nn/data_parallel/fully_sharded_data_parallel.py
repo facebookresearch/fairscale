@@ -259,7 +259,7 @@ class FullyShardedDataParallel(nn.Module):
         force_input_to_fp32: bool = False,
         verbose: bool = False,
         cpu_offload: bool = False,
-        **kwargs,
+        **kwargs: Dict[str, Any],
     ):
         init_start = time.time()
         super().__init__()
@@ -282,10 +282,7 @@ class FullyShardedDataParallel(nn.Module):
         self.clear_autocast_cache = clear_autocast_cache
         self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
-        if "ssd_offload" in kwargs:
-            self.ssd_offload = kwargs["ssd_offload"]
-        else:
-            self.ssd_offload = False
+        self.ssd_offload = kwargs.get("ssd_offload", False)
 
         self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
@@ -346,8 +343,8 @@ class FullyShardedDataParallel(nn.Module):
 
         for n, p in self.named_parameters():
             if not hasattr(p, "_filename"):
-                p._filename = f"{randint(1, 10E6)}_rank{self.rank}"
-            p._num_padded = 0
+                p._filename = f"{randint(1, int(10E6))}_rank{self.rank}"  # type: ignore
+            p._num_padded = 0  # type: ignore
 
         # Shard module parameters in place
         self._shard_parameters_()
@@ -592,17 +589,17 @@ class FullyShardedDataParallel(nn.Module):
             if not p._is_sharded:
                 self.numel_padded_per_param.append(0)
                 if self.ssd_offload:
-                    p._shard_size = p.data.size()
-                    ssd_offload.write(p.data, p._filename)
+                    p._shard_size = p.data.size()  # type: ignore
+                    ssd_offload.write(p.data, p._filename)  # type: ignore
                 continue
             p._is_sharded = True
 
             # Replace p.data with the relevant shard.
             if self.ssd_offload:
                 p.data, num_padded = self._get_shard(p.data)
-                p._num_padded = num_padded
-                p._shard_size = p.size()
-                ssd_offload.write(p.data, p._filename)
+                p._num_padded = num_padded  # type: ignore
+                p._shard_size = p.size()  # type: ignore
+                ssd_offload.write(p.data, p._filename)  # type: ignore
                 self.numel_padded_per_param.append(num_padded)
                 # TODO(anjs): Currently we free storage at the beginning of FW
                 # Should we be instead doing it here?
@@ -689,7 +686,7 @@ class FullyShardedDataParallel(nn.Module):
         del self.orig_sizes
         self._reset_lazy_init()
 
-    def parameters(self, *args: Any, **kwargs: Any) -> Iterator[Parameter]:
+    def parameters(self, recurse: bool = True) -> Iterator[Parameter]:
         """Returns an iterator over the module parameters, yielding all the parameters
         part of the model. This call cannot be made when ssd_offload is set because
         parameter data will not be loaded.
@@ -701,11 +698,9 @@ class FullyShardedDataParallel(nn.Module):
                 + "contain tensor data since it is offloaded to disk."
             )
 
-        return super().parameters(*args, **kwargs)
+        return super().parameters(recurse=recurse)
 
-    def named_parameters(
-        self, i_promise_not_to_access_tensor_data=False, *args: Any, **kwargs: Any
-    ) -> Iterator[Tuple[str, Parameter]]:
+    def named_parameters(self, prefix: str = "", recurse: bool = True) -> Iterator[Tuple[str, Parameter]]:
         """Returns an iterator over the module parameters, yielding both the name of the
         parameter as well as the parameter.
 
@@ -724,7 +719,7 @@ class FullyShardedDataParallel(nn.Module):
                 + "contain tensor data since it is offloaded to disk."
             )
 
-        named_param = super().named_parameters(*args, **kwargs)
+        named_param = super().named_parameters(prefix=prefix, recurse=recurse)
         for name, param in named_param:
             if (
                 hasattr(self, "flatten_parameters")
@@ -822,8 +817,8 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.ssd_offload:
             for p in self.params:
-                alloc_storage_(p._fp32_shard, p._shard_size)
-                ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
+                alloc_storage_(p._fp32_shard, p._shard_size)  # type: ignore
+                ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)  # type: ignore
                 p._fp32_shard = p._fp32_shard.cuda()
                 p.data = p._fp32_shard
 
@@ -1077,7 +1072,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # Free storage attributed to p.data
         if self.ssd_offload:
-            p._fp32_shard_size = p._fp32_shard.size()
+            p._fp32_shard_size = p._fp32_shard.size()  # type: ignore
             p._fp32_shard = torch.zeros_like(p._fp32_shard, device=torch.device("cpu"), dtype=p._fp32_shard.dtype)
             free_storage_(p._fp32_shard)
             p.data = p._fp32_shard
@@ -1565,8 +1560,8 @@ class FullyShardedDataParallel(nn.Module):
         if self.ssd_offload:
             # The params are on disk and need to be moved to the CPU.
             for p in self.params:
-                alloc_storage_(p._fp32_shard, p._shard_size)
-                ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
+                alloc_storage_(p._fp32_shard, p._shard_size)  # type: ignore
+                ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)  # type: ignore
                 p._fp32_shard = p._fp32_shard.cuda()
                 p.data = p._fp32_shard
 
@@ -1599,8 +1594,8 @@ class FullyShardedDataParallel(nn.Module):
         if self.ssd_offload:
             # The params are on disk and need to be moved to the CPU.
             for p in self.params:
-                alloc_storage_(p._fp32_shard, p._shard_size)
-                ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)
+                alloc_storage_(p._fp32_shard, p._shard_size)  # type: ignore
+                ssd_offload.read(p._fp32_shard.cpu(), p._filename, num_padded=p._num_padded)  # type: ignore
                 p._fp32_shard = p._fp32_shard.cuda()
                 p.data = p._fp32_shard
 
