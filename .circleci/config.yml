@@ -36,7 +36,7 @@ gpu: &gpu
     CUDA_HOME: /usr/local/cuda-10.2
   machine:
     image: ubuntu-1604-cuda-10.2:202012-01
-  resource_class: gpu.medium
+  resource_class: gpu.large
 
 gpu_cu111: &gpu_cu111
   environment:
@@ -44,7 +44,7 @@ gpu_cu111: &gpu_cu111
     CUDA_HOME: /usr/local/cuda-11.2
   machine:
     image: ubuntu-2004-cuda-11.2:202103-01
-  resource_class: gpu.medium
+  resource_class: gpu.large
 
 # -------------------------------------------------------------------------------------
 # Re-usable commands
@@ -114,7 +114,7 @@ install_dep_pytorch_nightly: &install_dep_pytorch_nightly
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.10 && exit 0; fi
         # start installing
-        pip install --progress-bar off --pre torch==1.10.0.dev20210811+cu111 torchvision==0.11.0.dev20210811+cu111 -f https://download.pytorch.org/whl/nightly/cu111/torch_nightly.html
+        pip install --progress-bar off --pre torch==1.10.0.dev20210901+cu111 torchvision==0.11.0.dev20210901+cu111 -f https://download.pytorch.org/whl/nightly/cu111/torch_nightly.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
