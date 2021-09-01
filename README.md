@@ -172,7 +172,7 @@ If you use FairScale in your publication, please cite it by using the following 
 
 ```BibTeX
 @Misc{FairScale2021,
-  author =       {Mandeep Baines, Shruti Bhosale, Vittorio Caggiano, Naman Goyal, Siddharth Goyal, Myle Ott, Benjamin Lefaudeux, Vitaliy Liptchinsky, Mike Rabbat, Sam Sheiffer, Anjali Sridhar, Min Xu},
+  author =       {Mandeep Baines and Shruti Bhosale and Vittorio Caggiano and Naman Goyal and Siddharth Goyal and Myle Ott and Benjamin Lefaudeux and Vitaliy Liptchinsky and Mike Rabbat and Sam Sheiffer and Anjali Sridhar and Min Xu},
   title =        {FairScale:  A general purpose modular PyTorch library for high performance and large scale training},
   howpublished = {\url{https://github.com/facebookresearch/fairscale}},
   year =         {2021}
