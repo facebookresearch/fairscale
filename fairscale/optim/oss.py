@@ -5,6 +5,7 @@
 
 from collections import OrderedDict
 import copy
+import io
 from itertools import chain
 import logging
 from math import inf
@@ -25,6 +26,51 @@ if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
+
+
+_gpu_is_old: Optional[bool] = None
+
+
+def _gpu_capabilities_older_than_50() -> bool:
+    """Return True if the GPU's compute capability is older than SM50."""
+    global _gpu_is_old
+    if _gpu_is_old is None:
+        for i in range(torch.cuda.device_count()):
+            major, minor = torch.cuda.get_device_capability(f"cuda:{i}")
+            if major <= 5:
+                _gpu_is_old = True
+        _gpu_is_old = False
+    return _gpu_is_old
+
+
+def _broadcast_object(
+    obj: Any, src_rank: int, group: object = dist.group.WORLD, dist_device: torch.device = torch.device("cpu")
+) -> Any:
+    """
+    Either broadcast from master to the fleet (default),
+    or use the src setting as the original rank.
+
+    This is only needed for some older GPUs where dist.broadcast_object_list seems to hang.
+    """
+
+    if dist.get_rank() == src_rank:
+        # Emit data
+        buffer = io.BytesIO()
+        torch.save(obj, buffer)
+        data = bytearray(buffer.getbuffer())
+        length_tensor = torch.LongTensor([len(data)]).to(dist_device)
+        data_send_tensor = torch.ByteTensor(data).to(dist_device)
+        dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
+        dist.broadcast(data_send_tensor, src=src_rank, group=group, async_op=False)
+    else:
+        # Fetch from the source
+        length_tensor = torch.LongTensor([0]).to(dist_device)
+        dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
+        data_recv_tensor = torch.empty([int(length_tensor.item())], dtype=torch.uint8, device=dist_device)
+        dist.broadcast(data_recv_tensor, src=src_rank, group=group, async_op=False)
+        buffer = io.BytesIO(data_recv_tensor.cpu().numpy())
+        obj = torch.load(buffer, map_location=dist_device)
+    return obj
 
 
 class OSS(Optimizer):
@@ -285,17 +331,30 @@ class OSS(Optimizer):
                     if should_send_state
                     else torch.tensor([0], dtype=torch.uint8, device=dist_device)
                 )
-                obj_list = [state_to_share]
-                dist.broadcast_object_list(
-                    obj_list, src=self.global_rank, group=self.group,
-                )
+                if _gpu_capabilities_older_than_50():
+                    _broadcast_object(
+                        state_to_share, src_rank=self.global_rank, group=self.group, dist_device=dist_device
+                    )
+                else:
+                    obj_list = [state_to_share]
+                    dist.broadcast_object_list(
+                        obj_list, src=self.global_rank, group=self.group,
+                    )
             else:
                 # Fetch the optim state from the other replicas
-                obj_list = [torch.tensor([0], dtype=torch.uint8, device=dist_device)]
-                dist.broadcast_object_list(
-                    obj_list, src=self._local_to_global_rank[rank], group=self.group,
-                )
-                replica_state = obj_list[0]
+                if _gpu_capabilities_older_than_50():
+                    replica_state = _broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=dist_device),
+                        src_rank=self._local_to_global_rank[rank],
+                        group=self.group,
+                        dist_device=dist_device,
+                    )
+                else:
+                    obj_list = [torch.tensor([0], dtype=torch.uint8, device=dist_device)]
+                    dist.broadcast_object_list(
+                        obj_list, src=self._local_to_global_rank[rank], group=self.group,
+                    )
+                    replica_state = obj_list[0]
 
                 if should_collect_state:
                     self._all_states.append(
