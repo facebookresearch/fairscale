@@ -39,7 +39,8 @@ def _gpu_capabilities_older_than_50() -> bool:
             major, minor = torch.cuda.get_device_capability(f"cuda:{i}")
             if major <= 5:
                 _gpu_is_old = True
-        _gpu_is_old = False
+        if _gpu_is_old is None:
+            _gpu_is_old = False
     return _gpu_is_old
 
 
@@ -50,7 +51,9 @@ def _broadcast_object(
     Either broadcast from master to the fleet (default),
     or use the src setting as the original rank.
 
-    This is only needed for some older GPUs where dist.broadcast_object_list seems to hang.
+    This is only needed for some older GPUs where dist.broadcast_object_list seems to hang. Also
+    the hang behavior persist once it happens. I.e. once we call dist.broadcast_object_list,
+    subsequent calls with _broadcast_object also hang.
     """
 
     if dist.get_rank() == src_rank:
