@@ -35,6 +35,8 @@ gpu: &gpu
     CUDA_VERSION: "10.2"
     CUDA_HOME: /usr/local/cuda-10.2
   machine:
+    # This image actually has cuda-11.1 installed, but it doesn't seems to affect us
+    # using pytorch cu10 builds below.
     image: ubuntu-1604-cuda-10.2:202012-01
   resource_class: gpu.large
 
