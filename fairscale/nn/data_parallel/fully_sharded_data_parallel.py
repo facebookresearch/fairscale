@@ -666,10 +666,10 @@ class FullyShardedDataParallel(nn.Module):
         parameter as well as the parameter.
 
         With FSDP, the `named_parameters` function implemented in `nn.Module` will not
-        be able to return the name and param when we use flattened parameters unless 
+        be able to return the name and param when we use flattened parameters unless
         we call this function under a `summon_full_params` context.
 
-        If you want the full param to be returned, you should call this function 
+        If you want the full param to be returned, you should call this function
         under a `summon_full_params` context when using flattened or original params.
         """
         named_param = super().named_parameters(*args, **kwargs)
@@ -1185,6 +1185,12 @@ class FullyShardedDataParallel(nn.Module):
             if self._is_root:
                 self._queue_wait_for_post_backward()
 
+            # All-gather full parameters.
+            if self.reshard_after_forward:
+                self._rebuild_full_params()
+            else:
+                self._use_full_params()
+
             if self._pre_backward_hook_has_run:
                 return  # only run once (from multiple outputs or multiple forward passes)
             self._pre_backward_hook_has_run = True
@@ -1192,12 +1198,6 @@ class FullyShardedDataParallel(nn.Module):
             # Start of a backward pass.
             self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
             self.training_state = TrainingState.BACKWARD_PRE
-
-            # All-gather full parameters.
-            if self.reshard_after_forward:
-                self._rebuild_full_params()
-            else:
-                self._use_full_params()
 
             # Prepare p.grad.
             self._prep_grads_for_backward()
