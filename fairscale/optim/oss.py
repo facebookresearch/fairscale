@@ -52,7 +52,7 @@ def _broadcast_object(
     or use the src setting as the original rank.
 
     This is only needed for some older GPUs where dist.broadcast_object_list seems to hang. Also
-    the hang behavior persist once it happens. I.e. once we call dist.broadcast_object_list,
+    the hang behavior persist across processes once it happens. I.e. once we call dist.broadcast_object_list,
     subsequent calls with _broadcast_object also hang.
     """
 
