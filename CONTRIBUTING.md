@@ -69,6 +69,8 @@ checks, which are static code analysis tools we use.
 
 ### Run statis analysis by hand (without using pre-commit)
 
+Note that, trailing spaces are not checked by the manual commands below, but they are checked by the pre-commit hooks above.
+
 ```
 black .
 isort .
