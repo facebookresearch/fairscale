@@ -17,7 +17,7 @@ We actively welcome your pull requests.
 2. If you've added code that should be tested, add tests.
 3. If you've changed APIs, update the documentation.
 4. Ensure the test suite passes.
-5. Make sure your code lints.
+5. Make sure your code passes static analysis (see below).
 6. If you haven't already, complete the Contributor License Agreement ("CLA").
 
 ## Contributor License Agreement ("CLA")
@@ -50,26 +50,35 @@ outlined on that page and do not file a public issue.
 * We follow the [PEP8](https://www.python.org/dev/peps/pep-0008/) style guide.
 * In your editor, install the [editorconfig](https://editorconfig.org/) extension
   which should ensure that you are following the same standards as us.
-* Please run black and isort before opening up your PR.
-
-```
-black .
-isort .
-flake8
-```
 * Please read the [editorconfig](.editorconfig) file to understand the exact coding style preferences.
 * Please place Python code related to models in fairscale/nn. Place Python code related to optimizers
   in fairscale/optim. Place C++ extensions in fairscale/clib.
 * Please put `__all__:List[str] = []` in new `__init__.py` files for consistent importing behavior
   and less development overhead in maintaining an importing list.
+* Please setup pre-commit before opening up your PR.
 
-## Testing
-
-### Static analysis
+### Pre-commit
 
 ```
+pip install -r requirements-dev.txt
+pre-commit install
+```
+
+After the above, your `git commit` command will automatically trigger pre-commit
+checks, which are static code analysis tools we use.
+
+### Run statis analysis by hand (without using pre-commit)
+
+Note that, trailing spaces are not checked by the manual commands below, but they are checked by the pre-commit hooks above.
+
+```
+black .
+isort .
+flake8
 mypy --ignore-missing-imports --scripts-are-modules --pretty .
 ```
+
+## Testing
 
 ### Unit tests
 
