@@ -25,9 +25,21 @@ class ThreadLocal(threading.local):
     def __init__(self) -> None:
         self.is_checkpointing = False
         self.is_recomputing = False
+        self.is_checkpointing_disabled = False
 
 
 thread_local = ThreadLocal()
+
+
+@contextmanager
+def disable_checkpointing() -> Generator[None, None, None]:
+    """Makes :func:`is_checkpointing_disabled` return :data:`True` within a context."""
+    orig = thread_local.is_checkpointing_disabled
+    thread_local.is_checkpointing_disabled = True
+    try:
+        yield
+    finally:
+        thread_local.is_checkpointing_disabled = orig
 
 
 @contextmanager
@@ -164,7 +176,7 @@ def _checkpointed_forward(
     # which would be an issue during eval since there wouldn't be a corresponding backward pass
     # to decrement the fwd counter.
     # See https://github.com/facebookresearch/fairscale/pull/709.
-    if not torch.is_grad_enabled():
+    if not torch.is_grad_enabled() or thread_local.is_checkpointing_disabled:
         return original_forward(module, *args, **kwargs)
 
     # Autograd Functions in PyTorch work best with positional args, since

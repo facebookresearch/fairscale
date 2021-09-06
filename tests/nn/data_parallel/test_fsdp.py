@@ -113,6 +113,10 @@ class DistributedTest(unittest.TestCase):
         else:
             assert next(model.parameters()).device == torch.device("cpu")
         shard_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
+        if config.get("cpu_offload", False):
+            # In pytorch 1.10, assert_allclose below checks for tensor device match. Therefore,
+            # we need to move the CPU tensor to CUDA in case we are doing cpu_offload.
+            shard_loss = shard_loss.cuda()
         shard_state_dict = model.state_dict()
 
         try:

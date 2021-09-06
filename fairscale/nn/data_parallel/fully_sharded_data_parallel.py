@@ -46,7 +46,7 @@ from fairscale.utils.parallel import (
     get_process_group_cached,
     validate_process_group,
 )
-from fairscale.utils.params import broadcast_object, calc_grad_norm, recursive_copy_to_device
+from fairscale.utils.params import calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
 
@@ -526,13 +526,14 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.move_grads_to_cpu:
             total_norm = total_norm.cpu()
+
         # Now multiply each grad by (max_norm/total_norm), same as torch 1.7 https://tinyurl.com/3wtxhhqq)
         clip_coef = torch.tensor(max_norm, dtype=total_norm.dtype, device=total_norm.device) / (total_norm + 1e-6)
         if clip_coef < 1:
-
             # multiply by clip_coef
             for p in params_with_grad:
-                p.grad.detach().mul_(clip_coef.to(p.grad.device))  # type: ignore
+                assert p.grad is not None
+                p.grad.detach().mul_(clip_coef.to(p.grad.device))
 
         return total_norm
 
@@ -665,10 +666,10 @@ class FullyShardedDataParallel(nn.Module):
         parameter as well as the parameter.
 
         With FSDP, the `named_parameters` function implemented in `nn.Module` will not
-        be able to return the name and param when we use flattened parameters unless 
+        be able to return the name and param when we use flattened parameters unless
         we call this function under a `summon_full_params` context.
 
-        If you want the full param to be returned, you should call this function 
+        If you want the full param to be returned, you should call this function
         under a `summon_full_params` context when using flattened or original params.
         """
         named_param = super().named_parameters(*args, **kwargs)
@@ -1184,21 +1185,36 @@ class FullyShardedDataParallel(nn.Module):
             if self._is_root:
                 self._queue_wait_for_post_backward()
 
-            if self._pre_backward_hook_has_run:
-                return  # only run once (from multiple outputs or multiple forward passes)
-            self._pre_backward_hook_has_run = True
-
-            # Start of a backward pass.
-            self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
-            self.training_state = TrainingState.BACKWARD_PRE
-
-            # All-gather full parameters.
+            # All-gather full parameters or switching to the full params.
+            #
+            # This needs to be done on every pre_backward hook, even within the same
+            # iteration (i.e. for checkpointed, multiple forward pass modules). This is
+            # because after the forward pass (i.e. in checkpoint inner graph), we always
+            # switch to fp32_shard in the ``forward`` function.
+            #
+            # We used to do this only after the ``self._pre_backward_hook_has_run``
+            # boolean guard below, which is incorrect. It worked in pytorch < 1.9 for
+            # some unknown reason, but pytorch 1.10 nightly exposed this bug.
+            #
+            # Note, both ``self._rebuild_full_params`` and ``self._use_full_params`` are
+            # idempotent.  So in case they are called unnecessarily, they don't incur much
+            # overhead.
             if self.reshard_after_forward:
                 self._rebuild_full_params()
             else:
                 self._use_full_params()
 
-            # Prepare p.grad.
+            # Only run the ``self._prep_grads_for_backward`` once per iteration (i.e. in case
+            # it is multiple outputs or multiple forward passes).
+            if self._pre_backward_hook_has_run:
+                return
+            self._pre_backward_hook_has_run = True
+
+            # Start of a backward pass for the first time in an iteration.
+            self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
+            self.training_state = TrainingState.BACKWARD_PRE
+
+            # Prepare p.grad so that it is in the right shape, device, accumulated values, etc.
             self._prep_grads_for_backward()
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
@@ -1472,6 +1488,9 @@ class FullyShardedDataParallel(nn.Module):
         """
         Gather all shards of params.
 
+        Note, this is idempotent if full params are already gathered. Callers
+        assume the idempotency. So please keep it that way.
+
         Args:
             force_full_precision (bool, Optional): by default params will be gathered
                 in ``compute_dtype`` (e.g., FP16), unless *force_full_precision* is
@@ -1548,7 +1567,7 @@ class FullyShardedDataParallel(nn.Module):
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     if hasattr(dist, "_all_gather_base"):
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
-                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)  # type: ignore
+                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)
                     else:
                         chunks = list(output_tensor.chunk(self.world_size))
                         dist.all_gather(chunks, p_data, group=self.process_group)
@@ -1567,6 +1586,9 @@ class FullyShardedDataParallel(nn.Module):
         Switch p.data pointers to use the full params.
 
         Note: this assumes full params are already gathered.
+
+        Note: this might be called after full_params is already in used. So please
+              make sure it is idempotent in that case.
         """
         assert self.has_full_params
         for p in self.params:
@@ -1581,7 +1603,9 @@ class FullyShardedDataParallel(nn.Module):
 
     @torch.no_grad()
     def _prep_grads_for_backward(self) -> None:
-        """Make sure p.grad is correctly prepared for the backward."""
+        """ Make sure p.grad is correctly prepared for the backward with
+            right shape, device, accumulated values, etc.
+        """
         for p in self.params:
             if p.grad is not None:
                 if p.grad.device != p.data.device:
@@ -1805,19 +1829,17 @@ class FullyShardedDataParallel(nn.Module):
             raise ValueError(msg)
 
     def _broadcast_pad_info_to_r0(self) -> List[List[List[int]]]:
-        """Collect [x.numel_padded_per_param for x in self._fsdp_instances] from teach rank."""
-        dummy_tensor = torch.tensor([0], dtype=torch.uint8, device=self.compute_device)
+        """Collect [x.numel_padded_per_param for x in self._fsdp_instances] from each rank."""
         world_pad_info: List[List[List[int]]] = []  # this will contain values from the whole world.
+        my_pad_info: List[List[int]] = [cast(List[int], m.numel_padded_per_param) for m in self._fsdp_instances]
         for rank in range(self.world_size):
             if rank == self.rank:
-                pad_info = [m.numel_padded_per_param for m in self._fsdp_instances]
+                pad_info = my_pad_info
             else:
-                pad_info = dummy_tensor  # type: ignore
-            pad_info = broadcast_object(
-                pad_info, src_rank=rank, group=self.process_group, dist_device=self.compute_device
-            )
+                pad_info = [[0]] * len(my_pad_info)
+            dist.broadcast_object_list(pad_info, src=rank, group=self.process_group)
             if self.rank == 0:
-                world_pad_info.append(pad_info)  # type: ignore
+                world_pad_info.append(pad_info)
         return world_pad_info
 
     def _gather_optim_state(
