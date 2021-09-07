@@ -321,7 +321,7 @@ def test_checkpoint_disabling():
                 y.append(self.linear(i))
             return y
 
-    x = in_data1 = torch.rand(4, 2)
+    x = torch.rand(4, 2)
     model1 = checkpoint_wrapper(TestModel())
     model2 = checkpoint_wrapper(TestModel())
 
