@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint_wrapper
 
-from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
+from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper, disable_checkpointing
 from fairscale.nn.misc import checkpoint_wrapper as deprecated_checkpoint_wrapper
 from fairscale.utils import torch_version
 from fairscale.utils.testing import skip_if_no_cuda
@@ -303,3 +303,39 @@ def test_list_input():
     # Backward. Adds 1 more forward call due to checkpoint.
     loss.backward()
     assert count == 3, f"Incorrect count {count}"
+
+
+def test_checkpoint_disabling():
+    """ Test to check new disable_checkpoint() API added to checkpoint_wrapper."""
+
+    class TestModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cnt = 0
+            self.linear = nn.Linear(2, 2)
+
+        def forward(self, x):
+            self.cnt += 1
+            y = []
+            for i in x:
+                y.append(self.linear(i))
+            return y
+
+    x = torch.rand(4, 2)
+    model1 = checkpoint_wrapper(TestModel())
+    model2 = checkpoint_wrapper(TestModel())
+
+    # Forward. cnt += 1
+    y = model1(x)
+    y = sum(i.sum() for i in y)
+    # Backward. cnt += 1
+    y.backward()
+    assert model1.cnt == 2
+
+    with disable_checkpointing():
+        # Forward. cnt += 1
+        y = model2(x)
+        y = sum(i.sum() for i in y)
+        # Backward. cnt remains same as checkpointing is disabled
+        y.backward()
+    assert model2.cnt == 1
