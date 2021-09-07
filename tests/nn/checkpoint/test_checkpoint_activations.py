@@ -312,17 +312,17 @@ def test_checkpoint_disabling():
         def __init__(self):
             super().__init__()
             self.cnt = 0
-            self.conv = nn.Linear(2, 2)
+            self.linear = nn.Linear(2, 2)
 
         def forward(self, x):
             self.cnt += 1
             y = []
             for i in x:
-                y.append(self.conv(i))
+                y.append(self.linear(i))
             return y
 
     x = in_data1 = torch.rand(4, 2)
-    model1 = checkpoint_wrapper((TestModel()))
+    model1 = checkpoint_wrapper(TestModel())
     model2 = checkpoint_wrapper(TestModel())
 
     # Forward. cnt += 1
