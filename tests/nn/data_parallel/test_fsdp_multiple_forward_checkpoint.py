@@ -70,7 +70,16 @@ class Model2(nn.Module):
 
 
 def _create_model(
-    with_model2, with_sync_bn, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
+    with_model2,
+    with_sync_bn,
+    with_fsdp,
+    with_checkpoint,
+    with_fwd_counters,
+    mixed_precision,
+    flatten,
+    wrap_bn,
+    fp32_reduce_scatter,
+    bucket_cap_mb,
 ):
     model = Model2() if with_model2 else Model()
     fsdp_config = None
@@ -91,15 +100,16 @@ def _create_model(
             if with_model2:
                 model.block3 = auto_wrap_bn(model.block3, single_rank_pg=False, fsdp_config=fsdp_config)
         if with_checkpoint:
-            model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=True)
+            model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=with_fwd_counters)
             if with_model2:
-                model.block3 = checkpoint_wrapper(model.block3, maintain_forward_counter=True)
+                model.block3 = checkpoint_wrapper(model.block3, maintain_forward_counter=with_fwd_counters)
         with enable_wrap(
             wrapper_cls=FSDP,
             flatten_parameters=flatten,
             mixed_precision=mixed_precision,
             compute_dtype=torch.float32,
             fp32_reduce_scatter=fp32_reduce_scatter,
+            bucket_cap_mb=bucket_cap_mb,
         ):
             model.block1 = wrap(model.block1)
             model.block2 = wrap(model.block2)
@@ -121,11 +131,13 @@ def _distributed_worker(
     with_sync_bn,
     with_fsdp,
     with_checkpoint,
+    with_fwd_counters,
     files,
     mixed_precision,
     flatten,
     wrap_bn,
     fp32_reduce_scatter,
+    bucket_cap_mb,
 ):
     filename, filename_rpc = files[:2]
     filename_loss = files[2:]
@@ -155,7 +167,16 @@ def _distributed_worker(
         batch = [x.half() for x in batch]
 
     model = _create_model(
-        with_model2, with_sync_bn, with_fsdp, with_checkpoint, mixed_precision, flatten, wrap_bn, fp32_reduce_scatter
+        with_model2,
+        with_sync_bn,
+        with_fsdp,
+        with_checkpoint,
+        with_fwd_counters,
+        mixed_precision,
+        flatten,
+        wrap_bn,
+        fp32_reduce_scatter,
+        bucket_cap_mb,
     )
     model = model.cuda()
 
@@ -166,6 +187,7 @@ def _distributed_worker(
             mixed_precision=mixed_precision,
             compute_dtype=torch.float32,
             fp32_reduce_scatter=fp32_reduce_scatter,
+            bucket_cap_mb=bucket_cap_mb,
         )
         model.set_gradient_divide_factors(1.0, 2.0, True)
         no_sync_context = contextlib.suppress()
@@ -224,10 +246,12 @@ def _get_cached_results(
     with_sync_bn,
     with_fsdp,
     with_checkpoint,
+    with_fwd_counters,
     mixed_precision,
     flatten,
     wrap_bn,
     fp32_reduce_scatter,
+    bucket_cap_mb,
 ):
     """ Cache the training to save time. For DDP, flatten, wrap_bn etc. doesn't matter, so
         the results can be cached.
@@ -243,10 +267,12 @@ def _get_cached_results(
         with_sync_bn,
         with_fsdp,
         with_checkpoint,
+        with_fwd_counters,
         mixed_precision,
         flatten,
         wrap_bn,
         fp32_reduce_scatter,
+        bucket_cap_mb,
     )
     global _result_cache
     if key not in _result_cache:
@@ -260,11 +286,13 @@ def _get_cached_results(
                     with_sync_bn,
                     with_fsdp,
                     with_checkpoint,
+                    with_fwd_counters,
                     temp_files,
                     mixed_precision,
                     flatten,
                     wrap_bn,
                     fp32_reduce_scatter,
+                    bucket_cap_mb,
                 ),
                 nprocs=world_size,
             )
@@ -310,39 +338,73 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type, bn
 
     world_size = 2
     expected_losses = None
-    # Ensure ddp == ddp+ckpt == fsdp == fsdp+ckpt.
+
+    # Ensure ddp == fsdp when modules are called multiple times per forward pass with/without checkpointing, forward
+    # counters and reducer bucketing.
+    #
+    # The bucketing check exists because the asynchronous gradient reduction it induces can interact with multiple
+    # forward passes in complex ways. For example, in the midst of a sharded backward pass, `parameter.grad` may only be
+    # `None` or an unsharded gradient tensor. The sharded tensor is then set at the end of the backwards pass. But a
+    # unit test with bucketing enabled might not catch violations of this invariant. For very small models, like the
+    # kind used in this unit test, bucketing will delay gradient reduction until after all the gradient computation is
+    # done. If the reduction incorrectly sets `.grad` to the _sharded_ variant, the test might not fail, since the
+    # gradient computations have already happened. Toggling bucketing helps verify that gradient reduction and
+    # computation interact correctly.
+    combinations = []
     for with_fsdp in [False, True]:
         for with_checkpoint in [False, True]:
             if not with_fsdp and with_checkpoint:
                 continue
-            final_losses = _get_cached_results(
-                world_size,
-                with_model2,
-                with_sync_bn,
-                with_fsdp,
-                with_checkpoint,
-                mixed_precision,
-                flatten,
-                wrap_bn,
-                fp32_reduce_scatter,
+            for with_fwd_counters in [True, False]:
+                if not with_checkpoint and with_fwd_counters:
+                    continue
+                for with_bucketing in [False, True]:
+                    if not with_fsdp and with_bucketing:
+                        continue
+                    combinations.append((with_fsdp, with_checkpoint, with_fwd_counters, with_bucketing))
+    print("")
+    print("Testing the following configurations:")
+    for with_fsdp, with_checkpoint, with_fwd_counters, with_bucketing in combinations:
+        print(f"  fsdp {with_fsdp} ckpt {with_checkpoint} fwd_counters {with_fwd_counters} bucketing {with_bucketing}")
+
+    for with_fsdp, with_checkpoint, with_fwd_counters, with_bucketing in combinations:
+        if with_bucketing:
+            bucket_cap_mb = 25
+        else:
+            bucket_cap_mb = 0
+        final_losses = _get_cached_results(
+            world_size,
+            with_model2,
+            with_sync_bn,
+            with_fsdp,
+            with_checkpoint,
+            with_fwd_counters,
+            mixed_precision,
+            flatten,
+            wrap_bn,
+            fp32_reduce_scatter,
+            bucket_cap_mb,
+        )
+        if expected_losses is None:
+            expected_losses = final_losses
+        else:
+            print(
+                f"checking: fsdp {with_fsdp} ckpt {with_checkpoint} fwd_counters {with_fwd_counters} "
+                f"bucketing {with_bucketing} with ddp+no_ckpt"
             )
-            if expected_losses is None:
-                expected_losses = final_losses
-            else:
-                print(f"checking: fsdp {with_fsdp} ckpt {with_checkpoint} with ddp+no_ckpt")
 
-                def check(exp, res):
-                    assert list(exp.keys()) == list(res.keys()), f"{list(exp.keys())} vs. {list(res.keys())}"
-                    rtol = 1e-4
-                    atol = 1e-5
-                    if with_model2 and mixed_precision and torch_version() >= (1, 9, 0):
-                        # On CI, with longer model2, mixed precsion and 1.9, even ddp vs. ddp+ckpt has
-                        # larger errors.
-                        rtol = 1e-3
-                        atol = 1e-4
-                    for key in exp.keys():
-                        exp_loss = exp[key]
-                        res_loss = res[key]
-                        torch.testing.assert_allclose(exp_loss, res_loss, rtol=rtol, atol=atol)
+            def check(exp, res):
+                assert list(exp.keys()) == list(res.keys()), f"{list(exp.keys())} vs. {list(res.keys())}"
+                rtol = 1e-4
+                atol = 1e-5
+                if with_model2 and mixed_precision and torch_version() >= (1, 9, 0):
+                    # On CI, with longer model2, mixed precsion and 1.9, even ddp vs. ddp+ckpt has
+                    # larger errors.
+                    rtol = 1e-3
+                    atol = 1e-4
+                for key in exp.keys():
+                    exp_loss = exp[key]
+                    res_loss = res[key]
+                    torch.testing.assert_allclose(exp_loss, res_loss, rtol=rtol, atol=atol)
 
-                check(expected_losses, final_losses)
+            check(expected_losses, final_losses)
