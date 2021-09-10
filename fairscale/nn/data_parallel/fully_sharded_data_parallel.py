@@ -93,10 +93,11 @@ class FullyShardedDataParallel(nn.Module):
     .. _`Xu et al.`: https://arxiv.org/abs/2004.13336
     .. _DeepSpeed: https://www.deepspeed.ai/
 
-    Usage::
+    Pseudo-code usage::
 
         import torch
         from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+
         torch.cuda.set_device(device_id)
         sharded_module = FSDP(my_module)
         optim = torch.optim.Adam(sharded_module.parameters(), lr=0.0001)
@@ -112,17 +113,27 @@ class FullyShardedDataParallel(nn.Module):
     across the forward pass. For example::
 
         import torch
-        from fairscale.nn.auto_wrap import enable_wrap, auto_wrap, wrap
+        from fairscale.nn.wrap import wrap, enable_wrap, auto_wrap
         from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+        from fairscale.utils.testing import dist_init, teardown, rmf
+
+        result = dist_init(0, 1, "/tmp/t1", "/tmp/t2")
+        assert result
         fsdp_params = dict(wrapper_cls=FSDP, mixed_precision=True, flatten_parameters=True)
         with enable_wrap(**fsdp_params):
+            l1 = wrap(torch.nn.Linear(5, 5))
+            assert isinstance(l1, FSDP)
             # Wraps layer in FSDP by default if within context
-            self.l1 = wrap(torch.nn.Linear(5, 5))
-            assert isinstance(self.l1, FSDP)
             # Separately Wraps children modules with more than 1e8 params
-            large_tfmr = torch.nn.Transformer(d_model=2048, encoder_layers=12, decoder_layers=12)
-            self.l2 = auto_wrap(large_tfmr, min_num_params=1e8)
-            assert isinstance(self.l2, FSDP)
+            large_tfmr = torch.nn.Transformer(d_model=2048, num_encoder_layers=12,
+                                              num_decoder_layers=12)
+            l2 = auto_wrap(large_tfmr)
+            assert isinstance(l2.encoder, FSDP)
+            assert isinstance(l2.decoder, FSDP)
+            print(l2)  # You can print the model to examine FSDP wrapping.
+        teardown()
+        rmf("/tmp/t1")
+        rmf("/tmp/t2")
 
     .. warning::
 
