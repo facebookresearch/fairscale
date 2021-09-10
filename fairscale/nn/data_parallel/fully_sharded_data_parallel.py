@@ -1213,6 +1213,7 @@ class FullyShardedDataParallel(nn.Module):
             # extra forward pass for re-computation.
             if self.training_state == TrainingState.IDLE:
                 self.training_state = TrainingState.BACKWARD_PRE
+            self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
             if t.requires_grad:
