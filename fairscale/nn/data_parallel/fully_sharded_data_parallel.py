@@ -1039,11 +1039,6 @@ class FullyShardedDataParallel(nn.Module):
         # For children instances, if they are checkpointed, state will not be reset to
         # IDLE after each inner forward/backward.
         self.assert_state(TrainingState.IDLE)
-        # Check if the root instance is being checkpointed. It doesn't make sense to
-        # checkpoint the root instance since it won't save GPU memory.
-        assert (
-            getattr(self, "_checkpoint_fwd_counter", 0) == 0
-        ), "Is the root FSDP module wrapping an activation checkpointed module? If so, please remove that."
         # As the root, we now set all children instances to False and
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
@@ -1309,13 +1304,6 @@ class FullyShardedDataParallel(nn.Module):
         if param.grad.requires_grad:
             raise RuntimeError("FSDP only works with gradients that don't require gradients")
 
-        # If this is a checkpointed module, we check if the following
-        # counter reaches 0. If not, it is not the final backward call
-        # for this module yet. Therefore, we early return in that case.
-        if hasattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter"):
-            if self._fsdp_wrapped_module._checkpoint_fwd_counter != 0:
-                return
-
         if self._require_backward_grad_sync or self.reshard_after_forward:
             # Free full params. As a special case, we don't free the full params
             # when in a ``no_sync`` context (as inversely indicated by
@@ -1358,6 +1346,16 @@ class FullyShardedDataParallel(nn.Module):
                 # matter, neglecting rounding.
                 grad = param.grad.data
                 # Clear grad on the tensor, so any repeated gradient computations do not interfere with this reduction.
+                #
+                # The effect on memory consumption is not usually significant. No extra memory is allocated if this
+                # module is called only once, reduction happens quickly, or the tensor is bucketed. If the module is
+                # called multiple times, and the backwards pass runs far enough ahead of the `post_backward` stream,
+                # then we can end up with multiple unsharded gradients allocated and queued for reduction.
+                #
+                # We could guard against this by using CUDA events (see record_event, wait_event in torch.cuda.Stream).
+                # This ensures the `default` stream will wait for the `post_backward` stream to complete the last
+                # reduction for this module, before scheduling additional reduction work. Then at most there are two
+                # unsharded gradients allocated; one for a pending reduction, and one for gradient computation.
                 param.grad = None
                 callback_fn = functools.partial(self._post_reduction_hook, param)
                 grad_chunks = chunk_and_pad(grad, self.world_size)

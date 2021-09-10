@@ -16,7 +16,7 @@ import torch.utils.checkpoint as torch_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
-from .checkpoint_utils import dec_counter, inc_counter, init_counter, patch_batchnorm
+from .checkpoint_utils import patch_batchnorm
 
 
 # https://docs.python.org/3/library/threading.html#thread-local-data
@@ -95,9 +95,7 @@ def is_recomputing() -> bool:
     return thread_local.is_recomputing
 
 
-def checkpoint_wrapper(
-    module: nn.Module, offload_to_cpu: bool = False, maintain_forward_counter: bool = False
-) -> nn.Module:
+def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False,) -> nn.Module:
     """
     A friendlier wrapper for performing activation checkpointing.
 
@@ -139,10 +137,6 @@ def checkpoint_wrapper(
             The module to be wrapped
         offload_to_cpu (bool):
             Whether to offload activations to CPU.
-        maintain_forward_counter (bool):
-            If True, maintain a forward counter per inner module. The counter will first
-            increases in forward calls of outer forward pass and then decreases in the
-            forward calls of outer backward pass. It is used by FullyShardedDataParallel.
 
     Returns:
         (nn.Module):
@@ -150,9 +144,6 @@ def checkpoint_wrapper(
     """
     # Patch the batchnorm layers in case there are any in this module.
     patch_batchnorm(module)
-
-    if maintain_forward_counter:
-        init_counter(module)
 
     # The use of weakref here is to prevent creating a ref cycle: m -> m.forward -> m.
     # When such cycle exists, gc won't collect the module when the module is freed.
@@ -172,10 +163,6 @@ def _checkpointed_forward(
     module = weak_self()
 
     # If gradients are disabled, just use original `.forward()` method directly.
-    # Doing so also ensures the internal fwd counter is not incremented in the forward pass,
-    # which would be an issue during eval since there wouldn't be a corresponding backward pass
-    # to decrement the fwd counter.
-    # See https://github.com/facebookresearch/fairscale/pull/709.
     if not torch.is_grad_enabled() or thread_local.is_checkpointing_disabled:
         return original_forward(module, *args, **kwargs)
 
@@ -270,8 +257,6 @@ class CheckpointFunction(torch.autograd.Function):
         with torch.no_grad(), enable_checkpointing():
             unpacked_args, unpacked_kwargs = unpack_kwargs(kwarg_keys, args)
             outputs = run_function(*unpacked_args, **unpacked_kwargs)
-            the_module = unpacked_args[0]
-            inc_counter(the_module)
 
         if not isinstance(outputs, torch.Tensor):
             # Autograd Functions don't like non-Tensor outputs. We can split the
@@ -304,8 +289,6 @@ class CheckpointFunction(torch.autograd.Function):
             unpacked_args, unpacked_kwargs = unpack_kwargs(ctx.kwarg_keys, inputs)
             outputs = ctx.run_function(*unpacked_args, **unpacked_kwargs)
             tensor_outputs, _ = split_non_tensors(outputs)
-            the_module = unpacked_args[0]
-            dec_counter(the_module)
 
         # Set the states back to what it was at the start of this function.
         set_rng_state(bwd_rng_state)

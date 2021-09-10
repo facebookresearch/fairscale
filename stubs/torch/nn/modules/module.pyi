@@ -106,9 +106,6 @@ class Module(Generic[T_co]):
 
     def extra_repr(self) -> str: ...
 
-    # This is added by checkpoint_wrapper
-    _checkpoint_fwd_counter: int
-
     # This is added torchgpipe
     training: bool
 

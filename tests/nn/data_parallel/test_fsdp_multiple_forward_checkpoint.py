@@ -74,7 +74,6 @@ def _create_model(
     with_sync_bn,
     with_fsdp,
     with_checkpoint,
-    with_fwd_counters,
     mixed_precision,
     flatten,
     wrap_bn,
@@ -93,16 +92,18 @@ def _create_model(
             "force_input_to_fp32": True,  # SyncBN needs this.
         }
 
+    if with_fsdp and wrap_bn:
+        model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False, fsdp_config=fsdp_config)
+        model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False, fsdp_config=fsdp_config)
+        if with_model2:
+            model.block3 = auto_wrap_bn(model.block3, single_rank_pg=False, fsdp_config=fsdp_config)
+
+    if with_checkpoint:
+        model.block2 = checkpoint_wrapper(model.block2)
+        if with_model2:
+            model.block3 = checkpoint_wrapper(model.block3)
+
     if with_fsdp:
-        if wrap_bn:
-            model.block1 = auto_wrap_bn(model.block1, single_rank_pg=False, fsdp_config=fsdp_config)
-            model.block2 = auto_wrap_bn(model.block2, single_rank_pg=False, fsdp_config=fsdp_config)
-            if with_model2:
-                model.block3 = auto_wrap_bn(model.block3, single_rank_pg=False, fsdp_config=fsdp_config)
-        if with_checkpoint:
-            model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=with_fwd_counters)
-            if with_model2:
-                model.block3 = checkpoint_wrapper(model.block3, maintain_forward_counter=with_fwd_counters)
         with enable_wrap(
             wrapper_cls=FSDP,
             flatten_parameters=flatten,
@@ -116,11 +117,7 @@ def _create_model(
             if with_model2:
                 model.block3 = wrap(model.block3)
             model.head = wrap(model.head)
-    else:
-        if with_checkpoint:
-            model.block2 = checkpoint_wrapper(model.block2, maintain_forward_counter=False)
-            if with_model2:
-                model.block3 = checkpoint_wrapper(model.block3, maintain_forward_counter=False)
+
     return model
 
 
@@ -131,7 +128,6 @@ def _distributed_worker(
     with_sync_bn,
     with_fsdp,
     with_checkpoint,
-    with_fwd_counters,
     files,
     mixed_precision,
     flatten,
@@ -171,7 +167,6 @@ def _distributed_worker(
         with_sync_bn,
         with_fsdp,
         with_checkpoint,
-        with_fwd_counters,
         mixed_precision,
         flatten,
         wrap_bn,
@@ -246,7 +241,6 @@ def _get_cached_results(
     with_sync_bn,
     with_fsdp,
     with_checkpoint,
-    with_fwd_counters,
     mixed_precision,
     flatten,
     wrap_bn,
@@ -267,7 +261,6 @@ def _get_cached_results(
         with_sync_bn,
         with_fsdp,
         with_checkpoint,
-        with_fwd_counters,
         mixed_precision,
         flatten,
         wrap_bn,
@@ -286,7 +279,6 @@ def _get_cached_results(
                     with_sync_bn,
                     with_fsdp,
                     with_checkpoint,
-                    with_fwd_counters,
                     temp_files,
                     mixed_precision,
                     flatten,
@@ -355,19 +347,16 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type, bn
         for with_checkpoint in [False, True]:
             if not with_fsdp and with_checkpoint:
                 continue
-            for with_fwd_counters in [True, False]:
-                if not with_checkpoint and with_fwd_counters:
+            for with_bucketing in [False, True]:
+                if not with_fsdp and with_bucketing:
                     continue
-                for with_bucketing in [False, True]:
-                    if not with_fsdp and with_bucketing:
-                        continue
-                    combinations.append((with_fsdp, with_checkpoint, with_fwd_counters, with_bucketing))
+                combinations.append((with_fsdp, with_checkpoint, with_bucketing))
     print("")
     print("Testing the following configurations:")
-    for with_fsdp, with_checkpoint, with_fwd_counters, with_bucketing in combinations:
-        print(f"  fsdp {with_fsdp} ckpt {with_checkpoint} fwd_counters {with_fwd_counters} bucketing {with_bucketing}")
+    for with_fsdp, with_checkpoint, with_bucketing in combinations:
+        print(f"  fsdp {with_fsdp} ckpt {with_checkpoint} bucketing {with_bucketing}")
 
-    for with_fsdp, with_checkpoint, with_fwd_counters, with_bucketing in combinations:
+    for with_fsdp, with_checkpoint, with_bucketing in combinations:
         if with_bucketing:
             bucket_cap_mb = 25
         else:
@@ -378,7 +367,6 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type, bn
             with_sync_bn,
             with_fsdp,
             with_checkpoint,
-            with_fwd_counters,
             mixed_precision,
             flatten,
             wrap_bn,
@@ -388,10 +376,7 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type, bn
         if expected_losses is None:
             expected_losses = final_losses
         else:
-            print(
-                f"checking: fsdp {with_fsdp} ckpt {with_checkpoint} fwd_counters {with_fwd_counters} "
-                f"bucketing {with_bucketing} with ddp+no_ckpt"
-            )
+            print(f"checking: fsdp {with_fsdp} ckpt {with_checkpoint} bucketing {with_bucketing} with ddp+no_ckpt")
 
             def check(exp, res):
                 assert list(exp.keys()) == list(res.keys()), f"{list(exp.keys())} vs. {list(res.keys())}"
