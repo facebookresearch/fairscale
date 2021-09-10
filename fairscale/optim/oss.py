@@ -462,10 +462,12 @@ class OSS(Optimizer):
         of some parameters changed.
         """
 
+        # Make sure that we capture the current default device
+        self._default_device = list(self._per_device_params.keys())[0]
+
         # Create the optim which will work on the param shard
         if not hasattr(self, "optim"):
             self._clear_cache()
-            self._default_device = list(self._per_device_params.keys())[0]
             self.optim = self._optim_constructor(self.partition_parameters()[self.rank], **self._optim_defaults)
             OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
 

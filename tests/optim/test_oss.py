@@ -151,6 +151,9 @@ class TestSingleRank(unittest.TestCase):
         # Check that OSS detects that the device changed
         o.step()
 
+        # Check that the default device has been updated
+        assert o._default_device.type == DEVICE
+
     def test_step_with_extra_inner_key(self):
         class SGDWithNewKey(torch.optim.SGD):
             # Dummy optimizer which adds a new key to the param groups
