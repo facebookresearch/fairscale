@@ -191,13 +191,33 @@ def _checkpointed_forward(
     # when original_forward's input are non-tensor (i.e. a tuple). Using this dummy tensor
     # avoids requiring users to set their input tensors's requires_grad flag. In the case
     # of tuple type inputs, setting the flag won't even trigger the backward pass.
+    #
+    # One implication of this is that since we always feed in a dummy tensor
+    # needing grad, then the output will always require grad, even if it originally
+    # wouldn't, such as if the module and original input both do not require grad.
+    # We get around this by saving the desired requires_grad value in output and
+    # detaching the output if needed.
     output = CheckpointFunction.apply(
         torch.tensor([], requires_grad=True), original_forward, parent_ctx_dict, kwarg_keys, *flat_args
     )
+    output_requires_grad = parent_ctx_dict["output_requires_grad"]
     if not isinstance(output, torch.Tensor):
+        # If output should not require grad, then detach it, since otherwise it will
+        # always have requires_grad = True due to our dummy tensor input above that
+        # requires_grad
+        output = [x.detach() if not output_requires_grad else x for x in output]
+
         packed_non_tensor_outputs = parent_ctx_dict["packed_non_tensor_outputs"]
         if packed_non_tensor_outputs:
             output = unpack_non_tensors(output, packed_non_tensor_outputs)
+
+    else:
+        # If output should not require grad, then detach it, since otherwise it will
+        # always have requires_grad = True due to our dummy tensor input above that
+        # requires_grad
+        if not output_requires_grad:
+            output = output.detach()
+
     return output
 
 
@@ -273,12 +293,29 @@ class CheckpointFunction(torch.autograd.Function):
             the_module = unpacked_args[0]
             inc_counter(the_module)
 
+        # Because we run with torch.no_grad(), we can't actually access
+        # outputs.requires_grad. Instead, we manually compute it by
+        # checking if either the input or the module needs grads
+        parameters = list(the_module.parameters())
+
+        # If the module is wrapped by FlattenParamsWrapper, then the
+        # parameters would have been deleted. If so, we need to access
+        # the views into the flattened parameters.
+        if hasattr(the_module, "_unflattened_param_views"):
+            parameters += the_module._unflattened_param_views
+
+        output_requires_grad = any(param.requires_grad for param in parameters) or any(
+            x.requires_grad for x in tensor_inputs
+        )
+        parent_ctx_dict["output_requires_grad"] = output_requires_grad
+
         if not isinstance(outputs, torch.Tensor):
             # Autograd Functions don't like non-Tensor outputs. We can split the
             # non-Tensor and Tensor outputs, returning the former by reference
             # through *parent_ctx_dict* and returning the latter directly.
             outputs, packed_non_tensor_outputs = split_non_tensors(outputs)
             parent_ctx_dict["packed_non_tensor_outputs"] = packed_non_tensor_outputs
+
         return outputs
 
     @staticmethod
@@ -317,10 +354,12 @@ class CheckpointFunction(torch.autograd.Function):
             if tensor_outputs[i].requires_grad:
                 outputs_with_grad.append(tensor_outputs[i])
                 args_with_grad.append(args[i])
+
         if len(outputs_with_grad) == 0:
             raise RuntimeError("None of the outputs have requires_grad=True, " "this checkpoint() is not necessary")
 
         torch.autograd.backward(outputs_with_grad, args_with_grad)
 
         grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else None for inp in inputs)
+
         return (None, None, None, None) + grads
