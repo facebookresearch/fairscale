@@ -71,12 +71,10 @@ def _train_step(model, optim, expected_param_shapes):
     # Create input and run forward pass.
     input = torch.randn(2, 3).cuda()
     loss = model(input).sum()
-    _check_fwd_counter(model, 1)
     _check_params(model, expected_param_shapes)
 
     # Run backward pass.
     loss.backward()
-    _check_fwd_counter(model, 0)
     _check_params(model, expected_param_shapes)
 
     # Finally, take a step.
@@ -90,7 +88,6 @@ def _eval_step(model, optim, expected_param_shapes):
     with torch.no_grad():
         input = torch.randn(2, 3).cuda()
         model(input).sum()
-    _check_fwd_counter(model, 0)
     _check_params(model, expected_param_shapes)
 
 
@@ -104,20 +101,11 @@ def _check_params(model, expected_param_shapes):
         ), f"Parameter {key} should have shape {expected_shape}, but found shape {current_shape}"
 
 
-def _check_fwd_counter(model, expected_value):
-    current_value = model._fpw_module.ffn[1]._fsdp_wrapped_module.module._checkpoint_fwd_counter
-    assert (
-        current_value == expected_value
-    ), f"forward counter of checkpointed submodule should be {expected_value}, but found {current_value}"
-
-
 class SimpleModuleWithCheckpointing(nn.Module):
     def __init__(self):
         super().__init__()
         self.ffn = nn.Sequential(
-            nn.Linear(3, 3),
-            FullyShardedDataParallel(checkpoint_wrapper(nn.Linear(3, 3), maintain_forward_counter=True)),
-            nn.Linear(3, 3),
+            nn.Linear(3, 3), FullyShardedDataParallel(checkpoint_wrapper(nn.Linear(3, 3))), nn.Linear(3, 3),
         )
 
     def forward(self, x):
