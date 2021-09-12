@@ -20,7 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         call `named_parameters` under the `summon_full_params` context when using flattened params or original
         params. If you are using original params (i.e flatten_params=False), calling `named_parameters` outside
         of the `summon_full_params` context will still return the original param names along with the local shards. [#755]
-
+- FSDP: Ensure gradient reduction accumulates into the unsharded gradient tensor
+        within a backwards pass. This matters when an FSDP module is called
+        multiple times within a forward pass, and reduction is not deferred
+        using activation checkpoint forward counters, bucketing or some other
+        mechanism. [#784]
 
 ## [0.4.0] - 2021-07-31
 ### Fixed
