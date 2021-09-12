@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         multiple times within a forward pass, and reduction is not deferred
         using activation checkpoint forward counters, bucketing or some other
         mechanism. [#784]
+- activation checkpoint: Added a context manager to disable checkpoint in case the same wrapped module
+                         needs to be checkpointed and not checkpointed in different parts of
+                         the module forward pass. [#772]
 
 ## [0.4.0] - 2021-07-31
 ### Fixed
