@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         that don't require grad and hence can fail the previous assert. [#761]
 - FSDP: Fixed a bug when multiple backward pass is called within an iteration, parameters' sharding
         state might be incorrect. [#775]
+- activation checkpoint: Ensure outputs of checkpointed modules only require grad if either
+                         the input requires grad or if the parameters require grad. [#787]
 
 ### Added
 - FSDP: Added support for returning the original names of parameters when `named_parameters` is called on
