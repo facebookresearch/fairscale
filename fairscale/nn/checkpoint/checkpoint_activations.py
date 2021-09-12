@@ -277,6 +277,7 @@ class CheckpointFunction(torch.autograd.Function):
         with torch.no_grad(), enable_checkpointing():
             unpacked_args, unpacked_kwargs = unpack_kwargs(kwarg_keys, args)
             outputs = run_function(*unpacked_args, **unpacked_kwargs)
+            the_module = unpacked_args[0]
 
         # Because we run with torch.no_grad(), we can't actually access
         # outputs.requires_grad. Instead, we manually compute it by
