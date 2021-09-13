@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - activation checkpoint: Ensure outputs of checkpointed modules only require grad if either
                          the input requires grad or if the parameters require grad. [#787]
 
+- OSS: fix the broadcast_fp16 option, broken after a refactor, this flag was doing nothing (bugfix).[#795]
+- OSS: update default device when refreshing the params, meaning that moving the model to GPU after
+       the OSS wrap will not trigger warnings and slow the jobs (ease of use). [#786]
+
 ### Added
 - FSDP: Added support for returning the original names of parameters when `named_parameters` is called on
         the module. To retrieve the orginal names of the parameters along with the params, you need to

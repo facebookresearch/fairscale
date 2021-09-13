@@ -32,7 +32,7 @@ class Bucket:
         Move the underlying buffer
         """
         assert self.buffer is not None, "Cannot move a collapsed bucket, please rebuild it"
-        self.buffer.to(device, dtype, non_blocking)
+        self.buffer = self.buffer.to(device, dtype, non_blocking)
 
 
 class ParamBucket(Bucket):
@@ -98,6 +98,8 @@ class ParamBucket(Bucket):
 
         self._fill = 0
         for p in self._params:
+            if p.dtype != self.buffer.dtype:
+                p.data = p.data.to(self.buffer.dtype)
             self._add_param_as_view(p, keep_existing_value=False)
 
 
