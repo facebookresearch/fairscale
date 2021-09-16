@@ -9,6 +9,7 @@ from enum import Enum, auto
 import functools
 import logging
 from math import inf
+import os
 import time
 import traceback
 import typing
@@ -54,6 +55,11 @@ from . import fsdp_optim_utils as ou
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
+
+if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
+    enable_nccl_base_collectives = False
+else:
+    enable_nccl_base_collectives = True
 
 
 class TrainingState(Enum):
@@ -1599,7 +1605,7 @@ class FullyShardedDataParallel(nn.Module):
                         output_tensor = p._full_param_padded
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
-                    if hasattr(dist, "_all_gather_base"):
+                    if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
                         dist._all_gather_base(output_tensor, p_data, group=self.process_group)
                     else:
