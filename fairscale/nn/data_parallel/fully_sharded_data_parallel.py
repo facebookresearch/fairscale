@@ -55,7 +55,7 @@ from . import fsdp_optim_utils as ou
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
-
+# TODO: Remove the toggle here when github open issue #801 is resolved.
 if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
     enable_nccl_base_collectives = False
 else:
