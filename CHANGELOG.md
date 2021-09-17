@@ -40,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
                          needs to be checkpointed and not checkpointed in different parts of
                          the module forward pass. [#772]
 - FSDP: Added a toggle with an environment variable ENABLE_NCCL_BASE_COLLECTIVES=[0,1] to allow users
-        enable/disabel using new nccl base collecectives. [#801]
+        enable/disable using new nccl base collecectives. By default, using new nccl base collectives
+        is enabled. [#801]
 
 ## [0.4.0] - 2021-07-31
 ### Fixed
