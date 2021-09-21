@@ -571,7 +571,7 @@ class DeviceAndTypeCheckModule(Base):
 def get_cycles_per_ms() -> float:
     """Measure and return approximate number of cycles per millisecond for torch.cuda._sleep
 
-    Copied from: github.com/pytorch/pytorch/blob/main/test/test_cuda.py
+    Copied from: github.com/pytorch/pytorch/blob/master/test/test_cuda.py
     """
 
     def measure() -> float:
