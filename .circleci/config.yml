@@ -3,7 +3,7 @@
 # Check https://circleci.com/docs/2.0/language-python/ for more details
 #
 # Adopted from
-# https://github.com/facebookresearch/detectron2/blob/master/.circleci/config.yml
+# https://github.com/facebookresearch/detectron2/blob/main/.circleci/config.yml
 #
 # Pro tip: download circle ci cli to validate the config locally during development.
 

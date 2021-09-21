@@ -2,7 +2,7 @@
 
 ![PyPI](https://img.shields.io/pypi/v/fairscale)
 [![Documentation Status](https://readthedocs.org/projects/fairscale/badge/?version=latest)](https://fairscale.readthedocs.io/en/latest/?badge=latest)
-[![CircleCI](https://circleci.com/gh/facebookresearch/fairscale.svg?style=shield)](https://app.circleci.com/pipelines/github/facebookresearch/fairscale/) ![PyPI - License](https://img.shields.io/pypi/l/fairscale) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/facebookresearch/fairscale/blob/master/CONTRIBUTING.md)
+[![CircleCI](https://circleci.com/gh/facebookresearch/fairscale.svg?style=shield)](https://app.circleci.com/pipelines/github/facebookresearch/fairscale/) ![PyPI - License](https://img.shields.io/pypi/l/fairscale) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/facebookresearch/fairscale/blob/main/CONTRIBUTING.md)
 --------------------------------------------------------------------------------
 
 ## Description
@@ -23,7 +23,7 @@ FairScale was designed with the following values in mind:
 
 ## Installation
 
-To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/master/docs/source/installation_instructions.rst). You should be able to install a pip package or
+To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/main/docs/source/installation_instructions.rst). You should be able to install a pip package or
 build directly from source.
 
 ## Getting Started
@@ -47,7 +47,7 @@ model = fairscale.nn.Pipe(model, balance=[2, 2], devices=[0, 1], chunks=8)
 ```
 
 ### Optimizer state sharding (ZeRO)
-See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/master/benchmarks/oss.py), but a minimal example could look like the following :
+See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/main/benchmarks/oss.py), but a minimal example could look like the following :
 
 ```python
 import torch
@@ -163,7 +163,7 @@ fairscale.nn.model_parallel is forked from [Megatron-LM](https://github.com/NVID
 
 fairscale.optim.adascale is forked from [AdaptDL](https://github.com/petuum/adaptdl), Copyright 2020, Petuum, Inc., licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
 
-fairscale.nn.misc.flatten_params_wrapper is forked from [PyTorch-Reparam-Module](https://github.com/SsnL/PyTorch-Reparam-Module), Copyright 2018, Tongzhou Wang, licensed under [MIT License](https://github.com/SsnL/PyTorch-Reparam-Module/blob/master/LICENSE).
+fairscale.nn.misc.flatten_params_wrapper is forked from [PyTorch-Reparam-Module](https://github.com/SsnL/PyTorch-Reparam-Module), Copyright 2018, Tongzhou Wang, licensed under [MIT License](https://github.com/SsnL/PyTorch-Reparam-Module/blob/main/LICENSE).
 
 
 ## Citing FairScale

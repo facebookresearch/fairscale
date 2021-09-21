@@ -1389,7 +1389,7 @@ class FullyShardedDataParallel(nn.Module):
             # go out of scope, at which point it could otherwise be freed for
             # further reuse by the main stream while the div/reduce_scatter/copy
             # are underway in the post_backward stream. See:
-            # github.com/NVIDIA/apex/blob/master/apex/parallel/distributed.py
+            # github.com/NVIDIA/apex/blob/main/apex/parallel/distributed.py
             orig_grad_data.record_stream(self._streams["post_backward"])
 
     def _post_reduction_hook(self, param: Parameter, reduced_grad: torch.Tensor) -> None:
