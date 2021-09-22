@@ -23,6 +23,7 @@ FairScale was designed with the following values in mind:
 ## What's New:
 
 * September 2021 [`master` branch renamed to `main`](https://github.com/github/renaming).
+* September 2021 [fairscale 0.4.1 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.1).
 
 ## Installation
 
