@@ -20,6 +20,9 @@ FairScale was designed with the following values in mind:
 
 * **Performance** - FairScale APIs provide the best performance in terms of scaling and efficiency.
 
+## What's New:
+
+* September 2021 [`master` branch renamed to `main`](https://github.com/github/renaming).
 
 ## Installation
 
