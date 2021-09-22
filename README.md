@@ -184,10 +184,12 @@ If you use FairScale in your publication, please cite it by using the following 
 
 ## FAQ
 1. If you experience an error indicating a default branch does not exist, it probably due to the latest update, switching the default branch from "master" to "main"
-```error: pathspec 'non-existing-branch' did not match any file(s) known to git
+```
+error: pathspec 'non-existing-branch' did not match any file(s) known to git
 ```
 Please run the following commands to update to the main branch.
-```git branch -m master main
+```
+git branch -m master main
 git fetch origin
 git branch -u origin/main main
 git remote set-head origin -a
