@@ -4,12 +4,19 @@
 # LICENSE file in the root directory of this source tree.
 
 import functools
+import os
 from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
+
+# TODO: Remove the toggle-enable_nccl_base_collectives when github open issue #801 is resolved.
+if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
+    enable_nccl_base_collectives = False
+else:
+    enable_nccl_base_collectives = True
 
 
 class Bucket:
@@ -26,8 +33,8 @@ class Bucket:
             assert len(self.callbacks) == 0
             return
         # reduce-scatter bucket
-        if hasattr(dist, "_reduce_scatter_base"):
-            dist._reduce_scatter_base(  # type: ignore
+        if hasattr(dist, "_reduce_scatter_base") and enable_nccl_base_collectives:
+            dist._reduce_scatter_base(
                 self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
             )
         else:
@@ -130,9 +137,9 @@ class ReduceScatterBucketer:
             # TODO: investigate how to avoid using torch.cat (because it seems to be slow for CPU tensors)
             # input is too big to fit in the bucket, reduce-scatter directly
             output = torch.zeros_like(input_list[0])
-            if hasattr(dist, "_reduce_scatter_base"):
+            if hasattr(dist, "_reduce_scatter_base") and enable_nccl_base_collectives:
                 input_flattened = torch.cat(input_list)
-                dist._reduce_scatter_base(output, input_flattened, group=group)  # type: ignore
+                dist._reduce_scatter_base(output, input_flattened, group=group)
             else:
                 # fallback
                 dist.reduce_scatter(output, input_list, group=group)

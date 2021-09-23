@@ -92,7 +92,6 @@ class TestOptimizerUtils(DistributedTest):
         tstart = time()
         sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=0)
         duration = time() - tstart
-        # Switching from fairscale.utils.params.broadcast_object to torch.broadcast_object_list will cause this to raise
         assert duration < fsdp.world_size, f"gather optim state took {duration} seconds, suspect change in _consolidate"
 
         cuda_gb_after = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024 ** 3

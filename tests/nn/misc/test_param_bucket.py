@@ -48,7 +48,10 @@ def test_type_change():
 
     # Move the bucket to fp16 and back
     bucket.to(dtype=torch.float16, device=param.device)
+    assert bucket.buffer.dtype == torch.float16
+
     bucket.to(dtype=torch.float32, device=param.device, keep_param_alignment=True)
+    assert bucket.buffer.dtype == torch.float32
 
     # Same with the reference tensor
     param_.to(dtype=torch.float16)

@@ -325,6 +325,11 @@ class FlattenParamsWrapper(nn.Module):
                 delattr(m, n)
             m.register_parameter(n, getattr(shared_m, shared_n))
 
+        # Delete the param views into the flat params since we will delete the
+        # flat params next
+        if hasattr(self._fpw_module, "_unflattened_param_views"):
+            delattr(self._fpw_module, "_unflattened_param_views")
+
         for n in self.flat_param_names:
             # This ensures the flat params are removed from the module.
             delattr(self, n)
@@ -336,8 +341,15 @@ class FlattenParamsWrapper(nn.Module):
         """
         assert self.is_flattened
         ps = self.get_param_views()
+        param_views = []
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(m, n, p)  # This will set as plain attr
+            param_views.append(p)
+
+        # Save param views for easy access if anyone still wants to access
+        # parameters of the module.
+        setattr(self._fpw_module, "_unflattened_param_views", param_views)
+
         for (_, _, m, n, shared_m, shared_n) in self._shared_param_infos:
             setattr(m, n, getattr(shared_m, shared_n))
 

@@ -47,8 +47,8 @@ def _calculate_stats(input: Tensor, eps: float, process_group: ProcessGroup) -> 
 
 
 if torch_version()[:2] >= (1, 7):
-    _forward = torch.jit.script(_forward)  # type: ignore
-    _track_running_stats = torch.jit.script(_track_running_stats)  # type: ignore
+    _forward = torch.jit.script(_forward)
+    _track_running_stats = torch.jit.script(_track_running_stats)
 
 
 class _SyncBatchNormFunction(torch.autograd.Function):

@@ -1,6 +1,7 @@
 ## Steps to do a release
 
 - Update the CHANGELOG.md
+- Update "what's new" in README.md
 - Update `fairscale/__init__.py` and `docs/source/conf.py` for the new version number
 - git commit the change with title like "[chore] 0.3.1 release"
 - make a tag, like `git tag v0.3.1`

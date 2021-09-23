@@ -9,6 +9,7 @@ from enum import Enum, auto
 import functools
 import logging
 from math import inf
+import os
 import time
 import traceback
 import typing
@@ -46,7 +47,7 @@ from fairscale.utils.parallel import (
     get_process_group_cached,
     validate_process_group,
 )
-from fairscale.utils.params import broadcast_object, calc_grad_norm, recursive_copy_to_device
+from fairscale.utils.params import calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
 
@@ -54,6 +55,11 @@ from . import fsdp_optim_utils as ou
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
+# TODO: Remove the toggle here when github open issue #801 is resolved.
+if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
+    enable_nccl_base_collectives = False
+else:
+    enable_nccl_base_collectives = True
 
 
 class TrainingState(Enum):
@@ -93,10 +99,11 @@ class FullyShardedDataParallel(nn.Module):
     .. _`Xu et al.`: https://arxiv.org/abs/2004.13336
     .. _DeepSpeed: https://www.deepspeed.ai/
 
-    Usage::
+    Pseudo-code usage::
 
         import torch
         from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+
         torch.cuda.set_device(device_id)
         sharded_module = FSDP(my_module)
         optim = torch.optim.Adam(sharded_module.parameters(), lr=0.0001)
@@ -112,17 +119,27 @@ class FullyShardedDataParallel(nn.Module):
     across the forward pass. For example::
 
         import torch
-        from fairscale.nn.auto_wrap import enable_wrap, auto_wrap, wrap
+        from fairscale.nn.wrap import wrap, enable_wrap, auto_wrap
         from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+        from fairscale.utils.testing import dist_init, teardown, rmf
+
+        result = dist_init(0, 1, "/tmp/t1", "/tmp/t2")
+        assert result
         fsdp_params = dict(wrapper_cls=FSDP, mixed_precision=True, flatten_parameters=True)
         with enable_wrap(**fsdp_params):
+            l1 = wrap(torch.nn.Linear(5, 5))
+            assert isinstance(l1, FSDP)
             # Wraps layer in FSDP by default if within context
-            self.l1 = wrap(torch.nn.Linear(5, 5))
-            assert isinstance(self.l1, FSDP)
             # Separately Wraps children modules with more than 1e8 params
-            large_tfmr = torch.nn.Transformer(d_model=2048, encoder_layers=12, decoder_layers=12)
-            self.l2 = auto_wrap(large_tfmr, min_num_params=1e8)
-            assert isinstance(self.l2, FSDP)
+            large_tfmr = torch.nn.Transformer(d_model=2048, num_encoder_layers=12,
+                                              num_decoder_layers=12)
+            l2 = auto_wrap(large_tfmr)
+            assert isinstance(l2.encoder, FSDP)
+            assert isinstance(l2.decoder, FSDP)
+            print(l2)  # You can print the model to examine FSDP wrapping.
+        teardown()
+        rmf("/tmp/t1")
+        rmf("/tmp/t2")
 
     .. warning::
 
@@ -365,7 +382,7 @@ class FullyShardedDataParallel(nn.Module):
             f"FSDP.__init__(done): total_init_time: {(init_end - init_start): .4f} num_params: {(sum(p.numel() for p in self.params))}"
         )
 
-        # Flag to guard multiple pre-backward hook being executed per iteration.
+        # Flag to guard against preparing gradients multiple times per iteration.
         # This is reset at the end of the backward pass.
         self._pre_backward_hook_has_run = False
 
@@ -522,13 +539,14 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.move_grads_to_cpu:
             total_norm = total_norm.cpu()
+
         # Now multiply each grad by (max_norm/total_norm), same as torch 1.7 https://tinyurl.com/3wtxhhqq)
         clip_coef = torch.tensor(max_norm, dtype=total_norm.dtype, device=total_norm.device) / (total_norm + 1e-6)
         if clip_coef < 1:
-
             # multiply by clip_coef
             for p in params_with_grad:
-                p.grad.detach().mul_(clip_coef.to(p.grad.device))  # type: ignore
+                assert p.grad is not None
+                p.grad.detach().mul_(clip_coef.to(p.grad.device))
 
         return total_norm
 
@@ -661,10 +679,10 @@ class FullyShardedDataParallel(nn.Module):
         parameter as well as the parameter.
 
         With FSDP, the `named_parameters` function implemented in `nn.Module` will not
-        be able to return the name and param when we use flattened parameters unless 
+        be able to return the name and param when we use flattened parameters unless
         we call this function under a `summon_full_params` context.
 
-        If you want the full param to be returned, you should call this function 
+        If you want the full param to be returned, you should call this function
         under a `summon_full_params` context when using flattened or original params.
         """
         named_param = super().named_parameters(*args, **kwargs)
@@ -1040,11 +1058,6 @@ class FullyShardedDataParallel(nn.Module):
         # For children instances, if they are checkpointed, state will not be reset to
         # IDLE after each inner forward/backward.
         self.assert_state(TrainingState.IDLE)
-        # Check if the root instance is being checkpointed. It doesn't make sense to
-        # checkpoint the root instance since it won't save GPU memory.
-        assert (
-            getattr(self, "_checkpoint_fwd_counter", 0) == 0
-        ), "Is the root FSDP module wrapping an activation checkpointed module? If so, please remove that."
         # As the root, we now set all children instances to False and
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
@@ -1186,22 +1199,40 @@ class FullyShardedDataParallel(nn.Module):
             if self._is_root:
                 self._queue_wait_for_post_backward()
 
-            if self._pre_backward_hook_has_run:
-                return  # only run once (from multiple outputs or multiple forward passes)
-            self._pre_backward_hook_has_run = True
-
-            # Start of a backward pass.
-            self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
-            self.training_state = TrainingState.BACKWARD_PRE
-
-            # All-gather full parameters.
+            # All-gather full parameters or switching to the full params.
+            #
+            # This needs to be done on every pre_backward hook, even within the same
+            # iteration (i.e. for checkpointed, multiple forward pass modules). This is
+            # because after the forward pass (i.e. in checkpoint inner graph), we always
+            # switch to fp32_shard in the ``forward`` function.
+            #
+            # We used to do this only after the ``self._pre_backward_hook_has_run``
+            # boolean guard below, which is incorrect. It worked in pytorch < 1.9 for
+            # some unknown reason, but pytorch 1.10 nightly exposed this bug.
+            #
+            # Note, both ``self._rebuild_full_params`` and ``self._use_full_params`` are
+            # idempotent.  So in case they are called unnecessarily, they don't incur much
+            # overhead.
             if self.reshard_after_forward:
                 self._rebuild_full_params()
             else:
                 self._use_full_params()
 
-            # Prepare p.grad.
-            self._prep_grads_for_backward()
+            # Only run the ``self._prep_grads_for_backward`` once per iteration (i.e. in case
+            # it is multiple outputs or multiple forward passes).
+            if not self._pre_backward_hook_has_run:
+                self._pre_backward_hook_has_run = True
+                # Start of a backward pass for the first time in an iteration.
+                self.assert_state([TrainingState.IDLE, TrainingState.BACKWARD_PRE])
+                # Prepare p.grad so that it is in the right shape, device, accumulated values, etc.
+                self._prep_grads_for_backward()
+
+            # Transition to BACKWARD_PRE state if currently IDLE. We can transition from BACKWARD_POST
+            # to IDLE when FSDP is within activation checkpointing and called multiple times, due to the
+            # extra forward pass for re-computation.
+            if self.training_state == TrainingState.IDLE:
+                self.training_state = TrainingState.BACKWARD_PRE
+            self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
             if t.requires_grad:
@@ -1284,27 +1315,14 @@ class FullyShardedDataParallel(nn.Module):
         the local optimizer only sees the relevant parameter shard.
         """
         # First hook callback will see PRE state. If we have multiple params,
-        # then subsequent hook callbacks will see POST state. When checkpoint
-        # fwd counter is used, IDLE is also possible since the pre-backward hook
-        # is not triggered (see ``auto_wrap_bn`` below, we have to use
-        # FSDP(checkpoint(conv, FSDP(bn), ...)), with reshard_after_forward=False).
-        if hasattr(self, "_checkpoint_fwd_counter"):
-            self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST, TrainingState.IDLE])
-        else:
-            self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
+        # then subsequent hook callbacks will see POST state.
+        self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         self.training_state = TrainingState.BACKWARD_POST
         if param.grad is None:
             return
 
         if param.grad.requires_grad:
             raise RuntimeError("FSDP only works with gradients that don't require gradients")
-
-        # If this is a checkpointed module, we check if the following
-        # counter reaches 0. If not, it is not the final backward call
-        # for this module yet. Therefore, we early return in that case.
-        if hasattr(self._fsdp_wrapped_module, "_checkpoint_fwd_counter"):
-            if self._fsdp_wrapped_module._checkpoint_fwd_counter != 0:
-                return
 
         if self._require_backward_grad_sync or self.reshard_after_forward:
             # Free full params. As a special case, we don't free the full params
@@ -1340,18 +1358,34 @@ class FullyShardedDataParallel(nn.Module):
                 # Average grad by world_size for consistency with PyTorch DDP.
                 param.grad.data.div_(self.gradient_predivide_factor)
 
-            callback_fn = functools.partial(self._post_reduction_hook, param)
             if param._is_sharded:
-                assert param._is_sharded
                 assert self._reducer is not None
-                grad_chunks = chunk_and_pad(param.grad.data, self.world_size)
+                # Save the unsharded grad for reduction. We will asynchronously accumulate the reduced gradient into
+                # param._saved_grad_shard. If this FSDP module was called multiple times it's possible that multiple
+                # gradient reductions will happen in an undefined order. But addition commutes, so this order doesn't
+                # matter, neglecting rounding.
+                grad = param.grad.data
+                # Clear grad on the tensor, so any repeated gradient computations do not interfere with this reduction.
+                #
+                # The effect on memory consumption is not usually significant. No extra memory is allocated if this
+                # module is called only once, reduction happens quickly, or the tensor is bucketed. If the module is
+                # called multiple times, and the backwards pass runs far enough ahead of the `post_backward` stream,
+                # then we can end up with multiple unsharded gradients allocated and queued for reduction.
+                #
+                # We could guard against this by using CUDA events (see record_event, wait_event in torch.cuda.Stream).
+                # This ensures the `default` stream will wait for the `post_backward` stream to complete the last
+                # reduction for this module, before scheduling additional reduction work. Then at most there are two
+                # unsharded gradients allocated; one for a pending reduction, and one for gradient computation.
+                param.grad = None
+                callback_fn = functools.partial(self._post_reduction_hook, param)
+                grad_chunks = chunk_and_pad(grad, self.world_size)
                 self._reducer.reduce_scatter_async(grad_chunks, group=self.process_group, callback_fn=callback_fn)
             else:
                 # Currently the only way for _is_sharded to be False is if
                 # world_size == 1. This could be relaxed in the future, in which
                 # case grads should be all-reduced here.
                 assert self.world_size == 1
-                callback_fn(param.grad.data)
+                self._post_reduction_hook(param, param.grad.data)
 
             # After _post_backward_hook returns, orig_grad_data will eventually
             # go out of scope, at which point it could otherwise be freed for
@@ -1363,33 +1397,36 @@ class FullyShardedDataParallel(nn.Module):
     def _post_reduction_hook(self, param: Parameter, reduced_grad: torch.Tensor) -> None:
         """Hook to call on each param after the reduce-scatter."""
         assert torch.cuda.current_stream() == self._streams["post_backward"]
-        assert param.grad is not None
         self.assert_state(TrainingState.BACKWARD_POST)
-        param.grad.data = reduced_grad
         if self.gradient_postdivide_factor > 1:
             # Average grad by world_size for consistency with PyTorch DDP.
-            param.grad.data.div_(self.gradient_postdivide_factor)
+            reduced_grad.data.div_(self.gradient_postdivide_factor)
         # Cast grad to param's dtype (typically FP32). Note: we do this
         # before the move_grads_to_cpu step so that this entire hook remains
         # non-blocking. The downside is a bit more D2H transfer in that case.
         if self.mixed_precision:
-            orig_param_grad_data = param.grad.data
-            param.grad.data = param.grad.data.to(dtype=param.data.dtype)
+            orig_param_grad_data = reduced_grad.data
+            reduced_grad.data = reduced_grad.data.to(dtype=param.data.dtype)
             # Don't let this memory get reused until after the transfer.
             orig_param_grad_data.record_stream(torch.cuda.current_stream())
-        if hasattr(param, "_saved_grad_shard") and param._saved_grad_shard is not None:
-            assert (
-                param._saved_grad_shard.shape == param.grad.shape
-            ), f"{param._saved_grad_shard.shape} vs {param.grad.shape}"
-            param.grad.data += param._saved_grad_shard
-            delattr(param, "_saved_grad_shard")
-        # Optionally move gradients to CPU, typically used if one is running
-        # the optimizer on the CPU.
+
+        if param._is_sharded:
+            # Accumulate into the gradient shard.
+            if getattr(param, "_saved_grad_shard", None) is None:
+                param._saved_grad_shard = reduced_grad.data
+            else:
+                assert (
+                    param._saved_grad_shard.shape == reduced_grad.shape
+                ), f"{param._saved_grad_shard.shape} vs {reduced_grad.shape}"
+                param._saved_grad_shard.data += reduced_grad.data
+            reduced_grad = param._saved_grad_shard.data
+
+        # Optionally move gradients to CPU, typically used if one is running the optimizer on the CPU. Once the full
+        # backwards pass completes, we will set `.grad` to the CPU copy.
         if self.move_grads_to_cpu:
-            param._cpu_grad.copy_(param.grad.data, non_blocking=True)
+            param._cpu_grad.copy_(reduced_grad.data, non_blocking=True)
             # Don't let this memory get reused until after the transfer.
-            param.grad.data.record_stream(torch.cuda.current_stream())
-            param.grad.data = param._cpu_grad
+            reduced_grad.data.record_stream(torch.cuda.current_stream())
 
     def _queue_wait_for_post_backward(self) -> None:
         """Try to queue a `wait_for_post_backward` callback.
@@ -1432,19 +1469,38 @@ class FullyShardedDataParallel(nn.Module):
         if self._reducer is not None:
             self._reducer.teardown()
 
-        def _remove_shard_bwd_hook(fsdp_module: FullyShardedDataParallel) -> None:
+        def _finalize_parameters(fsdp_module: FullyShardedDataParallel) -> None:
             """Helper used below on all fsdp modules."""
             for p in fsdp_module.params:
-                if p.requires_grad:
-                    if hasattr(p, "_shard_bwd_hook"):
-                        assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
-                        p._shard_bwd_hook[1].remove()
-                        delattr(p, "_shard_bwd_hook")
+                if not p.requires_grad:
+                    continue
+                if hasattr(p, "_shard_bwd_hook"):
+                    assert len(p._shard_bwd_hook) == 2, len(p._shard_bwd_hook)
+                    p._shard_bwd_hook[1].remove()
+                    delattr(p, "_shard_bwd_hook")
+
+                # Leave the gradient accumulation state as-is if not synchronizing this pass. This ensures p.grad
+                # remains the unsharded gradient accumulated from prior no-sync passes, and p._saved_grad_shard
+                # remains the sharded gradient from the last synchronized pass. This also allows interleaved no-sync and
+                # sync passes, if desired.
+                if not self._require_backward_grad_sync:
+                    continue
+
+                # Parameter and gradient devices must match.
+                if hasattr(p, "_cpu_grad"):
+                    assert p.device == torch.device("cpu")
+                    p.grad = p._cpu_grad
+                elif hasattr(p, "_saved_grad_shard"):
+                    assert p.device == p._saved_grad_shard.device
+                    p.grad = p._saved_grad_shard
+
+                if hasattr(p, "_saved_grad_shard"):
+                    delattr(p, "_saved_grad_shard")
 
         # Update root and nested FSDP's hooks and flags.
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
-                _remove_shard_bwd_hook(m)
+                _finalize_parameters(m)
                 m._pre_backward_hook_has_run = False
                 if any(p.requires_grad for p in m.parameters()):
                     # Check if the module has params and if any of them has
@@ -1473,6 +1529,9 @@ class FullyShardedDataParallel(nn.Module):
     def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
+
+        Note, this is idempotent if full params are already gathered. Callers
+        assume the idempotency. So please keep it that way.
 
         Args:
             force_full_precision (bool, Optional): by default params will be gathered
@@ -1548,9 +1607,9 @@ class FullyShardedDataParallel(nn.Module):
                         output_tensor = p._full_param_padded
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
-                    if hasattr(dist, "_all_gather_base"):
+                    if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
-                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)  # type: ignore
+                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)
                     else:
                         chunks = list(output_tensor.chunk(self.world_size))
                         dist.all_gather(chunks, p_data, group=self.process_group)
@@ -1570,6 +1629,9 @@ class FullyShardedDataParallel(nn.Module):
         Switch p.data pointers to use the full params.
 
         Note: this assumes full params are already gathered.
+
+        Note: this might be called after full_params is already in used. So please
+              make sure it is idempotent in that case.
         """
         assert self.has_full_params
         for p in self.params:
@@ -1584,7 +1646,9 @@ class FullyShardedDataParallel(nn.Module):
 
     @torch.no_grad()
     def _prep_grads_for_backward(self) -> None:
-        """Make sure p.grad is correctly prepared for the backward."""
+        """ Make sure p.grad is correctly prepared for the backward with
+            right shape, device, accumulated values, etc.
+        """
         for p in self.params:
             if p.grad is not None:
                 if p.grad.device != p.data.device:
@@ -1808,19 +1872,17 @@ class FullyShardedDataParallel(nn.Module):
             raise ValueError(msg)
 
     def _broadcast_pad_info_to_r0(self) -> List[List[List[int]]]:
-        """Collect [x.numel_padded_per_param for x in self._fsdp_instances] from teach rank."""
-        dummy_tensor = torch.tensor([0], dtype=torch.uint8, device=self.compute_device)
+        """Collect [x.numel_padded_per_param for x in self._fsdp_instances] from each rank."""
         world_pad_info: List[List[List[int]]] = []  # this will contain values from the whole world.
+        my_pad_info: List[List[int]] = [cast(List[int], m.numel_padded_per_param) for m in self._fsdp_instances]
         for rank in range(self.world_size):
             if rank == self.rank:
-                pad_info = [m.numel_padded_per_param for m in self._fsdp_instances]
+                pad_info = my_pad_info
             else:
-                pad_info = dummy_tensor  # type: ignore
-            pad_info = broadcast_object(
-                pad_info, src_rank=rank, group=self.process_group, dist_device=self.compute_device
-            )
+                pad_info = [[0]] * len(my_pad_info)
+            dist.broadcast_object_list(pad_info, src=rank, group=self.process_group)
             if self.rank == 0:
-                world_pad_info.append(pad_info)  # type: ignore
+                world_pad_info.append(pad_info)
         return world_pad_info
 
     def _gather_optim_state(

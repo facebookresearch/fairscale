@@ -6,19 +6,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+
+### Added
+
+## [0.4.1] - 2021-09-17
+### Fixed
 - FSDP: We don't attach post backward hooks for params that don't require grad. However in the hook
         triggered after the post backward hook, we assert on the POST_BACKWARD state which can only
         be set in the post backward hook. Modified the assert to account for the fact that the root
         FSDP module can have child modules with params that require grad and it can contain params
         that don't require grad and hence can fail the previous assert. [#761]
+- FSDP: Fixed a bug when multiple backward pass is called within an iteration, parameters' sharding
+        state might be incorrect. [#775]
+- activation checkpoint: Ensure outputs of checkpointed modules only require grad if either
+                         the input requires grad or if the parameters require grad. [#787]
+
+- OSS: fix the broadcast_fp16 option, broken after a refactor, this flag was doing nothing (bugfix).[#795]
+- OSS: update default device when refreshing the params, meaning that moving the model to GPU after
+       the OSS wrap will not trigger warnings and slow the jobs (ease of use). [#786]
 
 ### Added
 - FSDP: Added support for returning the original names of parameters when `named_parameters` is called on
-        the module. To retrieve the orginal names of the parameters along with the params, you need to 
+        the module. To retrieve the orginal names of the parameters along with the params, you need to
         call `named_parameters` under the `summon_full_params` context when using flattened params or original
         params. If you are using original params (i.e flatten_params=False), calling `named_parameters` outside
         of the `summon_full_params` context will still return the original param names along with the local shards. [#755]
-
+- FSDP: Ensure gradient reduction accumulates into the unsharded gradient tensor
+        within a backwards pass. This matters when an FSDP module is called
+        multiple times within a forward pass, and reduction is not deferred
+        using activation checkpoint forward counters, bucketing or some other
+        mechanism. [#784]
+- activation checkpoint: Added a context manager to disable checkpoint in case the same wrapped module
+                         needs to be checkpointed and not checkpointed in different parts of
+                         the module forward pass. [#772]
+- FSDP: Added a toggle with an environment variable ENABLE_NCCL_BASE_COLLECTIVES=[0,1] to allow users
+        enable/disable using new nccl base collecectives. By default, using new nccl base collectives
+        is enabled. [#801]
 
 ## [0.4.0] - 2021-07-31
 ### Fixed

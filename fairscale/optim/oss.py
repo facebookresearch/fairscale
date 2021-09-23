@@ -5,6 +5,7 @@
 
 from collections import OrderedDict
 import copy
+import io
 from itertools import chain
 import logging
 from math import inf
@@ -17,7 +18,7 @@ from torch.nn import Parameter
 from torch.optim import SGD, Optimizer
 
 from fairscale.nn.misc import ParamBucket
-from fairscale.utils.params import broadcast_object, calc_grad_norm, get_global_rank, recursive_copy_to_device
+from fairscale.utils.params import calc_grad_norm, get_global_rank, recursive_copy_to_device
 
 __all__ = ["OSS"]
 
@@ -25,6 +26,54 @@ if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
+
+
+_gpu_is_old: Optional[bool] = None
+
+
+def _gpu_capabilities_older_than_50() -> bool:
+    """Return True if the GPU's compute capability is older than SM50."""
+    global _gpu_is_old
+    if _gpu_is_old is None:
+        for i in range(torch.cuda.device_count()):
+            major, minor = torch.cuda.get_device_capability(f"cuda:{i}")
+            if major <= 5:
+                _gpu_is_old = True
+        if _gpu_is_old is None:
+            _gpu_is_old = False
+    return _gpu_is_old
+
+
+def _broadcast_object(
+    obj: Any, src_rank: int, group: object = dist.group.WORLD, dist_device: torch.device = torch.device("cpu")
+) -> Any:
+    """
+    Either broadcast from master to the fleet (default),
+    or use the src setting as the original rank.
+
+    This is only needed for some older GPUs where dist.broadcast_object_list seems to hang. Also
+    the hang behavior persist across processes once it happens. I.e. once we call dist.broadcast_object_list,
+    subsequent calls with _broadcast_object also hang.
+    """
+
+    if dist.get_rank() == src_rank:
+        # Emit data
+        buffer = io.BytesIO()
+        torch.save(obj, buffer)
+        data = bytearray(buffer.getbuffer())
+        length_tensor = torch.LongTensor([len(data)]).to(dist_device)
+        data_send_tensor = torch.ByteTensor(data).to(dist_device)
+        dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
+        dist.broadcast(data_send_tensor, src=src_rank, group=group, async_op=False)
+    else:
+        # Fetch from the source
+        length_tensor = torch.LongTensor([0]).to(dist_device)
+        dist.broadcast(length_tensor, src=src_rank, group=group, async_op=False)
+        data_recv_tensor = torch.empty([int(length_tensor.item())], dtype=torch.uint8, device=dist_device)
+        dist.broadcast(data_recv_tensor, src=src_rank, group=group, async_op=False)
+        buffer = io.BytesIO(data_recv_tensor.cpu().numpy())
+        obj = torch.load(buffer, map_location=dist_device)
+    return obj
 
 
 class OSS(Optimizer):
@@ -285,17 +334,30 @@ class OSS(Optimizer):
                     if should_send_state
                     else torch.tensor([0], dtype=torch.uint8, device=dist_device)
                 )
-                broadcast_object(
-                    state_to_share, src_rank=self.global_rank, group=self.group, dist_device=dist_device,
-                )
+                if _gpu_capabilities_older_than_50():
+                    _broadcast_object(
+                        state_to_share, src_rank=self.global_rank, group=self.group, dist_device=dist_device
+                    )
+                else:
+                    obj_list = [state_to_share]
+                    dist.broadcast_object_list(
+                        obj_list, src=self.global_rank, group=self.group,
+                    )
             else:
                 # Fetch the optim state from the other replicas
-                replica_state = broadcast_object(
-                    torch.tensor([0], dtype=torch.uint8, device=dist_device),
-                    src_rank=self._local_to_global_rank[rank],
-                    group=self.group,
-                    dist_device=dist_device,
-                )
+                if _gpu_capabilities_older_than_50():
+                    replica_state = _broadcast_object(
+                        torch.tensor([0], dtype=torch.uint8, device=dist_device),
+                        src_rank=self._local_to_global_rank[rank],
+                        group=self.group,
+                        dist_device=dist_device,
+                    )
+                else:
+                    obj_list = [torch.tensor([0], dtype=torch.uint8, device=dist_device)]
+                    dist.broadcast_object_list(
+                        obj_list, src=self._local_to_global_rank[rank], group=self.group,
+                    )
+                    replica_state = obj_list[0]
 
                 if should_collect_state:
                     self._all_states.append(
@@ -400,10 +462,12 @@ class OSS(Optimizer):
         of some parameters changed.
         """
 
+        # Make sure that we capture the current default device
+        self._default_device = list(self._per_device_params.keys())[0]
+
         # Create the optim which will work on the param shard
         if not hasattr(self, "optim"):
             self._clear_cache()
-            self._default_device = list(self._per_device_params.keys())[0]
             self.optim = self._optim_constructor(self.partition_parameters()[self.rank], **self._optim_defaults)
             OSS._sync_param_groups(self.optim.param_groups, self.param_groups)
 

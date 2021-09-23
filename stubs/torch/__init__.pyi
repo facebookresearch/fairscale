@@ -29,6 +29,7 @@ from . import optim as optim
 from . import nn as nn
 from . import testing as testing
 from . import utils as utils
+from . import jit as jit
 
 #MODIFIED BY TORCHGPIPE
 from . import backends
