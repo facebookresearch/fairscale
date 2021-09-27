@@ -274,7 +274,7 @@ jobs:
           keys:
             - cache-key-cpu-py37-181-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_181
+      - <<: *install_dep_190
 
       - save_cache:
           paths:
@@ -307,7 +307,7 @@ jobs:
       - restore_cache:
           keys:
             - cache-key-cpu-py38-181-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
-      - <<: *install_dep_181
+      - <<: *install_dep_190
 
       - save_cache:
           paths:
@@ -341,7 +341,7 @@ jobs:
           keys:
             - cache-key-cpu-py39-181-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_181
+      - <<: *install_dep_190
 
       - save_cache:
           paths:
