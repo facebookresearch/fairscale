@@ -7,11 +7,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import lru_cache
-from typing import Dict, List, NamedTuple, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Sequence, Set, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.hooks import RemovableHandle
 
 from fairscale.nn import FullyShardedDataParallel
 
@@ -25,14 +26,14 @@ class TraceForwardEvent(NamedTuple):
     memory_diff: int
     memory_activations: int
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "memory_diff": self.memory_diff,
             "memory_activations": self.memory_activations,
         }
 
     @classmethod
-    def from_dict(cls, serialized):
+    def from_dict(cls, serialized: Dict[str, Any]) -> "TraceForwardEvent":
         return TraceForwardEvent(
             memory_diff=serialized["memory_diff"], memory_activations=serialized["memory_activations"],
         )
@@ -46,11 +47,11 @@ class TraceBackwardEvent(NamedTuple):
 
     memory_activations: int
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
         return {"memory_activations": self.memory_activations}
 
     @classmethod
-    def from_dict(cls, serialized):
+    def from_dict(cls, serialized: Dict[str, Any]) -> "TraceBackwardEvent":
         return TraceBackwardEvent(memory_activations=serialized["memory_activations"])
 
 
@@ -78,7 +79,7 @@ class LayerMemoryTrace(NamedTuple):
     cumul_all_gathered: int
     event: Union[TraceForwardEvent, TraceBackwardEvent]
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "module_name": self.module_name,
             "module_params": self.module_params,
@@ -91,9 +92,9 @@ class LayerMemoryTrace(NamedTuple):
         }
 
     @classmethod
-    def from_dict(cls, serialized):
+    def from_dict(cls, serialized: Dict[str, Any]) -> "LayerMemoryTrace":
         if serialized["is_forward"]:
-            event = TraceForwardEvent.from_dict(serialized["event"])
+            event: Union[TraceForwardEvent, TraceBackwardEvent] = TraceForwardEvent.from_dict(serialized["event"])
         else:
             event = TraceBackwardEvent.from_dict(serialized["event"])
         return LayerMemoryTrace(
@@ -163,16 +164,16 @@ class ProcessGroupTracker:
         ```
     """
 
-    def __init__(self, group, listener=None):
+    def __init__(self, group: Any, listener: Optional[Callable] = None):
         self.group = group
         self.listener = listener
 
-    def allgather(self, output_tensors, input_tensors, *args, **kwargs):
+    def allgather(self, output_tensors, input_tensors, *args, **kwargs):  # type: ignore
         if self.listener is not None:
             self.listener(ProcessGroupTrackingEvent.allgather, output_tensors, input_tensors)
         return self.group.allgather(output_tensors, input_tensors, *args, **kwargs)
 
-    def __getattr__(self, item):
+    def __getattr__(self, item: str) -> Any:
         # Forward: for functions not traces
         return getattr(self.group, item)
 
@@ -228,16 +229,16 @@ class LayerwiseMemoryTracker:
         ```
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.memory_traces: List[LayerMemoryTrace] = []
-        self._hooks = []
-        self._previous_module_name = None
+        self._hooks: List[RemovableHandle] = []
+        self._previous_module_name: Optional[str] = None
         self._last_all_gather_memory = 0
-        self._cumul_all_gather_memory = []
+        self._cumul_all_gather_memory: List[int] = []
         self._memory_pre_forward = 0
-        self._traced_module_names = set()
+        self._traced_module_names: Set[str] = set()
 
-    def monitor(self, model: nn.Module):
+    def monitor(self, model: nn.Module) -> None:
         """
         Install hooks on the model to track its memory usage
         """
@@ -251,13 +252,13 @@ class LayerwiseMemoryTracker:
                     m.process_group.listener = self._handle_process_group_call
         torch.cuda.empty_cache()
 
-    def clear_traces(self):
+    def clear_traces(self) -> None:
         """
         Clear all the traces: new traces will be written on a clean slate
         """
         self.memory_traces.clear()
 
-    def stop(self):
+    def stop(self) -> None:
         """
         Stop any form of tracking (removes the hooks used to monitor the model)
         """
@@ -303,7 +304,7 @@ class LayerwiseMemoryTracker:
         A quick summary of interesting statistics on the memory usage
         during the forward/backward pass
         """
-        total_diff = sum(t.event.memory_diff for t in self.forward_traces)
+        total_diff = sum(t.event.memory_diff for t in self.forward_traces)  # type: ignore
         total_act = sum(t.event.memory_activations for t in self.forward_traces)
         top_act_producers = self.top_forward_activation_producers(top=10)
         return LayerwiseMemoryTrackerSummary(
@@ -314,20 +315,20 @@ class LayerwiseMemoryTracker:
             top_forward_activation_producers=top_act_producers,
         )
 
-    def top_forward_activation_producers(self, top: int = 10):
+    def top_forward_activation_producers(self, top: int = 10) -> List[LayerMemoryTrace]:
         """
         What are the top activation producers during the forward pass
         """
         return sorted(self.forward_traces, key=lambda a: a.event.memory_activations, reverse=True)[:top]
 
-    def show_plots(self, figsize: Tuple[int, int] = (16, 20), capture: bool = False):
+    def show_plots(self, figsize: Tuple[int, int] = (16, 20), capture: bool = False) -> Optional[Any]:
         """
         Show useful memory plots. Use "capture=True" to return an image
         rather than displaying the plots.
         """
         return compare_memory_traces_in_plot({"run": self.memory_traces}, figsize=figsize, capture=capture)
 
-    def save_traces(self, path: str):
+    def save_traces(self, path: str) -> None:
         """
         Save the traces in a JSON file
         """
@@ -338,7 +339,7 @@ class LayerwiseMemoryTracker:
             json.dump({"traces": json_traces}, f)
 
     @classmethod
-    def load(cls, path: str):
+    def load(cls, path: str) -> "LayerwiseMemoryTracker":
         import json
 
         out = cls()
@@ -347,8 +348,8 @@ class LayerwiseMemoryTracker:
         out.memory_traces = [LayerMemoryTrace.from_dict(t) for t in traces]
         return out
 
-    def _create_pre_forward_hook(self, name: str):
-        def _pre_forward_hook(module: nn.Module, inputs):
+    def _create_pre_forward_hook(self, name: str) -> Callable:
+        def _pre_forward_hook(module: nn.Module, inputs: Any) -> None:
             torch.cuda.synchronize()
             allocated, reserved = self._capture_memory()
             self._previous_module_name = name
@@ -358,7 +359,7 @@ class LayerwiseMemoryTracker:
 
         return _pre_forward_hook
 
-    def _handle_process_group_call(self, event: ProcessGroupTrackingEvent, *args):
+    def _handle_process_group_call(self, event: ProcessGroupTrackingEvent, *args: Sequence[Any]) -> None:
         torch.cuda.synchronize()
         if event == ProcessGroupTrackingEvent.allgather:
             outputs, inputs = args
@@ -367,8 +368,10 @@ class LayerwiseMemoryTracker:
             if self._cumul_all_gather_memory:
                 self._cumul_all_gather_memory[-1] += output_size
 
-    def _create_post_forward_hook(self, name: str):
-        def _post_forward_hook(module: nn.Module, inputs, outputs):
+    def _create_post_forward_hook(self, name: str) -> Callable:
+        def _post_forward_hook(
+            module: nn.Module, inputs: Sequence[torch.Tensor], outputs: Sequence[torch.Tensor]
+        ) -> None:
             torch.cuda.synchronize()
             if isinstance(module, FullyShardedDataParallel):
                 self._cumul_all_gather_memory.pop()
@@ -405,8 +408,8 @@ class LayerwiseMemoryTracker:
 
         return _post_forward_hook
 
-    def _create_backward_hook(self, name: str):
-        def _backward_hook(module: nn.Module, grad_input: torch.Tensor, grad_output: torch.Tensor):
+    def _create_backward_hook(self, name: str) -> Callable:
+        def _backward_hook(module: nn.Module, grad_input: torch.Tensor, grad_output: torch.Tensor) -> None:
             torch.cuda.synchronize()
             if name not in self._traced_module_names:
                 return
@@ -433,18 +436,18 @@ class LayerwiseMemoryTracker:
         return _backward_hook
 
     @staticmethod
-    def _capture_memory():
+    def _capture_memory() -> Tuple[int, int]:
         torch.cuda.synchronize()
         allocated_mb = torch.cuda.memory_allocated()
-        reserved_mb = torch.cuda.memory_reserved()
+        reserved_mb = torch.cuda.memory_reserved()  # type: ignore
         return allocated_mb, reserved_mb
 
     @classmethod
-    def _get_parameter_size(cls, module):
+    def _get_parameter_size(cls, module: nn.Module) -> int:
         return sum(p.numel() * cls._get_dtype_size(p) for p in module.parameters())
 
     @classmethod
-    def _get_module_output_size(cls, xs):
+    def _get_module_output_size(cls, xs: Union[torch.Tensor, Sequence[torch.Tensor]]) -> int:
         """
         Return the minimum memory requirement to store the tensors
         provided as parameters
@@ -452,19 +455,21 @@ class LayerwiseMemoryTracker:
         if isinstance(xs, torch.Tensor):
             x = xs
             p = cls._get_dtype_size(x)
-            for x in x.shape:
-                p *= x
+            for d in x.shape:
+                p *= d
             return p
         elif isinstance(xs, tuple) or isinstance(xs, list):
             return sum(cls._get_module_output_size(x) for x in xs)
         return 0
 
     @classmethod
-    def _get_dtype_size(cls, x: torch.Tensor):
+    def _get_dtype_size(cls, x: torch.Tensor) -> int:
         return 2 if x.dtype == torch.float16 else 4
 
     @classmethod
-    def _filter_allocated_output(cls, inputs, outputs):
+    def _filter_allocated_output(
+        cls, inputs: Union[torch.Tensor, Sequence[torch.Tensor]], outputs: Union[torch.Tensor, Sequence[torch.Tensor]]
+    ) -> List[torch.Tensor]:
         """
         Only return the outputs that are allocated and not views, reshape
         or stride of the inputs
@@ -474,15 +479,15 @@ class LayerwiseMemoryTracker:
         return [y for y in ys if all(not cls._is_same_storage(x, y) for x in xs)]
 
     @staticmethod
-    def _is_same_storage(x: torch.Tensor, y: torch.Tensor):
+    def _is_same_storage(x: torch.Tensor, y: torch.Tensor) -> bool:
         """
         Indicate if x and y share the same storage, meaning that one of them
         is a view, reshape or stride of the other or from a common tensor
         """
-        return x.storage().data_ptr() == y.storage().data_ptr()
+        return x.storage().data_ptr() == y.storage().data_ptr()  # type: ignore
 
     @staticmethod
-    def _collect_tensors(module_io_tensors):
+    def _collect_tensors(module_io_tensors: Union[torch.Tensor, Sequence[torch.Tensor]]) -> List[torch.Tensor]:
         """
         Extract the tensors out of the provided input or output of a nn.Module
         """
@@ -527,7 +532,7 @@ def find_best_reset_points(activation_sizes: List[int], num_checkpoints: int) ->
                 allocation = list(sub_alloc)
                 allocation.append(curr_pos + 1)
 
-        return min_val, allocation
+        return int(min_val), allocation
 
     best_score, best_allocation = visit(0, num_checkpoints)
     return best_score, best_allocation[::-1]
@@ -578,7 +583,7 @@ def suggest_checkpoint_location(
     )
 
 
-def _assert_visualisation_library_installed():
+def _assert_visualisation_library_installed() -> None:
     try:
         import PIL  # NOQA
         import matplotlib  # NOQA
@@ -591,7 +596,7 @@ def _assert_visualisation_library_installed():
 
 def compare_memory_traces_in_plot(
     memory_traces_by_job: Dict[str, List[LayerMemoryTrace]], figsize: Tuple[int, int] = (16, 20), capture: bool = False,
-):
+) -> Optional[Any]:
     """
     Create a plot of the memory allocation over time during the forward/backward
     passes, with a breakdown of the memory used for activation VS parameters
@@ -640,6 +645,7 @@ def compare_memory_traces_in_plot(
 
     if not capture:
         plt.show()
+        return None
     else:
         return matplotlib_figure_to_image(fig)
 
@@ -649,7 +655,7 @@ class _MemoryGraphCreator:
     Helper class to create graphs to display memory
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         import matplotlib
 
         self.font = {
@@ -658,40 +664,40 @@ class _MemoryGraphCreator:
             "size": 12,
         }
 
-    def allocated_memory_curve(self, ax, job_name: str, memory_traces: List[LayerMemoryTrace]):
+    def allocated_memory_curve(self, ax: Any, job_name: str, memory_traces: List[LayerMemoryTrace]) -> None:
         allocated_memory = [t.allocated for t in memory_traces]
         x, y_forward, y_backward = self._split_forward_backward(memory_traces, allocated_memory)
         ax.plot(x, y_forward, x, y_backward, label=job_name)
 
         max_index = np.argmax(allocated_memory)
-        max_trace = memory_traces[max_index]
+        max_trace = memory_traces[max_index]  # type: ignore
         max_module = ".".join([n for n in max_trace.module_name.split(".") if not n.startswith("_")])
         max_phase = "fwd" if max_trace.is_forward else "bwd"
         ax.set_ylim([None, max_trace.allocated * 1.1])
-        x_text, y_text = max(0, max_index * 0.8), max_trace.allocated * 1.04
+        x_text, y_text = max(0, max_index * 0.8), max_trace.allocated * 1.04  # type: ignore
         ax.text(x_text, y_text, f"{max_module} ({max_phase})", fontdict=self.font)
         self._y_axis_in_gigabytes(ax)
 
-    def reserved_memory_curve(self, ax, job_name: str, memory_traces: List[LayerMemoryTrace]):
+    def reserved_memory_curve(self, ax: Any, job_name: str, memory_traces: List[LayerMemoryTrace]) -> None:
         reserved_memory = [t.reserved for t in memory_traces]
         x, y_forward, y_backward = self._split_forward_backward(memory_traces, reserved_memory)
         ax.plot(x, y_forward, x, y_backward, label=job_name)
         self._y_axis_in_gigabytes(ax)
 
-    def activation_allocations(self, ax, job_name: str, memory_traces: List[LayerMemoryTrace]):
+    def activation_allocations(self, ax: Any, job_name: str, memory_traces: List[LayerMemoryTrace]) -> None:
         event_allocations = [t.event.memory_activations for t in memory_traces]
         x, y_forward, y_backward = self._split_forward_backward(memory_traces, event_allocations)
         ax.plot(x, y_forward, x, y_backward, label=job_name)
         self._y_axis_in_gigabytes(ax)
 
-    def cumulative_activations(self, ax, job_name: str, memory_traces: List[LayerMemoryTrace]):
+    def cumulative_activations(self, ax: Any, job_name: str, memory_traces: List[LayerMemoryTrace]) -> None:
         event_allocations = [t.event.memory_activations for t in memory_traces]
         x, y_forward, y_backward = self._split_forward_backward(memory_traces, event_allocations)
         cumulative_forward_activations = np.cumsum(y_forward)
         ax.plot(x, cumulative_forward_activations, label=job_name)
         self._y_axis_in_gigabytes(ax)
 
-    def all_gathered_memory(self, ax, job_name: str, memory_traces: List[LayerMemoryTrace]):
+    def all_gathered_memory(self, ax: Any, job_name: str, memory_traces: List[LayerMemoryTrace]) -> None:
         # Plot the all_gathered and cumulative all_gathered memory
         gathered_memory = [t.all_gathered for t in memory_traces]
         cumul_gathered_memory = [t.cumul_all_gathered for t in memory_traces]
@@ -702,44 +708,46 @@ class _MemoryGraphCreator:
 
         # Adding the name of the layer with max cumulative all_gathered memory
         max_index = np.argmax(cumul_gathered_memory)
-        max_trace = memory_traces[max_index]
+        max_trace = memory_traces[max_index]  # type: ignore
         max_module = ".".join([n for n in max_trace.module_name.split(".") if not n.startswith("_")])
         ax.set_ylim([None, max_trace.cumul_all_gathered * 1.1])
-        x_text, y_text = max(0, max_index * 0.8), max_trace.cumul_all_gathered * 1.04
+        x_text, y_text = max(0, max_index * 0.8), max_trace.cumul_all_gathered * 1.04  # type: ignore
         ax.text(x_text, y_text, f"{max_module} (fwd)", fontdict=self.font)
 
-    def module_parameters(self, ax, job_name: str, memory_traces: List[LayerMemoryTrace]):
+    def module_parameters(self, ax: Any, job_name: str, memory_traces: List[LayerMemoryTrace]) -> None:
         module_parameters = [t.module_params for t in memory_traces]
         x, y_forward, y_backward = self._split_forward_backward(memory_traces, module_parameters)
         ax.plot(x, y_forward, x, y_backward, label=job_name)
         self._y_axis_in_gigabytes(ax)
 
     @staticmethod
-    def _y_axis_in_gigabytes(ax):
+    def _y_axis_in_gigabytes(ax: Any) -> None:
         ax.ticklabel_format(axis="y", style="sci", scilimits=(9, 9))
 
     @classmethod
-    def _split_forward_backward(cls, memory_traces: List[LayerMemoryTrace], values):
+    def _split_forward_backward(
+        cls, memory_traces: List[LayerMemoryTrace], values: List[Any]
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         x_values = np.array(list(range(len(memory_traces))))
         mask_forwards, mask_backwards = cls._mask_forward_backward(memory_traces)
         return (
             x_values,
-            np.ma.masked_where(mask_backwards, values),
-            np.ma.masked_where(mask_forwards, values),
+            np.ma.masked_where(mask_backwards, values),  # type: ignore
+            np.ma.masked_where(mask_forwards, values),  # type: ignore
         )
 
     @classmethod
-    def _mask_forward_backward(cls, memory_traces: List[LayerMemoryTrace]):
+    def _mask_forward_backward(cls, memory_traces: List[LayerMemoryTrace]) -> Tuple[np.ndarray, np.ndarray]:
         mask_forwards = np.array([t.is_forward for t in memory_traces])
         return mask_forwards, ~mask_forwards
 
 
 @contextmanager
-def null_context():
+def null_context() -> Iterator[None]:
     yield
 
 
-def matplotlib_figure_to_image(fig):
+def matplotlib_figure_to_image(fig: Any) -> Any:
     """
     Convert a matplotlib figure to an image in RGB format, for instance
     to save it on disk

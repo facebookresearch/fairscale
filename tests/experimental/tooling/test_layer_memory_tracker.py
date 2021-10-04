@@ -131,12 +131,12 @@ def _layer_memory_tracking_ddp_worker(gpu_id: int, sync_files: Tuple[str, str], 
     torch.cuda.manual_seed(0)
     model = nn.Sequential(nn.Linear(10, 32), nn.ReLU(), nn.Linear(32, 32), nn.ReLU(), nn.Linear(32, 10),)
     model = model.cuda(gpu_id)
-    model = DistributedDataParallel(model, device_ids=[gpu_id])
+    ddp_model = DistributedDataParallel(model, device_ids=[gpu_id])
 
     # Track the model on a forward / backward pass
     tracker = LayerwiseMemoryTracker()
-    tracker.monitor(model)
-    fake_criterion(model(fake_inputs), fake_targets).backward()
+    tracker.monitor(ddp_model)
+    fake_criterion(ddp_model(fake_inputs), fake_targets).backward()
     tracker.stop()
 
     # Check the overall structure of the collected traces
@@ -186,12 +186,12 @@ def _layer_memory_tracking_fsdp_worker(gpu_id: int, sync_files: Tuple[str, str],
         FullyShardedDataParallel(nn.Linear(10, 10).cuda(gpu_id), flatten_parameters=True, process_group=group,),
     )
     model = model.cuda(gpu_id)
-    model = FullyShardedDataParallel(model, flatten_parameters=False, process_group=group)
+    dist_model = FullyShardedDataParallel(model, flatten_parameters=False, process_group=group)
 
     # Track the model on a forward / backward pass
     tracker = LayerwiseMemoryTracker()
-    tracker.monitor(model)
-    fake_criterion(model(fake_inputs), fake_targets).backward()
+    tracker.monitor(dist_model)
+    fake_criterion(dist_model(fake_inputs), fake_targets).backward()
     tracker.stop()
 
     # Check results of all gathers tracking (feature specific to FSDP)
