@@ -127,7 +127,7 @@ Leading to the following memory profile, saving around 400MB of activation memor
 Dedicated features to FSDP distributed training
 -----------------------------------------------
 
-When training a big model with `FullyShardedDataParallem`, you can use the `LayerwiseMemoryTracker` to track the
+When training a big model with `FullyShardedDataParallel`, you can use the `LayerwiseMemoryTracker` to track the
 amount of memory exchanged by FSDP to consolidate sharded layers:
 
 .. code-block:: python
@@ -162,7 +162,7 @@ Limitations
 
 The `LayerwiseMemoryTracker` has a bunch of limitations it is important to be aware of:
 
-1. It only works on GPU models (models cannot sit on the CPU)
-2. Some of the GPU memory might not tracked by PyTorch (for example some NCCL buffers)
-3. Beside memory allocated and memory cached, which are based on PyTorch, the results are based on heuristic, and might miss some memory in some cases
-4. Some features (such as cumulatived all gathered memory for FSDP) do not work in the backward pass
+1. It only works on GPU models: models cannot sit on the CPU
+2. Some of the GPU memory might not tracked by PyTorch (for example some NCCL buffers) and therefore will not be tracked with this tooling either
+3. Beside memory allocated and memory cached, which are based on PyTorch, the results are based on heuristics, and might miss some memory in some cases
+4. Some features (such as cumulative all gathered memory for FSDP) do not work in the backward pass
