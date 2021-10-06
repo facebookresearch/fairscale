@@ -994,7 +994,8 @@ class FullyShardedDataParallel(nn.Module):
 
         # A single shard of the parameters in full precision.
         p._fp32_shard = p.data
-
+        
+        assert p._fp32_shard.device == torch.device("cuda")
         if self.move_params_to_cpu:
             assert p._fp32_shard.device == torch.device("cpu")
 
