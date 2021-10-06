@@ -997,7 +997,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # A single shard of the parameters in full precision.
         p._fp32_shard = p.data
-        
+
         assert p._fp32_shard.device == torch.device("cuda")
         if self.move_params_to_cpu:
             assert p._fp32_shard.device == torch.device("cpu")
@@ -1009,7 +1009,7 @@ class FullyShardedDataParallel(nn.Module):
             p.data = p._fp32_shard
 
         if self.move_params_to_cpu or self.mixed_precision:
-            
+
             # In mixed precision mode, we maintain a reduced precision
             # (typically FP16) parameter shard on compute_device for performing
             # the computation in the forward/backward pass. We resize the

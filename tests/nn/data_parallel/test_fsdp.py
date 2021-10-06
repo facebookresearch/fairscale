@@ -68,7 +68,6 @@ class DistributedTest(unittest.TestCase):
             params = [p for p in model.parameters()]
             print(f"params.device {params[0].device} param.grad.device {params[0].grad.device}")
 
-
             optim.step()
         if isinstance(model, FullyShardedDataParallel):
             model.assert_state(TrainingState.IDLE)
