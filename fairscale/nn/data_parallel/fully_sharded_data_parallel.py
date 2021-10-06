@@ -587,6 +587,7 @@ class FullyShardedDataParallel(nn.Module):
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
+                p._is_sharded = False
                 self.numel_padded_per_param.append(0)
                 continue
             p._is_sharded = True
@@ -596,6 +597,8 @@ class FullyShardedDataParallel(nn.Module):
             p.data, num_padded = self._get_shard(p.data)
             self.numel_padded_per_param.append(num_padded)
             free_storage_(orig_data)
+
+            p._is_sharded = True
         assert len(self.numel_padded_per_param) == len(self.params)
 
     def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
