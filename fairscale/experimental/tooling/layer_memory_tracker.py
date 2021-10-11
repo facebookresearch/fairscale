@@ -168,14 +168,22 @@ class ProcessGroupTracker:
         self.group = group
         self.listener = listener
 
-    def allgather(self, output_tensors, input_tensors, *args, **kwargs):  # type: ignore
-        if self.listener is not None:
-            self.listener(ProcessGroupTrackingEvent.allgather, output_tensors, input_tensors)
-        return self.group.allgather(output_tensors, input_tensors, *args, **kwargs)
-
     def __getattr__(self, item: str) -> Any:
         # Forward: for functions not traces
+        if item == "allgather":
+            # For PyTorch 1.8 and below
+            return self._build_wrapper(fct=self.group.allgather)
+        elif item == "_allgather_base":
+            # For PyTorch 1.9 and above
+            return self._build_wrapper(fct=getattr(self.group, item))
         return getattr(self.group, item)
+
+    def _build_wrapper(self, fct):
+        def wrapper(output_tensors, input_tensors, *args, **kwargs):
+            if self.listener is not None:
+                self.listener(ProcessGroupTrackingEvent.allgather, output_tensors, input_tensors)
+            return fct(output_tensors, input_tensors, *args, **kwargs)
+        return wrapper
 
 
 class LayerwiseMemoryTracker:
