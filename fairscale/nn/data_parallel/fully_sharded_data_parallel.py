@@ -258,6 +258,7 @@ class FullyShardedDataParallel(nn.Module):
         self,
         module: nn.Module,
         process_group: Optional[ProcessGroup] = None,
+        reduce_scatter_process_group: Optional[ProcessGroup] = None,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
@@ -278,6 +279,7 @@ class FullyShardedDataParallel(nn.Module):
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
+        self.reduce_scatter_process_group = reduce_scatter_process_group or process_group
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         self.reshard_after_forward = reshard_after_forward
@@ -308,6 +310,9 @@ class FullyShardedDataParallel(nn.Module):
         if self.move_params_to_cpu and not self.mixed_precision:
             raise ValueError("cpu_offload requires mixed_precision=True")
 
+        assert self.process_group.rank() == self.reduce_scatter_process_group.rank()
+        assert self.process_group.size() == self.reduce_scatter_process_group.size()
+
         # skip validation if the process group was created above
         if process_group:
             validate_process_group(self.compute_device, self.process_group)
@@ -324,7 +329,6 @@ class FullyShardedDataParallel(nn.Module):
             if not hasattr(param, "_is_sharded"):
                 param_names.append(param_name)
                 params.append(param)
-
         self._has_params = len(params) > 0
 
         # For now, it is either all flatten or none flatten. This will be extended to
@@ -1380,7 +1384,7 @@ class FullyShardedDataParallel(nn.Module):
                 param.grad = None
                 callback_fn = functools.partial(self._post_reduction_hook, param)
                 grad_chunks = chunk_and_pad(grad, self.world_size)
-                self._reducer.reduce_scatter_async(grad_chunks, group=self.process_group, callback_fn=callback_fn)
+                self._reducer.reduce_scatter_async(grad_chunks, group=self.reduce_scatter_process_group, callback_fn=callback_fn)
             else:
                 # Currently the only way for _is_sharded to be False is if
                 # world_size == 1. This could be relaxed in the future, in which
