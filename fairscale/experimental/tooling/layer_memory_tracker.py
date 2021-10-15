@@ -183,6 +183,7 @@ class ProcessGroupTracker:
             if self.listener is not None:
                 self.listener(ProcessGroupTrackingEvent.allgather, output_tensors, input_tensors)
             return fct(output_tensors, input_tensors, *args, **kwargs)
+
         return wrapper
 
 
