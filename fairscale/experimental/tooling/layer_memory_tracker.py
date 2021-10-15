@@ -178,8 +178,13 @@ class ProcessGroupTracker:
             return self._build_wrapper(fct=getattr(self.group, item))
         return getattr(self.group, item)
 
-    def _build_wrapper(self, fct):
-        def wrapper(output_tensors, input_tensors, *args, **kwargs):
+    def _build_wrapper(self, fct: Callable) -> Callable:
+        def wrapper(
+            output_tensors: Union[torch.Tensor, Sequence[torch.Tensor]],
+            input_tensors: Union[torch.Tensor, Sequence[torch.Tensor]],
+            *args: list,
+            **kwargs: dict,
+        ) -> Any:
             if self.listener is not None:
                 self.listener(ProcessGroupTrackingEvent.allgather, output_tensors, input_tensors)
             return fct(output_tensors, input_tensors, *args, **kwargs)
