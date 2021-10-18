@@ -41,6 +41,7 @@ from .utils import (
 from .utils.cuda_metering import EventRecorder, create_event_recorder
 
 HEARTBEAT_TIMEOUT = 300  # maximum time to wait for message (seconds)
+BROADCAST_BUCKET_SIZE = 10 * 1024 * 1024
 
 
 class SlowMoDistributedDataParallel(Module):
@@ -88,7 +89,7 @@ class SlowMoDistributedDataParallel(Module):
                         transfomers on the WMT 16 En-De dataset, we have found the optimal
                         values to be 0 for less than 4 nodes, 0.2 for 4 nodes, 0.5 for 8
                         nodes and 0.6 for 16 nodes (default: 0.5)
-        slowmo_memory_efficient (float): If enabled, use a memory efficient implementation of
+        slowmo_memory_efficient (bool): If enabled, use a memory efficient implementation of
                         SlowMo. The basic implementation of SlowMo occupies extra memory
                         equal to double the memory occupied by the model parameters. This
                         implementation shards that across a certain number of shards which is
@@ -140,7 +141,7 @@ class SlowMoDistributedDataParallel(Module):
         synch_freq (int): How often (number of iterations) to synchronize for overlap SGP
                    (default: 0)
         use_streams (bool): Whether to use CUDA streams to speed up SGP overlap (default: True)
-        slowmo_sgp_average_params (bool): Whether to complete average the parameters when slowmo
+        slowmo_sgp_average_params (bool): Whether to completely average the parameters when slowmo
                                   is done instead of a partial averaging that happens every
                                   iteration (default: False)
 
@@ -162,6 +163,7 @@ class SlowMoDistributedDataParallel(Module):
                          contains the GPUs local to the current node (default: None)
         comm_device: (Optional[torch.device]): The torch.device on which torch tensors are to be
                      placed before communication (default: None)
+
     Example:
         >>> torch.distributed.init_process_group(backend='nccl', world_size=4, init_method='...')
         >>> net = fairscale.data_parallel.SlowMoDistributedDataParallel(model, nprocs_per_node=8)
@@ -224,20 +226,19 @@ class SlowMoDistributedDataParallel(Module):
             rank, world_size, nprocs_per_node, global_group, master_group, local_node_group
         )
 
-        # put model on output device
         self.module = module
         self.broadcast_buffers = broadcast_buffers
         first_param_dtype = next(self.module.parameters()).dtype
 
         # prepare local intra-node all-reduce objects
-        self.broadcast_bucket_size = 10 * 1024 * 1024  # bytes
+        self.broadcast_bucket_size = BROADCAST_BUCKET_SIZE  # bytes
         self.module_buffers = list(self.module.buffers())
 
         # choose communication device based on backend
         if comm_device is None:
-            cpu_comm = True if dist.get_backend() == "gloo" else False
+            cpu_comm = dist.get_backend() == "gloo"
             comm_device = torch.device("cpu") if cpu_comm else torch.device("cuda")
-        self.__cpu_comm = comm_device.type == "cpu"
+        self._cpu_comm = comm_device.type == "cpu"
 
         # distributed backend config
         self.dist_config = {
@@ -246,7 +247,7 @@ class SlowMoDistributedDataParallel(Module):
             "rank": rank,
             "process_rank": self.process_rank,
             "world_size": world_size,
-            "cpu_comm": self.__cpu_comm,
+            "cpu_comm": self._cpu_comm,
         }
         self.profile_mode = profile_mode
         self.num_updates = 0
@@ -870,7 +871,7 @@ class SlowMoDistributedDataParallel(Module):
         self.gossip_device_buffer = []
         for p in module.parameters():
             cp = cast(torch.nn.Parameter, p.clone().detach_())
-            cp = cast(torch.nn.Parameter, cp.cpu().pin_memory() if self.__cpu_comm else cp.cuda())
+            cp = cast(torch.nn.Parameter, cp.cpu().pin_memory() if self._cpu_comm else cp.cuda())
             self.gossip_params.append(cp)
             self.gossip_device_buffer.append(cp)
 
@@ -928,15 +929,14 @@ class SlowMoDistributedDataParallel(Module):
                 device=cast(torch.device, self.dist_config["comm_device"])
             )
             self.is_sgp_ps_numerator = cast(bool, state_dict.pop("is_sgp_ps_numerator"))
-            super(SlowMoDistributedDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
-        else:
-            super(SlowMoDistributedDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
+
+        super(SlowMoDistributedDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
 
     def _sgp_ps_numerator(self) -> None:
         """ Convert model params to ps-numerator """
         if not self.is_sgp_ps_numerator:
-            ps_weight = self.ps_weight
             if not self.lazy_mixing:
+                ps_weight = self.ps_weight
                 with torch.no_grad():
                     for p in self.module.parameters():
                         p.mul_(cast(torch.Tensor, ps_weight.type(p.dtype)))
@@ -945,8 +945,8 @@ class SlowMoDistributedDataParallel(Module):
     def _sgp_unbias(self) -> None:
         """ Convert moel params to de-biased estimate """
         if self.is_sgp_ps_numerator:
-            ps_weight = self.ps_weight
             if not self.lazy_mixing:
+                ps_weight = self.ps_weight
                 with torch.no_grad():
                     for p in self.module.parameters():
                         p.div_(cast(torch.Tensor, ps_weight.type(p.dtype)))  # type: ignore
@@ -962,7 +962,6 @@ class SlowMoDistributedDataParallel(Module):
         super(SlowMoDistributedDataParallel, self).eval()
         if self.sgp:
             self.gossip_enable = False
-        if self.sgp:
             self._sgp_query_gossip_queue(non_blocking=self.asynch)
         return self
 
@@ -979,10 +978,9 @@ class SlowMoDistributedDataParallel(Module):
                 self.logger.warning("not gossiping right now")
             return False
 
-        if not non_blocking:
-            if not self.gossip_flag.wait(timeout=HEARTBEAT_TIMEOUT):
-                raise NameError("Gossip flag timeout")
-                sys.exit()  # HEARTBEAT monitor
+        if not non_blocking and not self.gossip_flag.wait(timeout=HEARTBEAT_TIMEOUT):
+            raise RuntimeError("Gossip flag timeout")
+            sys.exit()  # HEARTBEAT monitor
 
         # query gossip thread
         if self.gossip_flag.is_set():
