@@ -14,7 +14,6 @@ import torch
 from torch import nn
 import torch.distributed
 import torch.nn.functional as F
-from torch.testing._internal.common_distributed import requires_nccl
 
 import fairscale.experimental.nn.data_parallel.gossip as gossip
 from fairscale.utils.testing import skip_if_single_gpu, spawn_for_all_world_sizes
@@ -484,7 +483,7 @@ _SLOWMO_TEST_SETTINGS = [
 ]
 
 
-@requires_nccl()
+@pytest.mark.skipif(not torch.distributed.is_nccl_available(), reason="This test requires NCCL")
 @skip_if_single_gpu
 @pytest.mark.parametrize("test_settings", _SLOWMO_TEST_SETTINGS)
 def test_settings(test_settings) -> None:
@@ -576,7 +575,7 @@ def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempf
             print("Skipping flaky test due to 0 memory error")
 
 
-@requires_nccl()
+@pytest.mark.skipif(not torch.distributed.is_nccl_available(), reason="This test requires NCCL")
 @skip_if_single_gpu
 def test_max_memory_used_localsgd_slowmo_memory_efficient() -> None:
     world_size = 2
@@ -622,7 +621,7 @@ def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, temp
             print("Skipping flaky test due to memory error")
 
 
-@requires_nccl()
+@pytest.mark.skipif(not torch.distributed.is_nccl_available(), reason="This test requires NCCL")
 @skip_if_single_gpu
 def test_max_memory_used_slowmo_memory_efficient() -> None:
     world_size = 2
@@ -669,7 +668,7 @@ def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile_1, tempfil
             print("Skipping flaky test due to memory error")
 
 
-@requires_nccl()
+@pytest.mark.skipif(not torch.distributed.is_nccl_available(), reason="This test requires NCCL")
 @skip_if_single_gpu
 def test_max_memory_used_slowmo_no_sharding() -> None:
     world_size = 2
