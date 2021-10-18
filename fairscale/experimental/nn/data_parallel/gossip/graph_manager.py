@@ -136,12 +136,7 @@ class GraphManager(object):
 
     def _rotate_backward(self, r: int, p: int) -> int:
         """ Helper function returns peer that is p hops behind r """
-        temp = r
-        for _ in range(p):
-            temp -= 1
-            if temp < 0:
-                temp = self.world_size - 1
-        return temp
+        return (r - p) % self.world_size
 
 
 class DynamicDirectedExponentialGraph(GraphManager):

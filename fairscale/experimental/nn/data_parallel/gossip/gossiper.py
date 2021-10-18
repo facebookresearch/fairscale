@@ -10,6 +10,7 @@ Gossipers
               and recv from multiple peers at each ieration)
 """
 
+from enum import Enum
 import logging
 from typing import Iterator, List, Optional, Tuple, cast
 
@@ -20,12 +21,12 @@ from .graph_manager import GraphManager
 from .mixing_manager import MixingManager, UniformMixing
 
 
-class dist_backend:
-    UNDEFINED = -1
-    TCP = 0
-    MPI = 1
-    GLOO = 2
-    NCCL = 3
+class dist_backend(str, Enum):
+    UNDEFINED = "undefined"
+    TCP = "tcp"
+    MPI = "mpi"
+    GLOO = "gloo"
+    NCCL = "nccl"
 
 
 class Gossiper(object):
@@ -53,7 +54,6 @@ class Gossiper(object):
     ) -> None:
         """
         Initialize generic averaging class designed for multi-peer comms
-
         """
 
         self.logger = logger
@@ -99,6 +99,9 @@ class Gossiper(object):
             except Exception as e:
                 if self.logger is not None:
                     self.logger.error(e)
+                else:
+                    raise (e)
+
         self.placeholder = self.in_msg_buffer.clone()
 
     @property
@@ -120,7 +123,7 @@ class Gossiper(object):
     def refresh_peers_(self, rotate: Optional[bool] = None) -> None:
         """ Update in- and out-peers """
         if rotate is None:
-            rotate = True if self._graph_manager.is_dynamic_graph() else False
+            rotate = self._graph_manager.is_dynamic_graph()
         # cannot cycle peers in a static graph
         assert not (rotate and not self._graph_manager.is_dynamic_graph())
         self.out_edges, self.in_edges = self._graph_manager.get_edges(rotate)

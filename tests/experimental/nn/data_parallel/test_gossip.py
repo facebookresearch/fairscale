@@ -13,12 +13,11 @@ import pytest
 import torch
 from torch import nn
 import torch.distributed
-import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.testing._internal.common_distributed import requires_nccl
 
 import fairscale.experimental.nn.data_parallel.gossip as gossip
-from fairscale.utils.testing import skip_if_single_gpu
+from fairscale.utils.testing import skip_if_single_gpu, spawn_for_all_world_sizes
 
 # Enfore CUBLAS reproducibility, see https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -493,12 +492,11 @@ def test_settings(test_settings) -> None:
     temp_file_name = tempfile.mkstemp()[1]
 
     print("Testing ", test_settings["test_function"], " with settings ", test_settings["test_name"])
-
-    mp.spawn(
+    spawn_for_all_world_sizes(
         test_settings["test_function"],
+        world_sizes=[world_size],
         args=(world_size, temp_file_name, test_settings["slowmo_settings"]),
-        nprocs=world_size,
-        join=True,
+        deterministic=True,
     )
 
 
@@ -582,11 +580,11 @@ def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempf
 @skip_if_single_gpu
 def test_max_memory_used_localsgd_slowmo_memory_efficient() -> None:
     world_size = 2
-    mp.spawn(
+    spawn_for_all_world_sizes(
         run_max_memory_used_localsgd_slowmo_memory_efficient,
+        world_sizes=[world_size],
         args=(world_size, tempfile.mkstemp()[1], tempfile.mkstemp()[1]),
-        nprocs=world_size,
-        join=True,
+        deterministic=True,
     )
 
 
@@ -628,11 +626,11 @@ def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, temp
 @skip_if_single_gpu
 def test_max_memory_used_slowmo_memory_efficient() -> None:
     world_size = 2
-    mp.spawn(
+    spawn_for_all_world_sizes(
         run_max_memory_used_slowmo_memory_efficient,
+        world_sizes=[world_size],
         args=(world_size, tempfile.mkstemp()[1], tempfile.mkstemp()[1]),
-        nprocs=world_size,
-        join=True,
+        deterministic=True,
     )
 
 
@@ -675,11 +673,11 @@ def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile_1, tempfil
 @skip_if_single_gpu
 def test_max_memory_used_slowmo_no_sharding() -> None:
     world_size = 2
-    mp.spawn(
+    spawn_for_all_world_sizes(
         run_max_memory_used_slowmo_no_sharding,
+        world_sizes=[world_size],
         args=(world_size, tempfile.mkstemp()[1], tempfile.mkstemp()[1]),
-        nprocs=world_size,
-        join=True,
+        deterministic=True,
     )
 
 
