@@ -15,7 +15,11 @@ import pytest
 import torch
 
 from fairscale.experimental.nn.offload import OffloadModel
+from fairscale.utils import torch_version
 from fairscale.utils.testing import skip_if_no_cuda
+
+if torch_version() >= (1, 8, 0):
+    from fairscale.experimental.nn.auto_shard import shard_model
 
 
 def _init():
@@ -32,20 +36,38 @@ def test_single_run():
     device, offload_device = _init()
     model = _get_model()
 
-    offload_model = OffloadModel(model_cpu=model, device=device, offload_device=offload_device, num_slices=2,)
-    offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
+    peak_mem = {}
+    for checkpoint_activation in [True, False]:
+        offload_model = OffloadModel(
+            model=model,
+            device=device,
+            offload_device=offload_device,
+            num_slices=2,
+            checkpoint_activation=checkpoint_activation,
+        )
+        offload_optimizer = torch.optim.SGD(offload_model.parameters(), lr=0.001)
 
-    input = torch.ones(2, 2).to(device)
-    labels = torch.ones(2, 2).to(device)
-    offload_model.train()
-    pred = offload_model(input)
-    loss_fn = torch.nn.MSELoss(reduction="sum")
-    loss = loss_fn(pred, labels)
-    loss.backward()
-    offload_optimizer.step()
+        input = torch.ones(1000, 2).to(device)
+        labels = torch.ones(1000, 2).to(device)
+        offload_model.train()
+        pred = offload_model(input)
+        loss_fn = torch.nn.MSELoss(reduction="sum")
+        loss = loss_fn(pred, labels)
+        loss.backward()
+        offload_optimizer.step()
+        key = "ca_" + str(checkpoint_activation)
+        peak_mem[key] = torch.cuda.memory_stats(0)["allocated_bytes.all.peak"]
+        print(
+            "Peak allocated bytes on cuda:0 for checkpoint_activation "
+            + str(checkpoint_activation)
+            + ": {:2f}".format(peak_mem[key])
+        )
+
+    # TODO(anj-s): We need a better requirement since this fails on CircleCI right now.
+    assert peak_mem["ca_True"] <= peak_mem["ca_False"]
 
 
-def _get_model(num_inputs=2, num_hidden=2, num_layers=1, num_outputs=2):
+def _get_model(num_inputs=2, num_hidden=20, num_layers=10, num_outputs=2):
     model = torch.nn.Sequential(
         torch.nn.Linear(num_inputs, num_hidden),
         *([torch.nn.Linear(num_hidden, num_hidden) for _ in range(num_layers)]),
@@ -102,7 +124,7 @@ def _train_offload_model(
 ):
     omodel = copy.deepcopy(model)
     offload_model = OffloadModel(
-        model_cpu=omodel,
+        model=omodel,
         device=device,
         offload_device=offload_device,
         num_slices=2,
@@ -117,7 +139,11 @@ def _train_offload_model(
 @pytest.mark.parametrize("use_fp16", [True, False])
 @pytest.mark.parametrize("checkpoint_activation", [True, False])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
-def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
+@pytest.mark.parametrize("use_auto_shard", [True, False])
+def test_correctness(use_fp16, checkpoint_activation, num_microbatches, use_auto_shard):
+    if use_auto_shard and torch_version() < (1, 8, 0):
+        pytest.skip("auto_shard requires torch version >= 1.8.0")
+
     if (use_fp16 or checkpoint_activation) and not hasattr(torch.cuda.amp, "custom_fwd"):
         pytest.skip(f"AMP APIs are not supported in torch version {torch.__version__}")
 
@@ -126,9 +152,14 @@ def test_correctness(use_fp16, checkpoint_activation, num_microbatches):
 
     device, offload_device = _init()
     model = _get_model()
+    if use_auto_shard:
+        offload_model = shard_model(model)
+    else:
+        offload_model = model
+
     rmodel, ropt, rloss = _train_reg_model(model, device, offload_device)
     omodel, oopt, oloss = _train_offload_model(
-        model,
+        offload_model,
         device,
         offload_device,
         use_fp16=use_fp16,

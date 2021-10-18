@@ -1,3 +1,8 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
+
 import logging
 from pathlib import Path
 import shutil
@@ -12,24 +17,7 @@ def setup_cached_mnist():
     done, tentatives = False, 0
     while not done and tentatives < 5:
         # Monkey patch the resource URLs to work around a possible blacklist
-        MNIST.resources = [
-            (
-                "https://github.com/blefaudeux/mnist_dataset/raw/main/train-images-idx3-ubyte.gz",
-                "f68b3c2dcbeaaa9fbdd348bbdeb94873",
-            ),
-            (
-                "https://github.com/blefaudeux/mnist_dataset/raw/main/train-labels-idx1-ubyte.gz",
-                "d53e105ee54ea40749a09fcbcd1e9432",
-            ),
-            (
-                "https://github.com/blefaudeux/mnist_dataset/raw/main/t10k-images-idx3-ubyte.gz",
-                "9fb629c4189551a2d022fa330f9573f3",
-            ),
-            (
-                "https://github.com/blefaudeux/mnist_dataset/raw/main/t10k-labels-idx1-ubyte.gz",
-                "ec29112dd5afa0611ce80d1b7f02629c",
-            ),
-        ]
+        MNIST.mirrors = ["https://github.com/blefaudeux/mnist_dataset/raw/main/"] + MNIST.mirrors
 
         # This will automatically skip the download if the dataset is already there, and check the checksum
         try:

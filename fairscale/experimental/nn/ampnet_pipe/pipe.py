@@ -56,6 +56,7 @@ class AMPnetPipe(AsyncPipe):
             weight_prediction,
             checkpoint_stop,
             self.input_device,
+            self.chunks,
         )
 
         if rank == 0:

@@ -8,7 +8,6 @@ Testing ShardedDDP
 """
 
 from contextlib import suppress
-import tempfile
 
 import numpy as np
 import pytest
@@ -21,17 +20,35 @@ from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
 from fairscale.utils.testing import (
     GPT2,
+    SGDWithPausingCompute,
     available_devices,
     check_same_models_across_ranks,
     skip_if_less_than_four_gpu,
     skip_if_no_cuda,
-    skip_if_py38,
     skip_if_single_gpu,
+    temp_files_ctx,
 )
 
 
-def _get_mlp():
-    return Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
+def _get_mlp(tripwire: bool = False):
+    if not tripwire:
+        return Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
+
+    class Tripwire(torch.nn.Module):
+        """A model made to expose possible corner cases
+        """
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = Linear(2, 3, bias=False)
+
+            # mismatched types in between trainable or not, can trip the buckets for instance
+            self.register_parameter("tripwire", torch.nn.Parameter(torch.LongTensor((3, 3)), requires_grad=False))
+
+        def forward(self, x):
+            return self.model(x)
+
+    return Tripwire()
 
 
 class _DoubleInput(torch.nn.Module):
@@ -46,7 +63,16 @@ class _DoubleInput(torch.nn.Module):
 
 
 def run_one_step(
-    rank, world_size, backend, device, temp_file_name, broadcast_buffers, grad_accumulation, reduce_buffer_size,
+    rank,
+    world_size,
+    backend,
+    device,
+    temp_file_name,
+    broadcast_buffers,
+    grad_accumulation,
+    reduce_buffer_size,
+    optimizer_type,
+    reduce_fp16=False,
 ):
     dist.init_process_group(init_method="file://" + temp_file_name, backend=backend, rank=rank, world_size=world_size)
     if device == torch.device("cuda"):
@@ -62,9 +88,17 @@ def run_one_step(
 
     next(model.parameters()).requires_grad = False  # Test non-trainable parameters
 
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+    optimizer_settings = {"lr": 1e-3, "momentum": 0.99}
+    if optimizer_type == SGDWithPausingCompute:
+        optimizer_settings["rank"] = rank
+
+    optimizer = OSS(params=model.parameters(), optim=optimizer_type, **optimizer_settings)
     ddp_model = ShardedDataParallel(
-        model, optimizer, broadcast_buffers=broadcast_buffers, reduce_buffer_size=reduce_buffer_size
+        model,
+        optimizer,
+        broadcast_buffers=broadcast_buffers,
+        reduce_buffer_size=reduce_buffer_size,
+        reduce_fp16=reduce_fp16,
     )
 
     # The model should be synchronized in between the ranks at ShardedDataParallel construction time, check that
@@ -74,7 +108,7 @@ def run_one_step(
 
     # Optim loop
     def closure():
-        optimizer.zero_grad()
+        ddp_model.zero_grad(set_to_none=True)
 
         with ddp_model.no_sync() if grad_accumulation else suppress():
             input_tensor = torch.rand((64, 2)).to(device)
@@ -85,6 +119,11 @@ def run_one_step(
     # The models should stay the same in between the ranks
     for i in range(5):
         _ = optimizer.step(closure=closure)
+
+        # For a sync of all the streams
+        if device.type == torch.device("cuda").type:
+            torch.cuda.synchronize(device=device)
+
         # when running on cpu/gloo the "nodes" are not really different
         same_params = device == torch.device("cpu") or not grad_accumulation
         check_same_models_across_ranks(
@@ -94,14 +133,14 @@ def run_one_step(
     dist.destroy_process_group()
 
 
-def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size):
-    temp_file_name = tempfile.mkstemp()[1]
-    mp.spawn(
-        run_one_step,
-        args=(world_size, backend, device, temp_file_name, broadcast_buffers, grad_accumulation, reduce_buffer_size),
-        nprocs=world_size,
-        join=True,
-    )
+def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size, optimizer_type):
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_one_step,
+            args=(world_size, backend, device, temp_files[0], broadcast_buffers, grad_accumulation, reduce_buffer_size),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 @skip_if_no_cuda
@@ -109,22 +148,35 @@ def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, 
 @pytest.mark.parametrize("broadcast_buffers", [True, False])
 @pytest.mark.parametrize("grad_accumulation", [True, False])
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
-def test_step_gpu(broadcast_buffers, grad_accumulation, reduce_buffer_size):
+@pytest.mark.parametrize("optimizer_type", [torch.optim.SGD, SGDWithPausingCompute])
+@pytest.mark.parametrize("reduce_fp16", [False, True])
+@pytest.mark.parametrize(
+    "setup",
+    [
+        [dist.Backend.NCCL, torch.device("cuda")],
+        [dist.Backend.GLOO, torch.device("cpu")],
+        [dist.Backend.GLOO, torch.device("cuda")],
+    ],
+)
+def test_step(broadcast_buffers, grad_accumulation, reduce_buffer_size, optimizer_type, reduce_fp16, setup):
     world_size = 2
-    run_test(
-        dist.Backend.NCCL, torch.device("cuda"), world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size
-    )
-
-
-@skip_if_py38
-@pytest.mark.parametrize("broadcast_buffers", [True, False])
-@pytest.mark.parametrize("grad_accumulation", [True, False])
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
-def test_step_cpu(broadcast_buffers, grad_accumulation, reduce_buffer_size):
-    world_size = 2
-    run_test(
-        dist.Backend.GLOO, torch.device("cpu"), world_size, broadcast_buffers, grad_accumulation, reduce_buffer_size
-    )
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_one_step,
+            args=(
+                world_size,
+                setup[0],
+                setup[1],
+                temp_files[0],
+                broadcast_buffers,
+                grad_accumulation,
+                reduce_buffer_size,
+                optimizer_type,
+                reduce_fp16,
+            ),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 def run_test_two_inputs(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
@@ -141,13 +193,13 @@ def run_test_two_inputs(rank, world_size, backend, device, temp_file_name, reduc
 
     # Optim loop
     def closure():
-        optimizer.zero_grad()
+        ddp_model.zero_grad(set_to_none=True)
         input_tensor = torch.rand((64, 2)).to(device)
         loss = ddp_model(input_tensor, input_tensor).abs().sum()
         loss.backward()
         return loss
 
-    for i in range(5):
+    for _ in range(5):
         _ = optimizer.step(closure=closure)
 
     dist.destroy_process_group()
@@ -162,44 +214,117 @@ def test_inputs(reduce_buffer_size, backend, device):
     if backend == "nccl" and device == "cpu":
         pytest.skip("Incompatible combination, or cuda not available")
         return
-
-    mp.spawn(
-        run_test_two_inputs,
-        args=(world_size, backend, device, tempfile.mkstemp()[1], reduce_buffer_size),
-        nprocs=world_size,
-        join=True,
-    )
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_test_two_inputs,
+            args=(world_size, backend, device, temp_files[0], reduce_buffer_size),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 def test_ddp_attributes():
     # Check that ShardedDDP exposes the same attributes as Pytorch's DDP
     # - is multi_device_module
     # - device_type
-    dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
+    with temp_files_ctx(num=1) as temp_files:
+        dist.init_process_group(init_method="file://" + temp_files[0], backend="gloo", rank=0, world_size=1)
 
-    model = Sequential(Linear(2, 3), Linear(3, 3))
-    optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
-    ddp_model = ShardedDataParallel(model, optimizer)
+        model = Sequential(Linear(2, 3), Linear(3, 3))
+        optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+        ddp_model = ShardedDataParallel(model, optimizer)
 
-    assert hasattr(ddp_model, "is_multi_device_module")
-    assert hasattr(ddp_model, "device_type")
-    dist.destroy_process_group()
+        assert hasattr(ddp_model, "is_multi_device_module")
+        assert hasattr(ddp_model, "device_type")
+        assert hasattr(ddp_model, "module")
+        dist.destroy_process_group()
 
 
 def test_random_attributes():
-    # Check that ShardedDDP exposes the original module's attributes
-    dist.init_process_group(init_method="file://" + tempfile.mkstemp()[1], backend="gloo", rank=0, world_size=1)
+    with temp_files_ctx(num=1) as temp_files:
+        # Check that ShardedDDP exposes the original module's attributes
+        dist.init_process_group(init_method="file://" + temp_files[0], backend="gloo", rank=0, world_size=1)
 
-    model = Sequential(Linear(2, 3), Linear(3, 3))
-    model.banana = "sweet"
+        model = Sequential(Linear(2, 3), Linear(3, 3))
+        model.banana = "sweet"
 
+        optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+        ddp_model = ShardedDataParallel(model, optimizer)
+
+        assert hasattr(ddp_model, "banana")
+        assert not hasattr(ddp_model, "orange")
+
+        dist.destroy_process_group()
+
+
+def test_catch_grad_grad():
+    with temp_files_ctx(num=1) as temp_files:
+        # Check that ShardedDDP exposes the original module's attributes
+        dist.init_process_group(init_method="file://" + temp_files[0], backend="gloo", rank=0, world_size=1)
+
+        model = Sequential(Linear(2, 3), Linear(3, 3))
+        model.train()
+        chained_grad = torch.zeros_like(next(model.parameters()))
+        chained_grad.requires_grad = True
+        next(model.parameters()).grad = chained_grad
+
+        optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+        ddp_model = ShardedDataParallel(model, optimizer)
+
+        inputs = torch.rand(100, 2)
+        with pytest.raises(RuntimeError):
+            _ = ddp_model(inputs)
+
+        dist.destroy_process_group()
+
+
+def test_mixed_types():
+    with temp_files_ctx(num=1) as temp_files:
+        # Check that ShardedDDP exposes the original module's attributes
+        dist.init_process_group(init_method="file://" + temp_files[0], backend="gloo", rank=0, world_size=1)
+
+        model = _get_mlp(tripwire=True)
+
+        optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
+        model = ShardedDataParallel(model, optimizer)
+        input_tensor = torch.rand((2, 2))
+        _ = model(input_tensor)
+
+        dist.destroy_process_group()
+
+
+def run_test_train_eval_change(rank, world_size, file):
+    # Check that ShardedDDP handles the switch from training to eval properly
+    dist.init_process_group(init_method="file://" + file, backend="gloo", rank=rank, world_size=world_size)
+
+    model = _get_mlp()
+    model.train()
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
-    ddp_model = ShardedDataParallel(model, optimizer)
+    model = ShardedDataParallel(model, optimizer)
+    input_tensor = torch.rand((2, 2))
+    loss = model(input_tensor).sum()
+    loss.backward()  # make sure that the gradients are reduced
 
-    assert hasattr(ddp_model, "banana")
-    assert not hasattr(ddp_model, "orange")
+    # Wipe the gradients and switch to eval mode
+    model.zero_grad()
+    model.eval()
+    _ = model(input_tensor)
+    assert next(model.parameters()).grad is None or torch.norm(next(model.parameters()).grad) < 1e-6
+
+    # Get back to training
+    model = model.train()
+    model(input_tensor).sum().backward()
+    assert torch.norm(next(model.parameters()).grad) > 0.0
 
     dist.destroy_process_group()
+
+
+def test_train_eval_change():
+    world_size = 4
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_test_train_eval_change, args=(world_size, temp_files[0]), nprocs=world_size, join=True,
+        )
 
 
 def run_test_device_change(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
@@ -218,6 +343,9 @@ def run_test_device_change(rank, world_size, backend, device, temp_file_name, re
     except AssertionError:
         pass
 
+    # Check that we can change the data type
+    ddp_model.to(device=torch.device("cpu"), dtype=torch.float16)
+
     dist.destroy_process_group()
 
 
@@ -225,17 +353,17 @@ def run_test_device_change(rank, world_size, backend, device, temp_file_name, re
 @skip_if_single_gpu
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 def test_device_change(reduce_buffer_size):
-    # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
+    # Check that ShardedDDP handles a device change properly
     world_size = 2
     backend = "nccl"
-    temp_file_name = tempfile.mkstemp()[1]
-    device = "cuda"
-    mp.spawn(
-        run_test_device_change,
-        args=(world_size, backend, device, temp_file_name, reduce_buffer_size),
-        nprocs=world_size,
-        join=True,
-    )
+    with temp_files_ctx(num=1) as temp_files:
+        device = "cuda"
+        mp.spawn(
+            run_test_device_change,
+            args=(world_size, backend, device, temp_files[0], reduce_buffer_size),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 def run_test_training_change(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
@@ -265,14 +393,14 @@ def run_test_training_change(rank, world_size, backend, device, temp_file_name, 
 def test_training_change(reduce_buffer_size):
     world_size = 2
     backend = "nccl"
-    temp_file_name = tempfile.mkstemp()[1]
     device = "cuda"
-    mp.spawn(
-        run_test_training_change,
-        args=(world_size, backend, device, temp_file_name, reduce_buffer_size),
-        nprocs=world_size,
-        join=True,
-    )
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_test_training_change,
+            args=(world_size, backend, device, temp_files[0], reduce_buffer_size),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 def run_test_ddp_sync_batch_norm(rank, world_size, backend, device, temp_file_name):
@@ -297,11 +425,14 @@ def test_ddp_sync_batch_norm():
     # Check that ShardedDDP is compatible with sync batch norm across multiple GPUs
     world_size = 2
     backend = "gloo"
-    temp_file_name = tempfile.mkstemp()[1]
     device = "cuda"
-    mp.spawn(
-        run_test_ddp_sync_batch_norm, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True
-    )
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_test_ddp_sync_batch_norm,
+            args=(world_size, backend, device, temp_files[0]),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 def run_test_two_optimizers(rank, world_size, backend, device, temp_file_name):
@@ -339,12 +470,14 @@ def test_two_optimizers():
     # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
     world_size = 2
     backend = "gloo"
-    temp_file_name = tempfile.mkstemp()[1]
     device = "cpu"
-    mp.spawn(run_test_two_optimizers, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_test_two_optimizers, args=(world_size, backend, device, temp_files[0]), nprocs=world_size, join=True
+        )
 
 
-def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
+def run_test_gpt2(rank, world_size, backend, device, temp_file_name, reduce_buffer_size):
     INPUT_DIM = 16
     BACH_SIZE = 10
     STEPS = 10
@@ -357,13 +490,21 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
     np.random.seed(rank)
     model = GPT2(
         embed_dim=256, num_heads=2, num_layers=12, num_positions=INPUT_DIM * INPUT_DIM, num_vocab=512, num_classes=2
-    ).to(device)
+    )
     optimizer = OSS(params=model.parameters(), optim=torch.optim.SGD, lr=1e-3, momentum=0.99)
-    ddp_model = ShardedDataParallel(model, optimizer)
+    ddp_model = ShardedDataParallel(model, optimizer, reduce_buffer_size=reduce_buffer_size)
+
+    # Move the model to another device post-construction
+    model = model.to(device)
 
     # Optim loop
+    set_to_none = True
+
     def closure():
-        optimizer.zero_grad()
+        nonlocal set_to_none
+        ddp_model.zero_grad(set_to_none=set_to_none)
+        set_to_none = not set_to_none
+
         # Force int inputs to prevent the first grad from firing
         input_tensor = torch.randint(10, (BACH_SIZE, INPUT_DIM)).to(device)
         loss = ddp_model(input_tensor).abs().sum()
@@ -374,18 +515,28 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name):
     for i in range(STEPS):
         _ = optimizer.step(closure=closure)
 
+        # Stress test the .to() method
+        ddp_model.to(device=device, dtype=torch.float16)
+        ddp_model.to(device=device, dtype=torch.float32)
+
     dist.destroy_process_group()
 
 
 @skip_if_no_cuda
 @skip_if_single_gpu
-def test_gpt2():
-    # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
-    world_size = 2
+@pytest.mark.parametrize("world_size", [1, 2])
+@pytest.mark.parametrize("reduce_buffer", [2 ** 23, 2 ** 40])
+def test_gpt2(world_size, reduce_buffer):
+    # Check that having trainable unused params is fine
     backend = "gloo"
-    temp_file_name = tempfile.mkstemp()[1]
     device = "cuda"
-    mp.spawn(run_test_gpt2, args=(world_size, backend, device, temp_file_name), nprocs=world_size, join=True)
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_test_gpt2,
+            args=(world_size, backend, device, temp_files[0], reduce_buffer),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 def run_test_multiple_groups(rank, world_size, tempfile_name, backend, reduce_buffer_size):
@@ -448,11 +599,10 @@ def run_test_multiple_groups(rank, world_size, tempfile_name, backend, reduce_bu
 @pytest.mark.parametrize("backend", ["gloo", "nccl"])
 def test_multiple_groups(reduce_buffer_size, backend):
     world_size = 4
-    temp_file_name = tempfile.mkstemp()[1]
-
-    mp.spawn(
-        run_test_multiple_groups,
-        args=(world_size, temp_file_name, backend, reduce_buffer_size),
-        nprocs=world_size,
-        join=True,
-    )
+    with temp_files_ctx(num=1) as temp_files:
+        mp.spawn(
+            run_test_multiple_groups,
+            args=(world_size, temp_files[0], backend, reduce_buffer_size),
+            nprocs=world_size,
+            join=True,
+        )

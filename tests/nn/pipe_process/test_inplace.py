@@ -21,13 +21,13 @@ import pytest
 import torch
 from torch import nn
 
-from fairscale.nn.pipe import AsyncPipe, MultiProcessPipe
+from fairscale.nn.pipe import AsyncPipe
 from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 @torch_spawn([2])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
-@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+@pytest.mark.parametrize("pipe_class", [AsyncPipe])
 def inplace_on_requires_grad(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1), nn.ReLU(inplace=True))
     model = pipe_class(model, [1, 1], worker_map=get_worker_map(), checkpoint="always")
@@ -50,7 +50,7 @@ def inplace_on_requires_grad(pipe_class):
 
 @torch_spawn([1])
 @pytest.mark.xfail(strict=True)
-@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+@pytest.mark.parametrize("pipe_class", [AsyncPipe])
 def inplace_on_not_requires_grad(pipe_class):
     # In-place operation on a tensor not requiring grad doesn't cause a
     # RuntimeError. Currently, we cannot detect this case.
@@ -70,7 +70,7 @@ def inplace_on_not_requires_grad(pipe_class):
 
 @torch_spawn([1])
 @pytest.mark.xfail(strict=True)
-@pytest.mark.parametrize("pipe_class", [MultiProcessPipe, AsyncPipe])
+@pytest.mark.parametrize("pipe_class", [AsyncPipe])
 def inplace_incorrect_grad(pipe_class):
     class M(nn.Module):
         def forward(self, foo_bar):

@@ -3,44 +3,49 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-import os
+import functools
 import tempfile
 
 import pytest
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 
 from fairscale.nn import MOELayer, Top2Gate
+from fairscale.utils import torch_version
 
-skip_if_no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
+pytestmark = pytest.mark.skipif(
+    not (torch.cuda.is_available() and torch_version() >= (1, 8, 0)), reason="cuda and torch>=1.8.0 required"
+)
 
-BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
-
-if torch.cuda.is_available():
-    devices = ["cpu", "cuda"]
-else:
-    devices = ["cpu"]
-URL = "file://" + tempfile.mkstemp()[1]
-
-os.environ["MASTER_ADDR"] = "localhost"
-os.environ["MASTER_PORT"] = "29501"  # torch 1.5 compatibility
-
-if "OMPI_COMM_WORLD_SIZE" in os.environ:
-    dist.init_process_group(backend=dist.Backend.MPI, init_method=URL)
+devices = ["cuda"]
 
 
-def setup_module(module):
-    if "OMPI_COMM_WORLD_SIZE" not in os.environ:
-        dist.init_process_group(backend=BACKEND, rank=0, world_size=1, init_method=URL)
+def pg_worker(rank, world_size, init_file, func, *args):
+    init_url = "file://" + init_file
+    dist.init_process_group(backend=dist.Backend.NCCL, rank=rank, world_size=world_size, init_method=init_url)
+    torch.cuda.set_device(rank)
+    dist.all_reduce(torch.zeros(1).cuda())
+    func(*args)
+    dist.destroy_process_group()
 
 
-def teardown_module(module):
-    if "OMPI_COMM_WORLD_SIZE" not in os.environ:
-        torch.distributed.destroy_process_group()
+def pg_test(world_size=torch.cuda.device_count()):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            tempfile_name = tempfile.mkstemp()[1]
+            mp.spawn(pg_worker, args=(world_size, tempfile_name, func, *kwargs.values()), nprocs=world_size)
+
+        globals()["test_" + func.__name__] = wrapper
+        return func
+
+    return decorator
 
 
+@pg_test(world_size=1)
 @pytest.mark.parametrize("device", devices)
-def test_create(device):
+def create(device):
     model_dim = 8
     num_experts = 4
     gate = Top2Gate(model_dim, num_experts)
@@ -48,20 +53,21 @@ def test_create(device):
     moe = MOELayer(gate, expert).to(device)
 
 
+@pg_test(world_size=1)
 @pytest.mark.parametrize("device", devices)
-def test_expert_params(device):
+def expert_params(device):
     model_dim = 8
     num_experts = 4
     gate = Top2Gate(model_dim, num_experts)
     expert = torch.nn.Linear(model_dim, model_dim)
     moe = MOELayer(gate, expert).to(device)
     for p in expert.parameters():
-        assert p.expert is True
+        assert p.expert is True, str(p.expert)
 
 
-@pytest.mark.mpi
-@pytest.mark.parametrize("device", ["cpu"])
-def test_forward(device):
+@pg_test()
+@pytest.mark.parametrize("device", devices)
+def forward(device):
     model_dim = 8
     num_experts = dist.get_world_size(dist.group.WORLD)
     input = torch.randn(4, 16, model_dim).to(device)
@@ -71,14 +77,14 @@ def test_forward(device):
     expert.weight = torch.nn.Parameter(torch.eye(model_dim))
     moe = MOELayer(gate, expert).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     # Re-assembled output should match input due to identity expert.
-    assert torch.allclose(input, output)
+    torch.testing.assert_allclose(input, output)
 
 
-@pytest.mark.mpi
-@pytest.mark.parametrize("device", ["cpu"])
-def test_forward_multi(device):
+@pg_test()
+@pytest.mark.parametrize("device", devices)
+def forward_multi(device):
     torch.set_printoptions(threshold=5000)
     num_local_experts = 4
     model_dim = 4
@@ -93,11 +99,13 @@ def test_forward_multi(device):
         experts += [expert]
     moe = MOELayer(gate, torch.nn.ModuleList(experts)).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     # 90% of the input should have gone to an expert
-    assert len(output.nonzero(as_tuple=False)) / output.numel() > 0.90
+    assert (
+        len(output.nonzero(as_tuple=False)) / output.numel() > 0.90
+    ), f"{len(output.nonzero(as_tuple=False))} / {output.numel()}"
     # Except for zeros, re-assembled output should match input due to identity expert.
-    assert torch.allclose(input, torch.where(output > 0, output, input))
+    torch.testing.assert_allclose(input, torch.where(output > 0, output, input))
 
 
 # Test Gate which round-robin routes tokens to experts
@@ -109,7 +117,7 @@ class RoundRobinGate(torch.nn.Module):
 
     def forward(self, input):
         s = input.shape[0]
-        assert s % self.num_experts == 0
+        assert s % self.num_experts == 0, f"{s} % {self.num_experts} != 0"
         capacity = 2 * s // self.num_experts
         output = torch.zeros(s, self.num_experts, capacity, dtype=input.dtype, device=input.device)
         for i in range(s):
@@ -117,9 +125,9 @@ class RoundRobinGate(torch.nn.Module):
         return 0.0, output, output.bool()
 
 
-@pytest.mark.mpi
-@pytest.mark.parametrize("device", ["cpu"])
-def test_forward_routing(device):
+@pg_test()
+@pytest.mark.parametrize("device", devices)
+def forward_routing(device):
     model_dim = 8
     num_experts = dist.get_world_size()
     input = torch.randn(4, 16, model_dim).to(device)
@@ -130,17 +138,17 @@ def test_forward_routing(device):
     expert.weight = torch.nn.Parameter(torch.eye(model_dim) * scale)
     moe = MOELayer(gate, expert).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     # Verify that each token was sent to the correct expert by checking its scale.
     t = input.shape[1]
     for i in range(t):
         expert = i % num_experts
-        assert torch.allclose(input[:, i] * (expert + 1), output[:, i])
+        torch.testing.assert_allclose(input[:, i] * (expert + 1), output[:, i])
 
 
-@pytest.mark.mpi
-@pytest.mark.parametrize("device", ["cpu"])
-def test_forward_routing_multi(device):
+@pg_test()
+@pytest.mark.parametrize("device", devices)
+def forward_routing_multi(device):
     model_dim = 8
     num_local_experts = 4
     num_experts = dist.get_world_size(dist.group.WORLD) * num_local_experts
@@ -155,17 +163,17 @@ def test_forward_routing_multi(device):
         experts += [expert]
     moe = MOELayer(gate, torch.nn.ModuleList(experts)).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     # Verify that each token was sent to the correct expert by checking its scale.
     t = input.shape[1]
     for i in range(t):
         expert = i % num_experts
-        assert torch.allclose(input[:, i] * (expert + 1), output[:, i])
+        torch.testing.assert_allclose(input[:, i] * (expert + 1), output[:, i])
 
 
-@pytest.mark.mpi
-@pytest.mark.parametrize("device", ["cpu"])
-def test_backward(device):
+@pg_test()
+@pytest.mark.parametrize("device", devices)
+def backward(device):
     loss = torch.nn.MSELoss()
     model_dim = 8
     num_experts = dist.get_world_size(dist.group.WORLD)
@@ -176,7 +184,7 @@ def test_backward(device):
     expert.weight = torch.nn.Parameter(torch.eye(model_dim))
     moe = MOELayer(gate, expert).to(device)
     output = moe(input)
-    assert output.shape == input.shape
+    assert output.shape == input.shape, f"{output.shape} != {input.shape}"
     output = loss(output, input)
     output.backward()
-    assert torch.allclose(expert.weight.grad, torch.zeros_like(expert.weight))
+    torch.testing.assert_allclose(expert.weight.grad, torch.zeros_like(expert.weight))

@@ -1,4 +1,7 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
 
 import torch.nn as nn
 
@@ -20,16 +23,23 @@ class Offload_Transformer:
             "seq_len": 32,
         }
 
-    def get_benchmark_config():
+    def get_benchmark_config(checkpoint_activation=True):
 
         return {
             "epochs": 1,
             "lr": 0.001,  # learning rate
             "batch_size": 8,
             "criterion": nn.CrossEntropyLoss(),
-            "checkpoint_activation": True,
-            "num_microbatches": 4,
+            "checkpoint_activation": checkpoint_activation,
+            "num_microbatches": 1,
             "slices": 3,
+        }
+
+    def get_golden_real_stats():
+        return {
+            "avg_wps": 192.105,
+            "std_dev_wps": 39.56,
+            "peak_mem_usage": 1180848128,
         }
 
 
@@ -52,7 +62,7 @@ class Offload_Sequential:
             "criterion": nn.CrossEntropyLoss(),
             "slices": 3,
             "checkpoint_activation": True,
-            "num_microbatches": 4,
+            "num_microbatches": 1,
         }
 
 
@@ -80,19 +90,12 @@ class Pipe:
             "criterion": nn.CrossEntropyLoss(),
         }
 
-    def get_golden_real_stats(multiprocess=False):
-        if not multiprocess:
-            return {
-                "avg_wps": 703.778,
-                "std_dev_wps": 5.732,
-                "peak_mem_usage": [2320996352, 1396742144, 1396742144, 2340010496],
-            }
-        else:
-            return {
-                "avg_wps": 647.404,
-                "std_dev_wps": 14.51,
-                "peak_mem_usage": [3305007616, 2578692608, 3304524288, 2578692608],
-            }
+    def get_golden_real_stats():
+        return {
+            "avg_wps": 703.778,
+            "std_dev_wps": 5.732,
+            "peak_mem_usage": [2320996352, 1396742144, 1396742144, 2340010496],
+        }
 
     def get_golden_synthetic_stats():
         # TODO(anj-s): Add support for synthetic regression benchmarks

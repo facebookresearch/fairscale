@@ -4,10 +4,14 @@
 # LICENSE file in the root directory of this source tree.
 
 # Please update the doc version in docs/source/conf.py as well.
-__version__ = "0.3.1"
+__version__ = "0.4.1"
 
 ################################################################################
 # Import most common subpackages
 ################################################################################
 
+from typing import List
+
 from . import nn
+
+__all__: List[str] = []

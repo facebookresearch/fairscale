@@ -2,54 +2,41 @@
 
 ![PyPI](https://img.shields.io/pypi/v/fairscale)
 [![Documentation Status](https://readthedocs.org/projects/fairscale/badge/?version=latest)](https://fairscale.readthedocs.io/en/latest/?badge=latest)
-[![CircleCI](https://circleci.com/gh/facebookresearch/fairscale.svg?style=shield)](https://app.circleci.com/pipelines/github/facebookresearch/fairscale/) ![PyPI - License](https://img.shields.io/pypi/l/fairscale) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/facebookresearch/fairscale/blob/master/CONTRIBUTING.md)
+[![CircleCI](https://circleci.com/gh/facebookresearch/fairscale.svg?style=shield)](https://app.circleci.com/pipelines/github/facebookresearch/fairscale/) ![PyPI - License](https://img.shields.io/pypi/l/fairscale) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/facebookresearch/fairscale/blob/main/CONTRIBUTING.md)
 --------------------------------------------------------------------------------
 
 ## Description
-FairScale is a PyTorch extension library for high performance and large scale training on one or multiple machines/nodes. This library extends basic PyTorch capabilities while adding new experimental ones.
+FairScale is a PyTorch extension library for high performance and large scale training.
+This library extends basic PyTorch capabilities while adding new SOTA scaling techniques.
+FairScale makes available the latest distributed training techniques in the form of composable
+modules and easy to use APIs. These APIs are a fundamental part of a researcher's toolbox as
+they attempt to scale models with limited resources.
 
-FairScale supports:
-* Parallelism:
-   * Pipeline parallelism (`fairscale.nn.pipe`)
-   * Asynchronous Pipeline parallelism (`fairscale.nn.async_pipe`)
-   * Model Parallelism (`fairscale.nn.model_parallel.layers`)
-   * _experimental_ AmpNet (`fairscale.experimental.nn.ampnet_pipe`)
-* Sharded training:
-   * Optimizer state sharding (`fairscale.optim.OSS`)
-   * Sharded Data Parallel (SDP) (`fairscale.nn.ShardedDataParallel`)
-   * Fully Sharded Data Parallel (FSDP) (`fairscale.nn.FullyShardedDataParallel`) (PyTorch >= 1.6)
-* Optimization at scale:
-   * AdaScale SGD (`fairscale.optim.AdaScale`)
-* GPU memory optimization:
-   * Activation checkpointing wrapper (`fairscale.nn.misc.checkpoint_wrapper`)
-* GPU speed optimization:
-   * Sharded grad scaler - automatic mixed precision (`fairscale.optim.grad_scaler`)
+FairScale was designed with the following values in mind:
 
-## Requirements
+* **Usability** -  Users should be able to understand and use FairScale APIs with minimum cognitive overload.
 
-* PyTorch >= 1.5.1
+* **Modularity** - Users should be able to combine multiple FairScale APIs as part of their training loop seamlessly.
+
+* **Performance** - FairScale APIs provide the best performance in terms of scaling and efficiency.
+
+## What's New:
+
+* September 2021 [`master` branch renamed to `main`](https://github.com/github/renaming).
+* September 2021 [fairscale 0.4.1 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.1).
 
 ## Installation
 
-Normal installation:
-```bash
-pip install fairscale
-```
-
-Development mode:
-```bash
-cd fairscale
-pip install -r requirements.txt
-pip install -e .
-```
-
-If either of the above fails, add `--no-build-isolation` to the `pip install` command (this could be a problem with recent versions of pip).
-
+To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/main/docs/source/installation_instructions.rst). You should be able to install a pip package or
+build directly from source.
 
 ## Getting Started
-The full documentation (https://fairscale.readthedocs.io/) contains instructions for getting started and extending fairscale.
+The full [documentation](https://fairscale.readthedocs.io/) contains instructions for getting started, deep dives and tutorials about the various FairScale APIs.
 
 ## Examples
+
+Here are a few sample snippets from a subset of FairScale offerings:
+
 ### Pipe
 
 Run a 4-layer model on 2 GPUs. The first two layers run on cuda:0 and the next two layers run on cuda:1.
@@ -64,7 +51,7 @@ model = fairscale.nn.Pipe(model, balance=[2, 2], devices=[0, 1], chunks=8)
 ```
 
 ### Optimizer state sharding (ZeRO)
-See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/master/benchmarks/oss.py), but a minimal example could look like the following :
+See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/main/benchmarks/oss.py), but a minimal example could look like the following :
 
 ```python
 import torch
@@ -162,17 +149,17 @@ At a high level, we want ML researchers to:
   * not worrying about losing accuracy
   * potentially higher GPU efficiency (fewer steps, less networking overhead, etc.)
 
-# Testing
+## Testing
 
-We use circleci to test on PyTorch versions 1.5.1, 1.6.0 and 1.7.1 and CUDA version 10.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
+We use circleci to test on PyTorch versions 1.6.0, 1.7.1, and 1.8.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
 ## Contributors
 
-See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.
+We welcome outside contributions! Please see the [CONTRIBUTING](CONTRIBUTING.md) instructions for how you can contribute to FairScale.
 
 ## License
 
-fairscale is licensed under the [BSD-3-Clause License](LICENSE).
+FairScale is licensed under the [BSD-3-Clause License](LICENSE).
 
 fairscale.nn.pipe is forked from [torchgpipe](https://github.com/kakaobrain/torchgpipe), Copyright 2019, Kakao Brain, licensed under [Apache License](http://www.apache.org/licenses/LICENSE-2.0).
 
@@ -182,13 +169,29 @@ fairscale.optim.adascale is forked from [AdaptDL](https://github.com/petuum/adap
 
 fairscale.nn.misc.flatten_params_wrapper is forked from [PyTorch-Reparam-Module](https://github.com/SsnL/PyTorch-Reparam-Module), Copyright 2018, Tongzhou Wang, licensed under [MIT License](https://github.com/SsnL/PyTorch-Reparam-Module/blob/master/LICENSE).
 
-## References
 
-Here is a list of all authors on relevant research papers this work is based on:
+## Citing FairScale
 
-* torchgpipe: Chiheon Kim, Heungsub Lee, Myungryong Jeong, Woonhyuk Baek, Boogeon Yoon, Ildoo Kim, Sungbin Lim, Sungwoong Kim. [[Paper](https://arxiv.org/pdf/2004.09910.pdf)] [[Code](https://github.com/kakaobrain/torchgpipe)]
-* ZeRO: Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, Yuxiong He. [[Paper](https://arxiv.org/pdf/1910.02054.pdf)] [[Code](https://github.com/microsoft/DeepSpeed)]
-* Megatron-LM: Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley, Jared Casper, Bryan Catanzaro. [[Paper](https://arxiv.org/pdf/1909.08053.pdf)][[Code](https://github.com/NVIDIA/Megatron-LM)]
-* AdaScale SGD: Tyler B. Johnson, Pulkit Agrawal, Haijie Gu, Carlos Guestrin. [[Paper](https://proceedings.icml.cc/static/paper_files/icml/2020/4682-Paper.pdf)]
-* GShard: Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu, Dehao Chen, Orhan Firat, Yanping Huang, Maxim Krikun, Noam Shazeer, Zhifeng Chen [[Paper]](https://arxiv.org/abs/2006.16668)
-* AMPNet:Alexander L. Gaunt, Matthew A. Johnson, Maik Riechert, Daniel Tarlow, Ryota Tomioka, Dimitrios Vytiniotis, Sam Webster [[Paper]](https://arxiv.org/abs/1705.09786)
+If you use FairScale in your publication, please cite it by using the following BibTeX entry.
+
+```BibTeX
+@Misc{FairScale2021,
+  author =       {Mandeep Baines and Shruti Bhosale and Vittorio Caggiano and Naman Goyal and Siddharth Goyal and Myle Ott and Benjamin Lefaudeux and Vitaliy Liptchinsky and Mike Rabbat and Sam Sheiffer and Anjali Sridhar and Min Xu},
+  title =        {FairScale:  A general purpose modular PyTorch library for high performance and large scale training},
+  howpublished = {\url{https://github.com/facebookresearch/fairscale}},
+  year =         {2021}
+}
+```
+
+## FAQ
+1. If you experience an error indicating a default branch does not exist, it probably due to the latest update, switching the default branch from "master" to "main"
+```
+error: pathspec 'non-existing-branch' did not match any file(s) known to git
+```
+Please run the following commands to update to the main branch.
+```
+git branch -m master main
+git fetch origin
+git branch -u origin/main main
+git remote set-head origin -a
+```

@@ -24,6 +24,8 @@ except ImportError:
 
 class TestAutoWrap(unittest.TestCase):
     def setUp(self) -> None:
+        # For all the tests here, we use a fake group and flatten being False since those should
+        # not affect how wrapping work.
         self.process_group = DummyProcessGroup(rank=0, size=1)
 
     def test_wrap(self):

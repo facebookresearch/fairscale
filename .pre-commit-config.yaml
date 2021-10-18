@@ -1,3 +1,6 @@
+# If you change the versions below, please make sure they are in-sync
+# with requirements-test.txt
+
 exclude: 'build|stubs'
 
 default_language_version:
@@ -11,7 +14,7 @@ repos:
     -   id: check-ast
     -   id: check-merge-conflict
     -   id: no-commit-to-branch
-        args: ['--branch=master']
+        args: ['--branch=main']
     -   id: check-added-large-files
         args: ['--maxkb=500']
     -   id: end-of-file-fixer
@@ -20,7 +23,6 @@ repos:
     rev: 19.10b0
     hooks:
     - id: black
-      language_version: python3.7
 
 -   repo: https://gitlab.com/pycqa/flake8
     rev: 3.7.9
@@ -40,6 +42,7 @@ repos:
         additional_dependencies: [toml]
 
 -   repo: https://github.com/pre-commit/mirrors-mypy
-    rev: 'v0.770'
+    rev: 'v0.790'
     hooks:
     -   id: mypy
+        additional_dependencies: [numpy]

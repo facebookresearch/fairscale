@@ -1,13 +1,23 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
 
+from distutils.version import LooseVersion
 import io
+import operator
 import tempfile
 
 import torch
 from torch.utils.data import DataLoader
+import torchtext
 from torchtext.data.utils import get_tokenizer
 from torchtext.utils import download_from_url, extract_archive
-from torchtext.vocab import build_vocab_from_iterator
+
+if operator.ge(torchtext.__version__, LooseVersion("0.10.0")):
+    from torchtext.legacy.vocab import build_vocab_from_iterator
+else:
+    from torchtext.vocab import build_vocab_from_iterator
 
 
 def _batchify(data, batch_size):
@@ -58,7 +68,7 @@ def get_synthetic_dataloaders(args, benchmark_config, model_specs):
     """Return synthetic dataloaders for training, testing and validation."""
 
     def batchify(data):
-        batch_size = args.batch_size
+        batch_size = benchmark_config["batch_size"]
         return _batchify(data, batch_size)
 
     total_batch_size = total_batch_size = _get_total_batch_size(benchmark_config, model_specs)

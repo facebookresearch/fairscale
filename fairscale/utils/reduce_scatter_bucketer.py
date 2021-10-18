@@ -4,12 +4,19 @@
 # LICENSE file in the root directory of this source tree.
 
 import functools
+import os
 from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
+
+# TODO: Remove the toggle-enable_nccl_base_collectives when github open issue #801 is resolved.
+if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
+    enable_nccl_base_collectives = False
+else:
+    enable_nccl_base_collectives = True
 
 
 class Bucket:
@@ -21,13 +28,19 @@ class Bucket:
         self.output_shard = torch.zeros_like(data[0])
 
     def flush(self) -> None:
+        """Flush content of the bucket."""
         if self.offset == 0:
             assert len(self.callbacks) == 0
             return
         # reduce-scatter bucket
-        dist.reduce_scatter(
-            self.output_shard[: self.offset], list(self.data[:, : self.offset].unbind(0)), group=self.group
-        )
+        if hasattr(dist, "_reduce_scatter_base") and enable_nccl_base_collectives:
+            dist._reduce_scatter_base(
+                self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
+            )
+        else:
+            dist.reduce_scatter(
+                self.output_shard[: self.offset], list(self.data[:, : self.offset].unbind(0)), group=self.group
+            )
         # execute post-reduction callbacks
         for callback_fn in self.callbacks:
             callback_fn()
@@ -36,6 +49,24 @@ class Bucket:
         self.offset = 0
         self.callbacks.clear()
         self.output_shard = torch.zeros_like(self.data[0])
+
+    def setup(self) -> None:
+        """Setup the buffers if they are not allocated.
+
+        Using ``setup`` and ``teardown``, we can ensure that the bucket
+        buffers are only allocated during the backward pass, hence saving more
+        memory to other parts of the training process, such as the forward pass
+        for activation memory.
+        """
+        for tensor in [self.data, self.output_shard]:
+            if tensor.storage().size() == 0:
+                tensor.storage().resize_(tensor.size().numel())
+
+    def teardown(self) -> None:
+        """Tear down the bucket by freeing the memory"""
+        assert self.offset == 0 and self.callbacks == [], "Incorrect call of teardown"
+        for tensor in [self.data, self.output_shard]:
+            tensor.storage().resize_(0)
 
 
 class ReduceScatterBucketer:
@@ -103,9 +134,15 @@ class ReduceScatterBucketer:
 
         bucket_shard_size = self._get_shard_size(first_input.element_size(), world_size)
         if first_input_size > bucket_shard_size:
+            # TODO: investigate how to avoid using torch.cat (because it seems to be slow for CPU tensors)
             # input is too big to fit in the bucket, reduce-scatter directly
             output = torch.zeros_like(input_list[0])
-            dist.reduce_scatter(output, input_list, group=group)
+            if hasattr(dist, "_reduce_scatter_base") and enable_nccl_base_collectives:
+                input_flattened = torch.cat(input_list)
+                dist._reduce_scatter_base(output, input_flattened, group=group)
+            else:
+                # fallback
+                dist.reduce_scatter(output, input_list, group=group)
             if callback_fn is not None:
                 callback_fn(output)
             return
@@ -132,6 +169,12 @@ class ReduceScatterBucketer:
         for bucket in self.buckets.values():
             bucket.flush()
 
+    @torch.no_grad()
+    def teardown(self) -> None:
+        """Free buffers from all buckets."""
+        for bucket in self.buckets.values():
+            bucket.teardown()
+
     @functools.lru_cache()
     def _get_shard_size(self, element_size: int, num_shards: int) -> int:
         if self.bucket_cap_mb <= 0:  # Values <= 0 disable bucketing.
@@ -141,6 +184,10 @@ class ReduceScatterBucketer:
         return int(bucket_size // num_shards)
 
     def _get_bucket(self, tensor: Tensor, group: ProcessGroup) -> Bucket:
+        # TODO (Min): the `group` used here in the key is the object hash, not the content
+        #     hash. That means if FSDP instances are initialized with different process groups,
+        #     even when the group members are in fact the same, we end up creating different
+        #     buckets here.
         key = (tensor.dtype, tensor.device, group)
         if key not in self.buckets:
             # buckets are divided into world_size pieces, bucket.data shaped (world_size, shard_size)
@@ -148,4 +195,5 @@ class ReduceScatterBucketer:
             shard_size = self._get_shard_size(tensor.element_size(), world_size)
             data = tensor.new_zeros((world_size, shard_size))
             self.buckets[key] = Bucket(data, group)
+        self.buckets[key].setup()
         return self.buckets[key]

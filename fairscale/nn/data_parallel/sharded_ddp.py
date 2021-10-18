@@ -13,16 +13,17 @@ import contextlib
 import functools
 from itertools import chain
 import logging
-from typing import Any, Callable, Deque, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Deque, Dict, Generator, List, Optional, Union
 
 import torch
 from torch import nn
 from torch.autograd import Variable
+import torch.autograd.profiler as profiler
 import torch.distributed as dist
-from torch.nn import Parameter
 
+from fairscale.nn.misc import GradBucket
 from fairscale.optim import OSS
-from fairscale.optim.utils import Bucket, Workhandle
+from fairscale.utils.params import Workhandle, get_global_rank
 
 
 def _trainable(param: torch.Tensor) -> bool:
@@ -102,31 +103,33 @@ class ShardedDataParallel(nn.Module):
     ):
         super().__init__()
 
+        # This field needs to be exposed to insure interface parity with DDP
         self.module = module
-        self.sharded_optimizers = [sharded_optimizer] if not isinstance(sharded_optimizer, list) else sharded_optimizer
-        self.enable_broadcast_buffers = broadcast_buffers
-        self.auto_refresh_trainable = auto_refresh_trainable
-        self.reduce_fp16 = reduce_fp16
+
+        self._sharded_optimizers = [sharded_optimizer] if not isinstance(sharded_optimizer, list) else sharded_optimizer
+        self._enable_broadcast_buffers = broadcast_buffers
+        self._auto_refresh_trainable = auto_refresh_trainable
+        self._reduce_fp16 = reduce_fp16
         if reduce_buffer_size > 0 and reduce_fp16:
-            self.reduce_fp16 = False
+            self._reduce_fp16 = False
             logging.warning(
                 "fp16 gradient reduction is not compatible with reduction buffers, which are requested. fp16 grad reduction is deactivated."
             )
 
         # Handle a no_sync() context which prevents the gradient synchronization,
         # accumulate in place
-        self.should_accumulate_grads = False
-        self.accumulate_grads_flipped = False
+        self._should_accumulate_grads = False
+        self._accumulate_grads_flipped = False
 
         # Communication related attributes
-        self.process_group = process_group if process_group is not None else dist.group.WORLD
-        self.backend = dist.get_backend(self.process_group)
-        self.world_size_scaling = 1.0 / dist.get_world_size(self.process_group)  # > 0
-        self.reference_global_rank = OSS.get_global_rank(self.process_group, 0)  # picking rank 0 as the reference
-        self.rank = dist.get_rank(self.process_group)
-        self.global_rank = OSS.get_global_rank(self.process_group, self.rank)
+        self._process_group = process_group if process_group is not None else dist.group.WORLD
+        self._backend = dist.get_backend(self._process_group)
+        self._world_size_scaling = 1.0 / dist.get_world_size(self._process_group)  # > 0
+        self._reference_global_rank = get_global_rank(self._process_group, 0)  # picking rank 0 as the reference
+        self._rank = dist.get_rank(self._process_group)
+        self._global_rank = get_global_rank(self._process_group, self._rank)
         self._local_to_global_rank = [
-            OSS.get_global_rank(self.process_group, i) for i in range(dist.get_world_size(self.process_group))
+            get_global_rank(self._process_group, i) for i in range(dist.get_world_size(self._process_group))
         ]
 
         # Expose some of the PytorchDDP attributes, some frameworks rely on them.
@@ -134,7 +137,6 @@ class ShardedDataParallel(nn.Module):
         # device_id related logic is not present, this is not handled
         devices = {p.device for p in self.module.parameters()}
         self.is_multi_device_module = len(devices) > 1
-        self.device = list(devices)[0]
 
         distinct_device_types = {p.device.type for p in self.module.parameters()}
         assert len(distinct_device_types) == 1, (
@@ -149,7 +151,10 @@ class ShardedDataParallel(nn.Module):
         # - we build an iterator which goes through all the parameters involved globally
         self._all_params = list(
             chain(
-                *[sum([sum(p, []) for p in optim.per_device_params.values()], []) for optim in self.sharded_optimizers]
+                *[
+                    sum([sum(p, []) for p in optim._per_device_params.values()], [])
+                    for optim in self._sharded_optimizers
+                ]
             )
         )
         self._trainable_params: List[torch.Tensor] = []
@@ -159,20 +164,27 @@ class ShardedDataParallel(nn.Module):
 
         # - setup buckets and tensor views
         model_size = sum([p.numel() for p in self.module.parameters()])
-        self.buffer_max_size = min(reduce_buffer_size, model_size)
+        self._buffer_max_size = min(reduce_buffer_size, model_size)
+
+        if dist.get_world_size(self._process_group) == 1:
+            self._buffer_max_size = 0
+            logging.info("Training is not really distributed, single rank. Deactivating buckets")
+
         logging.info(
             "ShardedDDP bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
-                self.buffer_max_size / 2 ** 20, model_size / 2 ** 20
+                self._buffer_max_size / 2 ** 20, model_size / 2 ** 20
             )
         )
-        self.use_buckets = self.buffer_max_size > 0
+        self._use_buckets = self._buffer_max_size > 0
 
-        self.buckets: Dict[torch.device, List[Bucket]] = {}
+        self._buckets: Dict[torch.device, Dict[int, GradBucket]] = {}
         self._should_bucket_grad: List[bool] = []
-        self._bucket_list: Optional[List[Bucket]] = None
+        self._bucket_list: List[GradBucket] = []
 
         # - setup backward hooks which will be called by Torch's autograd in due time
         self._grad_accs: List[Callable] = []
+        self._grad_hooks: List[Any] = []
+        self._manual_reduce: List[Callable] = []
 
         # passing a handle to torch.nn.SyncBatchNorm layer
         self._passing_sync_batchnorm_handle(self.module)
@@ -184,39 +196,35 @@ class ShardedDataParallel(nn.Module):
         self._work_handles: Deque[Workhandle] = deque()
         self._bucket_flush_callback_set = False
 
-        self.refresh_trainable()
-
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         """
         Module forward pass, handles any DDP-specific work in the background. Primes the
         backward pass for gradient reduction to the proper ranks.
         """
 
-        # Optionally check whether the trainable parameters have changed
-        if self.auto_refresh_trainable:
-            trainable_mask = list(map(_trainable, self._all_params))
-            if trainable_mask != self._reference_trainable_mask:
-                logging.warning("ShardedDDP detected that the trainable params changed, updating the partitioning")
+        with profiler.record_function("fairscale::sdp::forward"):
+            # Deferred initialization, or change detection
+            needs_setup = len(self._grad_hooks) == 0 and self.training
 
+            if self._auto_refresh_trainable:
+                needs_setup |= self._detect_train_change()
+
+            if needs_setup:
                 self.refresh_trainable()
-                self._reference_trainable_mask = trainable_mask
 
-        if self.enable_broadcast_buffers:
-            # NCCL communications are on a different stream, needs to be blocking
-            # for the subsequent FW to be correct
-            self.sync_buffers(blocking=True)
+            if self._enable_broadcast_buffers:
+                # NCCL communications are on a different stream, needs to be blocking
+                # for the subsequent FW to be correct
+                self.sync_buffers(blocking=True)
 
-        # Reset all the grad reduce and bucket state flags
-        self._clear_counters()
+            # Reset all the grad reduce and bucket state flags
+            self._clear_counters()
 
-        # Normal FW on the base model
-        return self.module(*inputs, **kwargs)
+            # Normal FW on the base model
+            return self.module(*inputs, **kwargs)
 
     def to(  # type: ignore
-        self,
-        device: Optional[Union[int, torch.device]],
-        dtype: Optional[torch.dtype] = None,
-        non_blocking: bool = False,
+        self, device: Optional[torch.device], dtype: Optional[torch.dtype] = None, non_blocking: bool = False,
     ) -> "ShardedDataParallel":
         """
         Moves and/or casts the parameters and buffers.
@@ -246,45 +254,52 @@ class ShardedDataParallel(nn.Module):
         Returns:
             Module: self.
         """
+        if isinstance(device, str):
+            device = torch.device(device)
 
-        assert device in self.buckets.keys(), "Changing devices is not supported, because this would break OSSs state"
         assert (
-            len(self.buckets.keys()) == 1
+            device is None
+            or len(self._buckets.keys()) == 0
+            or device.type in map(lambda x: x.type, self._buckets.keys())
+        ), "Changing devices is not supported, because this would break OSSs state"
+
+        assert (
+            len(self._buckets.keys()) < 2
         ), "Several devices specified to begin with, incompatible with setting a single device here"
 
-        for _device in self.buckets.keys():
-            for bucket in self.buckets[_device]:
-                bucket.buffer.to(device=device, dtype=dtype, non_blocking=non_blocking)
-
         self.module.to(device=device, dtype=dtype, non_blocking=non_blocking)
+
+        # Re-build the buckets, hooks, etc..
+        self.refresh_trainable()
 
     def refresh_trainable(self) -> None:
         """ If the module trainability has changed, update all the assumptions """
 
         # Make sure that this is not done while gradients are waiting to be reduced (if no_sync context for instance)
-        assert not functools.reduce(
-            lambda x, y: x or y, self._grad_to_be_reduced, False
-        ), "Grads waiting to be reduced: {}".format(self._grad_to_be_reduced)
+        if functools.reduce(lambda x, y: x or y, self._grad_to_be_reduced, False):
+            logging.warning(
+                "Grads waiting to be reduced. If this is on purpose (grad accumulation), please use a no_sync() context"
+            )
 
-        self._trainable_params = list(filter(lambda x: x.requires_grad, self._all_params))
-        self._trainable_params.sort(key=lambda x: x.numel())
-        self._grad_to_be_reduced = [True for _ in self._trainable_params]
+        with profiler.record_function("fairscale::sdp::refresh_trainable"):
+            self._trainable_params = list(filter(lambda x: x.requires_grad, self._all_params))
+            self._trainable_params.sort(key=lambda x: x.numel())
 
-        self._trainable_param_to_rank = {}
-        for optim in self.sharded_optimizers:
-            # OSS may need to change the communication pattern
-            optim.refresh_trainable()
+            self._trainable_param_to_rank = {}
+            for optim in self._sharded_optimizers:
+                # OSS may need to change the communication pattern
+                optim.refresh_trainable()
 
-            # Update ShardedDDP given the new partitions
-            for (
-                device_per_rank_params
-            ) in optim.per_device_params.values():  # all the params on this device (inc all ranks)
-                for device_params in device_per_rank_params:
-                    for param in filter(lambda x: x.requires_grad, device_params):
-                        self._trainable_param_to_rank[param] = optim.param_to_rank[param]
+                # Update ShardedDDP given the new partitions
+                for (
+                    device_per_rank_params
+                ) in optim._per_device_params.values():  # all the params on this device (inc all ranks)
+                    for device_params in device_per_rank_params:
+                        for param in filter(lambda x: x.requires_grad, device_params):
+                            self._trainable_param_to_rank[param] = optim._param_to_rank[param]
 
-        self._setup_bucket_strategy()
-        self._setup_backward_hooks()
+            self._setup_bucket_strategy()
+            self._setup_backward_hooks()
 
     def reduce(self) -> None:
         """
@@ -298,7 +313,8 @@ class ShardedDataParallel(nn.Module):
         ), "No grads waiting to be reduced, maybe that this was called twice or there was no BW pass ?"
 
         # Trigger all the current BW hooks
-        _ = map(lambda x: x(), self._grad_accs)
+        self._bucket_flush_callback_set = True  # no need to flush in the end, we own the callback execution
+        _ = list(map(lambda x: x(), self._manual_reduce))
 
         # Make sure that all the futures are consumed
         self._consume_work_handles()
@@ -312,18 +328,19 @@ class ShardedDataParallel(nn.Module):
             blocking (bool): wait for the operation to conclude.
         """
 
-        work_handles = []
+        with profiler.record_function("fairscale::sdp::sync_buffers"):
+            work_handles = []
 
-        for buffer in self.module.buffers(recurse=True):
-            work_handles.append(
-                dist.broadcast(buffer.data, self.reference_global_rank, self.process_group, async_op=True)
-            )
+            for buffer in self.module.buffers(recurse=True):
+                work_handles.append(
+                    dist.broadcast(buffer.data, self._reference_global_rank, self._process_group, async_op=True)
+                )
 
-        if blocking and work_handles:
-            if self.backend != dist.Backend.NCCL:
-                _ = list(filter(lambda x: x.wait(), work_handles))
-            else:
-                work_handles[-1].wait()
+            if blocking and work_handles:
+                if self._backend != dist.Backend.NCCL:
+                    _ = list(filter(lambda x: x.wait(), work_handles))
+                else:
+                    work_handles[-1].wait()
 
     def zero_grad(self, set_to_none: bool = False) -> None:
         r"""Sets gradients of all model parameters to zero. See similar function
@@ -334,11 +351,14 @@ class ShardedDataParallel(nn.Module):
                 See :meth:`torch.optim.Optimizer.zero_grad` for details.
         """
 
-        for index, trainable_param in enumerate(self._all_params):
-            if set_to_none and not self._should_bucket_grad[index]:
+        for index, trainable_param in enumerate(self._trainable_params):
+            if set_to_none and (len(self._should_bucket_grad) == 0 or not self._should_bucket_grad[index]):
                 trainable_param.grad = None
             elif trainable_param.grad is not None:
                 trainable_param.grad.zero_()
+
+        for bucket in self._bucket_list:
+            bucket.zero()
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped module."""
@@ -350,44 +370,25 @@ class ShardedDataParallel(nn.Module):
     @contextlib.contextmanager
     def no_sync(self) -> Generator:
         """A context manager to disable gradient synchronization."""
-        old_should_accumulate_grads = self.should_accumulate_grads
-        self.should_accumulate_grads = True
+        old_should_accumulate_grads = self._should_accumulate_grads
+        self._should_accumulate_grads = True
         yield
-        self.accumulate_grads_flipped = self.should_accumulate_grads != old_should_accumulate_grads
-        self.should_accumulate_grads = old_should_accumulate_grads
+        self._accumulate_grads_flipped = self._should_accumulate_grads != old_should_accumulate_grads
+        self._should_accumulate_grads = old_should_accumulate_grads
 
     @torch.no_grad()
     def _clear_counters(self) -> None:
         """Reset all the grad reduce and call counters"""
-        self._grad_to_be_reduced = [True for _ in self._grad_to_be_reduced]
+        if self.training:
+            self._grad_to_be_reduced = [True for _ in self._trainable_params]
         self._bucket_flush_callback_set = False
 
-        # Do not reset the buckets
-        if self.use_buckets:
-            assert self._bucket_list is not None
-
+        if self._use_buckets:
             for bucket in self._bucket_list:
-                assert (
-                    self.accumulate_grads_flipped or not self.training or self.should_accumulate_grads or bucket.sent
-                ), (
-                    "A bucket failed to be sent, cannot continue as results would be wrong. "
-                    + "You can trye de-activating ShardedDDP buckets -set `reduce_buffer_size` to 0-"
-                    + "Please submit a GitHub issue, this should not happen"
-                )
+                bucket.reset_checked_in()
 
-                bucket.reset()
-
-        if not self.should_accumulate_grads:
-            self.accumulate_grads_flipped = False
-
-    def _find_rank(self, param: Parameter) -> Tuple[OSS, int]:
-        """ Look up where this parameter belongs to """
-        for optim in self.sharded_optimizers:
-            if param in optim.param_to_rank.keys():
-                return optim, optim.param_to_rank[param]
-
-        assert False, "This parameter is not present in an optimizer, this should not happen"
-        return (None, -1)
+        if not self._should_accumulate_grads:
+            self._accumulate_grads_flipped = False
 
     def _get_reduce_fn(self, index: int, param: torch.Tensor, dst_rank: int) -> Callable:
         """
@@ -397,12 +398,12 @@ class ShardedDataParallel(nn.Module):
         Either way a delayed action is necessary and is passed as a callback.
         """
 
-        if not self.use_buckets or not self._should_bucket_grad[index]:
+        if not self._use_buckets or not self._should_bucket_grad[index]:
             # Direct reduction
             @torch.no_grad()
             def reduce(*_: Any) -> None:
                 # Skip gradient reduction, do not alter status flags
-                if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
+                if not self._should_accumulate_grads and self._grad_to_be_reduced[index]:
                     assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
 
                     if not self._bucket_flush_callback_set:
@@ -411,14 +412,14 @@ class ShardedDataParallel(nn.Module):
 
                     # Make sure that this is not fired twice
                     self._grad_to_be_reduced[index] = False
-                    param.grad.mul_(self.world_size_scaling)
+                    param.grad.mul_(self._world_size_scaling)
 
-                    if self.reduce_fp16:
+                    if self._reduce_fp16:
                         param.grad.data = param.grad.data.half()
 
                     # Future work includes clearing up the buffer if possible
                     def cleanup() -> None:
-                        if dst_rank != self.global_rank:
+                        if dst_rank != self._global_rank:
                             param.grad = None
                         else:
                             assert param.grad is not None
@@ -430,7 +431,7 @@ class ShardedDataParallel(nn.Module):
                             handle=dist.reduce(
                                 tensor=param.grad.data,
                                 dst=self._local_to_global_rank[dst_rank],
-                                group=self.process_group,
+                                group=self._process_group,
                                 async_op=True,
                             ),
                             callback=cleanup,
@@ -445,7 +446,8 @@ class ShardedDataParallel(nn.Module):
             @torch.no_grad()
             def reduce(*_: Any) -> None:
                 # Skip gradient reduction, do not alter status flags
-                if not self.should_accumulate_grads and self._grad_to_be_reduced[index]:
+
+                if not self._should_accumulate_grads and self._grad_to_be_reduced[index]:
                     assert param.grad is not None, "Reducing gradients during backward pass, cannot be None"
 
                     if not self._bucket_flush_callback_set:
@@ -454,12 +456,14 @@ class ShardedDataParallel(nn.Module):
 
                     # Make sure that this is not fired twice
                     self._grad_to_be_reduced[index] = False
-                    bucket = self.buckets[param.device][dst_rank]
+                    bucket = self._buckets[param.device][dst_rank]
                     bucket.params_checked_in += 1
 
-                    if bucket.full():
+                    if bucket.all_checked_in:
+                        assert bucket.buffer is not None
+
                         # Normalize the bucket in one go
-                        bucket.buffer.mul_(self.world_size_scaling)
+                        bucket.buffer.mul_(self._world_size_scaling)
 
                         # Reduce the bucket
                         bucket.sent = True
@@ -468,7 +472,7 @@ class ShardedDataParallel(nn.Module):
                                 handle=dist.reduce(
                                     tensor=bucket.buffer,
                                     dst=bucket.destination,
-                                    group=self.process_group,
+                                    group=self._process_group,
                                     async_op=True,
                                 ),
                                 callback=None,
@@ -485,22 +489,39 @@ class ShardedDataParallel(nn.Module):
         Attach a reduce function to each grad-requiring parameter.
         This makes the gradient reduction automatic whenever there's a backward pass
         """
+        with profiler.record_function("fairscale::sdp::setup_backward_hooks"):
+            # Detach possible pre-existing hooks
+            while len(self._grad_hooks) > 0:
+                self._grad_hooks.pop().remove()
 
-        # Go through the parameters, attach the hook
-        self._grad_accs = []
-        for index, param in enumerate(self._trainable_params):
-            if param.grad is not None and param.grad.requires_grad:
-                raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
+            # Go through the parameters, attach the hook
+            self._grad_accs = []
+            self._manual_reduce = []
+            if not self.training:
+                return
 
-            # Register the hook to the next function in line,
-            # so that the hook is fired when this grad has properly been computed
-            p_tmp = param.expand_as(param)
-            assert p_tmp.grad_fn is not None
-            grad_acc = p_tmp.grad_fn.next_functions[0][0]
-            dst_rank = self._trainable_param_to_rank[param]
+            for index, param in enumerate(self._trainable_params):
+                if param.grad is not None and param.grad.requires_grad:
+                    raise RuntimeError("ShardedDataParallel only works with gradients that don't require grad")
 
-            grad_acc.register_hook(self._get_reduce_fn(index, param, dst_rank))
-            self._grad_accs.append(grad_acc)  # keep this function in scope
+                p_tmp = param.expand_as(param)
+
+                # See https://pytorch.org/docs/stable/tensors.html?highlight=grad_fn
+                # We're interested in the tensors which will be tracked by Autograd
+                # Some tensors can have gradients independent of the inputs (ie. pooling layer for instance),
+                # these do not need to be sync'ed
+                if p_tmp.grad_fn is not None:
+                    # Register the hook to the next function in line,
+                    # so that the hook is fired when this grad has properly been computed
+                    # (by default the hook with Pytorch is a pre-grad, not a post-grad)
+                    grad_acc = p_tmp.grad_fn.next_functions[0][0]
+                    dst_rank = self._trainable_param_to_rank[param]
+
+                    reduce_function = self._get_reduce_fn(index, param, dst_rank)
+
+                    self._grad_hooks.append(grad_acc.register_hook(reduce_function))
+                    self._grad_accs.append(grad_acc)  # keep this hook in scope
+                    self._manual_reduce.append(reduce_function)
 
     @torch.no_grad()
     def _sync_params_and_buffers(self) -> None:
@@ -512,11 +533,11 @@ class ShardedDataParallel(nn.Module):
 
         for t in self.module.state_dict().values():
             work_handles.append(
-                dist.broadcast(t, src=self.reference_global_rank, group=self.process_group, async_op=True)
+                dist.broadcast(t, src=self._reference_global_rank, group=self._process_group, async_op=True)
             )
 
         # gloo does not guarantee inlining like NCCL, wait for all requests
-        if self.backend != dist.Backend.NCCL:
+        if self._backend != dist.Backend.NCCL:
             _ = list(filter(lambda x: x.wait(), work_handles))
         elif work_handles:
             work_handles[-1].wait()
@@ -527,10 +548,11 @@ class ShardedDataParallel(nn.Module):
         Adapted from ``torch.nn.distributed.DistributedDataParallel``.
         """
         for layer in module.modules():
-            if isinstance(layer, torch.nn.modules.SyncBatchNorm):
+            if isinstance(layer, torch.nn.modules.SyncBatchNorm) and hasattr(layer, "_specify_ddp_gpu_num"):
                 assert self.device_type != "cpu", "SyncBatchNorm layers only work with GPU modules"
                 # device_id logic has not been handled, assume single-process single-device
                 # SyncBatchNorm only supports DDP with single-process single-device anyway'
+                # This function is removed from pytorch since 1.9.
                 layer._specify_ddp_gpu_num(1)  # type: ignore
 
     def _setup_bucket_strategy(self) -> None:
@@ -539,54 +561,42 @@ class ShardedDataParallel(nn.Module):
         This method can be a slow for big models, but it it not typically called often (not for every forward for instance)
         """
 
-        if not self.use_buckets:
-            return
+        with profiler.record_function("fairscale::sdp::setup_buckets"):
+            if not self._use_buckets:
+                return
 
-        # Devise the bucketing strategy. Parameters are already sorted, in that:
-        # - these are only the trainable parameters, so they should produce grads
-        # - they are sorted by increasing size
-        self.buckets = {}
+            # Devise the bucketing strategy. Parameters are already sorted, in that:
+            # - these are only the trainable parameters, so they should produce grads
+            # - they are sorted by increasing size
+            self._buckets = {}
+            self._should_bucket_grad = [False for _ in self._trainable_params]
 
-        for param in self._trainable_params:
-            device = param.device
-            dst_rank = self._trainable_param_to_rank[param]
+            for i, param in enumerate(self._trainable_params):
+                device = param.device
+                dst_rank = self._trainable_param_to_rank[param]
 
-            if param.device not in self.buckets.keys():
-                self.buckets[param.device] = [
-                    Bucket(buffer=torch.zeros(self.buffer_max_size, dtype=param.dtype, device=device))
-                    for _ in range(dist.get_world_size(self.process_group))
-                ]
+                if param.device not in self._buckets.keys():
+                    self._buckets[param.device] = {}
 
-            bucket = self.buckets[device][dst_rank]
-            bucket.destination = self._local_to_global_rank[dst_rank]
+                if dst_rank not in self._buckets[param.device].keys():
+                    self._buckets[param.device][dst_rank] = GradBucket(
+                        self._buffer_max_size,
+                        dtype=param.dtype,
+                        device=param.device,
+                        destination=self._local_to_global_rank[dst_rank],
+                    )
 
-            # Criteria to decide whether this parameter is to be bucketed or not:
-            # - enough room in the bucket
-            if (bucket.fill + param.numel()) < self.buffer_max_size:
-                self._should_bucket_grad.append(True)
+                # Criteria to decide whether this parameter is to be bucketed or not:
+                # - enough room in the bucket
+                if self._buckets[device][dst_rank].can_add_grad_view(param):
+                    self._buckets[device][dst_rank].add_grad(param)
+                    self._should_bucket_grad[i] = True
 
-                # This parameter gradients becomes a view of the bucket
-                fill_next = bucket.fill + param.numel()
+            self._bucket_list = list(chain(*[self._buckets[device].values() for device in self._buckets.keys()]))
 
-                if param.grad is None:
-                    # will be overwritten just below, see next line
-                    param.grad = torch.zeros_like(param)
-
-                param.grad.data = bucket.buffer[bucket.fill : fill_next].view_as(param.data)
-                bucket.fill = fill_next
-
-                # Update the bucket
-                self.buckets[device][dst_rank].max_params_checked_in += 1
-
-            else:
-                self._should_bucket_grad.append(False)
-
-        self._bucket_list = list(chain(*[self.buckets[device] for device in self.buckets.keys()]))
-
-        # Resize the buckets to remove lost space in the end
-        for bucket in self._bucket_list:
-            bucket.buffer.resize_(bucket.fill)
-            bucket.sent = True
+            # Resize the buckets to remove lost space in the end
+            for bucket in self._bucket_list:
+                bucket.shrink()
 
     def _consume_work_handles(self) -> None:
         """Consume all the futures which are tied to this optimizer's buckets.
@@ -607,21 +617,41 @@ class ShardedDataParallel(nn.Module):
                 work_handle.callback()
 
     def _flush_reduce_calls(self) -> None:
-        if self._bucket_list is not None:
-            for bucket in self._bucket_list:
-                if not bucket.sent:
-                    # Normalize the bucket in one go
-                    bucket.buffer.mul_(self.world_size_scaling)
+        for bucket in self._bucket_list:
+            if not bucket.sent:
+                assert bucket.buffer is not None
 
-                    # Reduce the bucket
-                    self._work_handles.append(
-                        Workhandle(
-                            handle=dist.reduce(
-                                tensor=bucket.buffer, dst=bucket.destination, group=self.process_group, async_op=True,
-                            ),
-                            callback=None,
-                        )
+                # Normalize the bucket in one go
+                bucket.buffer.mul_(self._world_size_scaling)
+
+                # Reduce the bucket
+                self._work_handles.append(
+                    Workhandle(
+                        handle=dist.reduce(
+                            tensor=bucket.buffer, dst=bucket.destination, group=self._process_group, async_op=True,
+                        ),
+                        callback=None,
                     )
-                    bucket.sent = True
+                )
+                bucket.sent = True
 
         self._consume_work_handles()
+
+    def _detect_train_change(self) -> bool:
+        with profiler.record_function("fairscale::sdp::detect_train_changes"):
+            # Optionally check whether the trainable parameters have changed
+            trainable_mask = list(map(_trainable, self._all_params))
+
+            # - one or more parameters trainability changed
+            trainability_changed = trainable_mask != self._reference_trainable_mask
+
+            # - the whole model is not trainable but we still have grad hooks
+            trainability_changed |= not self.training and len(self._grad_hooks) > 0
+
+            if trainability_changed:
+                logging.warning(
+                    "ShardedDDP detected that the trainable params changed, either because of eval/train mode or parameter freezing/unfreeze."
+                )
+                self._reference_trainable_mask = trainable_mask
+
+        return trainability_changed

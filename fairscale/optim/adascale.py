@@ -74,7 +74,7 @@ class AdaScale(Optimizer):
         last_epoch = 0
         done = False
         step = 0
-        while True:
+        while not done:
             for batch in dataset:
                 optim.zero_grad()
                 logits = model()
@@ -86,7 +86,7 @@ class AdaScale(Optimizer):
                 if epoch > last_epoch:
                     scheduler.step()
                     last_epoch = epoch
-                if epoch >= max_epochs:
+                if epoch >= MAX_EPOCHS:
                     done = True
 
     Example 2: using a custom `update_lr()` function that update the learning
@@ -533,7 +533,7 @@ class AdaScale(Optimizer):
                 continue
             # must be a np array, extend it with the right value and check the shape.
             val = 1 if name == "grad_sqr_avg" else 0
-            self._state[name] = np.append(self._state[name], val)
+            self._state[name] = np.append(self._state[name], val)  # type: ignore
             assert self._state[name].shape == (len(self._optimizer.param_groups),)
 
     def zero_grad(self) -> None:

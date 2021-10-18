@@ -20,11 +20,14 @@
 """The Pipe interface."""
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union, cast
+import warnings
 
 import torch
 from torch import Tensor, nn
 import torch.autograd
 import torch.cuda
+
+from fairscale.utils import torch_version
 
 from . import microbatch
 from .batchnorm import DeferredBatchNorm
@@ -254,6 +257,14 @@ class Pipe(Module):
         deferred_batch_norm: bool = False,
     ) -> None:
         super().__init__()
+
+        if torch_version()[:2] >= (1, 8):
+            warnings.warn(
+                "fairscale.nn.Pipe has been upstreamed to PyTorch as torch.distributed.pipeline.sync.Pipe. "
+                "It is now deprecated and will be removed in a future version of fairscale. "
+                "The PyTorch API has minor changes. Please see https://pytorch.org/docs/stable/pipeline.html for details.",
+                DeprecationWarning,
+            )
 
         chunks = int(chunks)
         checkpoint = str(checkpoint)

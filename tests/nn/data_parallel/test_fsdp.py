@@ -15,9 +15,11 @@ from unittest import mock
 from parameterized import parameterized
 import torch
 from torch import nn
+import torch.distributed
 
+from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
-from fairscale.nn.misc.checkpoint_activations import checkpoint_wrapper
+from fairscale.utils import torch_version
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,
@@ -25,7 +27,6 @@ from fairscale.utils.testing import (
     get_cycles_per_ms,
     objects_are_equal,
     spawn_for_all_world_sizes,
-    torch_version,
 )
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
@@ -76,6 +77,56 @@ class DistributedTest(unittest.TestCase):
         else:
             model = FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs), group, **config).cuda()
         return model
+
+    @classmethod
+    def _test_identical_outputs(
+        cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
+    ):
+        if config.get("mixed_precision", False):
+            autocast = True
+            # Force the compute dtype to be torch.float32 so that we get
+            # identical results as PyTorch DDP when using autocast. Note that
+            # this will cause the all-gather to happen in FP32, which is slower
+            # than necessary in most cases.
+            config["compute_dtype"] = torch.float32
+        else:
+            autocast = False
+
+        # Establish reference behavior with PyTorch DDP (+ optionally autocast).
+        model = model_init_fn(group=group, wrapper_config=None).cuda()
+        if ref_ddp_fn is None:
+            model = nn.parallel.DistributedDataParallel(
+                model, device_ids=[rank], output_device=rank, process_group=group
+            )
+        else:
+            model = ref_ddp_fn(model, group)
+        ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
+        ref_state_dict = model.module.state_dict()
+        if config.get("cpu_offload", False):
+            for k in ref_state_dict.keys():
+                ref_state_dict[k] = ref_state_dict[k].cpu()
+
+        # Confirm we get the same behavior using FullyShardedDataParallel.
+        model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
+        if use_cuda:
+            model = model.cuda()
+        else:
+            assert next(model.parameters()).device == torch.device("cpu")
+        shard_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
+        if config.get("cpu_offload", False):
+            # In pytorch 1.10, assert_allclose below checks for tensor device match. Therefore,
+            # we need to move the CPU tensor to CUDA in case we are doing cpu_offload.
+            shard_loss = shard_loss.cuda()
+        shard_state_dict = model.state_dict()
+
+        try:
+            torch.testing.assert_allclose(ref_loss, shard_loss)
+            assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
+        except (AssertionError, RuntimeError) as e:
+            raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
+        if config.get("flatten_parameters", True):
+            metadata = model.local_metadata_dict()
+            assert isinstance(metadata, dict)
 
 
 class TestMixedPrecision(DistributedTest):
@@ -232,6 +283,12 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         spawn_and_init(test_fn)
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    def test_nested_all_wrapped_model_checkpoint(self, config):
+        model_fn = functools.partial(NestedWrappedModule, wrap_everything=True, checkpoint=True)
+        test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
+        spawn_and_init(test_fn)
+
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_parameterized(self, config):
         # Test every combination of these options:
         spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config))
@@ -312,49 +369,6 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     @classmethod
     def _dummy_ddp_fn(self, model, group):
         return DummyDDP(model)
-
-    @classmethod
-    def _test_identical_outputs(
-        cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
-    ):
-        if config.get("mixed_precision", False):
-            autocast = True
-            # Force the compute dtype to be torch.float32 so that we get
-            # identical results as PyTorch DDP when using autocast. Note that
-            # this will cause the all-gather to happen in FP32, which is slower
-            # than necessary in most cases.
-            config["compute_dtype"] = torch.float32
-        else:
-            autocast = False
-
-        # Establish reference behavior with PyTorch DDP (+ optionally autocast).
-        model = model_init_fn(group=group, wrapper_config=None).cuda()
-        if ref_ddp_fn is None:
-            model = nn.parallel.DistributedDataParallel(
-                model, device_ids=[rank], output_device=rank, process_group=group
-            )
-        else:
-            model = ref_ddp_fn(model, group)
-        ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
-        ref_state_dict = model.module.state_dict()
-        if config.get("cpu_offload", False):
-            for k in ref_state_dict.keys():
-                ref_state_dict[k] = ref_state_dict[k].cpu()
-
-        # Confirm we get the same behavior using FullyShardedDataParallel.
-        model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
-        if use_cuda:
-            model = model.cuda()
-        else:
-            assert next(model.parameters()).device == torch.device("cpu")
-        shard_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
-        shard_state_dict = model.state_dict()
-
-        try:
-            torch.testing.assert_allclose(ref_loss, shard_loss)
-            assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
-        except (AssertionError, RuntimeError) as e:
-            raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
 
     @parameterized.expand([[1], [inf]], name_func=rename_test)
     def test_clip_norm_transformer(self, norm_type):
@@ -440,160 +454,6 @@ class TestSerialization(DistributedTest):
         optim.step()
 
 
-class TestLocalStateDict(DistributedTest):
-    @parameterized.expand([[True, True], [False, False]], name_func=rename_test)
-    def test_load_local_state_dict(self, flatten_params, mixed_precision):
-        test_fn = functools.partial(
-            self._load_local_and_train, {"flatten_parameters": flatten_params, "mixed_precision": mixed_precision}
-        )
-        spawn_and_init(test_fn)
-
-    @classmethod
-    def _load_local_and_train(self, config, rank, group, d_model=16, d_vocab=23):
-        """Check that local_state_dict can be saved and loaded for a given worker, and that training updates it"""
-        model = self.get_wrapped_model(
-            group, cuda_first=False, config=config, d_vocab=d_vocab, d_model=d_model, add_bn=False
-        )  # Set bn=True here to show that BN doesn't get updated
-        state_1 = model.local_state_dict()
-        state_before_training = {k: v.cpu().clone() for k, v in state_1.items()}
-        assert len(state_1) > 0
-        model.load_local_state_dict(state_1)
-        weight_key = "flat_param" if model.flatten_parameters else "embed_tokens.weight"
-
-        state_1_weight = state_1[weight_key]
-        assert state_1_weight.dtype == torch.float32, f"got dtype {state_1_weight.dtype} expected torch.float32"
-        if not model.flatten_parameters:
-            # The weight will be sharded since we access module.state_dict directly
-            state_1_module_weight = model.module.state_dict()[weight_key]
-            torch.testing.assert_allclose(state_1_weight, state_1_module_weight)
-            torch.testing.assert_allclose(state_1_weight, model.module.embed_tokens.weight)
-        self._train_for_several_steps(model, 1, model.mixed_precision)
-
-        state_2 = model.local_state_dict()
-        state_after_training = {k: v.cpu().clone() for k, v in state_2.items()}
-        model.load_local_state_dict(state_2)
-
-        assert state_1.keys() == state_2.keys()
-
-        # Assert that parameters were updated since before training
-        unchanged = []
-        unwrapped_model = model.module.module if config["flatten_parameters"] else model.module
-        buffers = {name for name, _ in unwrapped_model.named_buffers()}
-        for k in state_1:
-            if (state_before_training[k] == state_after_training[k]).all() and (k not in buffers):
-                unchanged.append(k)
-        if unchanged:
-            raise AssertionError(f"params {unchanged} not changed after training")
-
-
-class TestSaveLoadStateDict(DistributedTest):
-    @parameterized.expand([[False], [True]], name_func=rename_test)
-    def test_calling_state_dict_twice_mixed_precision(self, mixed_precision):
-        test_fn = functools.partial(
-            self._test_calling_state_dict_twice, {"flatten_parameters": False, "mixed_precision": mixed_precision}
-        )
-        spawn_and_init(test_fn)
-
-    @classmethod
-    def _test_calling_state_dict_twice(self, config, rank, group, **model_kwargs):
-        ddp_model = self.get_wrapped_model(group, cuda_first=False, config=config, **model_kwargs)
-        autocast = ddp_model.mixed_precision
-        self._train_for_several_steps(ddp_model, 1, autocast)
-        ddp_model.state_dict()
-        ddp_model.state_dict()  # second call
-
-    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
-    def test_state_dict_after_forward(self, config):
-        test_fn = functools.partial(self._test_module_state_dict, config)
-        spawn_and_init(test_fn)
-
-    @parameterized.expand([[False], [True]], name_func=rename_test)
-    def test_state_dict_before_forward(self, mixed_precision):
-        test_fn = functools.partial(
-            self._test_state_dict_before_forward, {"flatten_parameters": False, "mixed_precision": mixed_precision}
-        )
-        spawn_and_init(test_fn)
-
-    @classmethod
-    def _test_state_dict_before_forward(cls, config, rank, group):
-        ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
-        sd = ddp_model.state_dict()
-        wt = sd["embed_tokens.weight"]
-        assert wt.dtype == torch.float32, f"got dtype {wt.dtype} expected torch.float32"
-        cls._train_for_several_steps(ddp_model, 1, ddp_model.mixed_precision)
-
-    @classmethod
-    def _test_module_state_dict(cls, config, rank, group):
-        ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
-        autocast = ddp_model.mixed_precision
-        cls._train_for_several_steps(ddp_model, 2, autocast)
-        state_1 = ddp_model.state_dict()
-        # You must make a new FullyShardedDataParallel instance to use module.load_state_dict
-        unwrapped_model = TransformerWithSharedParams(group)
-        unwrapped_model.load_state_dict(state_1)
-        new_ddp_model = FullyShardedDataParallel(unwrapped_model, group, **config).cuda()
-        cls._train_for_several_steps(new_ddp_model, 2, autocast)
-        try:
-            ddp_model.load_state_dict(new_ddp_model.state_dict())
-            assert False, "ddp_model.load_state_dict(new_ddp_model.state_dict()) succeeded"
-        except Exception:
-            pass
-
-    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
-    def test_nested_wrapped_model(self, config):
-        test_fn = functools.partial(self._test_nested_wrapped_model, config=config)
-        spawn_and_init(test_fn)
-
-    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
-    def test_nested_wrapped_model_local_state_dict(self, config):
-        test_fn = functools.partial(self._test_nested_wrapped_model_local_state_dict, config=config)
-        spawn_and_init(test_fn)
-
-    @classmethod
-    def _test_nested_wrapped_model(cls, rank, group, config=None):
-        # Get reference state dict without any nested FSDP instances.
-        model = NestedWrappedModule(group, None).cuda()
-        model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank, process_group=group)
-        cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
-        ref_state_dict = {k: v.clone() for k, v in model.module.state_dict().items()}
-
-        # Create a nested FSDP-wrapped instance.
-        if config["mixed_precision"]:
-            config["compute_dtype"] = torch.float32
-        model = NestedWrappedModule(group, config)
-        model = FullyShardedDataParallel(model, group, **config).cuda()
-        cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
-
-        # Round-trip state dict save/load/save.
-        state_dict = {k: v.clone() for k, v in model.state_dict().items()}
-        model.load_state_dict(state_dict)
-        state_dict = model.state_dict()
-
-        assert ref_state_dict.keys() == state_dict.keys(), f"{ref_state_dict.keys()} != {state_dict.keys()}"
-        for key in ref_state_dict.keys():
-            assert objects_are_equal(
-                ref_state_dict[key], state_dict[key], raise_exception=False
-            ), f"{key}, {ref_state_dict[key]} != {state_dict[key]}"
-
-    @classmethod
-    def _test_nested_wrapped_model_local_state_dict(cls, rank, group, config=None, local=None):
-        # Create a nested FSDP-wrapped instance.
-        model = NestedWrappedModule(group, config)
-        model = FullyShardedDataParallel(model, group, **config).cuda()
-        cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
-
-        # Round trip state dict save/load/save.
-        ref_state_dict = {k: v.clone() for k, v in model.local_state_dict().items()}
-        model.load_local_state_dict(ref_state_dict)
-        state_dict = model.local_state_dict()
-
-        assert ref_state_dict.keys() == state_dict.keys(), f"{ref_state_dict.keys()} != {state_dict.keys()}"
-        for key in ref_state_dict.keys():
-            assert objects_are_equal(
-                ref_state_dict[key], state_dict[key], raise_exception=False
-            ), f"{key}, {ref_state_dict[key]} != {state_dict[key]}"
-
-
 class TestHooks(DistributedTest):
     # Feel free to modify these tests as the implementation changes.
     # They aspire to make sure that backward hooks are registered and used
@@ -677,6 +537,41 @@ class TestNoGrad(DistributedTest):
         assert objects_are_equal(ref_output, no_grad_output, raise_exception=True)
 
 
+class TestModuleProperties(DistributedTest):
+    @parameterized.expand([[{"flatten_parameters": False}], [{"flatten_parameters": True}]], name_func=rename_test)
+    def test_named_parameters(self, config):
+        test_fn = functools.partial(self._test_named_params, config=config)
+        spawn_and_init(test_fn)
+
+    @classmethod
+    def _test_named_params(self, rank, group, config):
+        # Get the named parameters before wrapping.
+        before_wrap_model = TransformerWithSharedParams(group)
+        before_wrap_params = before_wrap_model.named_parameters()
+
+        # Train the model for 1 step.
+        model = self.get_wrapped_model(group, cuda_first=False, config=config)
+        self._train_for_several_steps(model, 1, autocast=False)
+
+        # Get the named parameters after wrapping to compare.
+        after_wrap_params = model.named_parameters()
+
+        if not config["flatten_parameters"]:
+            for before_nm, after_nm in zip(before_wrap_params, after_wrap_params):
+                assert before_nm[0] == after_nm[0]
+        else:
+            named_params_flat = [p for p in after_wrap_params][0][0]
+            assert "flat_param_0" in named_params_flat
+
+        # Compare name and size under the `summon_full_params` context.
+        with model.summon_full_params():
+            after_wrap_params = model.named_parameters()
+
+            for before_nm, after_nm_original in zip(before_wrap_params, after_wrap_params):
+                assert before_nm[0] == after_nm_original[0]
+                torch.testing.assert_allclose(before_nm[1].shape, after_nm_original[1].cpu().shape)
+
+
 class TransformerWithSharedParams(nn.Module):
     def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=True, **unused_kwargs):
         super().__init__()
@@ -721,7 +616,7 @@ class TransformerWithSharedParams(nn.Module):
 
 
 class NestedWrappedModule(nn.Module):
-    def __init__(self, group, wrapper_config, wrap_everything=False):
+    def __init__(self, group, wrapper_config, wrap_everything=False, checkpoint=False):
         super().__init__()
         self.rank = group.rank()
         self.world_size = group.size()
@@ -741,13 +636,24 @@ class NestedWrappedModule(nn.Module):
         )
 
         # Wrap all modules triggers a corner case where root FSDP doesn't have any params.
+        # Test it with checkpoint_wrapper as well to validate final backward callback
+        # is queued correctly when root FSDP does not have any params and every layer is
+        # wrapped as FSDP(checkpoint(module)).
         if wrap_everything:
-            self.module = nn.Sequential(
-                _maybe_wrap(nn.Linear(8, 4)),
-                _maybe_wrap(nn.Linear(4, 16)),
-                _maybe_wrap(nn.Linear(16, 4)),
-                _maybe_wrap(nn.Linear(4, 8)),
-            )
+            if checkpoint:
+                self.module = nn.Sequential(
+                    _maybe_wrap(checkpoint_wrapper(nn.Linear(8, 4))),
+                    _maybe_wrap(checkpoint_wrapper(nn.Linear(4, 16))),
+                    _maybe_wrap(checkpoint_wrapper(nn.Linear(16, 4))),
+                    _maybe_wrap(checkpoint_wrapper(nn.Linear(4, 8))),
+                )
+            else:
+                self.module = nn.Sequential(
+                    _maybe_wrap(nn.Linear(8, 4)),
+                    _maybe_wrap(nn.Linear(4, 16)),
+                    _maybe_wrap(nn.Linear(16, 4)),
+                    _maybe_wrap(nn.Linear(4, 8)),
+                )
 
     def get_input(self, device):
         torch.manual_seed(1 + self.rank)  # keep everything deterministic
@@ -781,13 +687,19 @@ class MixtureOfExperts(NestedWrappedModule):
 
         # "expert" params are different on each rank
         torch.manual_seed(42 + group.rank())
-        expert = nn.Linear(16, 4)
+        d_expert = 23
+        d_shared = 12
+        d_input = 8
+        expert = nn.Linear(d_expert, d_shared)
+
+        self.num_expert_params = sum([p.numel() for p in expert.parameters()])
         for p in expert.parameters():
             p.expert = True
 
         # everything else is shared
         torch.manual_seed(0)
-        shared = nn.Linear(4, 16)
+
+        shared = nn.Linear(d_shared, d_expert)
 
         if checkpoint_act:
             expert = checkpoint_wrapper(expert)
@@ -795,12 +707,12 @@ class MixtureOfExperts(NestedWrappedModule):
 
         if wrapper_config is not None:
             # we create a process group of size 1 for the expert params
-            expert_group = torch.distributed.new_group([group.rank()])
+            expert_group = torch.distributed.new_group([group.rank()])  # world size 1 means no shard
             expert = FullyShardedDataParallel(expert, expert_group, **wrapper_config)
 
             shared = FullyShardedDataParallel(shared, group, **wrapper_config)
 
-        self.module = nn.Sequential(nn.Linear(8, 4), shared, expert, nn.Linear(4, 8))
+        self.module = nn.Sequential(nn.Linear(d_input, d_shared), shared, expert, nn.Linear(d_shared, d_input))
 
     def forward(self, x):
         if self.delay_before_free_ms > 0:

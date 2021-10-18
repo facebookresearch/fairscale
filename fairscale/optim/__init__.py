@@ -7,6 +7,7 @@
 :mod:`fairscale.optim` is a package implementing various torch optimization algorithms.
 """
 import logging
+from typing import List
 
 from .adascale import AdaScale, AdaScaleWrapper
 from .oss import OSS
@@ -19,3 +20,5 @@ try:
     from .grad_scaler import GradScaler
 except ImportError:
     logging.warning("Torch AMP is not available on this platform")
+
+__all__: List[str] = []
