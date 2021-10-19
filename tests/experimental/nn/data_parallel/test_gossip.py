@@ -128,7 +128,7 @@ def _prepare_single_device_module(
 
 
 def run_test_slowmo_with_slowmo_freq_1(
-    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any]
+    rank: int, world_size: int, tempfile: str, _filename_rpc: str, slowmo_init_dict: Dict[Any, Any]
 ) -> None:
     """
     Note: we pass down `device_ids` all the way to SlowMoDistributedDataParallel
@@ -183,7 +183,7 @@ def run_test_slowmo_with_slowmo_freq_1(
 
 
 def run_test_localsgd_with_freq_ge_2(
-    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any]
+    rank: int, world_size: int, tempfile: str, _filename_rpc: str, slowmo_init_dict: Dict[Any, Any], *_, **__
 ) -> None:
 
     int_devices = get_gpus_for_rank(world_size)[rank][:1]
@@ -242,7 +242,7 @@ def run_test_localsgd_with_freq_ge_2(
 
 
 def run_test_slowmo_with_slowmo_freq_ge_2(
-    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], *_args: Any
+    rank: int, world_size: int, tempfile: str, _filename_rpc: str, slowmo_init_dict: Dict[Any, Any], *_, **__
 ) -> None:
     """
     Note: we pass down `device_ids` all the way to SlowMoDistributedDataParallel
@@ -313,7 +313,13 @@ def run_test_slowmo_with_slowmo_freq_ge_2(
 
 
 def run_test_memory_usage_localsgd_with_slowmo(
-    rank: int, world_size: int, tempfile: str, slowmo_init_dict: Dict[Any, Any], use_gossip_data_parallel: bool = False,
+    rank: int,
+    world_size: int,
+    tempfile: str,
+    slowmo_init_dict: Dict[Any, Any],
+    use_gossip_data_parallel: bool = False,
+    *_,
+    **__,
 ) -> int:
     int_devices = get_gpus_for_rank(world_size)[rank][:1]
     devices = [torch.device("cuda:" + str(i)) for i in int_devices]

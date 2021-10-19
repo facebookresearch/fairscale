@@ -213,11 +213,8 @@ def test_runner(
 ) -> None:
     # At this point we're in a new process, torch options need to be set again
     if deterministic:
-        if hasattr(torch, "set_deterministic"):
-            torch.set_deterministic(True)  # type: ignore  # this is just checked above, mypy is drunk
-        else:
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     test_func(rank, *args, **kwargs)
 
