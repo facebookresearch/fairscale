@@ -24,7 +24,8 @@ from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, Dist
 from fairscale.utils import torch_version
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available() or torch_version() < (1, 9, 0), reason="CPU tests fail right now and all tests require torch version >= 1.9.0."
+    not torch.cuda.is_available() or torch_version() < (1, 9, 0),
+    reason="CPU tests fail right now and all tests require torch version >= 1.9.0.",
 )
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
