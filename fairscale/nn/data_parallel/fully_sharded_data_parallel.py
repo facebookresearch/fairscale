@@ -180,7 +180,7 @@ class FullyShardedDataParallel(nn.Module):
             if ``True``, flatten parameters into a single contiguous tensor,
             which improves training speed.
         move_params_to_cpu (bool, Optional):
-            if ``True``, offload FP32 params to CPU.
+            if ``True``, offload params to CPU.
         compute_dtype (torch.dtype, Optional):
             dtype for full parameters for computation. This defaults to
             ``torch.float32`` unless *``mixed_precision``* is set, in which case
@@ -248,15 +248,8 @@ class FullyShardedDataParallel(nn.Module):
             Set this to ``True`` to turn on verbose output for model's string representation.
             Default: False
         cpu_offload (bool, Optional):
-<<<<<<< HEAD
             if ``True``, offload FP32 params to CPU. Note: This arg will be deprecated in favor of
             *``move_params_to_cpu``* in an upcoming release.
-=======
-            if ``True``, offload FP32 params to CPU. This is only relevant when
-            *``mixed_precision``* is ``True``. Note: This arg will be deprecated in favor of
-            *``move_params_to_cpu``* in an upcoming release. Please prefer
-            specifying ``move_params_to_cpu`` instead.
->>>>>>> main
     """
 
     def __init__(
@@ -1850,13 +1843,8 @@ class FullyShardedDataParallel(nn.Module):
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
                 p._fp16_shard.copy_(
-<<<<<<< HEAD
-                    # If move_params_to_cpu is True, this will be non-blocking because
-                    # _fp32_shard is pinned, otherwise it's a no-op.
-=======
                     # If move_params_to_cpu is True, this will be non-blocking
                     # because _fp32_shard is pinned, otherwise it's a no-op.
->>>>>>> main
                     p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
                 )
                 p.data = p._fp16_shard
