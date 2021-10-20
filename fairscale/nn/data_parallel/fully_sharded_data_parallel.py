@@ -190,7 +190,7 @@ class FullyShardedDataParallel(nn.Module):
         move_grads_to_cpu (bool, Optional):
             move gradient shard to CPU after reduction. This is useful when
             combined with CPU-based optimizers. It defaults to the value of
-            *``cpu_offload``*.
+            *``move_params_to_cpu``*.
         bucket_cap_mb (int, Optional):
             FSDP will bucket parameters so that gradient reduction can
             be more efficient for small parameters.
@@ -248,8 +248,15 @@ class FullyShardedDataParallel(nn.Module):
             Set this to ``True`` to turn on verbose output for model's string representation.
             Default: False
         cpu_offload (bool, Optional):
+<<<<<<< HEAD
             if ``True``, offload FP32 params to CPU. Note: This arg will be deprecated in favor of
             *``move_params_to_cpu``* in an upcoming release.
+=======
+            if ``True``, offload FP32 params to CPU. This is only relevant when
+            *``mixed_precision``* is ``True``. Note: This arg will be deprecated in favor of
+            *``move_params_to_cpu``* in an upcoming release. Please prefer
+            specifying ``move_params_to_cpu`` instead.
+>>>>>>> main
     """
 
     def __init__(
@@ -303,6 +310,11 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
+<<<<<<< HEAD
+=======
+        if self.move_params_to_cpu and not self.mixed_precision:
+            raise ValueError("move_params_to_cpu requires mixed_precision=True")
+>>>>>>> main
 
         # skip validation if the process group was created above
         if process_group:
@@ -630,7 +642,7 @@ class FullyShardedDataParallel(nn.Module):
                 f"buffer_dtype={self.buffer_dtype}, "
                 f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
                 f"compute_device={self.compute_device}"
-                f"cpu_offload={self.move_params_to_cpu}, "
+                f"move_params_to_cpu={self.move_params_to_cpu}, "
                 f"move_grads_to_cpu={self.move_grads_to_cpu}, "
                 f"bucket_cap_mb={self.bucket_cap_mb}, "
                 f"clear_autocast_cache={self.clear_autocast_cache}"
@@ -983,7 +995,7 @@ class FullyShardedDataParallel(nn.Module):
             ``_fp32_shard``: a single shard of the parameters in full precision
                 (typically FP32, but this is dependent on the dtype of the model
                 as it's passed in by the user). This can be on CPU or GPU
-                depending on the value of *``cpu_offload``*.
+                depending on the value of *``move_params_to_cpu``*.
             ``_fp16_shard``: if *``mixed_precision``* is ``True``, this will be
                 a single shard of the parameters in FP16, used for all-gather.
             ``_full_param_padded``: the full weight (padded to be evenly
@@ -1838,8 +1850,13 @@ class FullyShardedDataParallel(nn.Module):
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
                 p._fp16_shard.copy_(
+<<<<<<< HEAD
                     # If move_params_to_cpu is True, this will be non-blocking because
                     # _fp32_shard is pinned, otherwise it's a no-op.
+=======
+                    # If move_params_to_cpu is True, this will be non-blocking
+                    # because _fp32_shard is pinned, otherwise it's a no-op.
+>>>>>>> main
                     p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
                 )
                 p.data = p._fp16_shard
