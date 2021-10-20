@@ -21,8 +21,11 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 
 from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
+from fairscale.utils import torch_version
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CPU tests fail right now.")
+pytestmark = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch_version() < (1, 9, 0), reason="CPU tests fail right now."
+)
 
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
 GPU_DEVICES = ["worker0/cuda:0", "worker1/cuda:1"]
