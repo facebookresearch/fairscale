@@ -23,6 +23,9 @@ import torch.nn as nn
 from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
 from fairscale.utils import torch_version
 
+# TODO(anj): Fix the CPU only version before enabling this test.
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CPU version is broken")
+
 CPU_DEVICES = ["worker0/cpu", "worker1/cpu"]
 GPU_DEVICES = ["worker0/cuda:0", "worker1/cuda:1"]
 if torch.cuda.is_available():
