@@ -8,7 +8,6 @@
 #include <cmath>
 #include "ATen/TensorUtils.h"
 #include "ATen/AccumulateType.h"
-#include <THC/THCGeneral.h>
 #include "multi_tensor_apply.cuh"
 
 #define BLOCK_SIZE 512
@@ -262,5 +261,5 @@ void fused_adam_cuda(
             throw "Parameters must be of type float or half";
         }
     }
-    THCudaCheck(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 }
