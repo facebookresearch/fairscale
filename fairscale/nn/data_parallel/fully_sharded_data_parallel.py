@@ -274,6 +274,7 @@ class FullyShardedDataParallel(nn.Module):
         force_input_to_fp32: bool = False,
         verbose: bool = False,
         cpu_offload: bool = False,
+        gradient_predivide_factor: Optional[float] = None,
     ):
         init_start = time.time()
         super().__init__()
@@ -297,7 +298,7 @@ class FullyShardedDataParallel(nn.Module):
         self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
 
-        self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
+        self.gradient_predivide_factor: float = gradient_predivide_factor or self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
 
         self.numel_padded_per_param: List[int] = []
