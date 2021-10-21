@@ -204,6 +204,11 @@ run_oss_for_each: &run_oss_for_each
        command: |
          python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp --multi_tensor_optim
 
+run_fsdp_benchmark: &run_fsdp_benchmark
+  - run:
+      name: Run FSDP Benchmark
+      command: |
+        python benchmarks/fsdp.py --world_size 4 --debug
 
 run_doc_build: &run_doc_build
    - run:

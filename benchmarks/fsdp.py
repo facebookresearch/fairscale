@@ -172,18 +172,25 @@ def train(model_config, model, benchmark_config, model_specs, args):
         if i > 0:
             total_tokens += source.numel()
 
-        optimizer.zero_grad()
-        input = source.cuda()
-        target = target.cuda()
-        output = model(input)
+        if args.benchmark_eval:
+            input = source.cuda()
+            target = target.cuda()
+            output = model(input)
+            loss = criterion(output.view(-1, vocab_size), target.view(-1))
+        else:
+            optimizer.zero_grad()
+            input = source.cuda()
+            target = target.cuda()
+            output = model(input)
 
-        loss = criterion(output.view(-1, vocab_size), target.view(-1))
-        loss.backward()
+            loss = criterion(output.view(-1, vocab_size), target.view(-1))
+            loss.backward()
 
-        torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
-        optimizer.step()
+            torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
+            optimizer.step()
 
         total_loss += loss.item()
+
         log_interval = 1
         total_tokens_per_log_interval += source.numel()
         if i % log_interval == 0 and i > 0:
@@ -210,29 +217,6 @@ def train(model_config, model, benchmark_config, model_specs, args):
         return wps, loss.item()
     else:
         return 0.0, 0.0
-
-
-# TODO(anj-s): Add an option for users to be able to benchmark evaluate.
-def evaluate(eval_model, data_source, criterion, ntokens):
-    eval_model.eval()
-    total_loss = 0.0
-    # TODO(anj-s): Move this to the benchmark config if we want to benchmark evaluation.
-    bptt = 35
-
-    def get_batch(source, i, bptt):
-        seq_len = min(bptt, len(source) - 1 - i)
-        data = source[i : i + seq_len]
-        target = source[i + 1 : i + 1 + seq_len].view(-1)
-        return data, target
-
-    with torch.no_grad():
-        for i in range(0, data_source.size(0) - 1, bptt):
-            data, targets = get_batch(data_source, i, bptt)
-            output = eval_model(data)
-            output = output.to(targets.device)
-            output_flat = output.view(-1, ntokens)
-            total_loss += len(data) * criterion(output_flat, targets).item()
-    return total_loss / (len(data_source) - 1)
 
 
 def get_number_of_words(data):
@@ -343,9 +327,10 @@ def benchmark_single_process(args):
     model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
     model = model_config["model"]
 
-    if auto_wrap:
+    if args.enable_auto_wrap:
         with enable_wrap(wrapper_cls=FSDP, flatten_parameters=False):
             fsdp_model = auto_wrap(model, auto_wrap_policy=default_auto_wrap_policy)
+            fsdp_model = FSDP(fsdp_model)
     else:
         fsdp_model = FSDP(model)
     if args.dry_run:
@@ -368,7 +353,8 @@ parser.add_argument(
     help="Language Model(LM) used to benchmark FSDP.",
 )
 parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
-parser.add_argument("--auto_wrap", action="store_true", default=False, help="Use auto_wrap with FSDP")
+parser.add_argument("--enable_auto_wrap", action="store_true", default=False, help="Use auto_wrap with FSDP")
+parser.add_argument("--benchmark_eval", action="store_true", default=False, help="Benchmark evaluation workflow.")
 
 if __name__ == "__main__":
     args = parser.parse_args()
