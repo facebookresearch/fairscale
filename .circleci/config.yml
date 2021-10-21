@@ -577,6 +577,8 @@ jobs:
 
       - <<: *run_oss_gloo
 
+      - <<: *run_fsdp_benchmark
+
       - save_cache:
           paths:
             - /tmp/MNIST
