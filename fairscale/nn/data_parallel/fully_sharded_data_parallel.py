@@ -1036,7 +1036,7 @@ class FullyShardedDataParallel(nn.Module):
             )
             free_storage_(p._full_param_padded)
 
-        if self.move_grads_to_cpu:
+        if self.move_grads_to_cpu and self.training:
             # We can optionally move the grad shard to CPU during the backward
             # pass. In this case, it's important to pre-allocate the CPU grad
             # shard in pinned memory so that we can do a non-blocking transfer.
