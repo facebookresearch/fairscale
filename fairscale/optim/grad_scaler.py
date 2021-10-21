@@ -196,10 +196,28 @@ class ShardedGradScaler(TorchGradScaler):
         # To prepare for next iteration, clear the data collected from optimizers this iteration.
         self._per_optimizer_states = defaultdict(_refresh_per_optimizer_state)
 
-    def _foreach_non_finite_check_and_unscale_cpu(scaled_grads, found_inf, inv_scale):
-        pass
+    def _foreach_non_finite_check_and_unscale_cpu_(self, scaled_grads, found_inf, inv_scale):
+        if len(scaled_grads) == 0:
+            return
+        assert inv_scale.numel() == 1, "inv_scale must be a 1-element tensor."
+        assert found_inf.numel() == 1, "found_inf must be a 1-element tensor."
 
-    def _unscale_grads_(self, optimizer, inv_scale, found_inf, allow_fp16):
+        expected_device = scaled_grads[0].device  
+        expected_dtype = type(scaled_grads[0])
+        for tensor in scaled_grads: 
+            assert tensor.device == expected_device, "scaled_grads must be on the same device"
+
+            # check for non_overlapping_and_dense doesn't exist in the python world
+            # as remarked here https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/native/cuda/AmpKernels.cu#L108
+            # we assume tensor is not MTA safe. iterate through each item regarless of dtype
+            if type(tensor) is not expected_dtype:
+                # _amp_non_finite_check_and_unscale_cpu(tensor, found_inf, inv_scale)
+                if torch.isinf(tensor).any().item() is True or torch.isnan(tensor).any().item() is True:
+                    found_inf.data = torch.tensor([1.0])
+                else:
+                    tensor.data *= inv_scale.item()
+
+    def _unscale_grads_(self, optimizer, inv_scale, found_inf, allow_fp16=True):
         per_device_inv_scale = _GeneralMultiDeviceReplicator(inv_scale)
         per_device_found_inf = _GeneralMultiDeviceReplicator(found_inf)
 
