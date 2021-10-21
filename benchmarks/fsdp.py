@@ -61,20 +61,7 @@ def get_lm_model(args, device, config):
     nhid = config["nhid"]
     ndecoder = config["num_decoder_layers"]
 
-    if args.lazy_construction:
-        layers = [
-            LazyModule(lambda: transformer_lm.EmbeddingLayer(vocab_size, ninp, initrange)),
-            LazyModule(lambda: transformer_lm.PositionalEncodingLayer(ninp, dropout)),
-        ]
-        for _ in range(ndecoder):
-            layers.append(LazyModule(lambda: transformer_lm.TransformerDecoderLayer(ninp, nhead, nhid, dropout)))
-
-        layers.append(LazyModule(lambda: transformer_lm.LinearLayer(ninp, vocab_size, initrange)))
-        model = layers
-    else:
-        model = transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
-
-    return model
+    return transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
 
 def get_tensors_by_size_bucket():
@@ -340,9 +327,6 @@ def benchmark_single_process(args):
 
 
 parser = argparse.ArgumentParser(description="benchmark")
-parser.add_argument(
-    "--lazy_construction", action="store_true", default=False, help="Number of decoder layers in the model"
-)
 parser.add_argument("--max_batch", type=int, default=4, help="Max number of batches")
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
