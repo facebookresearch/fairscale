@@ -303,11 +303,6 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
-<<<<<<< HEAD
-=======
-        if self.move_params_to_cpu and not self.mixed_precision:
-            raise ValueError("move_params_to_cpu requires mixed_precision=True")
->>>>>>> main
 
         # skip validation if the process group was created above
         if process_group:
@@ -989,8 +984,7 @@ class FullyShardedDataParallel(nn.Module):
                 (typically FP32, but this is dependent on the dtype of the model
                 as it's passed in by the user). This can be on CPU or GPU
                 depending on the value of *``move_params_to_cpu``*.
-            ``_fp16_shard``: if *``mixed_precision``* is ``True``, this will be
-                a single shard of the parameters in FP16, used for all-gather.
+            ``_fp16_shard``: This will be a single shard of the parameters in FP16, used for all-gather.
             ``_full_param_padded``: the full weight (padded to be evenly
                 divisible by ``world_size``), used for computation in the
                 forward and backward pass. This will be resized in place and
@@ -1003,7 +997,8 @@ class FullyShardedDataParallel(nn.Module):
         # A single shard of the parameters in full precision.
         p._fp32_shard = p.data
 
-        assert p._fp32_shard.device == torch.device("cuda")
+        if self.mixed_precision:
+            assert p._fp32_shard.dtype == torch.float32
         if self.move_params_to_cpu:
             assert p._fp32_shard.device == torch.device("cpu")
 
@@ -1583,6 +1578,7 @@ class FullyShardedDataParallel(nn.Module):
             # Trim any padding and reshape to match original size.
             p.data = p.data[: p._orig_size.numel()].view(p._orig_size)
 
+        print(f"Has full params {self.has_full_params}")
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
             for p in self.params:
@@ -1592,8 +1588,19 @@ class FullyShardedDataParallel(nn.Module):
         self.has_full_params = True
 
         with torch.cuda.stream(self._streams["all_gather"]):
-            if (self.mixed_precision and not force_full_precision) or self.move_params_to_cpu:
+            if self.mixed_precision and not force_full_precision:
                 self._cast_fp32_param_shards_to_fp16()
+
+            if self.move_params_to_cpu:
+                if force_full_precision:
+                    if self.params[0].dtype == self.compute_dtype:
+                        self._cast_fp32_param_shards_to_fp16()
+                    else:
+                        for p in self.params:
+                            p.data = p.data.to(self.compute_device)
+                            print(f"p.data {p.data.size()} {p._orig_size} {self.compute_device}")
+                else:
+                    self._cast_fp32_param_shards_to_fp16()
 
             for p in self.params:
                 if not p._is_sharded:  # e.g., when world_size == 1

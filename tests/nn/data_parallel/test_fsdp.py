@@ -304,6 +304,15 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
         )
         spawn_and_init(test_fn)
+    
+    def test_cpu_offload_and_cpu_grads_no_mixed_precision(self):
+        # We don't test the False condition because that requires the optimizer to internally do
+        # the device transfer and PyTorch optimizers don't support this.
+        config = {"mixed_precision": False, "cpu_offload": True, "move_grads_to_cpu": True}
+        test_fn = functools.partial(
+            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
+        )
+        spawn_and_init(test_fn)
 
     def test_cpu_offload_and_cuda_grads_breaks(self):
         # If grads are on gpu, but model and optimizer are on cpu, backward breaks.
@@ -406,14 +415,14 @@ class TestParamInit(DistributedTest):
 
 
 class TestSerialization(DistributedTest):
-    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_pickle(self, mixed_precision, cpu_offload):
         """Ensure that wrapped modules can be pickled/unpickled."""
         config = {"mixed_precision": mixed_precision, "cpu_offload": cpu_offload}
         test_fn = functools.partial(self._test_pickle, config=config)
         spawn_and_init(test_fn, world_sizes=[2])
 
-    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_multiprocessing(self, mixed_precision, cpu_offload):
         """Ensure that wrapped modules can be sent via multiprocessing."""
         config = {"mixed_precision": mixed_precision, "cpu_offload": cpu_offload}
