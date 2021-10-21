@@ -304,7 +304,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
             self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
         )
         spawn_and_init(test_fn)
-    
+
     def test_cpu_offload_and_cpu_grads_no_mixed_precision(self):
         # We don't test the False condition because that requires the optimizer to internally do
         # the device transfer and PyTorch optimizers don't support this.

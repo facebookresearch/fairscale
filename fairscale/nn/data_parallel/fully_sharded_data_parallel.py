@@ -1565,7 +1565,7 @@ class FullyShardedDataParallel(nn.Module):
                 p.data = custom_output_tensor
                 output_tensors.append((p.data, True))
             elif not p._is_sharded:
-                if (self.mixed_precision and not force_full_precision) or self.move_params_to_cpu:
+                if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
                     assert p._fp16_shard is not None
                     p.data = p._fp16_shard
                     output_tensors.append((p.data, True))
