@@ -6,7 +6,7 @@
 import copy
 import os
 import tempfile
-from typing import Any, Dict, List, Tuple, Type
+from typing import Any, Dict, List, Tuple, Type, Union
 import unittest
 
 import pytest
@@ -124,7 +124,20 @@ def _prepare_single_device_module(
     input = torch.randn(global_batch_size, 2).to(devices[0])
     target = torch.randn(global_batch_size, 4).to(devices[0])
 
+    # Ensuring that the models and data are the same on all GPUs at the time of setup
+    data_list: List[Union[nn.Module, torch.Tensor]] = [model, slowmo_model, input, target]
+    for data in data_list:
+        make_same_as_data_on_gpu_0(data)
+
     return model, slowmo_model, input, target
+
+
+def make_same_as_data_on_gpu_0(data: Union[nn.Module, torch.Tensor]) -> None:
+    if isinstance(data, nn.Module):
+        for param in data.parameters():
+            torch.distributed.broadcast(param, src=0)
+    else:
+        torch.distributed.broadcast(data, src=0)
 
 
 def run_test_slowmo_with_slowmo_freq_1(
