@@ -500,7 +500,7 @@ def test_settings(test_settings) -> None:
     spawn_for_all_world_sizes(
         test_settings["test_function"],
         world_sizes=[world_size],
-        args=(world_size, temp_file_name, test_settings["slowmo_settings"]),
+        args=(test_settings["slowmo_settings"],),
         deterministic=True,
     )
 
@@ -586,10 +586,7 @@ def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempf
 def test_max_memory_used_localsgd_slowmo_memory_efficient() -> None:
     world_size = 2
     spawn_for_all_world_sizes(
-        run_max_memory_used_localsgd_slowmo_memory_efficient,
-        world_sizes=[world_size],
-        args=(world_size, tempfile.mkstemp()[1], tempfile.mkstemp()[1]),
-        deterministic=True,
+        run_max_memory_used_localsgd_slowmo_memory_efficient, world_sizes=[world_size], args=(), deterministic=True,
     )
 
 
@@ -632,10 +629,7 @@ def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, temp
 def test_max_memory_used_slowmo_memory_efficient() -> None:
     world_size = 2
     spawn_for_all_world_sizes(
-        run_max_memory_used_slowmo_memory_efficient,
-        world_sizes=[world_size],
-        args=(world_size, tempfile.mkstemp()[1], tempfile.mkstemp()[1]),
-        deterministic=True,
+        run_max_memory_used_slowmo_memory_efficient, world_sizes=[world_size], args=(), deterministic=True,
     )
 
 
@@ -679,10 +673,7 @@ def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile_1, tempfil
 def test_max_memory_used_slowmo_no_sharding() -> None:
     world_size = 2
     spawn_for_all_world_sizes(
-        run_max_memory_used_slowmo_no_sharding,
-        world_sizes=[world_size],
-        args=(world_size, tempfile.mkstemp()[1], tempfile.mkstemp()[1]),
-        deterministic=True,
+        run_max_memory_used_slowmo_no_sharding, world_sizes=[world_size], args=(), deterministic=True,
     )
 
 
