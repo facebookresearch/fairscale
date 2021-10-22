@@ -169,7 +169,10 @@ class AsyncRecvOperator(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def backward(ctx, *grad: Tensor,) -> Tuple[Optional[Tensor], ...]:
+    def backward(
+        ctx,
+        *grad: Tensor,
+    ) -> Tuple[Optional[Tensor], ...]:
         ranks = get_pipeline_parallel_ranks()
         this_rank = torch.distributed.get_rank()
         body = AsyncMessageBody(
@@ -177,7 +180,11 @@ class AsyncRecvOperator(torch.autograd.Function):
         )
         ctx.transport.send_message(
             PipeMessage(
-                this_rank, ranks[ctx.args.source.stage], queue_name=ctx.queue_name, args=body, tensors=tuple(grad),
+                this_rank,
+                ranks[ctx.args.source.stage],
+                queue_name=ctx.queue_name,
+                args=body,
+                tensors=tuple(grad),
             ),
             sync=True,
         )
@@ -242,7 +249,12 @@ class AsyncEventLoop:
         to the next stage in the pipeline if needed."""
 
         task = create_task(
-            self.checkpoint_stop, batch.index, self.group.rank(), batch, partition.module, skip_trackers,
+            self.checkpoint_stop,
+            batch.index,
+            self.group.rank(),
+            batch,
+            partition.module,
+            skip_trackers,
         )
         result = task.compute()
         task.finalize(result)

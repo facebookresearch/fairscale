@@ -96,7 +96,10 @@ class ReduceScatterBucketer:
 
     @torch.no_grad()
     def reduce_scatter_async(
-        self, input_list: List[Tensor], group: ProcessGroup, callback_fn: Optional[Callable] = None,
+        self,
+        input_list: List[Tensor],
+        group: ProcessGroup,
+        callback_fn: Optional[Callable] = None,
     ) -> None:
         """
         Reduce-scatter a list of tensors asynchronously, so smaller reductions

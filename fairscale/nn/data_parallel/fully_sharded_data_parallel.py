@@ -397,7 +397,7 @@ class FullyShardedDataParallel(nn.Module):
 
     @property
     def module(self) -> FlattenParamsWrapper:
-        """ make model.module accessible, just like DDP. """
+        """make model.module accessible, just like DDP."""
         assert isinstance(self._fsdp_wrapped_module, FlattenParamsWrapper)
         return self._fsdp_wrapped_module
 
@@ -665,10 +665,10 @@ class FullyShardedDataParallel(nn.Module):
         parameter as well as the parameter.
 
         With FSDP, the `named_parameters` function implemented in `nn.Module` will not
-        be able to return the name and param when we use flattened parameters unless 
+        be able to return the name and param when we use flattened parameters unless
         we call this function under a `summon_full_params` context.
 
-        If you want the full param to be returned, you should call this function 
+        If you want the full param to be returned, you should call this function
         under a `summon_full_params` context when using flattened or original params.
         """
         named_param = super().named_parameters(*args, **kwargs)
@@ -2059,7 +2059,7 @@ def _pre_load_state_dict_hook(
 
 
 def _clean_path(path: str) -> str:
-    """ Remove FSDP related wrapper modules from a given state dict key str path. """
+    """Remove FSDP related wrapper modules from a given state dict key str path."""
     return ".".join([split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}])
 
 

@@ -53,8 +53,8 @@ def patch_batchnorm(module: nn.Module) -> List:
 def init_counter(module: nn.Module) -> None:
     """Add a checkpoint forward pass counter to a module and all its child FSDP modules.
 
-       ``inc_counter`` and ``dec_counter`` are used together with this to maintain counters
-       for FSDP to use in case of multiple forward pass and checkpoint being used at the same time.
+    ``inc_counter`` and ``dec_counter`` are used together with this to maintain counters
+    for FSDP to use in case of multiple forward pass and checkpoint being used at the same time.
     """
     for mod in module.modules():
         mod._checkpoint_fwd_counter = 0

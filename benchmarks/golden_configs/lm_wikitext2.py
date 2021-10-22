@@ -100,3 +100,35 @@ class Pipe:
     def get_golden_synthetic_stats():
         # TODO(anj-s): Add support for synthetic regression benchmarks
         raise NotImplementedError("Synthetic data benchmarks are not supported.")
+
+
+class FSDP:
+    def get_model_config():
+        return {
+            "vocab_size": 10000,
+            "ninp": 1024,  # embedding dimension
+            "nhid": 1024,  # the dimension of the feedforward network model in nn.TransformerEncoder
+            "nhead": 2,  # the number of heads in the multiheadattention models
+            "dropout": 0,
+            "initrange": 0.1,
+            "scaler": GradScaler(),
+            "clip_value": 0.05,
+            "num_decoder_layers": 2,
+            "seq_len": 32,
+        }
+
+    def get_benchmark_config():
+
+        return {
+            "epochs": 1,
+            "lr": 0.001,  # learning rate
+            "batch_size": 8,
+            "criterion": nn.CrossEntropyLoss(),
+        }
+
+    def get_golden_real_stats():
+        raise NotImplementedError("Real data benchmarks are not supported yet.")
+
+    def get_golden_synthetic_stats():
+        # TODO(anj-s): Add support for synthetic regression benchmarks
+        raise NotImplementedError("Synthetic data benchmarks are not supported.")

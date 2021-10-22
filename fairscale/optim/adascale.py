@@ -187,11 +187,11 @@ class AdaScale(Optimizer):
         self._hook()
 
     def _hook(self) -> None:
-        """ Internal function to register the gradient hooks.
+        """Internal function to register the gradient hooks.
 
-            Note, don't assume every parameter will generate a gradient (i.e. triggering the hook)
-            in every backward pass, which is the reason that we have ``find_unused_params`` flag
-            in the DDP class in ``torch.nn.parallel``.
+        Note, don't assume every parameter will generate a gradient (i.e. triggering the hook)
+        in every backward pass, which is the reason that we have ``find_unused_params`` flag
+        in the DDP class in ``torch.nn.parallel``.
         """
         assert self._hook_handles == [], "Must run unhook first"
         for idx, param_group in enumerate(self._optimizer.param_groups):
@@ -200,23 +200,23 @@ class AdaScale(Optimizer):
                 self._hook_handles.append(h)
 
     def __del__(self) -> None:
-        """ Unhook in case caller forgets to call unhook.
+        """Unhook in case caller forgets to call unhook.
 
-            This however may not "work" since there would be circular reference
-            between the hook objects and this objects. In that case, neither will
-            get GC'ed. Calling unhook explicitly if you really want to delete
-            AdaScale from memory.
+        This however may not "work" since there would be circular reference
+        between the hook objects and this objects. In that case, neither will
+        get GC'ed. Calling unhook explicitly if you really want to delete
+        AdaScale from memory.
         """
         self.unhook()
 
     def unhook(self) -> None:
-        """ Unregister hook handles.
+        """Unregister hook handles.
 
-            This is public because caller may need to call this to ensure all GPU
-            memory are released. Otherwise, the hook may prevent parameters from being
-            released from the GPU memory pool.
+        This is public because caller may need to call this to ensure all GPU
+        memory are released. Otherwise, the hook may prevent parameters from being
+        released from the GPU memory pool.
 
-            Internally, we use this to support ``add_param_group()`` API.
+        Internally, we use this to support ``add_param_group()`` API.
         """
         for h in self._hook_handles:
             h.remove()
@@ -385,7 +385,9 @@ class AdaScale(Optimizer):
         # it means that we are in backward pass.
         if self._local_grad_sqr is None:
             self._local_grad_sqr = torch.zeros(
-                len(self._optimizer.param_groups), device=grad.device, requires_grad=False,
+                len(self._optimizer.param_groups),
+                device=grad.device,
+                requires_grad=False,
             )
         self._local_grad_sqr[pg_idx] += grad.pow(2).sum()
 
@@ -515,9 +517,9 @@ class AdaScale(Optimizer):
         return res
 
     def add_param_group(self, pg: Dict) -> None:
-        """ Support adding parameter groups
+        """Support adding parameter groups
 
-            We need to re-size some of the state and re-register the backward hooks.
+        We need to re-size some of the state and re-register the backward hooks.
         """
         assert self._local_grad_sqr is None, "Can't add parameter group during backward"
         self._optimizer.add_param_group(pg)
@@ -542,28 +544,32 @@ class AdaScale(Optimizer):
         return self._optimizer.zero_grad()
 
     def state_dict(self) -> Dict:
-        """ Proxy function to optimizer, checkpointing needs this.
+        """Proxy function to optimizer, checkpointing needs this.
 
-            .. note::
+        .. note::
 
-                Do NOT checkpoint in the middle of gradient accumulation since
-                associated AdaScale internal states are not saved in the checkpoint.
+            Do NOT checkpoint in the middle of gradient accumulation since
+            associated AdaScale internal states are not saved in the checkpoint.
         """
         assert self._local_grad_sqr is None, "Don't checkpoint in backward"
         return self._optimizer.state_dict()
 
     def load_state_dict(self, data: Dict) -> None:
-        """ Proxy function to optimizer, checkpointing needs this.
+        """Proxy function to optimizer, checkpointing needs this.
 
-            .. note::
+        .. note::
 
-                Do NOT checkpoint in the middle of gradient accumulation since
-                associated AdaScale internal states are not saved in the checkpoint.
+            Do NOT checkpoint in the middle of gradient accumulation since
+            associated AdaScale internal states are not saved in the checkpoint.
         """
         assert self._local_grad_sqr is None, "Don't load checkpoint in backward"
         return self._optimizer.load_state_dict(data)
 
-    def set_num_gradients_to_accumulate(self, num_gradients_to_accumulate: int, update_smoothing: bool = True,) -> None:
+    def set_num_gradients_to_accumulate(
+        self,
+        num_gradients_to_accumulate: int,
+        update_smoothing: bool = True,
+    ) -> None:
         """Set the number of gradients to accumulate to a new value.
 
         This is experimental. This could be called while training so that

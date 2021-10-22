@@ -208,7 +208,7 @@ run_fsdp_benchmark: &run_fsdp_benchmark
   - run:
       name: Run FSDP Benchmark
       command: |
-        python benchmarks/fsdp.py --debug
+        python benchmarks/fsdp.py --dry_run --debug
 
 run_doc_build: &run_doc_build
    - run:

@@ -320,14 +320,22 @@ if __name__ == "__main__":
     if args.optim_type == OptimType.oss_ddp or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark OSS with DDP")
         mp.spawn(
-            train, args=(args, BACKEND, OptimType.oss_ddp, args.check_regression), nprocs=args.world_size, join=True,  # type: ignore
+            train,
+            args=(args, BACKEND, OptimType.oss_ddp, args.check_regression),
+            nprocs=args.world_size,
+            join=True,  # type: ignore
         )
 
     if args.optim_type == OptimType.oss_sharded_ddp or args.optim_type == OptimType.everyone:
         logging.info("\n*** Benchmark OSS with ShardedDDP")
         mp.spawn(
             train,  # type: ignore
-            args=(args, BACKEND, OptimType.oss_sharded_ddp, args.check_regression,),
+            args=(
+                args,
+                BACKEND,
+                OptimType.oss_sharded_ddp,
+                args.check_regression,
+            ),
             nprocs=args.world_size,
             join=True,
         )

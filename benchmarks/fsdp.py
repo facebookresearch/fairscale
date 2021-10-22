@@ -21,7 +21,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
-from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
+from benchmarks.golden_configs.lm_wikitext2 import FSDP as lm_wikitext2
 from fairscale.nn import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 

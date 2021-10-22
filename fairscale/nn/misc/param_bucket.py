@@ -118,19 +118,17 @@ class GradBucket(Bucket):
         self.callback: Optional[Callable[[Any], None]] = None
 
     def reset_checked_in(self) -> None:
-        """ Reset the counter of the parameter grads which have been checked in
-        """
+        """Reset the counter of the parameter grads which have been checked in"""
         self.params_checked_in = 0
         self.sent = False
 
     @property
     def all_checked_in(self) -> bool:
-        """ Have all the expected gradient check-in happened ?"""
+        """Have all the expected gradient check-in happened ?"""
         return len(self._params) == self.params_checked_in
 
     def can_add_grad_view(self, param: torch.Tensor) -> bool:
-        """ Is there enough room in the bucket to add this parameter gradient, and is this param not already checked in ?
-        """
+        """Is there enough room in the bucket to add this parameter gradient, and is this param not already checked in ?"""
         return self._fill + param.numel() < self._max_size and id(param) not in self._param_ids
 
     def to(  # type: ignore

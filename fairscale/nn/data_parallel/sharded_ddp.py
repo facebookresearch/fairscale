@@ -31,7 +31,7 @@ def _trainable(param: torch.Tensor) -> bool:
 
 
 class ShardedDataParallel(nn.Module):
-    """ Wrap the model, and reduce the gradients to the right rank during the backward pass.
+    """Wrap the model, and reduce the gradients to the right rank during the backward pass.
 
     - the partition is given by the sharded optimizer
     - wrap the base model with a model which knows where to reduce each gradient
@@ -224,7 +224,10 @@ class ShardedDataParallel(nn.Module):
             return self.module(*inputs, **kwargs)
 
     def to(  # type: ignore
-        self, device: Optional[torch.device], dtype: Optional[torch.dtype] = None, non_blocking: bool = False,
+        self,
+        device: Optional[torch.device],
+        dtype: Optional[torch.dtype] = None,
+        non_blocking: bool = False,
     ) -> "ShardedDataParallel":
         """
         Moves and/or casts the parameters and buffers.
@@ -273,7 +276,7 @@ class ShardedDataParallel(nn.Module):
         self.refresh_trainable()
 
     def refresh_trainable(self) -> None:
-        """ If the module trainability has changed, update all the assumptions """
+        """If the module trainability has changed, update all the assumptions"""
 
         # Make sure that this is not done while gradients are waiting to be reduced (if no_sync context for instance)
         if functools.reduce(lambda x, y: x or y, self._grad_to_be_reduced, False):
@@ -600,8 +603,8 @@ class ShardedDataParallel(nn.Module):
 
     def _consume_work_handles(self) -> None:
         """Consume all the futures which are tied to this optimizer's buckets.
-            We start from the first/older ones, since they are the most likely to be ready and non-blocking
-            """
+        We start from the first/older ones, since they are the most likely to be ready and non-blocking
+        """
 
         while len(self._work_handles) > 0:
             work_handle = self._work_handles.popleft()
@@ -628,7 +631,10 @@ class ShardedDataParallel(nn.Module):
                 self._work_handles.append(
                     Workhandle(
                         handle=dist.reduce(
-                            tensor=bucket.buffer, dst=bucket.destination, group=self._process_group, async_op=True,
+                            tensor=bucket.buffer,
+                            dst=bucket.destination,
+                            group=self._process_group,
+                            async_op=True,
                         ),
                         callback=None,
                     )

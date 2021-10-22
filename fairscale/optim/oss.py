@@ -286,7 +286,10 @@ class OSS(Optimizer):
                     else torch.tensor([0], dtype=torch.uint8, device=dist_device)
                 )
                 broadcast_object(
-                    state_to_share, src_rank=self.global_rank, group=self.group, dist_device=dist_device,
+                    state_to_share,
+                    src_rank=self.global_rank,
+                    group=self.group,
+                    dist_device=dist_device,
                 )
             else:
                 # Fetch the optim state from the other replicas
@@ -437,7 +440,7 @@ class OSS(Optimizer):
 
     @property
     def _local_params(self) -> List[torch.Tensor]:
-        """ Iterable which goes through the parameters that this rank owns """
+        """Iterable which goes through the parameters that this rank owns"""
         if self.__local_params is None:
             self.__local_params = list(
                 chain(
@@ -453,7 +456,7 @@ class OSS(Optimizer):
 
     @property
     def _param_to_index(self) -> Dict[int, int]:
-        """ Hash table in between parameter indices in the global optimizer scheme, and the actual params """
+        """Hash table in between parameter indices in the global optimizer scheme, and the actual params"""
         if len(self.__param_to_index) == 0:
             self.__param_to_index = {id(p): i for i, p in enumerate(chain(*(g["params"] for g in self.param_groups)))}
 

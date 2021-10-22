@@ -142,7 +142,7 @@ class MySGD(Optimizer):
         super(MySGD, self).__setstate__(state)
 
     def step(self, closure=None):
-        """ Performs a single optimization step.
+        """Performs a single optimization step.
         Args:
             closure (callable, optional): A closure that reevaluates the model
                 and returns the loss.
@@ -162,15 +162,15 @@ class MySGD(Optimizer):
 
 class SpectrainSGDMomentum(Optimizer):
     r"""
-        Implements a SGD with momentum optimizer with Spectrain based weight
-        prediction. Please refer to the spectrain paper: https://arxiv.org/pdf/1809.02839.pdf
-        for more details.
+    Implements a SGD with momentum optimizer with Spectrain based weight
+    prediction. Please refer to the spectrain paper: https://arxiv.org/pdf/1809.02839.pdf
+    for more details.
 
-        Args:
-            params (iterable): iterable of parameters to optimize or dicts defining
-                parameter groups
-            lr (float): learning rate (required)
-            momentum (float): momentum (default=0.9)
+    Args:
+        params (iterable): iterable of parameters to optimize or dicts defining
+            parameter groups
+        lr (float): learning rate (required)
+        momentum (float): momentum (default=0.9)
     """
 
     def __init__(self, params, lr, momentum=0.9):
@@ -234,7 +234,7 @@ class SpectrainSGDMomentum(Optimizer):
                     p.data.sub_(param_state["momentum_buffer"].data, alpha=multiplier)
 
     def step(self, weight_prediction=True, closure=None):
-        """ Performs a single optimization step.
+        """Performs a single optimization step.
         Args:
             weight_prediction (bool, optional): Enable weight prediction based updates
             closure (callable, optional): A closure that reevaluates the model
