@@ -104,7 +104,7 @@ def validate_benchmark(measurements, final_loss, args, check_regression):
 
     if check_regression and rank == 0:
         assert median + 8.0 * mad > golden_data["reference_speed"], (
-            f"Speed regression detected: " f"{median + 3.0 * mad} vs.  {golden_data['reference_speed']}"
+            f"Speed regression detected: " f"{median + 8.0 * mad} vs.  {golden_data['reference_speed']}"
         )
         assert max_memory < 1.05 * golden_data["reference_memory"], (
             f"Memory use regression detected: " f"{max_memory} vs. {1.05* golden_data['reference_memory']}"
