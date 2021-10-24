@@ -43,9 +43,7 @@ class ConvolutionalModel(nn.Module):
     @staticmethod
     def _conv_block(in_channels: int, out_channels: int):
         return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=(3, 3)),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
+            nn.Conv2d(in_channels, out_channels, kernel_size=(3, 3)), nn.BatchNorm2d(out_channels), nn.ReLU(),
         )
 
     def forward(self, x):
@@ -80,10 +78,7 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, f
     torch.manual_seed(0)
     torch.cuda.set_device(gpu_id)
     torch.distributed.init_process_group(
-        backend="nccl",
-        init_method=f"file://{sync_file}",
-        world_size=world_size,
-        rank=gpu_id,
+        backend="nccl", init_method=f"file://{sync_file}", world_size=world_size, rank=gpu_id,
     )
     process_group = torch.distributed.new_group()
 
@@ -121,8 +116,7 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, f
     # Reconstruct a full checkpoint from the sharded checkpoints
     all_checkpoints = [_load_sharded_checkpoint(rank) for rank in range(world_size)]
     consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
-        shard_weights=[c["weights"] for c in all_checkpoints],
-        shard_metadata=[c["meta"] for c in all_checkpoints],
+        shard_weights=[c["weights"] for c in all_checkpoints], shard_metadata=[c["meta"] for c in all_checkpoints],
     )
 
     # Check that the reconstructed parameters are correct and of the right shape
@@ -165,8 +159,7 @@ def test_consolidation(embedding_size: int, flatten_parameters: bool):
 @skip_if_single_gpu
 class TestConsolidatedWeights(DistributedTest):
     @parameterized.expand(
-        [[True], [False]],
-        name_func=rename_test,
+        [[True], [False]], name_func=rename_test,
     )
     def test_consolidate_weights(self, transformer):
         config = {"mixed_precision": True, "flatten_parameters": True, "compute_dtype": torch.float32}
@@ -193,10 +186,7 @@ class TestConsolidatedWeights(DistributedTest):
         else:
             fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config)).cuda()
 
-        optim = Adam(
-            fsdp.parameters(),
-            lr=0.01,
-        )
+        optim = Adam(fsdp.parameters(), lr=0.01,)
         optim.zero_grad()
         with torch.cuda.amp.autocast(enabled=True):
             x = fsdp.module.get_input(torch.device("cuda"))
@@ -217,8 +207,7 @@ class TestConsolidatedWeights(DistributedTest):
             return
         all_checkpoints = [torch.load(p) for p in paths]
         consolidated_checkpoint = FullyShardedDataParallel.consolidate_shard_weights(
-            shard_weights=[c["weights"] for c in all_checkpoints],
-            shard_metadata=[c["meta"] for c in all_checkpoints],
+            shard_weights=[c["weights"] for c in all_checkpoints], shard_metadata=[c["meta"] for c in all_checkpoints],
         )
         full_model_extra = set(full_model_state_dict).difference(set(consolidated_checkpoint))
         consolidated_extra = set(consolidated_checkpoint).difference(set(full_model_state_dict))

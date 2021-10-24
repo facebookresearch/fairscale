@@ -42,10 +42,7 @@ class BenchmarkLMDataset(Dataset):
     """
 
     def __init__(
-        self,
-        vocab_size=10000,
-        max_source_positions=1024,
-        total_samples=10000,
+        self, vocab_size=10000, max_source_positions=1024, total_samples=10000,
     ):
         self.vocab_size = vocab_size
         self.max_source_positions = max_source_positions

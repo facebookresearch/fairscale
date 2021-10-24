@@ -26,10 +26,7 @@ def test_train_and_eval_with_checkpointing():
 
     with temp_files_ctx(2) as (temp_file_name, unused):
         mp.spawn(
-            _test_func,
-            args=(world_size, temp_file_name, unused),
-            nprocs=world_size,
-            join=True,
+            _test_func, args=(world_size, temp_file_name, unused), nprocs=world_size, join=True,
         )
 
 

@@ -38,12 +38,7 @@ def simple_linears(pipe_class):
 
     set_random_seed(12345)
     inputs = torch.rand(8, 1)
-    model = nn.Sequential(
-        nn.Linear(1, 2),
-        nn.Linear(2, 4),
-        nn.Linear(4, 2),
-        nn.Linear(2, 1),
-    )
+    model = nn.Sequential(nn.Linear(1, 2), nn.Linear(2, 4), nn.Linear(4, 2), nn.Linear(2, 1),)
 
     # Without MultiProcessPipe
     outputs = model(inputs)

@@ -130,10 +130,7 @@ class Pipeline:
             self.compute(batches, schedule, skip_trackers)
 
     def fence(
-        self,
-        batches: List[Batch],
-        schedule: List[Tuple[int, int]],
-        skip_trackers: List[SkipTrackerThroughPotals],
+        self, batches: List[Batch], schedule: List[Tuple[int, int]], skip_trackers: List[SkipTrackerThroughPotals],
     ) -> None:
         """Copies micro-batches after computation for the previous
         micro-batches.
@@ -158,10 +155,7 @@ class Pipeline:
                 copy(batches[i], prev_stream, next_stream)
 
     def compute(
-        self,
-        batches: List[Batch],
-        schedule: List[Tuple[int, int]],
-        skip_trackers: List[SkipTrackerThroughPotals],
+        self, batches: List[Batch], schedule: List[Tuple[int, int]], skip_trackers: List[SkipTrackerThroughPotals],
     ) -> None:
         """Runs tasks with synchronization to copy streams."""
         partitions = self.partitions

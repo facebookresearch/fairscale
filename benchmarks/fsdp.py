@@ -211,7 +211,8 @@ def get_number_of_words(data):
 
 
 def benchmark_language_model(model_config, model, benchmark_config, model_specs, args):
-    golden_config = get_golden_config(args.model_name, args)
+    # TODO(anj): Uncomment and add a check for regression once we have a couple of runs.
+    # golden_config = get_golden_config(args.model_name, args)
     epoch = benchmark_config["epochs"]
     start_time = time.time()
     if dist.get_rank() == dist.get_world_size() - 1:

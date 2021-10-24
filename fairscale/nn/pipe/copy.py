@@ -45,12 +45,7 @@ class Copy(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def forward(
-        ctx: Context,
-        prev_stream: AbstractStream,
-        next_stream: AbstractStream,
-        *input: Tensor,
-    ) -> Tensors:
+    def forward(ctx: Context, prev_stream: AbstractStream, next_stream: AbstractStream, *input: Tensor,) -> Tensors:
         ctx.prev_stream = prev_stream
         ctx.next_stream = next_stream
 
@@ -71,10 +66,7 @@ class Copy(torch.autograd.Function):
         return tuple(output)
 
     @staticmethod
-    def backward(
-        ctx: Context,
-        *grad_output: Tensor,
-    ) -> Tuple[Optional[Tensor], ...]:
+    def backward(ctx: Context, *grad_output: Tensor,) -> Tuple[Optional[Tensor], ...]:
         prev_stream = ctx.prev_stream
         next_stream = ctx.next_stream
 
@@ -106,12 +98,7 @@ class Wait(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def forward(
-        ctx: Context,
-        prev_stream: AbstractStream,
-        next_stream: AbstractStream,
-        *input: Tensor,
-    ) -> Tensors:
+    def forward(ctx: Context, prev_stream: AbstractStream, next_stream: AbstractStream, *input: Tensor,) -> Tensors:
         ctx.prev_stream = prev_stream
         ctx.next_stream = next_stream
 
@@ -120,10 +107,7 @@ class Wait(torch.autograd.Function):
         return tuple(x.detach() for x in input)
 
     @staticmethod
-    def backward(
-        ctx: Context,
-        *grad_input: Tensor,
-    ) -> Tuple[Optional[Tensor], ...]:
+    def backward(ctx: Context, *grad_input: Tensor,) -> Tuple[Optional[Tensor], ...]:
         prev_stream = ctx.prev_stream
         next_stream = ctx.next_stream
 

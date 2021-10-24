@@ -188,11 +188,7 @@ def update(devices):
     x = torch.randn(8, 4).to(device)
     model = [RemoteModuleParams(nn.Linear, (4, 4), {}), RemoteModuleParams(nn.ReLU, (), {})]
     pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=4, devices=devices[:2])
-    opt = DistributedOptimizer(
-        torch.optim.SGD,
-        pipe.parameter_rrefs(),
-        lr=0.05,
-    )
+    opt = DistributedOptimizer(torch.optim.SGD, pipe.parameter_rrefs(), lr=0.05,)
     losses = []
     for i in range(2):
         with dist_autograd.context() as context_id:
@@ -249,11 +245,7 @@ def multi_input_multi_output_layers(devices):
     assert [[0, 1], [2], [3], [4]] == extract_partitions(graph, pipe)
     parameter_rrefs = pipe.parameter_rrefs()
     assert len(parameter_rrefs) == 6
-    opt = DistributedOptimizer(
-        torch.optim.SGD,
-        parameter_rrefs,
-        lr=0.05,
-    )
+    opt = DistributedOptimizer(torch.optim.SGD, parameter_rrefs, lr=0.05,)
     losses = []
     for i in range(2):
         with dist_autograd.context() as context_id:
@@ -307,11 +299,7 @@ def auto_graph_extract(devices):
     assert [[0, 1], [2], [3], [4], [5]] == partitions, f"partitions={partitions}"
     parameter_rrefs = pipe.parameter_rrefs()
     assert len(parameter_rrefs) == 8
-    opt = DistributedOptimizer(
-        torch.optim.SGD,
-        parameter_rrefs,
-        lr=0.05,
-    )
+    opt = DistributedOptimizer(torch.optim.SGD, parameter_rrefs, lr=0.05,)
     losses = []
     for i in range(2):
         with dist_autograd.context() as context_id:

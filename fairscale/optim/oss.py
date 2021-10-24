@@ -286,10 +286,7 @@ class OSS(Optimizer):
                     else torch.tensor([0], dtype=torch.uint8, device=dist_device)
                 )
                 broadcast_object(
-                    state_to_share,
-                    src_rank=self.global_rank,
-                    group=self.group,
-                    dist_device=dist_device,
+                    state_to_share, src_rank=self.global_rank, group=self.group, dist_device=dist_device,
                 )
             else:
                 # Fetch the optim state from the other replicas

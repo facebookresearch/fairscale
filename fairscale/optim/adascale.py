@@ -385,9 +385,7 @@ class AdaScale(Optimizer):
         # it means that we are in backward pass.
         if self._local_grad_sqr is None:
             self._local_grad_sqr = torch.zeros(
-                len(self._optimizer.param_groups),
-                device=grad.device,
-                requires_grad=False,
+                len(self._optimizer.param_groups), device=grad.device, requires_grad=False,
             )
         self._local_grad_sqr[pg_idx] += grad.pow(2).sum()
 
@@ -565,11 +563,7 @@ class AdaScale(Optimizer):
         assert self._local_grad_sqr is None, "Don't load checkpoint in backward"
         return self._optimizer.load_state_dict(data)
 
-    def set_num_gradients_to_accumulate(
-        self,
-        num_gradients_to_accumulate: int,
-        update_smoothing: bool = True,
-    ) -> None:
+    def set_num_gradients_to_accumulate(self, num_gradients_to_accumulate: int, update_smoothing: bool = True,) -> None:
         """Set the number of gradients to accumulate to a new value.
 
         This is experimental. This could be called while training so that

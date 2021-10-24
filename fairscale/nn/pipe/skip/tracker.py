@@ -57,12 +57,7 @@ class SkipTracker:
         return self.tensors.pop((ns, name))
 
     def copy(
-        self,
-        batch: Batch,
-        prev_stream: AbstractStream,
-        next_stream: AbstractStream,
-        ns: Namespace,
-        name: str,
+        self, batch: Batch, prev_stream: AbstractStream, next_stream: AbstractStream, ns: Namespace, name: str,
     ) -> None:
         raise TypeError("copy is not supported for non-portal skip tensors")
 
@@ -152,12 +147,7 @@ class SkipTrackerThroughPotals(SkipTracker):
         return tensor
 
     def copy(
-        self,
-        batch: Batch,
-        prev_stream: AbstractStream,
-        next_stream: AbstractStream,
-        ns: Namespace,
-        name: str,
+        self, batch: Batch, prev_stream: AbstractStream, next_stream: AbstractStream, ns: Namespace, name: str,
     ) -> None:
         """Copies the skip tensor in the corresponding portal. The given
         micro-batch and the portal will be tied with :class:`Fork` and

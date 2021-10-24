@@ -62,10 +62,7 @@ class TestOptimizerUtils(DistributedTest):
             fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config)).cuda()
 
         try:
-            fsdp_optim = optim_fn(
-                fsdp.parameters(),
-                lr=0.01,
-            )
+            fsdp_optim = optim_fn(fsdp.parameters(), lr=0.01,)
             optim_unwrapped = optim_fn(unwrapped_model.parameters(), lr=0.01)
         except TypeError:  # Adadelta
             fsdp_optim = optim_fn(fsdp.parameters())

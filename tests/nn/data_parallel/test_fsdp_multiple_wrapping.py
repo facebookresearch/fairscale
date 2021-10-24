@@ -32,9 +32,7 @@ def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
     class InnerModel(Module):
         def __init__(self):
             super().__init__()
-            self.layers = Sequential(
-                FSDP(Linear(5, 5), **fsdp_config),
-            )
+            self.layers = Sequential(FSDP(Linear(5, 5), **fsdp_config),)
 
         def forward(self, x):
             return self.layers(x)
@@ -87,8 +85,5 @@ def test(world_size, precision, flatten):
     }
 
     mp.spawn(
-        _test_func,
-        args=(world_size, fsdp_config, temp_file_name, unused),
-        nprocs=world_size,
-        join=True,
+        _test_func, args=(world_size, fsdp_config, temp_file_name, unused), nprocs=world_size, join=True,
     )

@@ -18,10 +18,7 @@ from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
 
 
 def rename_test(testcase_func, param_num, param):
-    return "%s_%s" % (
-        testcase_func.__name__,
-        parameterized.to_safe_name(str(param.args)),
-    )
+    return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
 
 
 CONFIG_OPTIONS = [

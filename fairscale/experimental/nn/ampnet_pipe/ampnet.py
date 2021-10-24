@@ -34,20 +34,13 @@ from fairscale.nn.pipe.worker import Task
 
 
 def create_task_without_skip_trackers(
-    checkpoint_stop: int,
-    i: int,
-    j: int,
-    batch: Batch,
-    partition: nn.Sequential,
+    checkpoint_stop: int, i: int, j: int, batch: Batch, partition: nn.Sequential,
 ) -> Task:
     # Determine whether checkpointing or not.
     if i < checkpoint_stop:
 
         def function(
-            input: TensorOrTensors,
-            partition: nn.Sequential = partition,
-            chunk_id: int = i,
-            part_id: int = j,
+            input: TensorOrTensors, partition: nn.Sequential = partition, chunk_id: int = i, part_id: int = j,
         ) -> TensorOrTensors:
             with record_function("chunk%d-part%d" % (chunk_id, part_id)):
                 return partition(input)
@@ -59,10 +52,7 @@ def create_task_without_skip_trackers(
     else:
 
         def compute(
-            batch: Batch = batch,
-            partition: nn.Sequential = partition,
-            chunk_id: int = i,
-            part_id: int = j,
+            batch: Batch = batch, partition: nn.Sequential = partition, chunk_id: int = i, part_id: int = j,
         ) -> Batch:
             with record_function("chunk%d-part%d" % (chunk_id, part_id)):
                 return batch.call(partition)
@@ -103,11 +93,7 @@ class AsyncAMPnetEventLoop:
 
     def async_send_inner(self, batch: Batch, index: int) -> Tuple[Batch, PipeMessage]:
         task = create_task_without_skip_trackers(
-            self.checkpoint_stop,
-            index,
-            self.group.rank(),
-            batch,
-            self.partitions[0].module,
+            self.checkpoint_stop, index, self.group.rank(), batch, self.partitions[0].module,
         )
         result = task.compute()
         task.finalize(result)
@@ -272,11 +258,7 @@ class AsyncAMPnetEventLoop:
                 if self.weight_prediction:
                     optimizer.update_weight_using_future_predictions(cur_rank, N, count, self.chunks, forward=True)
                 task = create_task_without_skip_trackers(
-                    self.checkpoint_stop,
-                    args.microbatch_index,
-                    self.group.rank(),
-                    batch,
-                    self.partitions[0].module,
+                    self.checkpoint_stop, args.microbatch_index, self.group.rank(), batch, self.partitions[0].module,
                 )
                 output = task.compute()
                 activations[args.microbatch_index] = output

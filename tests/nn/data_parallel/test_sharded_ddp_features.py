@@ -322,10 +322,7 @@ def test_train_eval_change():
     world_size = 4
     with temp_files_ctx(num=1) as temp_files:
         mp.spawn(
-            run_test_train_eval_change,
-            args=(world_size, temp_files[0]),
-            nprocs=world_size,
-            join=True,
+            run_test_train_eval_change, args=(world_size, temp_files[0]), nprocs=world_size, join=True,
         )
 
 

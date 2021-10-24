@@ -38,8 +38,7 @@ def temp_files():
 # We only test on GPU since mix-precision only works on GPU.
 @skip_if_no_cuda
 @pytest.mark.parametrize(
-    "fsdp_config",
-    [{}, {"mixed_precision": True}],
+    "fsdp_config", [{}, {"mixed_precision": True}],
 )
 @pytest.mark.parametrize("input_cls", [dict, list])
 def test_input_type(temp_files, fsdp_config, input_cls):

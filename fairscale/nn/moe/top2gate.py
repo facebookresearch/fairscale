@@ -117,11 +117,7 @@ class Top2Gate(torch.nn.Module):
 
     wg: torch.nn.Linear
 
-    def __init__(
-        self,
-        model_dim: int,
-        num_experts: int,
-    ) -> None:
+    def __init__(self, model_dim: int, num_experts: int,) -> None:
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
 

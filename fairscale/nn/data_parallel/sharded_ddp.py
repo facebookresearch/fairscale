@@ -224,10 +224,7 @@ class ShardedDataParallel(nn.Module):
             return self.module(*inputs, **kwargs)
 
     def to(  # type: ignore
-        self,
-        device: Optional[torch.device],
-        dtype: Optional[torch.dtype] = None,
-        non_blocking: bool = False,
+        self, device: Optional[torch.device], dtype: Optional[torch.dtype] = None, non_blocking: bool = False,
     ) -> "ShardedDataParallel":
         """
         Moves and/or casts the parameters and buffers.
@@ -631,10 +628,7 @@ class ShardedDataParallel(nn.Module):
                 self._work_handles.append(
                     Workhandle(
                         handle=dist.reduce(
-                            tensor=bucket.buffer,
-                            dst=bucket.destination,
-                            group=self._process_group,
-                            async_op=True,
+                            tensor=bucket.buffer, dst=bucket.destination, group=self._process_group, async_op=True,
                         ),
                         callback=None,
                     )

@@ -169,11 +169,7 @@ def run_ddp_parity(
 
         def sharded_closure(input_tensor=input_tensor):
             return closure(
-                sharded_ddp_model,
-                sharded_scaler,
-                input_tensor,
-                grad_accumulation,
-                _manual_reduction=manual_reduction,
+                sharded_ddp_model, sharded_scaler, input_tensor, grad_accumulation, _manual_reduction=manual_reduction,
             )
 
         # Step/scale both
@@ -333,9 +329,7 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_b
         torch.cuda.synchronize(device)
 
         check_same_model_params(
-            sharded_ddp_model,
-            ddp_model,
-            f"DDP parity two optim test failing, step {i}, buffers {reduce_buffer_size}",
+            sharded_ddp_model, ddp_model, f"DDP parity two optim test failing, step {i}, buffers {reduce_buffer_size}",
         )
 
     dist.destroy_process_group()

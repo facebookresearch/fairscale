@@ -80,11 +80,7 @@ class ModelShard(nn.Module):
     """
 
     def __init__(
-        self,
-        cpu_model_shard: nn.Module,
-        device: torch.device,
-        offload_device: torch.device,
-        index: int,
+        self, cpu_model_shard: nn.Module, device: torch.device, offload_device: torch.device, index: int,
     ):
         super().__init__()
         self.model_shard = cpu_model_shard
@@ -461,12 +457,7 @@ class OffloadModel(nn.Module):
             # This is already sharded using the auto shard functinality.
             for i, m in enumerate(model):
                 self.model_slices.append(
-                    ModelShard(
-                        cpu_model_shard=m,
-                        device=device,
-                        offload_device=offload_device,
-                        index=i,
-                    )
+                    ModelShard(cpu_model_shard=m, device=device, offload_device=offload_device, index=i,)
                 )
         else:
             # Slice the model into roughly equivalent sequential shards.
@@ -476,10 +467,7 @@ class OffloadModel(nn.Module):
                 # Add one model handling this slice
                 self.model_slices.append(
                     ModelShard(
-                        cpu_model_shard=nn.Sequential(*split),
-                        device=device,
-                        offload_device=offload_device,
-                        index=i,
+                        cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device, index=i,
                     )
                 )
 

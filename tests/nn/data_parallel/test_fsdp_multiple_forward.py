@@ -76,8 +76,5 @@ def test1(precision, flatten):
     # the tensor dimensions.
     world_size = 2
     mp.spawn(
-        _test_func,
-        args=(world_size, fsdp_config, temp_file_name, unused),
-        nprocs=world_size,
-        join=True,
+        _test_func, args=(world_size, fsdp_config, temp_file_name, unused), nprocs=world_size, join=True,
     )

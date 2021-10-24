@@ -43,10 +43,7 @@ class FreezeModel(nn.Module):
 
 
 def _freeze_distributed_worker(
-    gpu_id,
-    world_size,
-    tempfile_name,
-    unused,
+    gpu_id, world_size, tempfile_name, unused,
 ):
     torch.cuda.set_device(gpu_id)
 
@@ -91,9 +88,7 @@ def _freeze_distributed_worker(
 def test_submodule_freezing_weights(temp_files):
     world_size = 2
     mp.spawn(
-        _freeze_distributed_worker,
-        (world_size, temp_files[0], temp_files[1]),
-        nprocs=world_size,
+        _freeze_distributed_worker, (world_size, temp_files[0], temp_files[1]), nprocs=world_size,
     )
 
 
@@ -125,11 +120,7 @@ class NestedTrunkModel(nn.Module):
             self._create_block(3, 64, with_fsdp, freeze_after_wrap_fsdp),
             self._create_block(64, 64, with_fsdp, freeze_after_wrap_fsdp),
         )
-        self.head = nn.Sequential(
-            nn.AdaptiveAvgPool2d(output_size=(1, 1)),
-            nn.Flatten(),
-            nn.Linear(64, 10),
-        )
+        self.head = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.Flatten(), nn.Linear(64, 10),)
         if with_fsdp and freeze_after_wrap_fsdp:
             self.fsdp_wrap()
 
@@ -144,10 +135,7 @@ class NestedTrunkModel(nn.Module):
         return self.head(self.trunk(x))
 
     def _create_block(self, in_channels, out_channels, with_fsdp, freeze_after_wrap_fsdp):
-        block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3),
-            nn.ReLU(inplace=True),
-        )
+        block = nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel_size=3), nn.ReLU(inplace=True),)
         return block
 
 
