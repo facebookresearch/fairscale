@@ -1,3 +1,8 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
+
 from __future__ import annotations
 
 from functools import reduce
@@ -26,7 +31,9 @@ def _get_num_chunks(input_tensor: torch.Tensor, chunk_size_bytes: int = DEFAULT_
     return num_chunks
 
 
-def _tensor_to_bytes_chunks(input_tensor: torch.Tensor, chunk_idx: int, chunk_size_bytes: int = DEFAULT_CHUNK_SIZE) -> bytes:
+def _tensor_to_bytes_chunks(
+    input_tensor: torch.Tensor, chunk_idx: int, chunk_size_bytes: int = DEFAULT_CHUNK_SIZE
+) -> bytes:
     """Converts the given tensor into a chunked array containing chunk_size_bytes."""
     size_in_bytes = input_tensor.nelement() * input_tensor.element_size()
     assert chunk_idx < _get_num_chunks(input_tensor, chunk_size_bytes)
@@ -77,6 +84,7 @@ class SsdTensorHandle(torch.Tensor):
     Returns:
         A SSDTensorHandle object representing a Tensor.
     """
+
     @staticmethod
     def __new__(
         cls: SsdTensorHandle, shape: Tuple[int, ...], dtype: torch.dtype, requires_grad: bool = False
@@ -134,6 +142,8 @@ class SsdTensorHandle(torch.Tensor):
         self.tensor = tensor
 
     def to_tensor(self) -> torch.Tensor:
+        """Returns the tensor represented by the Handle object. If the tensor is on disk, 
+        it is copied into the tensor attribute and returned."""
         if self.tensor is not None:
             return self.tensor
         else:
@@ -143,6 +153,7 @@ class SsdTensorHandle(torch.Tensor):
             return self.tensor
 
     def to_file(self, release_tensor_after_write: bool = True) -> None:
+        """The tensor attribute is stored in the file and released if specified."""
         assert self.tensor is not None
         write(self.tensor, self.filename, self.offset * self.tensor.element_size())
         if release_tensor_after_write:
@@ -168,6 +179,11 @@ class SsdTensorHandle(torch.Tensor):
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
+        """This function handles intercepting all operations performed on this handle
+        object. Before any operation, the tensor attribute is unwrapped from the handle 
+        and used in the operation. We maintain a refernce to the tensor and its current 
+        versions to track if modifications have been made. If we detect changes to the 
+        tensor, we write it to the file maintained by the Handle."""
         ssd_tensor_handles = []
 
         def unwrap(e: Any) -> torch.Tensor:
@@ -188,30 +204,39 @@ class SsdTensorHandle(torch.Tensor):
         return r
 
 
-# Class supporting a single SSD file backing one or more tensors
 class SsdBuffer:
+    """
+    The SsdBuffer represents a single buffer containing a list of tensors. Each of the 
+    tensors are represented by a `SsdTensorHandle`.
+    Args:
+        num_elems (int): Dictates the size of the 1-D tensor.
+        dtype (torch.dtype): Dtype of the buffer. 
+    """
+
     def __init__(self, num_elems: int, filename: str, dtype: torch.dtype = torch.float32) -> None:
         self.buffer: torch.Tensor = torch.empty((num_elems,), dtype=dtype)
         self.filename = filename
         self.offset = 0
         self.tensors: Dict[int, SsdTensorHandle] = {}
 
-    def allocate(self, n: int) -> SsdTensorHandle:
-        assert n > 0
+    def allocate(self, num_elems: int) -> SsdTensorHandle:
+        """Allocates a new tensor handle of size num_elems."""
+        assert num_elems > 0
         assert list(self.buffer.size()) != [1]
-        assert self.can_alloc(n)
+        assert self.can_alloc(num_elems)
 
-        tensor = self.buffer.narrow(0, self.offset, n)
+        tensor = self.buffer.narrow(0, self.offset, num_elems)
 
         tensor_offset = self.offset
         handle = SsdTensorHandle.from_tensor(tensor)
         self.tensors[tensor_offset] = handle
         handle.set_file_params(self.filename, tensor_offset)
-        self.offset += n
+        self.offset += num_elems
 
         return handle
 
     def insert(self, tensor: torch.Tensor) -> SsdTensorHandle:
+        """Insert a new tensor by allocating memory and creating a corresponding handle."""
         assert list(self.buffer.size()) != [1]
         # For the non sharded case, the tensor will not be flattened
         tensor = tensor.reshape(-1)
@@ -220,14 +245,19 @@ class SsdBuffer:
         handle.get_tensor().copy_(tensor)
         return handle
 
-    def can_alloc(self, n: int) -> bool:
+    def can_alloc(self, num_elems: int) -> bool:
+        """Verify that you can allocate a tensor within the bounds 
+        of the larger SsdBuffer memory buffer."""
         assert list(self.buffer.size()) != [1]
-        return (self.offset + n) <= self.buffer.numel()
+        return (self.offset + num_elems) <= self.buffer.numel()
 
     def get_tensors(self) -> List[SsdTensorHandle]:
+        """Return the list of handles that represent the tensors
+        in SsdBuffer."""
         return [t for t in self.tensors.values()]
 
     def to_disk(self) -> None:
+        """Write all tensors backed by handles to disk."""
         assert list(self.buffer.size()) != [1]
         # TODO(anj): Add comment about why we use `narrow`.
         valid_data = self.buffer.narrow(0, 0, self.offset)
@@ -242,6 +272,7 @@ class SsdBuffer:
         self.buffer = torch.empty((1))
 
     def from_disk(self, num_elems: int, dtype: torch.dtype = torch.float32) -> None:
+        """Read all tensors backed by handles into memory."""
         if num_elems < self.offset:
             raise RuntimeError(
                 f"Attempted to load from file ssdbuffer of size: {self.offset} into a buffer that is of size: {num_elems}"
@@ -252,4 +283,3 @@ class SsdBuffer:
 
         for offset, t in self.tensors.items():
             t.point_to_tensor(self.buffer.narrow(0, t.offset, t._numel))
-
