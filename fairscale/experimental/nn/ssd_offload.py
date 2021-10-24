@@ -1,0 +1,255 @@
+from __future__ import annotations
+
+from functools import reduce
+import io
+import os
+import pickle
+from typing import IO, Any, BinaryIO, Callable, Dict, Iterator, List, Optional, Tuple, Union
+
+import numpy as np
+import torch
+
+try:
+    from torch.utils._pytree import tree_map
+except ImportError:
+    # The PyTorch version(<1.9) we test with does not support the tree_map API.
+    pass
+
+
+DEFAULT_CHUNK_SIZE = 1024 * 1024
+
+
+def _get_num_chunks(input_tensor: torch.Tensor, chunk_size_bytes: int = DEFAULT_CHUNK_SIZE) -> int:
+    """Returns the number of chunks that the given tensor can be divided into."""
+    size_in_bytes = input_tensor.nelement() * input_tensor.element_size()
+    num_chunks = (size_in_bytes + (chunk_size_bytes - 1)) // chunk_size_bytes
+    return num_chunks
+
+
+def _tensor_to_bytes_chunks(input_tensor: torch.Tensor, chunk_idx: int, chunk_size_bytes: int = DEFAULT_CHUNK_SIZE) -> bytes:
+    """Converts the given tensor into a chunked array containing chunk_size_bytes."""
+    size_in_bytes = input_tensor.nelement() * input_tensor.element_size()
+    assert chunk_idx < _get_num_chunks(input_tensor, chunk_size_bytes)
+    input_tensor_np = input_tensor.detach().numpy().view(np.uint8).reshape(-1)
+    chunk_start = chunk_idx * chunk_size_bytes
+    chunk_end = min(size_in_bytes, chunk_start + chunk_size_bytes)
+    return input_tensor_np[chunk_start:chunk_end].tobytes()
+
+
+def write(input_tensor: torch.Tensor, filename: str, file_offset_bytes: int = 0) -> None:
+    """Populates the file with the data stored in the given tensor."""
+    num_chunks = _get_num_chunks(input_tensor)
+    file_flags = "r+b" if os.path.exists(filename) else "wb"
+    with open(filename, file_flags) as f:
+        f.seek(file_offset_bytes)
+        for i in range(num_chunks):
+            f.write(_tensor_to_bytes_chunks(input_tensor, i))
+
+
+def read(input_tensor: torch.Tensor, filename: str, file_offset_bytes: int = 0) -> None:
+    """Populates the given tensor with the data stored in a file."""
+    size_in_bytes = input_tensor.nelement() * input_tensor.element_size()
+    chunk_size_bytes = DEFAULT_CHUNK_SIZE
+    num_chunks = _get_num_chunks(input_tensor)
+    input_tensor_np = input_tensor.detach().numpy()
+    input_tensor_mv = memoryview(input_tensor_np.view(dtype=np.uint8).reshape(-1))
+    with io.open(filename, "rb") as f:
+        f.seek(file_offset_bytes)
+        for i in range(num_chunks):
+            chunk_start = i * chunk_size_bytes
+            chunk_end = min(size_in_bytes, chunk_start + chunk_size_bytes)
+            data_read = f.readinto(input_tensor_mv[chunk_start:chunk_end])
+            assert data_read == chunk_end - chunk_start
+
+
+class SsdTensorHandle(torch.Tensor):
+    """
+    This class extends from torch.Tensor and represents a Tensor which is backed by SSD storage.
+    The SsdTensorHandle object can point to a file or a tensor and there are corresponding functions to read
+    data into the tensor that is an attribute of the SsdTensorHandle object or write to the file. At any
+    point in time the Tensor may be in memory or on disk.
+
+    Args:
+        shape Tuple[int, ...]: Shape of the tensor that is represented by the handle.
+        dtype: torch.dtype: Dtype of the tensor that is represented by the handle.
+        requires_grad: bool: Property of the tensor that is represeneted by the handle.
+
+    Returns:
+        A SSDTensorHandle object representing a Tensor.
+    """
+    @staticmethod
+    def __new__(
+        cls: SsdTensorHandle, shape: Tuple[int, ...], dtype: torch.dtype, requires_grad: bool = False
+    ) -> SsdTensorHandle:
+        r = torch.Tensor._make_wrapper_subclass(cls, shape, dtype=dtype, requires_grad=requires_grad)  # type: ignore
+        return r
+
+    def __init__(self, shape: Tuple[int, ...], dtype: torch.dtype, requires_grad: bool) -> None:
+        self._shape = shape
+        if len(shape) == 0:
+            self._numel = 0
+        else:
+            self._numel = reduce((lambda x, y: x * y), shape)
+        self._dtype = dtype
+        # valid if offloaded to file
+        self.filename = ""
+        self.offset = -1
+        # valid if loaded to memory
+        self.tensor: Optional[torch.Tensor] = None
+        self.requires_grad = requires_grad
+
+    @classmethod
+    def from_file(
+        cls, shape: Tuple[int, ...], dtype: torch.dtype, filename: str, requires_grad: bool = False
+    ) -> SsdTensorHandle:
+        handle = cls(shape=shape, dtype=dtype, requires_grad=requires_grad)
+        handle.filename = filename
+        return handle
+
+    @classmethod
+    def from_tensor(cls, tensor: torch.Tensor) -> SsdTensorHandle:
+        handle = cls(shape=tensor.shape, dtype=tensor.dtype, requires_grad=tensor.requires_grad)
+        handle.tensor = tensor
+        return handle
+
+    def is_available(self) -> bool:
+        return self.tensor is not None
+
+    def get_tensor(self) -> torch.Tensor:
+        assert self.tensor is not None
+        return self.tensor
+
+    def set_file_params(self, filename: str, offset: int) -> None:
+        self.filename = filename
+        self.offset = offset
+
+    def point_to_file(self, filename: str, offset: int) -> None:
+        self.set_file_params(filename, offset)
+        self.tensor = None
+
+    def point_to_tensor(self, tensor: torch.Tensor) -> None:
+        assert self.tensor is None
+        assert self._shape == tensor.shape
+        assert self._dtype == tensor.dtype
+        self.tensor = tensor
+
+    def to_tensor(self) -> torch.Tensor:
+        if self.tensor is not None:
+            return self.tensor
+        else:
+            result_tensor = torch.empty(size=self._shape, dtype=self._dtype, requires_grad=self.requires_grad)
+            self.copy_into_tensor(result_tensor)
+            self.tensor = result_tensor
+            return self.tensor
+
+    def to_file(self, release_tensor_after_write: bool = True) -> None:
+        assert self.tensor is not None
+        write(self.tensor, self.filename, self.offset * self.tensor.element_size())
+        if release_tensor_after_write:
+            self.tensor = None
+
+    def copy_into_tensor(self, tensor: torch.Tensor) -> None:
+        """
+        if self.is_available(), this copies the Handle's tensor
+        into the passed in tensor. Otherwise, if !is_available(),
+        this reads from file into tensor, using the read() function.
+        Does not modify modify self.tensor unlike to_tensor() function.
+        This can be useful for calls like named_parameters() when
+        the tensor is already offloaded to disk.
+        """
+        assert self._shape == tensor.shape
+        assert self._dtype == tensor.dtype
+        if self.tensor is not None:
+            tensor.copy_(self.tensor)
+        else:
+            read(tensor, self.filename, self.offset * tensor.element_size())
+
+    __torch_function__ = torch._C._disabled_torch_function_impl  # type: ignore
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
+        ssd_tensor_handles = []
+
+        def unwrap(e: Any) -> torch.Tensor:
+            if isinstance(e, SsdTensorHandle):
+                t = e.to_tensor()
+                ssd_tensor_handles.append((e, t._version))  # type: ignore
+                return t
+            else:
+                return e
+
+        r = func(*tree_map(unwrap, args), **tree_map(unwrap, kwargs))
+
+        for e, saved_version in ssd_tensor_handles:
+            inplace_is_this_tensor = func.__name__[-1] == "_" and e is args[0]
+            out_is_this_tensor = False if "out" not in kwargs else e is kwargs["out"]
+            if inplace_is_this_tensor or out_is_this_tensor:
+                e.to_file()
+        return r
+
+
+# Class supporting a single SSD file backing one or more tensors
+class SsdBuffer:
+    def __init__(self, num_elems: int, filename: str, dtype: torch.dtype = torch.float32) -> None:
+        self.buffer: torch.Tensor = torch.empty((num_elems,), dtype=dtype)
+        self.filename = filename
+        self.offset = 0
+        self.tensors: Dict[int, SsdTensorHandle] = {}
+
+    def allocate(self, n: int) -> SsdTensorHandle:
+        assert n > 0
+        assert list(self.buffer.size()) != [1]
+        assert self.can_alloc(n)
+
+        tensor = self.buffer.narrow(0, self.offset, n)
+
+        tensor_offset = self.offset
+        handle = SsdTensorHandle.from_tensor(tensor)
+        self.tensors[tensor_offset] = handle
+        handle.set_file_params(self.filename, tensor_offset)
+        self.offset += n
+
+        return handle
+
+    def insert(self, tensor: torch.Tensor) -> SsdTensorHandle:
+        assert list(self.buffer.size()) != [1]
+        # For the non sharded case, the tensor will not be flattened
+        tensor = tensor.reshape(-1)
+        assert self.buffer.dtype == tensor.dtype
+        handle = self.allocate(tensor.numel())
+        handle.get_tensor().copy_(tensor)
+        return handle
+
+    def can_alloc(self, n: int) -> bool:
+        assert list(self.buffer.size()) != [1]
+        return (self.offset + n) <= self.buffer.numel()
+
+    def get_tensors(self) -> List[SsdTensorHandle]:
+        return [t for t in self.tensors.values()]
+
+    def to_disk(self) -> None:
+        assert list(self.buffer.size()) != [1]
+        # TODO(anj): Add comment about why we use `narrow`.
+        valid_data = self.buffer.narrow(0, 0, self.offset)
+        write(valid_data, self.filename)
+
+        # Remove all Tensor references
+        for offset, t in self.tensors.items():
+            t.point_to_file(self.filename, offset)
+
+        # TODO(anj-s): Setting this to None does not result in GC picking
+        # this reference up.
+        self.buffer = torch.empty((1))
+
+    def from_disk(self, num_elems: int, dtype: torch.dtype = torch.float32) -> None:
+        if num_elems < self.offset:
+            raise RuntimeError(
+                f"Attempted to load from file ssdbuffer of size: {self.offset} into a buffer that is of size: {num_elems}"
+            )
+        self.buffer = torch.empty((num_elems,), dtype=dtype)
+        valid_data = self.buffer.narrow(0, 0, self.offset)
+        read(valid_data, self.filename)
+
+        for offset, t in self.tensors.items():
+            t.point_to_tensor(self.buffer.narrow(0, t.offset, t._numel))
+
