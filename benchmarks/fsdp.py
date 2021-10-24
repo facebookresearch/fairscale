@@ -18,6 +18,7 @@ from models import transformer_lm
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
@@ -183,7 +184,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
         if i % log_interval == 0 and i > 0:
             cur_loss = total_loss / log_interval
             elapsed = time.time() - start_time
-            if dist.get_rank() == dist.get_world_size() - 1:
+            if dist.get_rank() == 0:
                 logging.debug(
                     "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
                         i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
@@ -300,15 +301,17 @@ def get_golden_config(model_name, args):
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
 
-def benchmark_single_process(args):
+def benchmark_fsdp(rank, args, world_size):
     """Benchmark a given model using a single process and multiple devices."""
 
     init_method_pgroup = "tcp://localhost:{}".format(RPC_PORT)
-    torch.distributed.init_process_group(backend="nccl", rank=0, world_size=1, init_method=init_method_pgroup)
+    torch.distributed.init_process_group(
+        backend="nccl", rank=rank, world_size=world_size, init_method=init_method_pgroup
+    )
 
-    num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
-    assert num_devices > 0
+    torch.cuda.set_device(rank)
     init_random_seed(0)
+    logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
 
     benchmark_config = create_benchmark_config(args.model_name)
     model_specs = get_model_specs(args.model_name)
@@ -345,5 +348,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
 
-    logging.info(f"Running single process benchmark with args: {args}")
-    benchmark_single_process(args)
+    logging.debug(f"Running FSDP benchmark with args: {args}")
+    num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
+    assert num_devices > 0
+
+    mp.spawn(
+        benchmark_fsdp, args=(args, num_devices), nprocs=num_devices, join=True,
+    )
