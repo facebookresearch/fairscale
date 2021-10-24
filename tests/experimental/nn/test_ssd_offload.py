@@ -7,8 +7,6 @@
 Testing SsdBuffer and SsdTensorHandle modules.
 """
 
-import filecmp
-import os
 import tempfile
 
 import numpy as np

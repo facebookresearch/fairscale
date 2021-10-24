@@ -8,8 +8,7 @@ from __future__ import annotations
 from functools import reduce
 import io
 import os
-import pickle
-from typing import IO, Any, BinaryIO, Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
