@@ -140,9 +140,7 @@ def test_dynaimc_conditionals_auto_wrapped():
 
     model = BranchedNetwork(features)
     sharded_model = shard_model(model, 3)
-    # TODO(ehotaj): There might be a bug in our split code because we shard the
-    # model into 10 shards even though we specify 3 shards above.
-    assert len(sharded_model) == 10
+    assert len(sharded_model) == 3
 
     input_ = torch.randn(3, features)
     model_output = model(input_)
