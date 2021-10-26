@@ -52,7 +52,6 @@ class DistributedTest(unittest.TestCase):
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
         # base_optimizer = torch.optim.SGD
-        # optim = OSS(params=model.parameters(), optim=base_optimizer)
         optim = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=0.9)
         scaler = ShardedGradScaler()
         for _ in range(num_steps):
@@ -70,8 +69,6 @@ class DistributedTest(unittest.TestCase):
                 if isinstance(model, FullyShardedDataParallel):
                     model.clip_grad_norm_(clip_norm, norm_type)
                 else:
-                    print("clip norm is %s" % clip_norm)
-                    print("norm type is %s" % norm_type)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm, norm_type)
             scaler.step(optim)
             scaler.update()
@@ -336,6 +333,15 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": True}
         test_fn = functools.partial(
             self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
+        )
+        spawn_and_init(test_fn)
+
+    def test_no_cpu_offload_with_sharded_grad_scaler(self):
+        # We don't test the False condition because that requires the optimizer to internally do
+        # the device transfer and PyTorch optimizers don't support this.
+        config = {"mixed_precision": True, "cpu_offload": False, "move_grads_to_cpu": False}
+        test_fn = functools.partial(
+            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=True, lr=0.01
         )
         spawn_and_init(test_fn)
 
