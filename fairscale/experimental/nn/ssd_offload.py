@@ -72,7 +72,7 @@ class SsdTensorHandle(torch.Tensor):
     """
     This class extends from torch.Tensor and represents a Tensor which is backed by SSD storage.
     The SsdTensorHandle object can point to a file or a tensor and there are corresponding functions to read
-    data into the tensor that is an attribute of the SsdTensorHandle object or write to the file. At any
+    data into the tensor that is an attribute of the SsdTensorHandle object or write the tensor to file. At any
     point in time the Tensor may be in memory or on disk.
 
     Args:
@@ -109,12 +109,14 @@ class SsdTensorHandle(torch.Tensor):
     def from_file(
         cls, shape: Tuple[int, ...], dtype: torch.dtype, filename: str, requires_grad: bool = False
     ) -> SsdTensorHandle:
+        """Returns a new SsdTensorHandle from a file."""
         handle = cls(shape=shape, dtype=dtype, requires_grad=requires_grad)
         handle.filename = filename
         return handle
 
     @classmethod
     def from_tensor(cls, tensor: torch.Tensor) -> SsdTensorHandle:
+        """Returns a new SsdTensorHandle from a tensor."""
         handle = cls(shape=tensor.shape, dtype=tensor.dtype, requires_grad=tensor.requires_grad)
         handle.tensor = tensor
         return handle
@@ -141,8 +143,10 @@ class SsdTensorHandle(torch.Tensor):
         self.tensor = tensor
 
     def to_tensor(self) -> torch.Tensor:
-        """Returns the tensor represented by the Handle object. If the tensor is on disk, 
-        it is copied into the tensor attribute and returned."""
+        """Returns the tensor represented by the SsdTensorHandle object. 
+        
+        If the tensor is on disk, it is copied into the tensor attribute and returned.
+        """
         if self.tensor is not None:
             return self.tensor
         else:
@@ -152,19 +156,20 @@ class SsdTensorHandle(torch.Tensor):
             return self.tensor
 
     def to_file(self, release_tensor_after_write: bool = True) -> None:
-        """The tensor attribute is stored in the file and released if specified."""
+        """Saves the tensor to disk and releases memory if specified."""
         assert self.tensor is not None
         write(self.tensor, self.filename, self.offset * self.tensor.element_size())
         if release_tensor_after_write:
             self.tensor = None
 
     def copy_into_tensor(self, tensor: torch.Tensor) -> None:
-        """
-        if self.is_available(), this copies the Handle's tensor
-        into the passed in tensor. Otherwise, if !is_available(),
-        this reads from file into tensor, using the read() function.
-        Does not modify modify self.tensor unlike to_tensor() function.
-        This can be useful for calls like named_parameters() when
+        """Copies SsdTensorHandle's data into the given tensor.
+
+        If the tensor is in memory, this function copies the data
+        into the passed in tensor. Otherwise, it reads from file into tensor, 
+        using the read() function.
+        This does not modify modify self.tensor unlike the to_tensor() 
+        function. This can be useful for calls like named_parameters() when
         the tensor is already offloaded to disk.
         """
         assert self._shape == tensor.shape
@@ -178,11 +183,13 @@ class SsdTensorHandle(torch.Tensor):
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
-        """This function handles intercepting all operations performed on this handle
-        object. Before any operation, the tensor attribute is unwrapped from the handle 
+        """Intercepts all operations performed on this handle object. 
+        
+        Before any operation, the tensor attribute is unwrapped from the handle 
         and used in the operation. We maintain a refernce to the tensor and its current 
         versions to track if modifications have been made. If we detect changes to the 
-        tensor, we write it to the file maintained by the Handle."""
+        tensor, we write it to the file maintained by the Handle.
+        """
         ssd_tensor_handles = []
 
         def unwrap(e: Any) -> torch.Tensor:
@@ -207,6 +214,7 @@ class SsdBuffer:
     """
     The SsdBuffer represents a single buffer containing a list of tensors. Each of the 
     tensors are represented by a `SsdTensorHandle`.
+
     Args:
         num_elems (int): Dictates the size of the 1-D tensor.
         dtype (torch.dtype): Dtype of the buffer. 
@@ -251,12 +259,11 @@ class SsdBuffer:
         return (self.offset + num_elems) <= self.buffer.numel()
 
     def get_tensors(self) -> List[SsdTensorHandle]:
-        """Return the list of handles that represent the tensors
-        in SsdBuffer."""
+        """Returns the list of tensor handles in SsdBuffer."""
         return [t for t in self.tensors.values()]
 
     def to_disk(self) -> None:
-        """Write all tensors backed by handles to disk."""
+        """Writes all tensors backed by handles to disk."""
         assert list(self.buffer.size()) != [1]
         # TODO(anj): Add comment about why we use `narrow`.
         valid_data = self.buffer.narrow(0, 0, self.offset)
@@ -271,7 +278,7 @@ class SsdBuffer:
         self.buffer = torch.empty((1))
 
     def from_disk(self, num_elems: int, dtype: torch.dtype = torch.float32) -> None:
-        """Read all tensors backed by handles into memory."""
+        """Reads all tensors backed by handles into memory."""
         if num_elems < self.offset:
             raise RuntimeError(
                 f"Attempted to load from file ssdbuffer of size: {self.offset} into a buffer that is of size: {num_elems}"
