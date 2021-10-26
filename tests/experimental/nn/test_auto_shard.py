@@ -31,9 +31,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe)
 
     def forward(self, x):
-        # TODO(anj): Fix the following error when using autoshard
-        # Error: TypeError: slice indices must be integers or None or have an __index__ method
-        # x = x + self.pe[:x.size(0), self.d_model]
+        x = x + self.pe[: x.size(0)]
         return self.dropout(x)
 
 
@@ -107,3 +105,48 @@ def test_single_run():
             input = model(input)
 
     assert input.size() == torch.Size([35, 20, 28783])
+
+
+class Branch(torch.nn.Module):
+    def __init__(self, features: int):
+        super().__init__()
+        self.left = nn.Linear(in_features=features, out_features=features)
+        self.right = nn.Linear(in_features=features, out_features=features)
+
+    def forward(self, x):
+        if x.sum() > 1000:
+            return self.left(x)
+        else:
+            return self.right(x)
+
+
+class BranchedNetwork(torch.nn.Module):
+    def __init__(self, features: int):
+        super().__init__()
+        self.net = torch.nn.ModuleList([Branch(features) for _ in range(10)])
+
+    def forward(self, x):
+        for module in self.net:
+            x = module(x)
+        return x
+
+
+def test_dynaimc_conditionals_auto_wrapped():
+    if torch_version() < (1, 8, 0):
+        pytest.skip("requires torch version >= 1.8.0")
+    from fairscale.experimental.nn.auto_shard import shard_model
+
+    features = 10
+
+    model = BranchedNetwork(features)
+    sharded_model = shard_model(model, 3)
+    # TODO(ehotaj): There might be a bug in our split code because we shard the
+    # model into 10 shards even though we specify 3 shards above.
+    assert len(sharded_model) == 10
+
+    input_ = torch.randn(3, features)
+    model_output = model(input_)
+    sharded_model_output = input_
+    for shard in sharded_model:
+        sharded_model_output = shard(sharded_model_output)
+    assert torch.allclose(model_output, sharded_model_output)
