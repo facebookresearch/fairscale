@@ -1040,6 +1040,7 @@ class FullyShardedDataParallel(nn.Module):
             # We can optionally move the grad shard to CPU during the backward
             # pass. In this case, it's important to pre-allocate the CPU grad
             # shard in pinned memory so that we can do a non-blocking transfer.
+            # This is only needed during training and not evaluation.
             p._cpu_grad = torch.zeros_like(p.data, device="cpu").pin_memory()
 
     def _set_is_root(self) -> None:
