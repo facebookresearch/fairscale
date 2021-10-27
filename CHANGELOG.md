@@ -6,9 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+- OffloadModel: Fix node names to enable correct sharding in auto_shard.py [#830]
+- OSS: Relaxed speed and memory constraints on OSS golden data due to regression when we bumped up the PyTorch version to 1.9. [#828] [#825]
+
 
 ### Added
-- LayerwiseMemoryTracker[feature][experimental] - This is a new experimental tool to help track, visualize and suggest fix for memory issues occurring during the forward/backward pass of your models. [#808]
+- LayerwiseMemoryTracker[feature][experimental]: This is a new experimental tool to help track, visualize and suggest fix for memory issues occurring during the forward/backward pass of your models. [#808]
+- Chore: Update PyTorch version that we run benchmarks with. [#823]
+- Chore: Update PyTorch version that we run test with. [#809]
+- OffloadModel: Extend auto_shard.py to allow dealing with conditionals automatically when tracing with torch.fx. This will work for most cases except when the conditional is part of the root instance. [#817]
 
 ## [0.4.1] - 2021-09-17
 ### Fixed
