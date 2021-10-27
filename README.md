@@ -2,7 +2,7 @@
 
 ![PyPI](https://img.shields.io/pypi/v/fairscale)
 [![Documentation Status](https://readthedocs.org/projects/fairscale/badge/?version=latest)](https://fairscale.readthedocs.io/en/latest/?badge=latest)
-[![CircleCI](https://circleci.com/gh/facebookresearch/fairscale.svg?style=shield)](https://app.circleci.com/pipelines/github/facebookresearch/fairscale/) ![PyPI - License](https://img.shields.io/pypi/l/fairscale) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/facebookresearch/fairscale/blob/master/CONTRIBUTING.md)
+[![CircleCI](https://circleci.com/gh/facebookresearch/fairscale.svg?style=shield)](https://app.circleci.com/pipelines/github/facebookresearch/fairscale/) ![PyPI - License](https://img.shields.io/pypi/l/fairscale) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/facebookresearch/fairscale/blob/main/CONTRIBUTING.md)
 --------------------------------------------------------------------------------
 
 ## Description
@@ -20,10 +20,14 @@ FairScale was designed with the following values in mind:
 
 * **Performance** - FairScale APIs provide the best performance in terms of scaling and efficiency.
 
+## What's New:
+
+* September 2021 [`master` branch renamed to `main`](https://github.com/github/renaming).
+* September 2021 [fairscale 0.4.1 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.1).
 
 ## Installation
 
-To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/master/docs/source/installation_instructions.rst). You should be able to install a pip package or
+To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/main/docs/source/installation_instructions.rst). You should be able to install a pip package or
 build directly from source.
 
 ## Getting Started
@@ -47,7 +51,7 @@ model = fairscale.nn.Pipe(model, balance=[2, 2], devices=[0, 1], chunks=8)
 ```
 
 ### Optimizer state sharding (ZeRO)
-See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/master/benchmarks/oss.py), but a minimal example could look like the following :
+See a more complete example [here](https://github.com/facebookresearch/fairscale/blob/main/benchmarks/oss.py), but a minimal example could look like the following :
 
 ```python
 import torch
@@ -147,7 +151,7 @@ At a high level, we want ML researchers to:
 
 ## Testing
 
-We use circleci to test on PyTorch versions 1.6.0, 1.7.1, and 1.8.1. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
+We use circleci to test on PyTorch versions 1.7.1, 1.8.1 and 1.9.0. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
 ## Contributors
 
@@ -177,4 +181,17 @@ If you use FairScale in your publication, please cite it by using the following 
   howpublished = {\url{https://github.com/facebookresearch/fairscale}},
   year =         {2021}
 }
+```
+
+## FAQ
+1. If you experience an error indicating a default branch does not exist, it probably due to the latest update, switching the default branch from "master" to "main"
+```
+error: pathspec 'non-existing-branch' did not match any file(s) known to git
+```
+Please run the following commands to update to the main branch.
+```
+git branch -m master main
+git fetch origin
+git branch -u origin/main main
+git remote set-head origin -a
 ```

@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## NEXT - TBD
 ### Fixed
+- FSDP: Fixed an pre-backward hook bug for certain type of models and FSDP config. [#833]
+
+### Added
+- LayerwiseMemoryTracker[feature][experimental] - This is a new experimental tool to help track, visualize and suggest fix for memory issues occurring during the forward/backward pass of your models. [#808]
+
+## [0.4.1] - 2021-09-17
+### Fixed
 - FSDP: We don't attach post backward hooks for params that don't require grad. However in the hook
         triggered after the post backward hook, we assert on the POST_BACKWARD state which can only
         be set in the post backward hook. Modified the assert to account for the fact that the root
@@ -34,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - activation checkpoint: Added a context manager to disable checkpoint in case the same wrapped module
                          needs to be checkpointed and not checkpointed in different parts of
                          the module forward pass. [#772]
+- FSDP: Added a toggle with an environment variable ENABLE_NCCL_BASE_COLLECTIVES=[0,1] to allow users
+        enable/disable using new nccl base collecectives. By default, using new nccl base collectives
+        is enabled. [#801]
 
 ## [0.4.0] - 2021-07-31
 ### Fixed

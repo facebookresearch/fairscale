@@ -1,7 +1,7 @@
 Efficient memory usage using Activation Checkpointing
 =====================================================
 
-Adaped from `torch.utils.checkpoint`, this is a friendlier wrapper for performing activation checkpointing.
+Adapted from `torch.utils.checkpoint`, this is a friendlier wrapper for performing activation checkpointing.
 
 Compared to the PyTorch version, this version wraps a `nn.Module` and allows for all subsequent calls to be
 checkpointed.

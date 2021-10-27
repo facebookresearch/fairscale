@@ -9,6 +9,7 @@ from enum import Enum, auto
 import functools
 import logging
 from math import inf
+import os
 import time
 import traceback
 import typing
@@ -54,6 +55,11 @@ from . import fsdp_optim_utils as ou
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
+# TODO: Remove the toggle here when github open issue #801 is resolved.
+if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
+    enable_nccl_base_collectives = False
+else:
+    enable_nccl_base_collectives = True
 
 
 class TrainingState(Enum):
@@ -185,7 +191,7 @@ class FullyShardedDataParallel(nn.Module):
         move_grads_to_cpu (bool, Optional):
             move gradient shard to CPU after reduction. This is useful when
             combined with CPU-based optimizers. It defaults to the value of
-            *``cpu_offload``*.
+            *``move_params_to_cpu``*.
         bucket_cap_mb (int, Optional):
             FSDP will bucket parameters so that gradient reduction can
             be more efficient for small parameters.
@@ -245,7 +251,8 @@ class FullyShardedDataParallel(nn.Module):
         cpu_offload (bool, Optional):
             if ``True``, offload FP32 params to CPU. This is only relevant when
             *``mixed_precision``* is ``True``. Note: This arg will be deprecated in favor of
-            *``move_params_to_cpu``* in an upcoming release.
+            *``move_params_to_cpu``* in an upcoming release. Please prefer
+            specifying ``move_params_to_cpu`` instead.
     """
 
     def __init__(
@@ -300,7 +307,7 @@ class FullyShardedDataParallel(nn.Module):
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
         if self.move_params_to_cpu and not self.mixed_precision:
-            raise ValueError("cpu_offload requires mixed_precision=True")
+            raise ValueError("move_params_to_cpu requires mixed_precision=True")
 
         # skip validation if the process group was created above
         if process_group:
@@ -585,6 +592,7 @@ class FullyShardedDataParallel(nn.Module):
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
+                p._is_sharded = False
                 self.numel_padded_per_param.append(0)
                 continue
             p._is_sharded = True
@@ -594,6 +602,8 @@ class FullyShardedDataParallel(nn.Module):
             p.data, num_padded = self._get_shard(p.data)
             self.numel_padded_per_param.append(num_padded)
             free_storage_(orig_data)
+
+            p._is_sharded = True
         assert len(self.numel_padded_per_param) == len(self.params)
 
     def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
@@ -625,7 +635,7 @@ class FullyShardedDataParallel(nn.Module):
                 f"buffer_dtype={self.buffer_dtype}, "
                 f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
                 f"compute_device={self.compute_device}"
-                f"cpu_offload={self.move_params_to_cpu}, "
+                f"move_params_to_cpu={self.move_params_to_cpu}, "
                 f"move_grads_to_cpu={self.move_grads_to_cpu}, "
                 f"bucket_cap_mb={self.bucket_cap_mb}, "
                 f"clear_autocast_cache={self.clear_autocast_cache}"
@@ -932,6 +942,7 @@ class FullyShardedDataParallel(nn.Module):
         for p in self.params:
             if hasattr(p, "_fp32_shard"):
                 del p._fp32_shard  # reset _init_param_attributes
+        self._output_pre_backward_hook_registered: Optional[List] = None
 
     def _lazy_init(self) -> None:
         """Initialization steps that should happen lazily, typically right
@@ -948,6 +959,7 @@ class FullyShardedDataParallel(nn.Module):
         if self._is_root is None:
             self._set_is_root()
             self._setup_streams()
+            self._setup_output_hook_list()
 
         if self._is_root:
             # Buffers stay on GPU, and don't get sharded. Since _cast_buffers
@@ -978,7 +990,7 @@ class FullyShardedDataParallel(nn.Module):
             ``_fp32_shard``: a single shard of the parameters in full precision
                 (typically FP32, but this is dependent on the dtype of the model
                 as it's passed in by the user). This can be on CPU or GPU
-                depending on the value of *``cpu_offload``*.
+                depending on the value of *``move_params_to_cpu``*.
             ``_fp16_shard``: if *``mixed_precision``* is ``True``, this will be
                 a single shard of the parameters in FP16, used for all-gather.
             ``_full_param_padded``: the full weight (padded to be evenly
@@ -1093,6 +1105,16 @@ class FullyShardedDataParallel(nn.Module):
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 m._streams = self._streams
                 m._reducer = self._reducer
+
+    def _setup_output_hook_list(self) -> None:
+        """ set up a list to avoid registering pre-backward hooks
+            incorrectly.
+        """
+        assert self._is_root, "This should only be called on the root"
+        self._output_pre_backward_hook_registered = []
+        for n, m in self.named_modules():
+            if n != "" and isinstance(m, FullyShardedDataParallel):
+                m._output_pre_backward_hook_registered = self._output_pre_backward_hook_registered
 
     def _wait_for_previous_optim_step(self) -> None:
         """
@@ -1226,9 +1248,15 @@ class FullyShardedDataParallel(nn.Module):
                 self.training_state = TrainingState.BACKWARD_PRE
             self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
 
+        _registered = 0
+
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
-            if t.requires_grad:
+            nonlocal _registered
+            assert self._output_pre_backward_hook_registered is not None
+            if t.requires_grad and (_registered == 0 or id(t) not in self._output_pre_backward_hook_registered):
                 t.register_hook(_pre_backward_hook)
+                self._output_pre_backward_hook_registered.append(id(t))
+                _registered += 1
             return t
 
         # Attach hooks to Tensor outputs.
@@ -1516,6 +1544,9 @@ class FullyShardedDataParallel(nn.Module):
                 if m._is_root:
                     # reset this flag for cases like "one forward pass + multiple backward passes"
                     self._post_backward_callback_queued = False
+                    # clear this list for next iteration
+                    assert self._output_pre_backward_hook_registered is not None
+                    self._output_pre_backward_hook_registered.clear()
 
     @torch.no_grad()
     def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
@@ -1599,7 +1630,7 @@ class FullyShardedDataParallel(nn.Module):
                         output_tensor = p._full_param_padded
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
-                    if hasattr(dist, "_all_gather_base"):
+                    if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
                         dist._all_gather_base(output_tensor, p_data, group=self.process_group)
                     else:
@@ -1825,8 +1856,8 @@ class FullyShardedDataParallel(nn.Module):
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
                 p._fp16_shard.copy_(
-                    # If cpu_offload is True, this will be non-blocking because
-                    # _fp32_shard is pinned, otherwise it's a no-op.
+                    # If move_params_to_cpu is True, this will be non-blocking
+                    # because _fp32_shard is pinned, otherwise it's a no-op.
                     p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
                 )
                 p.data = p._fp16_shard
