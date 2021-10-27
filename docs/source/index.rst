@@ -56,6 +56,7 @@ modules and easy to use APIs.
    tutorials/adascale
    tutorials/pipe
    tutorials/layer_memory_tracking
+   tutorials/slowmo_ddp
 
 |
 |

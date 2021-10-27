@@ -12,3 +12,4 @@ API Reference
    nn/fsdp
    nn/checkpoint/checkpoint_activations
    experimental/nn/offload_model
+   experimental/nn/slowmo_ddp

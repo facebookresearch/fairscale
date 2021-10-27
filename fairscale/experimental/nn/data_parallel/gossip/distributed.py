@@ -612,7 +612,7 @@ class SlowMoDistributedDataParallel(Module):
 
         Args:
             optimizer (torch.optim.Optimizer): The optimizer being used for training the model
-            fp32_params (Optional[torch.Tensor]: To be used when performing fp16 training. Needs to be
+            fp32_params (Optional[torch.Tensor]): To be used when performing fp16 training. Needs to be
                         set to the fp16 copy of the parameters (default: None)
         """
         # Done here in case the global momentum buffers have not been initialized by the caller.
