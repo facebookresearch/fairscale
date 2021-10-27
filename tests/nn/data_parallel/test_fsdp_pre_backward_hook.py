@@ -46,9 +46,17 @@ def test_pre_backward_hook(temp_files):
             x = self.l3(x)
             return x, inner_result
 
+        def assert_and_clear_grad(self):
+            for p in self.parameters():
+                assert p.shape in [(4, 4), (4,), (4 * 4 + 4,)], p.shape
+                assert p.grad is not None
+                p.grad = None
+
     model = FSDP(Model(), flatten_parameters=False).cuda()
     in_data = torch.rand(1, 4).cuda()
-    out, _ = model(in_data)
-    out.sum().backward()
+    for _ in range(3):
+        out, _ = model(in_data)
+        out.sum().backward()
+        model.assert_and_clear_grad()
 
     teardown()
