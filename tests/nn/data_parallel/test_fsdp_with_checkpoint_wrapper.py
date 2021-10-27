@@ -15,7 +15,6 @@ import torch.multiprocessing as mp
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.utils import torch_version
 from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
 
 
@@ -26,8 +25,6 @@ from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, tem
 @pytest.mark.parametrize("half_input", ["halfin", "fullin"])
 @pytest.mark.parametrize("fsdp_wrap_ckpt", ["F->C", "C->F"])
 def test_train_and_eval_with_checkpointing(flatten, mixed_precision, amp_context, half_input, fsdp_wrap_ckpt):
-    if torch_version() < (1, 6, 0):
-        pytest.skip("older pytorch doesn't support reduce_scatter")
 
     flatten = flatten == "flat"
     mixed_precision = mixed_precision == "fp16"
@@ -101,19 +98,19 @@ def _test_func(
 
     with context_train1:
         # Train for a step.
-        _train_step(model, optim, expected_param_shapes, amp_context, half_input)
+        _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
 
     # Now do an eval step.
-    _eval_step(model, optim, expected_param_shapes, amp_context, half_input)
+    _eval_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
 
     with context_train2:
         # And finally do another train step.
-        _train_step(model, optim, expected_param_shapes, amp_context, half_input)
+        _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
 
     teardown()
 
 
-def _train_step(model, optim, expected_param_shapes, amp_context, half_input):
+def _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input):
     # Prepare for training step.
     optim.zero_grad()
     model.train()
@@ -121,7 +118,8 @@ def _train_step(model, optim, expected_param_shapes, amp_context, half_input):
     # Create input and run forward pass.
     input = torch.randn(2, 3).cuda()
 
-    if amp_context and half_input:
+    # Make it FP16 when it is OK to do so.
+    if (amp_context and half_input) or (mixed_precision and half_input):
         input = input.half()
 
     context = contextlib.suppress()
@@ -142,12 +140,12 @@ def _train_step(model, optim, expected_param_shapes, amp_context, half_input):
     _check_params(model, expected_param_shapes)
 
 
-def _eval_step(model, optim, expected_param_shapes, amp_context, half_input):
+def _eval_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input):
     optim.zero_grad()
     model.eval()
     with torch.no_grad():
         input = torch.randn(2, 3).cuda()
-        if amp_context and half_input:
+        if (amp_context and half_input) or (mixed_precision and half_input):
             input = input.half()
         context = contextlib.suppress()
         if amp_context:
