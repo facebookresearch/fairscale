@@ -1252,6 +1252,26 @@ class FullyShardedDataParallel(nn.Module):
         _registered = 0
 
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
+            # We don't register the pre_backward hook on the same tensor that has been
+            # returned from an inner FSDP, unless it is the first one. This does
+            # not cover all problematic cases though. A tensor not from an inner
+            # FSDP can cause problems too:
+            # ```
+            #   x = layer1(input)
+            #   state = [x]  # better change to x.detach(), not fixed by the following if-condition
+            #   x = inner_fsdp_module_layer2(x)
+            #   state.append(x)  # better change to x.detach(), but fixed by the following if-condition
+            #   x = layer3(x)
+            #   return x, state
+            # ```
+            # The tensors in `state`, if not detached, can be registered with
+            # backward hooks (in addition to the `x` on the last line). In that case,
+            # pre-backward hook can fire multiple times in the order that causes
+            # the outer FSDP to crash.
+            #
+            # The best practice is for modules to be wrapped by FSDP to return 1 and only
+            # 1 tensor to be used for backward. All other tensors returned should be
+            # detached.
             nonlocal _registered
             assert self._output_pre_backward_hook_registered is not None
             if t.requires_grad and (_registered == 0 or id(t) not in self._output_pre_backward_hook_registered):
