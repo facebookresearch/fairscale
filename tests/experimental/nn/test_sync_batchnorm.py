@@ -106,7 +106,7 @@ def parity3d_checkpoint_syncbn():
     x = torch.randn(4, 3, 4, 4, 4).cuda() * rank
     torch_bn = torch.nn.SyncBatchNorm(3).cuda()
     fs_bn = SyncBatchNorm(3).cuda()
-    fs_bn = checkpoint_wrapper(fs_bn, maintain_forward_counter=True)
+    fs_bn = checkpoint_wrapper(fs_bn)
     check_parity_ddp(torch_bn, fs_bn, x)
 
 

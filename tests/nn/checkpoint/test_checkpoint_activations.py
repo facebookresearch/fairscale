@@ -10,7 +10,8 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint_wrapper
 
-from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
+from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper, disable_checkpointing
+from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.misc import checkpoint_wrapper as deprecated_checkpoint_wrapper
 from fairscale.utils import torch_version
 from fairscale.utils.testing import skip_if_no_cuda
@@ -303,3 +304,157 @@ def test_list_input():
     # Backward. Adds 1 more forward call due to checkpoint.
     loss.backward()
     assert count == 3, f"Incorrect count {count}"
+
+
+def test_checkpoint_disabling():
+    """Test to check new disable_checkpoint() API added to checkpoint_wrapper."""
+
+    class TestModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cnt = 0
+            self.linear = nn.Linear(2, 2)
+
+        def forward(self, x):
+            self.cnt += 1
+            y = []
+            for i in x:
+                y.append(self.linear(i))
+            return y
+
+    x = torch.rand(4, 2)
+    model1 = checkpoint_wrapper(TestModel())
+    model2 = checkpoint_wrapper(TestModel())
+
+    # Forward. cnt += 1
+    y = model1(x)
+    y = sum(i.sum() for i in y)
+    # Backward. cnt += 1
+    y.backward()
+    assert model1.cnt == 2
+
+    with disable_checkpointing():
+        # Forward. cnt += 1
+        y = model2(x)
+        y = sum(i.sum() for i in y)
+        # Backward. cnt remains same as checkpointing is disabled
+        y.backward()
+    assert model2.cnt == 1
+
+
+def test_checkpoint_requires_grad():
+    """Test to check checkpointing when outputs do not require gradient."""
+
+    class TestModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cnt = 0
+            self.linear = nn.Linear(2, 2)
+
+        def forward(self, x):
+            self.cnt += 1
+            return self.linear(x)
+
+    x = torch.rand(4, 2)
+    model = nn.Sequential(
+        checkpoint_wrapper(TestModel()),
+        checkpoint_wrapper(TestModel()),
+        checkpoint_wrapper(TestModel()),
+        checkpoint_wrapper(TestModel()),
+    )
+    model[0].requires_grad_(False)
+    model[1].requires_grad_(False)
+    model[2].requires_grad_(False)
+
+    y = model(x)
+    y = y.sum()
+    y.backward()
+
+    # Since only last model needs grad, we only run forward twice for it
+    assert model[0].cnt == 1
+    assert model[1].cnt == 1
+    assert model[2].cnt == 1
+    assert model[3].cnt == 2
+
+    # Now test with first model needing grad
+    model = nn.Sequential(
+        checkpoint_wrapper(TestModel()),
+        checkpoint_wrapper(TestModel()),
+        checkpoint_wrapper(TestModel()),
+        checkpoint_wrapper(TestModel()),
+    )
+    model[0].requires_grad_(True)
+    model[1].requires_grad_(False)
+    model[2].requires_grad_(False)
+
+    y = model(x)
+    y = y.sum()
+    y.backward()
+
+    # Since first model needs grad, all models need grad, so we run forward twice for all
+    assert model[0].cnt == 2
+    assert model[1].cnt == 2
+    assert model[2].cnt == 2
+    assert model[3].cnt == 2
+
+    # Stress test with multiple inputs/outputs, of which some are not Tensor
+    class TestModel2(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cnt = 0
+            self.linear = nn.Linear(2, 2)
+
+        def forward(self, x, y, z):
+            self.cnt += 1
+            z = z + [self.cnt]
+            return self.linear(x + y), z, ["hi"]
+
+    model1 = checkpoint_wrapper(TestModel())
+    model2 = checkpoint_wrapper(TestModel())
+    model3 = checkpoint_wrapper(TestModel2())
+    model4 = checkpoint_wrapper(TestModel())
+    model1.requires_grad_(False)
+    model2.requires_grad_(False)
+
+    y = model4(model3(model1(x), model2(x), ["bye"])[0])
+    y = y.sum()
+    y.backward()
+
+    assert model1.cnt == 1
+    assert model2.cnt == 1
+    assert model3.cnt == 2
+    assert model4.cnt == 2
+
+    model1 = checkpoint_wrapper(TestModel())
+    model2 = checkpoint_wrapper(TestModel())
+    model3 = checkpoint_wrapper(TestModel2())
+    model4 = checkpoint_wrapper(TestModel())
+    model2.requires_grad_(False)
+
+    y = model4(model3(model1(x), model2(x), ["bye"])[0])
+    y = y.sum()
+    y.backward()
+
+    assert model1.cnt == 2
+    assert model2.cnt == 1
+    assert model3.cnt == 2
+    assert model4.cnt == 2
+
+    # Test flattened pararameters
+    model = nn.Sequential(
+        FlattenParamsWrapper(checkpoint_wrapper(TestModel())),
+        FlattenParamsWrapper(checkpoint_wrapper(TestModel())),
+        FlattenParamsWrapper(checkpoint_wrapper(TestModel())),
+        FlattenParamsWrapper(checkpoint_wrapper(TestModel())),
+    )
+    model[0].requires_grad_(False)
+    model[1].requires_grad_(False)
+
+    y = model(x)
+    y = y.sum()
+    y.backward()
+
+    assert model[0].cnt == 1
+    assert model[1].cnt == 1
+    assert model[2].cnt == 2
+    assert model[3].cnt == 2

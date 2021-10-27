@@ -16,7 +16,7 @@ import torch.utils.checkpoint as torch_checkpoint
 
 from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
-from .checkpoint_utils import dec_counter, inc_counter, init_counter, patch_batchnorm
+from .checkpoint_utils import patch_batchnorm
 
 
 # https://docs.python.org/3/library/threading.html#thread-local-data
@@ -25,9 +25,21 @@ class ThreadLocal(threading.local):
     def __init__(self) -> None:
         self.is_checkpointing = False
         self.is_recomputing = False
+        self.is_checkpointing_disabled = False
 
 
 thread_local = ThreadLocal()
+
+
+@contextmanager
+def disable_checkpointing() -> Generator[None, None, None]:
+    """Makes :func:`is_checkpointing_disabled` return :data:`True` within a context."""
+    orig = thread_local.is_checkpointing_disabled
+    thread_local.is_checkpointing_disabled = True
+    try:
+        yield
+    finally:
+        thread_local.is_checkpointing_disabled = orig
 
 
 @contextmanager
@@ -83,9 +95,7 @@ def is_recomputing() -> bool:
     return thread_local.is_recomputing
 
 
-def checkpoint_wrapper(
-    module: nn.Module, offload_to_cpu: bool = False, maintain_forward_counter: bool = False
-) -> nn.Module:
+def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False,) -> nn.Module:
     """
     A friendlier wrapper for performing activation checkpointing.
 
@@ -127,10 +137,6 @@ def checkpoint_wrapper(
             The module to be wrapped
         offload_to_cpu (bool):
             Whether to offload activations to CPU.
-        maintain_forward_counter (bool):
-            If True, maintain a forward counter per inner module. The counter will first
-            increases in forward calls of outer forward pass and then decreases in the
-            forward calls of outer backward pass. It is used by FullyShardedDataParallel.
 
     Returns:
         (nn.Module):
@@ -138,9 +144,6 @@ def checkpoint_wrapper(
     """
     # Patch the batchnorm layers in case there are any in this module.
     patch_batchnorm(module)
-
-    if maintain_forward_counter:
-        init_counter(module)
 
     # The use of weakref here is to prevent creating a ref cycle: m -> m.forward -> m.
     # When such cycle exists, gc won't collect the module when the module is freed.
@@ -160,11 +163,7 @@ def _checkpointed_forward(
     module = weak_self()
 
     # If gradients are disabled, just use original `.forward()` method directly.
-    # Doing so also ensures the internal fwd counter is not incremented in the forward pass,
-    # which would be an issue during eval since there wouldn't be a corresponding backward pass
-    # to decrement the fwd counter.
-    # See https://github.com/facebookresearch/fairscale/pull/709.
-    if not torch.is_grad_enabled():
+    if not torch.is_grad_enabled() or thread_local.is_checkpointing_disabled:
         return original_forward(module, *args, **kwargs)
 
     # Autograd Functions in PyTorch work best with positional args, since
@@ -179,13 +178,33 @@ def _checkpointed_forward(
     # when original_forward's input are non-tensor (i.e. a tuple). Using this dummy tensor
     # avoids requiring users to set their input tensors's requires_grad flag. In the case
     # of tuple type inputs, setting the flag won't even trigger the backward pass.
+    #
+    # One implication of this is that since we always feed in a dummy tensor
+    # needing grad, then the output will always require grad, even if it originally
+    # wouldn't, such as if the module and original input both do not require grad.
+    # We get around this by saving the desired requires_grad value in output and
+    # detaching the output if needed.
     output = CheckpointFunction.apply(
         torch.tensor([], requires_grad=True), original_forward, parent_ctx_dict, kwarg_keys, *flat_args
     )
+    output_requires_grad = parent_ctx_dict["output_requires_grad"]
     if not isinstance(output, torch.Tensor):
+        # If output should not require grad, then detach it, since otherwise it will
+        # always have requires_grad = True due to our dummy tensor input above that
+        # requires_grad
+        output = [x.detach() if not output_requires_grad else x for x in output]
+
         packed_non_tensor_outputs = parent_ctx_dict["packed_non_tensor_outputs"]
         if packed_non_tensor_outputs:
             output = unpack_non_tensors(output, packed_non_tensor_outputs)
+
+    else:
+        # If output should not require grad, then detach it, since otherwise it will
+        # always have requires_grad = True due to our dummy tensor input above that
+        # requires_grad
+        if not output_requires_grad:
+            output = output.detach()
+
     return output
 
 
@@ -259,7 +278,22 @@ class CheckpointFunction(torch.autograd.Function):
             unpacked_args, unpacked_kwargs = unpack_kwargs(kwarg_keys, args)
             outputs = run_function(*unpacked_args, **unpacked_kwargs)
             the_module = unpacked_args[0]
-            inc_counter(the_module)
+
+        # Because we run with torch.no_grad(), we can't actually access
+        # outputs.requires_grad. Instead, we manually compute it by
+        # checking if either the input or the module needs grads
+        parameters = list(the_module.parameters())
+
+        # If the module is wrapped by FlattenParamsWrapper, then the
+        # parameters would have been deleted. If so, we need to access
+        # the views into the flattened parameters.
+        if hasattr(the_module, "_unflattened_param_views"):
+            parameters += the_module._unflattened_param_views
+
+        output_requires_grad = any(param.requires_grad for param in parameters) or any(
+            x.requires_grad for x in tensor_inputs
+        )
+        parent_ctx_dict["output_requires_grad"] = output_requires_grad
 
         if not isinstance(outputs, torch.Tensor):
             # Autograd Functions don't like non-Tensor outputs. We can split the
@@ -267,6 +301,7 @@ class CheckpointFunction(torch.autograd.Function):
             # through *parent_ctx_dict* and returning the latter directly.
             outputs, packed_non_tensor_outputs = split_non_tensors(outputs)
             parent_ctx_dict["packed_non_tensor_outputs"] = packed_non_tensor_outputs
+
         return outputs
 
     @staticmethod
@@ -292,8 +327,6 @@ class CheckpointFunction(torch.autograd.Function):
             unpacked_args, unpacked_kwargs = unpack_kwargs(ctx.kwarg_keys, inputs)
             outputs = ctx.run_function(*unpacked_args, **unpacked_kwargs)
             tensor_outputs, _ = split_non_tensors(outputs)
-            the_module = unpacked_args[0]
-            dec_counter(the_module)
 
         # Set the states back to what it was at the start of this function.
         set_rng_state(bwd_rng_state)
@@ -305,10 +338,12 @@ class CheckpointFunction(torch.autograd.Function):
             if tensor_outputs[i].requires_grad:
                 outputs_with_grad.append(tensor_outputs[i])
                 args_with_grad.append(args[i])
+
         if len(outputs_with_grad) == 0:
             raise RuntimeError("None of the outputs have requires_grad=True, " "this checkpoint() is not necessary")
 
         torch.autograd.backward(outputs_with_grad, args_with_grad)
 
         grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else None for inp in inputs)
+
         return (None, None, None, None) + grads

@@ -226,7 +226,7 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
 def worker_process(
     rank: int, world_size: int, filename: str, filename_rpc: str, func: Callable, args: Any, error_queue: Any
 ) -> None:
-    """Main function for unit tests launced with torch_spawn"""
+    """Main function for unit tests launched with torch_spawn"""
 
     if not dist_init(rank, world_size, filename, filename_rpc):
         logging.warning("failed initializing torch distributed")
