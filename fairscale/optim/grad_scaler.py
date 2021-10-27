@@ -22,7 +22,6 @@ class _GeneralMultiDeviceReplicator(object):
     """
     Lazily serves copies of a tensor to requested devices.  Copies are cached per-device.
     """
-
     def __init__(self, master_tensor: torch.Tensor) -> None:
         assert master_tensor.is_cuda or master_tensor.device.type == "xla" or master_tensor.device.type == "cpu"
         self.master = master_tensor
@@ -70,69 +69,6 @@ class ShardedGradScaler(TorchGradScaler):
     _scale: Optional[torch.Tensor]
     _grows_tracker: Optional[torch.Tensor]
     _per_optimizer_states: Dict[int, Dict[str, Any]]
-    """
-    An instance ``scaler`` of :class:`GradScaler` helps perform the steps of gradient scaling
-    conveniently.
-
-    * ``scaler.scale(loss)`` multiplies a given loss by ``scaler``'s current scale factor.
-    * ``scaler.step(optimizer)`` safely unscales gradients and calls ``optimizer.step()``.
-    * ``scaler.update()`` updates ``scaler``'s scale factor.
-
-    Example::
-
-        # Creates a GradScaler once at the beginning of training.
-        scaler = GradScaler()
-
-        for epoch in epochs:
-            for input, target in data:
-                optimizer.zero_grad()
-                output = model(input)
-                loss = loss_fn(output, target)
-
-                # Scales loss.  Calls backward() on scaled loss to create scaled gradients.
-                scaler.scale(loss).backward()
-
-                # scaler.step() first unscales gradients of the optimizer's params.
-                # If gradients don't contain infs/NaNs, optimizer.step() is then called,
-                # otherwise, optimizer.step() is skipped.
-                scaler.step(optimizer)
-
-                # Updates the scale for next iteration.
-                scaler.update()
-
-    See the :ref:`Automatic Mixed Precision examples<amp-examples>` for usage
-    (along with autocasting) in more complex cases like gradient clipping, gradient accumulation, gradient penalty,
-    and multiple losses/optimizers.
-
-    ``scaler`` dynamically estimates the scale factor each iteration.  To minimize gradient underflow,
-    a large scale factor should be used.  However, ``float16`` values can "overflow" (become inf or NaN) if
-    the scale factor is too large.  Therefore, the optimal scale factor is the largest factor that can be used
-    without incurring inf or NaN gradient values.
-    ``scaler`` approximates the optimal scale factor over time by checking the gradients for infs and NaNs during every
-    ``scaler.step(optimizer)`` (or optional separate ``scaler.unscale_(optimizer)``, see :meth:`unscale_`).
-
-    * If infs/NaNs are found, ``scaler.step(optimizer)`` skips the underlying ``optimizer.step()`` (so the params
-      themselves remain uncorrupted) and ``update()`` multiplies the scale by ``backoff_factor``.
-
-    * If no infs/NaNs are found, ``scaler.step(optimizer)`` runs the underlying ``optimizer.step()`` as usual.
-      If ``growth_interval`` unskipped iterations occur consecutively, ``update()`` multiplies the scale by
-      ``growth_factor``.
-
-    The scale factor often causes infs/NaNs to appear in gradients for the first few iterations as its
-    value calibrates.  ``scaler.step`` will skip the underlying ``optimizer.step()`` for these
-    iterations.  After that, step skipping should occur rarely (once every few hundred or thousand iterations).
-
-    Args:
-        init_scale (float, optional, default=2.**16):  Initial scale factor.
-        growth_factor (float, optional, default=2.0):  Factor by which the scale is multiplied during
-            :meth:`update` if no inf/NaN gradients occur for ``growth_interval`` consecutive iterations.
-        backoff_factor (float, optional, default=0.5):  Factor by which the scale is multiplied during
-            :meth:`update` if inf/NaN gradients occur in an iteration.
-        growth_interval (int, optional, default=2000):  Number of consecutive iterations without inf/NaN gradients
-            that must occur for the scale to be multiplied by ``growth_factor``.
-        enabled (bool, optional, default=True):  If ``False``, disables gradient scaling. :meth:`step` simply
-            invokes the underlying ``optimizer.step()``, and other methods become no-ops.
-    """
 
     def __init__(self, init_scale=2.0 ** 16, growth_factor=2.0, backoff_factor=0.5, growth_interval=2000, enabled=True,process_group: Any = dist.group.WORLD):
         if enabled and amp_definitely_not_available():
@@ -156,6 +92,7 @@ class ShardedGradScaler(TorchGradScaler):
             self._growth_tracker = None
             self._per_optimizer_states = defaultdict(_refresh_per_optimizer_state)
             self.display_warning = True
+            self.group = process_group
 
     def _check_scale_growth_tracker(self, funcname) -> Tuple[torch.Tensor, torch.Tensor]:
         fix = "This may indicate your script did not use scaler.scale(loss or outputs) earlier in the iteration."
@@ -293,7 +230,10 @@ class ShardedGradScaler(TorchGradScaler):
         optimizer_state = self._per_optimizer_states[id(optimizer)]
         last_handle = None
         for v in optimizer_state["found_inf_per_device"].values():
-            last_handle = dist.all_reduce(v, async_op=True)
+            if v.device == 'cpu':
+                last_handle = dist.all_reduce(v.cuda(), async_op=True, group=self.group)
+            else:
+                last_handle = dist.all_reduce(v, async_op=True, group=self.group)
 
         # Make sure that the calls are done before moving out.
         # The calls are executed in sequence, waiting for the last one is enough
@@ -362,20 +302,6 @@ class ShardedGradScaler(TorchGradScaler):
 
         return retval
 
-    def _amp_update_scale_cpu_(self, current_scale, found_inf):
-        new_scale = None
-        if found_inf == float("inf") or found_inf == float("-inf"):
-            new_scale = current_scale * self._backoff_factor
-            self._growth_tracker = 0
-        else:
-            successful = self._growth_tracker + 1
-            if successful == self._growth_interval:
-                new_scale = current_scale * self._growth_factor
-                self._growth_tracker = 0
-            else:
-                self._growth_tracker = successful
-        return new_scale
-
     def update(self, new_scale=None):
         """
         Updates the scale factor.
@@ -396,6 +322,19 @@ class ShardedGradScaler(TorchGradScaler):
             :meth:`update` should only be called at the end of the iteration, after ``scaler.step(optimizer)`` has
             been invoked for all optimizers used this iteration.
         """
+
+        def _amp_update_scale_cpu_(_scale, _growth_tracker, found_inf):
+            if found_inf == float("inf") or found_inf == -float("inf"):
+                _scale *= self._backoff_factor
+                _growth_tracker = 0
+            else:
+                successful = _growth_tracker + 1
+                if successful == self._growth_interval:
+                    _scale *= self._growth_factor
+                    _growth_tracker = 0
+                else:
+                    _growth_tracker = successful
+
         if not self._enabled:
             return
 
@@ -428,7 +367,7 @@ class ShardedGradScaler(TorchGradScaler):
                     found_inf_combined += found_infs[i]
 
             if "cpu" in str(_scale.device):
-                self._amp_update_scale_cpu_(_scale, found_inf_combined)
+                _amp_update_scale_cpu_(_scale, _growth_tracker, found_inf_combined)
             else:
                 torch._amp_update_scale_(
                     _scale,
