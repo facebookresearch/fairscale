@@ -52,8 +52,9 @@ class DistributedTest(unittest.TestCase):
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
 
-        base_optimizer = torch.optim.SGD
-        optim = OSS(params=model.parameters(), optim=base_optimizer, lr=lr, momentum=0.9)
+        # base_optimizer = torch.optim.SGD
+        # optim = OSS(params=model.parameters(), optim=base_optimizer, lr=lr, momentum=0.9)
+        optim = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=0.9)
         scaler = ShardedGradScaler()
         for _ in range(num_steps):
             optim.zero_grad()

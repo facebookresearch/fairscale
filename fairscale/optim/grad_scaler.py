@@ -231,7 +231,6 @@ class ShardedGradScaler(TorchGradScaler):
         last_handle = None
 
         for v in optimizer_state["found_inf_per_device"].values():
-            breakpoint()
             if v.device.type == 'cpu':
                 v_on_cuda = v.cuda()
                 last_handle = dist.all_reduce(v_on_cuda, async_op=True, group=self.group)
