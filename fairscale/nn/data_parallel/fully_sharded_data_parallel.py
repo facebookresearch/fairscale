@@ -1107,7 +1107,7 @@ class FullyShardedDataParallel(nn.Module):
                 m._reducer = self._reducer
 
     def _setup_output_hook_list(self) -> None:
-        """ set up an output dict to avoid registering pre-backward hook
+        """ set up a list to avoid registering pre-backward hooks
             incorrectly.
         """
         assert self._is_root, "This should only be called on the root"
