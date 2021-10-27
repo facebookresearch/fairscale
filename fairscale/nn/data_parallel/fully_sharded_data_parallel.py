@@ -1248,11 +1248,15 @@ class FullyShardedDataParallel(nn.Module):
                 self.training_state = TrainingState.BACKWARD_PRE
             self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
 
+        _registered = 0
+
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
+            nonlocal _registered
             assert self._output_pre_backward_hook_registered is not None
-            if t.requires_grad and id(t) not in self._output_pre_backward_hook_registered:
+            if t.requires_grad and (_registered == 0 or id(t) not in self._output_pre_backward_hook_registered):
                 t.register_hook(_pre_backward_hook)
                 self._output_pre_backward_hook_registered.append(id(t))
+                _registered += 1
             return t
 
         # Attach hooks to Tensor outputs.
