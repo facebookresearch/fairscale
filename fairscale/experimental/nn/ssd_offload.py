@@ -143,8 +143,8 @@ class SsdTensorHandle(torch.Tensor):
         self.tensor = tensor
 
     def to_tensor(self) -> torch.Tensor:
-        """Returns the tensor represented by the SsdTensorHandle object. 
-        
+        """Returns the tensor represented by the SsdTensorHandle object.
+
         If the tensor is on disk, it is copied into the tensor attribute and returned.
         """
         if self.tensor is not None:
@@ -184,7 +184,7 @@ class SsdTensorHandle(torch.Tensor):
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
         """Intercepts all operations performed on this handle object. 
-        
+
         Before any operation, the tensor attribute is unwrapped from the handle 
         and used in the operation. We maintain a refernce to the tensor and its current 
         versions to track if modifications have been made. If we detect changes to the 
