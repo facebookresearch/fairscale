@@ -8,7 +8,7 @@ from collections import defaultdict, abc
 from enum import Enum
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
-
+import remote_pdb
 import torch
 from torch.cuda.amp import GradScaler as TorchGradScaler
 import torch.distributed as dist
@@ -229,9 +229,12 @@ class ShardedGradScaler(TorchGradScaler):
         # Synchronize the detected inf across the ranks
         optimizer_state = self._per_optimizer_states[id(optimizer)]
         last_handle = None
+
         for v in optimizer_state["found_inf_per_device"].values():
-            if v.device == 'cpu':
-                last_handle = dist.all_reduce(v.cuda(), async_op=True, group=self.group)
+            breakpoint()
+            if v.device.type == 'cpu':
+                v_on_cuda = v.cuda()
+                last_handle = dist.all_reduce(v_on_cuda, async_op=True, group=self.group)
             else:
                 last_handle = dist.all_reduce(v, async_op=True, group=self.group)
 
@@ -302,6 +305,18 @@ class ShardedGradScaler(TorchGradScaler):
 
         return retval
 
+    def _amp_update_scale_cpu_(self, found_inf):
+        if found_inf == float("inf") or found_inf == -float("inf"):
+            self._scale *= self._backoff_factor
+            self._growth_tracker = 0
+        else:
+            successful = self._growth_tracker + 1
+            if successful == self._growth_interval:
+                self._scale *= self._growth_factor
+                self._growth_tracker = 0
+            else:
+                self._growth_tracker = successful
+
     def update(self, new_scale=None):
         """
         Updates the scale factor.
@@ -322,18 +337,6 @@ class ShardedGradScaler(TorchGradScaler):
             :meth:`update` should only be called at the end of the iteration, after ``scaler.step(optimizer)`` has
             been invoked for all optimizers used this iteration.
         """
-
-        def _amp_update_scale_cpu_(_scale, _growth_tracker, found_inf):
-            if found_inf == float("inf") or found_inf == -float("inf"):
-                _scale *= self._backoff_factor
-                _growth_tracker = 0
-            else:
-                successful = _growth_tracker + 1
-                if successful == self._growth_interval:
-                    _scale *= self._growth_factor
-                    _growth_tracker = 0
-                else:
-                    _growth_tracker = successful
 
         if not self._enabled:
             return
@@ -366,12 +369,12 @@ class ShardedGradScaler(TorchGradScaler):
                 for i in range(1, len(found_infs)):
                     found_inf_combined += found_infs[i]
 
-            if "cpu" in str(_scale.device):
-                _amp_update_scale_cpu_(_scale, _growth_tracker, found_inf_combined)
+            if _scale.device.type == "cpu":
+                self._amp_update_scale_cpu_(found_inf_combined)
             else:
                 torch._amp_update_scale_(
-                    _scale,
-                    _growth_tracker,
+                    self._scale,
+                    self._growth_tracker,
                     found_inf_combined,
                     self._growth_factor,
                     self._backoff_factor,
