@@ -937,6 +937,7 @@ class FullyShardedDataParallel(nn.Module):
         for p in self.params:
             if hasattr(p, "_fp32_shard"):
                 del p._fp32_shard  # reset _init_param_attributes
+        self._output_pre_backward_hook_registered: Optional[List] = None
 
     def _lazy_init(self) -> None:
         """Initialization steps that should happen lazily, typically right
@@ -953,6 +954,7 @@ class FullyShardedDataParallel(nn.Module):
         if self._is_root is None:
             self._set_is_root()
             self._setup_streams()
+            self._setup_output_hook_list()
 
         if self._is_root:
             # Buffers stay on GPU, and don't get sharded. Since _cast_buffers
@@ -1041,10 +1043,11 @@ class FullyShardedDataParallel(nn.Module):
             )
             free_storage_(p._full_param_padded)
 
-        if self.move_grads_to_cpu:
+        if self.move_grads_to_cpu and self.training:
             # We can optionally move the grad shard to CPU during the backward
             # pass. In this case, it's important to pre-allocate the CPU grad
             # shard in pinned memory so that we can do a non-blocking transfer.
+            # This is only needed during training and not evaluation.
             p._cpu_grad = torch.zeros_like(p.data, device="cpu").pin_memory()
 
     def _set_is_root(self) -> None:
@@ -1108,6 +1111,16 @@ class FullyShardedDataParallel(nn.Module):
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 m._streams = self._streams
                 m._reducer = self._reducer
+
+    def _setup_output_hook_list(self) -> None:
+        """ set up a list to avoid registering pre-backward hooks
+            incorrectly.
+        """
+        assert self._is_root, "This should only be called on the root"
+        self._output_pre_backward_hook_registered = []
+        for n, m in self.named_modules():
+            if n != "" and isinstance(m, FullyShardedDataParallel):
+                m._output_pre_backward_hook_registered = self._output_pre_backward_hook_registered
 
     def _wait_for_previous_optim_step(self) -> None:
         """
@@ -1241,9 +1254,35 @@ class FullyShardedDataParallel(nn.Module):
                 self.training_state = TrainingState.BACKWARD_PRE
             self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
 
+        _registered = 0
+
         def _register_hook(t: torch.Tensor) -> torch.Tensor:
-            if t.requires_grad:
+            # We don't register the pre_backward hook on the same tensor that has been
+            # returned from an inner FSDP, unless it is the first one. This does
+            # not cover all problematic cases though. A tensor not from an inner
+            # FSDP can cause problems too:
+            # ```
+            #   x = layer1(input)
+            #   state = [x]  # better change to x.detach(), not fixed by the following if-condition
+            #   x = inner_fsdp_module_layer2(x)
+            #   state.append(x)  # better change to x.detach(), but fixed by the following if-condition
+            #   x = layer3(x)
+            #   return x, state
+            # ```
+            # The tensors in `state`, if not detached, can be registered with
+            # backward hooks (in addition to the `x` on the last line). In that case,
+            # pre-backward hook can fire multiple times in the order that causes
+            # the outer FSDP to crash.
+            #
+            # The best practice is for modules to be wrapped by FSDP to return 1 and only
+            # 1 tensor to be used for backward. All other tensors returned should be
+            # detached.
+            nonlocal _registered
+            assert self._output_pre_backward_hook_registered is not None
+            if t.requires_grad and (_registered == 0 or id(t) not in self._output_pre_backward_hook_registered):
                 t.register_hook(_pre_backward_hook)
+                self._output_pre_backward_hook_registered.append(id(t))
+                _registered += 1
             return t
 
         # Attach hooks to Tensor outputs.
@@ -1531,6 +1570,9 @@ class FullyShardedDataParallel(nn.Module):
                 if m._is_root:
                     # reset this flag for cases like "one forward pass + multiple backward passes"
                     self._post_backward_callback_queued = False
+                    # clear this list for next iteration
+                    assert self._output_pre_backward_hook_registered is not None
+                    self._output_pre_backward_hook_registered.clear()
 
     @torch.no_grad()
     def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
