@@ -6,7 +6,7 @@ from source using the instructions below.
 
 ### Requirements
 
-* PyTorch>= 1.6.0
+* PyTorch>= 1.7.1
 
 ### Installing the pip package (stable)
 
