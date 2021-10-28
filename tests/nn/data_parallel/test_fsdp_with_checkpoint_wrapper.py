@@ -90,22 +90,17 @@ def _test_func(
     torch.manual_seed(1 + rank)
 
     # Expecting an known bug in 4 out of 32 cases.
-    context_train1 = contextlib.suppress()
-    context_train2 = contextlib.suppress()
     if fsdp_wrap_ckpt and mixed_precision and not flatten:
-        context_train1 = pytest.raises(SystemError)
-        context_train2 = pytest.raises(ValueError)
+        pytest.skip("known bug")
 
-    with context_train1:
-        # Train for a step.
-        _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
+    # Train for a step.
+    _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
 
     # Now do an eval step.
     _eval_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
 
-    with context_train2:
-        # And finally do another train step.
-        _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
+    # And finally do another train step.
+    _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
 
     teardown()
 
