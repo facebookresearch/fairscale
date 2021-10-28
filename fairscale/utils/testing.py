@@ -215,6 +215,7 @@ def test_runner(
     if deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+        torch.manual_seed(1357)
 
     test_func(rank, *args, **kwargs)
 
