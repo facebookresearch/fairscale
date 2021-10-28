@@ -218,6 +218,7 @@ class SlowMoDistributedDataParallel(Module):
         # NCCL_BLOCKING_WAIT causes issues with using multiple process groups
         assert os.environ.get("NCCL_BLOCKING_WAIT", "0") == "0"
 
+        assert nprocs_per_node >= 1
         self.nprocs_per_node = nprocs_per_node
 
         if process_world_size is None or process_rank is None:
@@ -350,36 +351,46 @@ class SlowMoDistributedDataParallel(Module):
         logical_world_size = process_world_size // self.nprocs_per_node
         logical_rank = process_rank // self.nprocs_per_node
 
-        if self.nprocs_per_node > 1:
-            if local_node_group is None:
-                self.logger.debug("Initializing local process groups")
-                for node in range(logical_world_size):
-                    node_processes_ranks = list(range(node * self.nprocs_per_node, (node + 1) * self.nprocs_per_node,))
-                    # Process group to communicate between processes on this
-                    # machine
-                    new_local_group = create_process_group(node_processes_ranks)
-                    if process_rank in node_processes_ranks:
-                        self.local_node_group = new_local_group
-                self.logger.debug("Initialization of local groups complete")
-            else:
-                self.local_node_group = local_node_group
-
-            if master_group is None:
-                self.logger.debug("Initializing master process group")
-                master_nodes = [i for i in range(dist.get_world_size()) if i % nprocs_per_node == 0]
-                self.master_group = create_process_group(master_nodes) if len(master_nodes) > 1 else None
-                if self.master_group is not None and process_rank in master_nodes:
-                    self.logger.debug("Initialization of master group complete")
-            else:
-                self.master_group = master_group
-        else:
-            if master_group is None:
-                self.master_group = self.global_group
-            else:
-                self.master_group = master_group
+        self._maybe_initialize_local_node_group(local_node_group, process_rank, logical_world_size)
+        self._initialize_master_group(master_group, process_rank, nprocs_per_node)
 
         self.logger.debug("Initialization of all process groups complete")
         return logical_rank, logical_world_size
+
+    def _initialize_master_group(
+        self, master_group: Optional[torch.distributed.ProcessGroup], process_rank: int, nprocs_per_node: int
+    ) -> None:
+        if master_group is not None:
+            self.master_group: Optional[torch.distributed.ProcessGroup] = master_group
+            return
+
+        if self.nprocs_per_node > 1:
+            self.logger.debug("Initializing master process group")
+            master_nodes = [i for i in range(dist.get_world_size()) if i % nprocs_per_node == 0]
+            self.master_group = create_process_group(master_nodes) if len(master_nodes) > 1 else None
+            if self.master_group is not None and process_rank in master_nodes:
+                self.logger.debug("Initialization of master group complete")
+        else:
+            self.master_group = self.global_group
+
+    def _maybe_initialize_local_node_group(
+        self, local_node_group: Optional[torch.distributed.ProcessGroup], process_rank: int, logical_world_size: int
+    ) -> None:
+        if self.nprocs_per_node == 1:
+            return
+
+        if local_node_group is not None:
+            self.local_node_group = local_node_group
+            return
+
+        self.logger.debug("Initializing local process groups")
+        for node in range(logical_world_size):
+            node_processes_ranks = list(range(node * self.nprocs_per_node, (node + 1) * self.nprocs_per_node,))
+            # Process group to communicate between processes on this machine
+            new_local_group = create_process_group(node_processes_ranks)
+            if process_rank in node_processes_ranks:
+                self.local_node_group = new_local_group
+        self.logger.debug("Initialization of local groups complete")
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Union[torch.Tensor, List[torch.Tensor]]:
         """ Forward pass performed in parallel across all devices on node """
