@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+import remote_pdb
 import functools
 import itertools
 from math import inf
@@ -52,18 +53,20 @@ class DistributedTest(unittest.TestCase):
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
 
-        # base_optimizer = torch.optim.SGD
-        # optim = OSS(params=model.parameters(), optim=base_optimizer, lr=lr, momentum=0.9)
         optim = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=0.9)
+
         scaler = ShardedGradScaler()
-        for _ in range(num_steps):
+        for _ in range(1):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
                 # Inputs always cuda regardless of move_grads_cpu, or model.device
                 input = model.module.get_input(torch.device("cuda"))
                 output = model(*input)
+                # print("rank = %s %s" % (torch.distributed.get_rank(), output))
                 loss = model.module.get_loss(input, output).to(model_device)
+                print("loss before scaling %s" % loss)
             loss = scaler.scale(loss)
+            print("loss after scaling %s" % loss)
             assert loss.dtype == torch.float32
             model.module.run_backward(loss)
             if norm_type is not None:
@@ -79,27 +82,6 @@ class DistributedTest(unittest.TestCase):
         if isinstance(model, FullyShardedDataParallel):
             model.assert_state(TrainingState.IDLE)
         return loss.detach()
-
-        #     optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-        #     for _ in range(num_steps):
-        #         optim.zero_grad()
-        #         with torch.cuda.amp.autocast(enabled=autocast):
-        #             # Inputs always cuda regardless of move_grads_cpu, or model.device
-        #             input = model.module.get_input(torch.device("cuda"))
-        #             output = model(*input)
-        #             loss = model.module.get_loss(input, output).to(model_device)
-        #         assert loss.dtype == torch.float32
-        #         model.module.run_backward(loss)
-        #         if norm_type is not None:
-        #             clip_norm = 0.3
-        #             if isinstance(model, FullyShardedDataParallel):
-        #                 model.clip_grad_norm_(clip_norm, norm_type)
-        #             else:
-        #                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm, norm_type)
-        #         optim.step()
-        #     if hasattr(model, "assert_idle"):
-        #         model.assert_idle()
-        #     return loss.detach()
 
     @staticmethod
     def get_wrapped_model(group, cuda_first=False, config={}, **model_kwargs) -> FullyShardedDataParallel:
@@ -151,7 +133,7 @@ class DistributedTest(unittest.TestCase):
             shard_loss = shard_loss.cuda()
         shard_state_dict = model.state_dict()
         print("shard_loss %s" % shard_loss)
-
+        # print(config)
         try:
             torch.testing.assert_allclose(ref_loss, shard_loss)
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
@@ -336,6 +318,15 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         spawn_and_init(test_fn)
 
     def test_no_cpu_offload_with_sharded_grad_scaler(self):
+        # We don't test the False condition because that requires the optimizer to internally do
+        # the device transfer and PyTorch optimizers don't support this.
+        config = {"mixed_precision": False, "cpu_offload": False, "move_grads_to_cpu": False}
+        test_fn = functools.partial(
+            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=True, lr=0.01
+        )
+        spawn_and_init(test_fn)
+
+    def test_no_cpu_offload_with_sharded_grad_scaler_and_mixed_precision(self):
         # We don't test the False condition because that requires the optimizer to internally do
         # the device transfer and PyTorch optimizers don't support this.
         config = {"mixed_precision": True, "cpu_offload": False, "move_grads_to_cpu": False}

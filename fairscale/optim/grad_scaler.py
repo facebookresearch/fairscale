@@ -50,11 +50,11 @@ def _refresh_per_optimizer_state():
     return {"stage": OptState.READY, "found_inf_per_device": {}}
 
 
-class GradScaler(TorchGradScaler):
-    def _unscale_grads_(
-        self, optimizer: Optimizer, inv_scale: torch.Tensor, found_inf: torch.Tensor, allow_fp16: bool
-    ) -> Dict[torch.device, torch.Tensor]:
-        return super()._unscale_grads_(optimizer, inv_scale, found_inf, True)
+# class GradScaler(TorchGradScaler):
+#     def _unscale_grads_(
+#         self, optimizer: Optimizer, inv_scale: torch.Tensor, found_inf: torch.Tensor, allow_fp16: bool
+#     ) -> Dict[torch.device, torch.Tensor]:
+#         return super()._unscale_grads_(optimizer, inv_scale, found_inf, True)
 
 
 class ShardedGradScaler(TorchGradScaler):
@@ -70,7 +70,15 @@ class ShardedGradScaler(TorchGradScaler):
     _grows_tracker: Optional[torch.Tensor]
     _per_optimizer_states: Dict[int, Dict[str, Any]]
 
-    def __init__(self, init_scale=2.0 ** 16, growth_factor=2.0, backoff_factor=0.5, growth_interval=2000, enabled=True,process_group: Any = dist.group.WORLD):
+    def __init__(
+        self,
+        init_scale=2.0 ** 16,
+        growth_factor=2.0,
+        backoff_factor=0.5,
+        growth_interval=2000,
+        enabled=True,
+        process_group: Any = dist.group.WORLD,
+    ):
         if enabled and amp_definitely_not_available():
             warnings.warn("torch.cuda.amp.GradScaler is enabled, but CUDA is not available.  Disabling.")
             self._enabled = False
@@ -156,20 +164,21 @@ class ShardedGradScaler(TorchGradScaler):
         assert found_inf.numel() == 1, "found_inf must be a 1-element tensor."
 
         expected_device = grads[0].device
-        expected_dtype = type(grads[0])
-        for tensor in grads:
+        # expected_dtype = type(grads[0])
+        for tensor in grads[0]:
             assert tensor.device == expected_device, "grads must be on the same device"
 
             # check for non_overlapping_and_dense doesn't exist in the python world
             # as remarked here https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/native/cuda/AmpKernels.cu#L108
             # we assume tensor is not MTA safe. iterate through each item regardless of dtype
-            if type(tensor) is not expected_dtype:
-                if torch.isinf(tensor).any().item() is True or torch.isnan(tensor).any().item() is True:
-                    found_inf = torch.cuda.FloatTensor([1.0])
-                else:
-                    tensor.data *= inv_scale.item()
+            # if type(tensor) is not expected_dtype:
+            if torch.isinf(tensor).any().item() is True or torch.isnan(tensor).any().item() is True:
+                found_inf.data = torch.tensor([1.0])
+                break
+            else:
+                tensor.data *= inv_scale.item()
 
-    def _unscale_grads_(self, optimizer, inv_scale, found_inf, allow_fp16):
+    def _unscale_grads_(self, optimizer, inv_scale, found_inf, allow_fp16=True):
         per_device_inv_scale = _GeneralMultiDeviceReplicator(inv_scale)
         per_device_found_inf = _GeneralMultiDeviceReplicator(found_inf)
 
@@ -234,6 +243,7 @@ class ShardedGradScaler(TorchGradScaler):
             if v.device.type == 'cpu':
                 v_on_cuda = v.cuda()
                 last_handle = dist.all_reduce(v_on_cuda, async_op=True, group=self.group)
+                v_on_cuda.cpu()
             else:
                 last_handle = dist.all_reduce(v, async_op=True, group=self.group)
 
@@ -294,14 +304,11 @@ class ShardedGradScaler(TorchGradScaler):
             return retval
 
         if optimizer_state["stage"] is OptState.READY:
-            self.unscale_(optimizer) 
+            self.unscale_(optimizer)
 
         assert len(optimizer_state["found_inf_per_device"]) > 0, "No inf checks were recorded for this optimizer."
-
         retval = self._maybe_opt_step(optimizer, optimizer_state, *args, **kwargs)
-
         optimizer_state["stage"] = OptState.STEPPED
-
         return retval
 
     def _amp_update_scale_cpu_(self, found_inf):
@@ -369,8 +376,10 @@ class ShardedGradScaler(TorchGradScaler):
                     found_inf_combined += found_infs[i]
 
             if _scale.device.type == "cpu":
+                print("using cpu")
                 self._amp_update_scale_cpu_(found_inf_combined)
             else:
+                print("using gpu")
                 torch._amp_update_scale_(
                     self._scale,
                     self._growth_tracker,
