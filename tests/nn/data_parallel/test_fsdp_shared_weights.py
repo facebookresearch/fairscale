@@ -29,8 +29,17 @@ def temp_files():
 
 
 @skip_if_no_cuda
-def test_pre_backward_hook(temp_files):
-    """Test FSDP with a model that triggers a pre_backward hook bug."""
+@pytest.mark.parametrize("outer_flat", ["outer_flat", "outer_nonflat"])
+@pytest.mark.parametrize("inner_flat", ["inner_flat", "inner_nonflat"])
+@pytest.mark.parametrize("share_bias", ["share_bias", "no_share_bias"])
+@pytest.mark.parametrize("has_bias", ["has_bias", "no_bias"])
+def test_shared_weight(temp_files, outer_flat, inner_flat, share_bias, has_bias):
+    """Test FSDP with a model with shared weights."""
+
+    outer_flat = outer_flat == "outer_flat"
+    inner_flat = inner_flat == "inner_flat"
+    share_bias = share_bias == "share_bias"
+    has_bias = has_bias == "has_bias"
 
     result = dist_init(rank=0, world_size=1, filename=temp_files[0], filename_rpc=temp_files[1])
     assert result, "Dist init failed"
@@ -38,13 +47,19 @@ def test_pre_backward_hook(temp_files):
     class Model(Module):
         def __init__(self, with_fsdp=False):
             super().__init__()
-            self.l1 = Linear(4, 4).cuda()
-            self.l2 = Linear(4, 4).cuda()
-            self.l3 = Linear(4, 4).cuda()
+            self.l1 = Linear(4, 4, bias=has_bias).cuda()
+            self.l2 = Linear(4, 4, bias=has_bias).cuda()
+            self.l3 = Linear(4, 4, bias=has_bias).cuda()
+
+            # share the weights.
+            self.l1.weight = self.l3.weight
+            if has_bias and share_bias:
+                self.l1.bias = self.l3.bias
+
             if with_fsdp:
-                self.l1 = FSDP(self.l1)
-                self.l2 = FSDP(self.l2)
-                self.l3 = FSDP(self.l3)
+                self.l1 = FSDP(self.l1, flatten_parameters=inner_flat)
+                self.l2 = FSDP(self.l2, flatten_parameters=inner_flat)
+                self.l3 = FSDP(self.l3, flatten_parameters=inner_flat)
 
         def forward(self, x):
             x = self.l1(x)
@@ -53,7 +68,7 @@ def test_pre_backward_hook(temp_files):
             return x
 
     model = Model()
-    fsdp_model = FSDP(Model(with_fsdp=True))
+    fsdp_model = FSDP(Model(with_fsdp=True), flatten_parameters=outer_flat)
     sd_before = deepcopy(model.state_dict())
     fsdp_model.load_state_dict(sd_before)
     in_data = torch.rand(1, 4).cuda()
@@ -63,8 +78,13 @@ def test_pre_backward_hook(temp_files):
 
     # Before and after state should not be equal.
     assert not objects_are_equal(sd_before, model.state_dict())
-    # Non FSDP an FSDP should be equal.
-    objects_are_equal(model.state_dict(), fsdp_model.state_dict(), raise_exception=True)
+
+    if not inner_flat:
+        # Non FSDP an FSDP should be equal.
+        objects_are_equal(model.state_dict(), fsdp_model.state_dict(), raise_exception=True)
+    else:
+        # Otherwise, weight sharing should cause them to be not equal.
+        assert not objects_are_equal(model.state_dict(), fsdp_model.state_dict())
 
     teardown()
 
