@@ -63,12 +63,13 @@ class SlowMoDistributedDataParallel(Module):
 
     Args:
         module (Module): module to be parallelized
-        nprocs_per_node (int): Number of GPUs per node. This needs to be specified for
+        nprocs_per_node (int): Number of processes per node (one per GPU). This needs to be specified for
                         optimal accuracy and speed. Syncing across GPUs in a node
                         is extremely fast, which we utilize for performance optimization
         broadcast_buffers (bool): Flag that enables syncing (broadcasting)
-                          buffers of the module at beginning of the ``forward``
-                          function. (default: ``True``)
+                          buffers (example - batchnorm buffers) of the module at beginning of the ``forward``
+                          function. Setting it to False would result in better performance due to less
+                          communication on the network but might result in a reduced accuracy (default: ``True``)
 
         slowmo_base_algorithm (str): The base algorithm to be used for
                               approximately averaging the different parameters across nodes.
@@ -91,9 +92,9 @@ class SlowMoDistributedDataParallel(Module):
                         nodes and 0.6 for 16 nodes (default: 0.5)
         slowmo_memory_efficient (bool): If enabled, use a memory efficient implementation of
                         SlowMo. The basic implementation of SlowMo occupies extra memory
-                        equal to double the memory occupied by the model parameters. This
-                        implementation shards that across a certain number of shards which is
-                        specified as a parameter below.
+                        equal to double the memory occupied by the model parameters. The
+                        memory efficient implementation shards that memory across a certain
+                        number of shards which is specified as a parameter below.
                         In addition, slowmo_memory_efficient leads to extra communication
                         with throughput equivalent to an allreduce, and performs an allreduce
                         as a side-effect. In order to optimize the implementation, we skip
@@ -119,7 +120,12 @@ class SlowMoDistributedDataParallel(Module):
                   changing this (default: 1.0)
         slowmo_num_shards (int): The number of shards between which slow momentum parameters
                           are distributed. This is only used when memory_efficient is set to
-                          True (default: 32),
+                          True.
+                          The number of shards should scale with the number of parameters
+                          in the model. Increasing the number of shards decreases the memory
+                          used per node for storing the slow momentum parameters. However, if
+                          the shard size per node is too small, it results in a communication
+                          overhead (default: 32),
 
         # LocalSGD Args
 
@@ -137,9 +143,10 @@ class SlowMoDistributedDataParallel(Module):
                communication. This is used to specify weights given to outgoing and incoming
                messages (default: None)
         push_sum (bool): Whether to use PushSum or PushPull gossip (default: True)
-        overlap (bool): Whether to use the overlap form of SGP (default: False)
-        synch_freq (int): How often (number of iterations) to synchronize for overlap SGP
-                   (default: 0)
+        overlap (bool): Whether to use the overlap form of SGP. This feature is currently disabled
+                        until further testing is done for its use (default: False)
+        synch_freq (int): How often (number of iterations) to synchronize for overlap SGP. A value
+                          of 0 means to synchronize overlap SGP every iteration (default: 0)
         use_streams (bool): Whether to use CUDA streams to speed up SGP overlap (default: True)
         slowmo_sgp_average_params (bool): Whether to completely average the parameters when slowmo
                                   is done instead of a partial averaging that happens every
@@ -262,7 +269,8 @@ class SlowMoDistributedDataParallel(Module):
 
         self.slowmo_frequency = slowmo_frequency
         self.slowmo_sgp_average_params = slowmo_sgp_average_params
-        self.slowmo_base_algorithm = slowmo_base_algorithm
+
+        assert slowmo_base_algorithm in ["localsgd", "sgp"]
         self.localsgd = slowmo_base_algorithm == "localsgd"
         self.sgp = slowmo_base_algorithm == "sgp"
 
@@ -270,10 +278,9 @@ class SlowMoDistributedDataParallel(Module):
         self.ef1: Optional[List[torch.Tensor]] = None
         self.global_momentum_buffers_initialized = False
 
-        if self.master_group is None:
-            if self.localsgd or self.sgp:
-                self.localsgd = self.sgp = False
-                self.logger.warning("Disabling LocalSGD and SGP since a local allreduce will suffice")
+        if self.master_group is None and (self.localsgd or self.sgp):
+            self.localsgd = self.sgp = False
+            self.logger.warning("Disabling LocalSGD and SGP since a local allreduce will suffice")
 
         if self.slowmo and not self.localsgd and not self.sgp:
             self.logger.warning("SlowMo is being used without LocalSGD and SGP")
@@ -301,7 +308,7 @@ class SlowMoDistributedDataParallel(Module):
             )
 
         # register ps/grad-reduction hooks
-        self.__register_hooks()
+        self._register_hooks()
 
         self.logger.debug("Initialization of SlowMoDistributedDataParallel complete")
 
@@ -424,15 +431,14 @@ class SlowMoDistributedDataParallel(Module):
                 assert len(fp32_params_list) == 1
                 fp32_params = fp32_params_list[0]
 
-            offset = 0
-            for i, p in enumerate(self.parameters()):
-                numel = p.numel()
-                # The fairseq implementation could contain fp32 parameters either as a
-                # list, or as a single tensor
-                if isinstance(fp32_params, list):
-                    yield p.view(-1), fp32_params[i]
-                else:
-                    yield p.view(-1), fp32_params[offset : offset + numel]
+            if isinstance(fp32_params, list):
+                for p, fp32_param in zip(self.parameters(), fp32_params):
+                    yield p.view(-1), fp32_param
+            else:
+                offset = 0
+                for p in self.parameters():
+                    yield p.view(-1), fp32_params[offset : offset + p.numel()]
+                    offset += p.numel()
 
     def _should_perform_slowmo(self) -> bool:
         return self.slowmo and (self.num_updates + 1) % self.slowmo_frequency == 0
@@ -441,7 +447,7 @@ class SlowMoDistributedDataParallel(Module):
         return self.localsgd and (self.num_updates + 1) % self.localsgd_frequency == 0
 
     def _skip_averaging_memory_efficient_slowmo(self) -> bool:
-        return self._should_perform_slowmo() and self.slowmo_memory_efficient
+        return self.slowmo_memory_efficient and self._should_perform_slowmo()
 
     def _should_perform_sgp_common(self) -> bool:
         return self.sgp and not self.overlap and not self._skip_averaging_memory_efficient_slowmo()
@@ -451,6 +457,9 @@ class SlowMoDistributedDataParallel(Module):
 
     def _should_perform_sgp_overlap(self) -> bool:
         return self._should_perform_sgp_common() and self.overlap
+
+    def _should_use_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> bool:
+        return bool(fp16_fp32_list) and (self._should_perform_sgp() or self._should_allreduce_params())
 
     def _should_allreduce_params(self) -> bool:
         # We do not all-reduce parameters with local SGD if a slow momentum step is
@@ -463,7 +472,7 @@ class SlowMoDistributedDataParallel(Module):
 
     def _maybe_pre_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
         ef_rec = self._create_event_recorder("Error feedback")
-        if self._should_perform_sgp() or self._should_allreduce_params():
+        if self._should_use_error_feedback(fp16_fp32_list):
             with torch.no_grad():
                 for p_fp16, p_fp32 in fp16_fp32_list:
                     if self._should_allreduce_params():
@@ -476,8 +485,7 @@ class SlowMoDistributedDataParallel(Module):
                         p_fp16.mul_(dist.get_world_size(self.master_group))
                     p_fp32 -= p_fp16.float()
 
-            if self.ef1 is not None:
-                with torch.no_grad():
+                if self.ef1 is not None:
                     for idx, (_, p_fp32) in enumerate(fp16_fp32_list):
                         p_fp32 += self.ef1[idx]
                         p_fp32.div_(2)
@@ -486,7 +494,7 @@ class SlowMoDistributedDataParallel(Module):
 
     def _maybe_post_communicate_error_feedback(self, fp16_fp32_list: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
         ef_unroll_rec = self._create_event_recorder("Sync and error feedback unroll rec")
-        if self._should_perform_sgp() or self._should_allreduce_params():
+        if self._should_use_error_feedback(fp16_fp32_list):
             # Error Feedback Reversal
             with torch.no_grad():
                 for p, p_fp32 in fp16_fp32_list:
@@ -495,14 +503,14 @@ class SlowMoDistributedDataParallel(Module):
         self.logger.debug("Error feedback unroll completed")
 
     def _maybe_perform_sgp(self) -> None:
+        sgp_rec = self._create_event_recorder("SGP")
         if self._should_perform_sgp():
-            sgp_rec = self._create_event_recorder("SGP")
             if not self._should_allreduce_params():
                 self._sgp_transfer_params()
                 self._sgp_query_gossip_queue()
                 torch.cuda.synchronize()
-            sgp_rec.stop()
             self.logger.debug("SGP completed")
+        sgp_rec.stop()
 
     def _maybe_allreduce(self) -> None:
         localsgd_rec = self._create_event_recorder("Localsgd communication time")
@@ -554,28 +562,24 @@ class SlowMoDistributedDataParallel(Module):
         if self._should_perform_sgp_overlap() and fp16_fp32_list:
             # Initialize error feedback for SGP-overlap
             if self.ef1 is None:
-                self.ef1 = []
-                for _, p_fp32 in fp16_fp32_list:
-                    self.ef1.append(p_fp32.clone().detach_())
+                self.ef1 = [p_fp32.clone().detach_() for _, p_fp32 in fp16_fp32_list]
 
             with torch.no_grad():
-                for idx, (p_fp16, p_fp32) in enumerate(fp16_fp32_list):
-                    assert self.ef1 is not None
-                    self.ef1[idx].copy_(p_fp32 - p_fp16.float())
+                assert self.ef1 is not None
+                for ef1, (p_fp16, p_fp32) in zip(self.ef1, fp16_fp32_list):
+                    ef1.copy_(p_fp32 - p_fp16.float())
 
-    def perform_slowmo(
-        self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor] = None
-    ) -> None:  # TODO: rename this function
-        """ This is to be called after optimizer.step. It performs the approximate averaging using
+    def perform_slowmo(self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor] = None) -> None:
+        """ This is to be called after optimizer.step(). It performs the approximate averaging using
         the base algorithm (SGP/ LocalSGD) and the slow momentum step. Since LocalSGD and the slow
-        momentum step are not performed every iteration, it only performs those when needed
+        momentum step are not performed every iteration, it only performs those when needed.
 
         Args:
             optimizer (torch.optim.Optimizer): The optimizer being used for training the model
             fp32_params (Optional[torch.Tensor]: To be used when performing fp16 training. Needs to be
                         set to the fp16 copy of the parameters (default: None)
         """
-        # Done here in case the global momentum buffers has not been initialized by the caller.
+        # Done here in case the global momentum buffers have not been initialized by the caller.
         # In an ideal implementation, this would be called by the caller. We do it here instead of
         # waiting for it to happen in the global_momentum step function so that we store a copy of
         # the version of the parameters at iteration 0 and can use them for a slow momentum step later
@@ -599,9 +603,7 @@ class SlowMoDistributedDataParallel(Module):
             and not hasattr(optimizer, "_amp_stash")
             and any(p.dtype == torch.float16 for p in self.parameters())
         ):
-            self.logger.warning(
-                "WARNING: please set fp32_params in " "perform_slowmo in order to " "avoid accuracy loss"
-            )
+            self.logger.warning("WARNING: please set fp32_params in perform_slowmo() in order to avoid accuracy loss")
 
         self._maybe_pre_communicate_error_feedback(fp16_fp32_list)
         self._maybe_perform_sgp()
@@ -616,17 +618,16 @@ class SlowMoDistributedDataParallel(Module):
 
     def _init_global_momentum_buffers(self, optimizer: torch.optim.Optimizer) -> None:
         """ Initializes the slow momentum buffers """
+        self.global_momentum_buffers_initialized = True
+
         if not self.slowmo:
             return
-
-        self.global_momentum_buffers_initialized = True
 
         total_elements = 0
         params_dtype = None
         for group in optimizer.param_groups:
             for p in group["params"]:
-                numel = p.numel()
-                total_elements += numel
+                total_elements += p.numel()
 
                 # Assert that all parameters have the same device and dtype
                 if params_dtype is None:
@@ -637,10 +638,10 @@ class SlowMoDistributedDataParallel(Module):
 
         self.world_portion_length = (total_elements + self.slowmo_num_shards - 1) // self.slowmo_num_shards
 
-        rank = dist.get_rank()
         if not self.is_computing_slowmo:
             return
 
+        rank = dist.get_rank()
         self.portion_start = rank * self.world_portion_length if self.slowmo_memory_efficient else 0
         self.portion_end = (
             min((rank + 1) * self.world_portion_length, total_elements)
@@ -767,7 +768,7 @@ class SlowMoDistributedDataParallel(Module):
 
                     offset += numel
 
-    def __register_hooks(self) -> None:
+    def _register_hooks(self) -> None:
         """
         Registers push-sum de-bias/bias hooks in pre-forward/post-backward
         passes in all leaf modules
@@ -798,9 +799,8 @@ class SlowMoDistributedDataParallel(Module):
                 self._sgp_ps_numerator()
 
                 # gossip during training (not inference)
-                if self.gossip_enable:
-                    if self.overlap and not self._skip_averaging_memory_efficient_slowmo():
-                        self._sgp_query_gossip_queue()
+                if self.gossip_enable and self.overlap and not self._skip_averaging_memory_efficient_slowmo():
+                    self._sgp_query_gossip_queue()
 
         def queue_hook(*unused: Any) -> None:
             Variable._execution_engine.queue_callback(hook)
@@ -817,9 +817,8 @@ class SlowMoDistributedDataParallel(Module):
 
             # gossip during training (not inference)
             if self.sgp:
-                if self.gossip_enable:
-                    if self.overlap and not self._skip_averaging_memory_efficient_slowmo():
-                        self._sgp_transfer_params()
+                if self.gossip_enable and self.overlap and not self._skip_averaging_memory_efficient_slowmo():
+                    self._sgp_transfer_params()
 
                 # convert model to de-biased estimate
                 self._sgp_unbias()
@@ -1105,7 +1104,7 @@ class SlowMoDistributedDataParallel(Module):
         gossip_stream: torch.cuda.Stream,
     ) -> None:
         """ Gossip thread, which performs push-sum on model params """
-        logger = make_logger(cast(int, dist_config["rank"]), cast(bool, dist_config["verbose"]))
+        logger = make_logger(dist_config["rank"], dist_config["verbose"])
 
         gossip_params_by_dtype = group_by_dtype(gossip_params)
         gossip_device_buffer_by_dtype = group_by_dtype(gossip_device_buffer)

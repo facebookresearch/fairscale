@@ -78,15 +78,15 @@ def communicate(tensors: List[torch.Tensor], communication_op: Any, logger: logg
             something like torch.distributed.all_reduce
     """
     tensors_by_dtype = group_by_dtype(tensors)
-    for dtype in tensors_by_dtype:
-        flat_tensor = flatten_tensors(tensors_by_dtype[dtype])
+    for tensors_with_same_dtype in tensors_by_dtype.values():
+        flat_tensor = flatten_tensors(tensors_with_same_dtype)
         if logger is not None:
             logger.debug("Flatten completed")
         communication_op(tensor=flat_tensor)
         if logger is not None:
             logger.debug("Commmunication completed")
         with torch.no_grad():
-            for f, t in zip(unflatten_tensors(flat_tensor, tensors_by_dtype[dtype]), tensors_by_dtype[dtype],):
+            for f, t in zip(unflatten_tensors(flat_tensor, tensors_with_same_dtype), tensors_with_same_dtype,):
                 t.copy_(f)
         if logger is not None:
             logger.debug("Unflatten completed")

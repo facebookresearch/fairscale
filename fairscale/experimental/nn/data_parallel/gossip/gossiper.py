@@ -100,7 +100,7 @@ class Gossiper(object):
                 if self.logger is not None:
                     self.logger.error(e)
                 else:
-                    raise (e)
+                    raise
 
         self.placeholder = self.in_msg_buffer.clone()
 
@@ -160,13 +160,9 @@ class Gossiper(object):
 
     def clean_msg_buffers_(self) -> None:
         """ Clean outgoing message buffer """
-        msgs = []
         while len(self.out_msg_buffer) > 0:
             req, msg = self.out_msg_buffer.pop()
             req.wait()
-            msgs.append(msg)
-        while len(msgs) > 0:
-            msg = msgs.pop()
             msg.set_()
 
     def parse_in_msg_buffer(self, residual: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
