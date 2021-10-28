@@ -32,6 +32,10 @@ def test_train_and_eval_with_checkpointing(flatten, mixed_precision, amp_context
     half_input = half_input == "halfin"
     fsdp_wrap_ckpt = fsdp_wrap_ckpt == "F->C"
 
+    # Expecting an known bug in 4 out of 32 cases.
+    if fsdp_wrap_ckpt and mixed_precision and not flatten:
+        pytest.skip("known bug")
+
     world_size = 2
 
     with temp_files_ctx(2) as (temp_file_name, unused):
@@ -89,23 +93,14 @@ def _test_func(
 
     torch.manual_seed(1 + rank)
 
-    # Expecting an known bug in 4 out of 32 cases.
-    context_train1 = contextlib.suppress()
-    context_train2 = contextlib.suppress()
-    if fsdp_wrap_ckpt and mixed_precision and not flatten:
-        context_train1 = pytest.raises(SystemError)
-        context_train2 = pytest.raises(ValueError)
-
-    with context_train1:
-        # Train for a step.
-        _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
+    # Train for a step.
+    _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
 
     # Now do an eval step.
     _eval_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
 
-    with context_train2:
-        # And finally do another train step.
-        _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
+    # And finally do another train step.
+    _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
 
     teardown()
 
