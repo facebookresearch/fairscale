@@ -160,8 +160,8 @@ class SlowMoDistributedDataParallel(Module):
 
         # Args for advanced users (these are automatically handled otherwise)
 
-        rank (Optional[int]): Rank of the current process in the process group (default: None)
-        world_size (Optional[int]): Size of the process group (default: None)
+        process_rank (Optional[int]): Rank of the current process in the process group (default: None)
+        process_world_size (Optional[int]): Size of the process group (default: None)
         global_group (Optional[torch.distributed.ProcessGroup]): Global process group initialized
                      by init_process_group (default: None)
         master_group (Optional[torch.distributed.ProcessGroup]): Process group which only contains
@@ -206,8 +206,8 @@ class SlowMoDistributedDataParallel(Module):
         verbose: bool = False,
         profile_mode: bool = False,
         # Args for advanced users (these are automatically handled otherwise)
-        rank: Optional[int] = None,
-        world_size: Optional[int] = None,
+        process_rank: Optional[int] = None,
+        process_world_size: Optional[int] = None,
         global_group: Optional[torch.distributed.ProcessGroup] = None,
         master_group: Optional[torch.distributed.ProcessGroup] = None,
         local_node_group: Optional[torch.distributed.ProcessGroup] = None,
@@ -220,17 +220,21 @@ class SlowMoDistributedDataParallel(Module):
 
         self.nprocs_per_node = nprocs_per_node
 
-        if world_size is None or rank is None:
+        if process_world_size is None or process_rank is None:
             assert dist.is_initialized()
-            rank = dist.get_rank()
-            world_size = dist.get_world_size()
-        assert world_size is not None and rank is not None
-        self.process_rank = rank
+            process_rank = dist.get_rank()
+            process_world_size = dist.get_world_size()
+        assert process_world_size is not None and process_rank is not None
+        self.process_rank = process_rank
 
         self._initialize_logger(verbose, self.process_rank)
 
-        rank, world_size = self._maybe_create_process_groups(
-            rank, world_size, nprocs_per_node, global_group, master_group, local_node_group
+        # The logical prefix in the following variables denotes the variable value if nprocs_per_node processes
+        # were treated as one process and then the following variables were calculated for the resulting process
+        # group.This is how they are being treated for optimization purposes because intra-node communication is
+        # very efficient with NVLink
+        logical_rank, logical_world_size = self._maybe_create_process_groups(
+            self.process_rank, process_world_size, nprocs_per_node, global_group, master_group, local_node_group
         )
 
         self.module = module
@@ -251,9 +255,9 @@ class SlowMoDistributedDataParallel(Module):
         self.dist_config = {
             "verbose": verbose,
             "comm_device": comm_device,
-            "rank": rank,
+            "logical_rank": logical_rank,
             "process_rank": self.process_rank,
-            "world_size": world_size,
+            "logical_world_size": logical_world_size,
             "cpu_comm": self._cpu_comm,
         }
         self.profile_mode = profile_mode
@@ -295,8 +299,8 @@ class SlowMoDistributedDataParallel(Module):
             self._sgp_init(
                 module=module,
                 first_param_dtype=first_param_dtype,
-                rank=rank,
-                world_size=world_size,
+                logical_rank=logical_rank,
+                logical_world_size=logical_world_size,
                 comm_device=comm_device,
                 graph=graph,
                 mixing=mixing,
@@ -325,8 +329,8 @@ class SlowMoDistributedDataParallel(Module):
 
     def _maybe_create_process_groups(
         self,
-        rank: int,
-        world_size: int,
+        process_rank: int,
+        process_world_size: int,
         nprocs_per_node: int,
         global_group: Optional[torch.distributed.ProcessGroup],
         master_group: Optional[torch.distributed.ProcessGroup],
@@ -340,40 +344,42 @@ class SlowMoDistributedDataParallel(Module):
         else:
             self.global_group = global_group
         self.logger.debug("Global group set")
-
         self.process_group = self.global_group
+
+        self.local_rank = process_rank % self.nprocs_per_node
+        logical_world_size = process_world_size // self.nprocs_per_node
+        logical_rank = process_rank // self.nprocs_per_node
+
         if self.nprocs_per_node > 1:
-            self.local_rank = self.process_rank % self.nprocs_per_node
-            world_size //= nprocs_per_node
-            rank //= nprocs_per_node
             if local_node_group is None:
                 self.logger.debug("Initializing local process groups")
-                for node in range(world_size):
+                for node in range(logical_world_size):
                     node_processes_ranks = list(range(node * self.nprocs_per_node, (node + 1) * self.nprocs_per_node,))
                     # Process group to communicate between processes on this
                     # machine
                     new_local_group = create_process_group(node_processes_ranks)
-                    if self.process_rank in node_processes_ranks:
+                    if process_rank in node_processes_ranks:
                         self.local_node_group = new_local_group
                 self.logger.debug("Initialization of local groups complete")
             else:
                 self.local_node_group = local_node_group
+
             if master_group is None:
                 self.logger.debug("Initializing master process group")
                 master_nodes = [i for i in range(dist.get_world_size()) if i % nprocs_per_node == 0]
                 self.master_group = create_process_group(master_nodes) if len(master_nodes) > 1 else None
-                if self.master_group is not None and self.process_rank in master_nodes:
+                if self.master_group is not None and process_rank in master_nodes:
                     self.logger.debug("Initialization of master group complete")
             else:
                 self.master_group = master_group
         else:
-            self.local_rank = 0
             if master_group is None:
                 self.master_group = self.global_group
             else:
                 self.master_group = master_group
+
         self.logger.debug("Initialization of all process groups complete")
-        return rank, world_size
+        return logical_rank, logical_world_size
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Union[torch.Tensor, List[torch.Tensor]]:
         """ Forward pass performed in parallel across all devices on node """
@@ -388,7 +394,7 @@ class SlowMoDistributedDataParallel(Module):
         params = cast(List[torch.Tensor], list(self.module.parameters()))
         communication_op = functools.partial(
             dist.broadcast,
-            src=(cast(int, self.dist_config["rank"]) * self.nprocs_per_node),
+            src=(cast(int, self.dist_config["logical_rank"]) * self.nprocs_per_node),
             group=self.local_node_group,
         )
         communicate(params, communication_op)
@@ -519,7 +525,7 @@ class SlowMoDistributedDataParallel(Module):
             params = cast(List[torch.Tensor], list(self.parameters()))
             with torch.no_grad():
                 for p in params:
-                    p.div_(cast(int, self.dist_config["world_size"]))
+                    p.div_(cast(int, self.dist_config["logical_world_size"]))
             self.logger.debug("Params normalized before localsgd step")
 
             # Commenting this out as it may cause an overhead. Can be uncommented if needed
@@ -641,10 +647,9 @@ class SlowMoDistributedDataParallel(Module):
         if not self.is_computing_slowmo:
             return
 
-        rank = dist.get_rank()
-        self.portion_start = rank * self.world_portion_length if self.slowmo_memory_efficient else 0
+        self.portion_start = self.process_rank * self.world_portion_length if self.slowmo_memory_efficient else 0
         self.portion_end = (
-            min((rank + 1) * self.world_portion_length, total_elements)
+            min((self.process_rank + 1) * self.world_portion_length, total_elements)
             if self.slowmo_memory_efficient
             else total_elements
         )
@@ -831,8 +836,8 @@ class SlowMoDistributedDataParallel(Module):
         self,
         module: torch.nn.Module,
         first_param_dtype: torch.dtype,
-        rank: int,
-        world_size: int,
+        logical_rank: int,
+        logical_world_size: int,
         comm_device: Optional[torch.device] = None,
         graph: Optional[GraphManager] = None,
         mixing: Optional[MixingManager] = None,
@@ -845,7 +850,7 @@ class SlowMoDistributedDataParallel(Module):
         """ Perform initialization for Stochastic Gradient Push base algorithm """
 
         if graph is None:
-            graph = NPDDEGraph(rank, world_size, self.nprocs_per_node, self.local_rank)
+            graph = NPDDEGraph(logical_rank, logical_world_size, self.nprocs_per_node, self.local_rank)
 
         if mixing is None:
             mixing = UniformMixing(graph, comm_device)
@@ -1104,7 +1109,7 @@ class SlowMoDistributedDataParallel(Module):
         gossip_stream: torch.cuda.Stream,
     ) -> None:
         """ Gossip thread, which performs push-sum on model params """
-        logger = make_logger(dist_config["rank"], dist_config["verbose"])
+        logger = make_logger(dist_config["logical_rank"], dist_config["verbose"])
 
         gossip_params_by_dtype = group_by_dtype(gossip_params)
         gossip_device_buffer_by_dtype = group_by_dtype(gossip_device_buffer)
@@ -1119,7 +1124,7 @@ class SlowMoDistributedDataParallel(Module):
                 graph=cast(GraphManager, dist_config["graph"]),
                 mixing=cast(MixingManager, dist_config["mixing"]),
                 rank=cast(int, dist_config["process_rank"]),
-                world_size=cast(int, dist_config["world_size"]),
+                world_size=cast(int, dist_config["logical_world_size"]),
                 logger=logger,
             )
 

@@ -114,8 +114,8 @@ def _prepare_single_device_module(
     slowmo_model = gossip.SlowMoDistributedDataParallel(
         copy.deepcopy(model).to(devices[0]),
         comm_device=devices[0],
-        rank=rank,
-        world_size=world_size,
+        process_rank=rank,
+        process_world_size=world_size,
         **slowmo_init_dict,
     )
 
@@ -350,7 +350,11 @@ def run_test_memory_usage_localsgd_with_slowmo(
         )
     if use_gossip_data_parallel:
         model: nn.Module = gossip.SlowMoDistributedDataParallel(
-            LargeNet().to(devices[0]), comm_device=devices[0], rank=rank, world_size=world_size, **slowmo_init_dict,
+            LargeNet().to(devices[0]),
+            comm_device=devices[0],
+            process_rank=rank,
+            process_world_size=world_size,
+            **slowmo_init_dict,
         )
     else:
         model = LargeNet().to(devices[0])
