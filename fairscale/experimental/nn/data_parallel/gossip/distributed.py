@@ -1141,7 +1141,7 @@ class SlowMoDistributedDataParallel(Module):
 
         gossipers = {}
         # init gossip instance
-        gossiper_class = PushSum if cast(bool, dist_config["push_sum"]) else PushPull
+        gossiper_class = PushSum if dist_config["push_sum"] else PushPull
         for dtype in gossip_params_by_dtype:
             gossipers[dtype] = gossiper_class(
                 flatten_tensors(gossip_params_by_dtype[dtype]),
