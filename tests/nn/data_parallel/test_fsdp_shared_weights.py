@@ -32,10 +32,17 @@ class Model(Module):
         # share the weights.
         if sharing == "share_only_weights":
             self.l1.weight = self.l3.weight
+        elif sharing == "share_only_bias":
+            if has_bias:
+                self.l1.bias = self.l3.bias
+            else:
+                pytest.skip("skipping share_only_bias but does not have bias cases")
         elif sharing == "share_both":
             self.l1.weight = self.l3.weight
             if has_bias:
                 self.l1.bias = self.l3.bias
+        else:
+            assert sharing is None or sharing == "share_none"
 
         if with_fsdp:
             self.l1 = FSDP(self.l1, flatten_parameters=inner_flat)
@@ -62,7 +69,7 @@ def temp_files():
 @pytest.mark.parametrize("outer_flat", ["outer_flat", "outer_nonflat"])
 @pytest.mark.parametrize("inner_flat", ["inner_flat", "inner_nonflat"])
 @pytest.mark.parametrize("has_bias", ["has_bias", "no_bias"])
-@pytest.mark.parametrize("sharing", ["share_none", "share_only_weights", "share_both"])
+@pytest.mark.parametrize("sharing", ["share_none", "share_only_weights", "share_only_bias", "share_both"])
 def test_shared_weight(temp_files, outer_flat, inner_flat, has_bias, sharing):
     """Test FSDP with a model with shared weights."""
 
@@ -72,7 +79,7 @@ def test_shared_weight(temp_files, outer_flat, inner_flat, has_bias, sharing):
     world_size = 2
 
     # Get ref.
-    model = Model(has_bias=has_bias)
+    model = Model(has_bias=has_bias, sharing=sharing)
     sd_before = deepcopy(model.state_dict())
     in_data = torch.rand(1, 4).cuda()
     _train(model, in_data, world_size)
