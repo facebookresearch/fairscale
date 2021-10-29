@@ -60,7 +60,6 @@ class DistributedTest(unittest.TestCase):
                 input = model.module.get_input(torch.device("cuda"))
                 output = model(*input)
                 loss = model.module.get_loss(input, output).to(model_device)
-                
             loss = scaler.scale(loss)
             assert loss.dtype == torch.float32
             model.module.run_backward(loss)
@@ -126,7 +125,7 @@ class DistributedTest(unittest.TestCase):
             # we need to move the CPU tensor to CUDA in case we are doing cpu_offload.
             shard_loss = shard_loss.cuda()
         shard_state_dict = model.state_dict()
-        
+
         try:
             torch.testing.assert_allclose(ref_loss, shard_loss)
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
