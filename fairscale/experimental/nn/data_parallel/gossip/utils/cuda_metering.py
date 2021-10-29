@@ -7,11 +7,15 @@
 Benchmarking utils for timing cuda executions
 """
 
-import collections
+from collections import defaultdict, deque
+from functools import partial
 import statistics
-from typing import ClassVar, Dict, List, Optional
+from typing import ClassVar, Deque, Dict, Optional
 
 import torch
+
+MAX_LEN_DEQUEUE = 10 ** 4
+deque_with_max_len_fixed = partial(deque, maxlen=MAX_LEN_DEQUEUE)
 
 
 def create_and_record_event() -> torch.cuda.Event:
@@ -35,7 +39,8 @@ class CudaEventRecorder(EventRecorder):
     """ Allows profiling in an easy-to-use manner. CudaEventRecorder can be used
     in a loop. When it is used in a loop (or when an event recorder is created
     multiple times with the same name), get_timings returns the statistics of the
-    timings since the last reset
+    timings since the last reset. Note: in case the number of timings is greater than
+    10,000, only the last 10,000 timings are used to calculate the statistics.
 
     Usage:
     >>> event_recorder1 = CudaEventRecorder('1')
@@ -51,8 +56,8 @@ class CudaEventRecorder(EventRecorder):
 
     """
 
-    event_recorders: ClassVar[Dict[str, List["CudaEventRecorder"]]] = collections.defaultdict(list)
-    all_event_recorders: ClassVar[Dict[str, List["CudaEventRecorder"]]] = collections.defaultdict(list)
+    event_recorders: ClassVar[Dict[str, Deque["CudaEventRecorder"]]] = defaultdict(deque_with_max_len_fixed)  # type: ignore
+    all_event_recorders: ClassVar[Dict[str, Deque["CudaEventRecorder"]]] = defaultdict(deque_with_max_len_fixed)  # type: ignore
 
     def __init__(self, event_name: str) -> None:
         self.event_name = event_name
@@ -75,10 +80,10 @@ class CudaEventRecorder(EventRecorder):
 
     @classmethod
     def reset(cls) -> None:
-        cls.event_recorders = collections.defaultdict(list)
+        cls.event_recorders = defaultdict(deque_with_max_len_fixed)  # type: ignore
 
     @classmethod
-    def get_common_timings(cls, event_recorders: Dict[str, List["CudaEventRecorder"]], description: str) -> str:
+    def get_common_timings(cls, event_recorders: Dict[str, Deque["CudaEventRecorder"]], description: str) -> str:
         all_timings_str = f"{description}:\n"
 
         # Iterating over different types of events, eg., forward, backward
