@@ -347,19 +347,24 @@ class SlowMoDistributedDataParallel(Module):
         """ Creates the process groups required for the SlowMo implementation """
 
         self.local_rank = process_rank % self.nprocs_per_node
+        assert (
+            process_world_size % self.nprocs_per_node == 0
+        )  # total world size must be a multiple of `nprocs_per_node`
         logical_world_size = process_world_size // self.nprocs_per_node
         logical_rank = process_rank // self.nprocs_per_node
 
-        self._maybe_initialize_global_group(global_group)
+        self._maybe_initialize_global_group(global_group, process_world_size)
         self._maybe_initialize_local_node_group(local_node_group, process_rank, logical_world_size)
         self._maybe_initialize_master_group(master_group, process_rank, process_world_size, nprocs_per_node)
 
         self.logger.debug("Initialization of all process groups complete")
         return logical_rank, logical_world_size
 
-    def _maybe_initialize_global_group(self, global_group: Optional[torch.distributed.ProcessGroup]) -> None:
+    def _maybe_initialize_global_group(
+        self, global_group: Optional[torch.distributed.ProcessGroup], process_world_size: int
+    ) -> None:
         if global_group is None:
-            all_processes = list(range(self.process_world_size))
+            all_processes = list(range(process_world_size))
             self.global_group = create_process_group(all_processes)
             self.logger.debug("Initialization of global group complete")
         else:
@@ -420,7 +425,7 @@ class SlowMoDistributedDataParallel(Module):
         # intra-node parameter sync
         params = cast(List[torch.Tensor], list(self.module.parameters()))
         communication_op = functools.partial(
-            dist.broadcast, src=(self.logical_rank * self.nprocs_per_node), group=self.local_node_group,
+            dist.broadcast, src=self.logical_rank * self.nprocs_per_node, group=self.local_node_group,
         )
         communicate(params, communication_op)
         self.logger.debug("Intra-node param sync complete")
