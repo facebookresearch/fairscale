@@ -133,19 +133,15 @@ class Gossiper(object):
         self.mixing_weights = self._mixing_manager.get_mixing_weights(residual_adjusted)
 
     def mix_out_msg_(
-        self, out_msg: torch.Tensor, ps_weight: torch.Tensor, residual: bool = False
+        self, out_msg: torch.Tensor, ps_weight: torch.Tensor
     ) -> Iterator[torch.Tensor]:
         """ Returns a generator mixing messages on the fly """
-        self.refresh_mixing_weights_(residual)
+        self.refresh_mixing_weights_(residual_adjusted=True)
         self.ps_weight = ps_weight
 
         # check whether or not we need to communicate ps_weight
         if not self.regular:
             out_msg = torch.cat([out_msg, cast(torch.Tensor, self.ps_weight.type(out_msg.dtype))])
-
-        # first return 'loopback msg to self'
-        if not residual:
-            yield out_msg.mul(self.mixing_weights["lo"].type(out_msg.dtype))  # type: ignore
 
         # check whether or not we need to create a buffer for each out-msg
         if self._mixing_manager.is_uniform():
@@ -165,19 +161,16 @@ class Gossiper(object):
             req.wait()
             msg.set_()
 
-    def parse_in_msg_buffer(self, residual: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+    def parse_in_msg_buffer(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """ Parse in-msg buffer and return msg and ps-weight separately """
         msg = self.in_msg_buffer
         if not self.regular:
             return msg.narrow(0, 0, len(msg) - 1), msg[-1]
         else:
-            if residual:
-                return msg, self.ps_weight * self.peers_per_itr_device
-            else:
-                return msg, torch.ones(1, dtype=msg.dtype, device=self.device)
+            return msg, self.ps_weight * self.peers_per_itr_device
 
     def mix(
-        self, out_msg: torch.Tensor, ps_weight: torch.Tensor, residual: bool = False
+        self, out_msg: torch.Tensor, ps_weight: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """ Single gossip step """
         raise NotImplementedError
@@ -187,7 +180,7 @@ class PushSum(Gossiper):
     """ 1-peer Push-Sum consensus averaging module """
 
     def mix(
-        self, out_msg: torch.Tensor, ps_weight: torch.Tensor, residual: bool = False
+        self, out_msg: torch.Tensor, ps_weight: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """ Consensus averaging step """
         # out_msg must be on the correct device
@@ -196,7 +189,7 @@ class PushSum(Gossiper):
             self.logger.debug("in/out -peers {}/{}".format(self.in_edges, self.out_edges))
 
         # prepare messages for gossip
-        mixed_out_msgs = self.mix_out_msg_(out_msg, ps_weight, residual)
+        mixed_out_msgs = self.mix_out_msg_(out_msg, ps_weight)
 
         # non-blocking send
         for out_edge in self.out_edges:
@@ -206,17 +199,14 @@ class PushSum(Gossiper):
             self.out_msg_buffer.append((req, msg))
 
         # blocking recv w/ some code optimization to avoid buffer prep overhead
-        if len(self.in_edges) == 1 and residual:
+        if len(self.in_edges) == 1:
             in_edge = self.in_edges[0]
             dist.broadcast(tensor=self.in_msg_buffer, src=in_edge.src, group=in_edge.process_group)
 
         # regular non-blocking recv
         else:
             # prepare in-msg buffer
-            if not residual:
-                self.in_msg_buffer.copy_(next(mixed_out_msgs))
-            else:
-                self.in_msg_buffer.zero_()
+            self.in_msg_buffer.zero_()
 
             for in_edge in self.in_edges:
                 dist.broadcast(
@@ -226,14 +216,14 @@ class PushSum(Gossiper):
 
         self.refresh_peers_()
         self.clean_msg_buffers_()
-        return self.parse_in_msg_buffer(residual)
+        return self.parse_in_msg_buffer()
 
 
 class PushPull(Gossiper):
     """ Doubly-stochastic consensus averaging module """
 
     def mix(
-        self, out_msg: torch.Tensor, ps_weight: torch.Tensor, residual: bool = False
+        self, out_msg: torch.Tensor, ps_weight: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # out_msg must be on the correct device
         assert out_msg.device.type == self.device.type
@@ -241,10 +231,10 @@ class PushPull(Gossiper):
             self.logger.debug("in/out -peers {}/{}".format(self.in_edges, self.out_edges))
 
         # prepare messages for gossip
-        mixed_out_msgs = self.mix_out_msg_(out_msg, ps_weight, residual)
+        mixed_out_msgs = self.mix_out_msg_(out_msg, ps_weight)
 
         # send-recv w/ some code optimization to avoid buffer prep overhead
-        if len(self.in_edges) == 1 and len(self.out_edges) == 1 and residual:
+        if len(self.in_edges) == 1 and len(self.out_edges) == 1:
             out_edge, in_edge = self.out_edges[0], self.in_edges[0]
             msg = next(mixed_out_msgs)
             if not self.passive:
@@ -261,10 +251,7 @@ class PushPull(Gossiper):
         # regular send-recv
         else:
             # prepare in-msg buffer
-            if not residual:
-                self.in_msg_buffer.copy_(next(mixed_out_msgs))
-            else:
-                self.in_msg_buffer.zero_()
+            self.in_msg_buffer.zero_()
 
             # send-recv
             for out_edge, in_edge in zip(self.out_edges, self.in_edges):
@@ -283,4 +270,4 @@ class PushPull(Gossiper):
 
         self.refresh_peers_()
         self.clean_msg_buffers_()
-        return self.parse_in_msg_buffer(residual)
+        return self.parse_in_msg_buffer()

@@ -1094,7 +1094,7 @@ class SlowMoDistributedDataParallel(Module):
 
         # send and receive parameters
         with gossip_lock:
-            in_msg, ps_weight = gossiper.mix(out_msg, gossip_ps_weight, residual=True)
+            in_msg, ps_weight = gossiper.mix(out_msg, gossip_ps_weight)
             ps_factor = gossiper.mixing_weights["lo"]
 
         # unflatten parameters
