@@ -3,7 +3,6 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-import remote_pdb
 import functools
 import itertools
 from math import inf
@@ -18,7 +17,6 @@ import torch
 from torch import nn
 import torch.distributed
 from fairscale.optim.grad_scaler import ShardedGradScaler
-from fairscale.optim.oss import OSS
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
@@ -54,19 +52,16 @@ class DistributedTest(unittest.TestCase):
         # and this makes it bad for tests
 
         optim = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=0.9)
-
         scaler = ShardedGradScaler()
-        for _ in range(1):
+        for _ in range(num_steps):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
                 # Inputs always cuda regardless of move_grads_cpu, or model.device
                 input = model.module.get_input(torch.device("cuda"))
                 output = model(*input)
-                # print("rank = %s %s" % (torch.distributed.get_rank(), output))
                 loss = model.module.get_loss(input, output).to(model_device)
-                print("loss before scaling %s" % loss)
+                
             loss = scaler.scale(loss)
-            print("loss after scaling %s" % loss)
             assert loss.dtype == torch.float32
             model.module.run_backward(loss)
             if norm_type is not None:
@@ -118,7 +113,6 @@ class DistributedTest(unittest.TestCase):
         if config.get("cpu_offload", False):
             for k in ref_state_dict.keys():
                 ref_state_dict[k] = ref_state_dict[k].cpu()
-        print("ref_loss is %s" % ref_loss)
 
         # Confirm we get the same behavior using FullyShardedDataParallel.
         model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
@@ -132,8 +126,7 @@ class DistributedTest(unittest.TestCase):
             # we need to move the CPU tensor to CUDA in case we are doing cpu_offload.
             shard_loss = shard_loss.cuda()
         shard_state_dict = model.state_dict()
-        print("shard_loss %s" % shard_loss)
-        # print(config)
+        
         try:
             torch.testing.assert_allclose(ref_loss, shard_loss)
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
