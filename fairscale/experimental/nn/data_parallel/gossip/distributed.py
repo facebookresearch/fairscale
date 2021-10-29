@@ -125,7 +125,7 @@ class SlowMoDistributedDataParallel(Module):
                           in the model. Increasing the number of shards decreases the memory
                           used per node for storing the slow momentum parameters. However, if
                           the shard size per node is too small, it results in a communication
-                          overhead (default: 32),
+                          overhead (default: 32)
 
         # LocalSGD Args
 
@@ -232,8 +232,8 @@ class SlowMoDistributedDataParallel(Module):
 
         # The logical prefix in the following variables denotes the variable value if nprocs_per_node processes
         # were treated as one process and then the following variables were calculated for the resulting process
-        # group.This is how they are being treated for optimization purposes because intra-node communication is
-        # very efficient with NVLink
+        # group. This is how they are being treated for optimization purposes because intra-node communication is
+        # very efficient with NVLink.
         logical_rank, logical_world_size = self._maybe_create_process_groups(
             self.process_rank, process_world_size, nprocs_per_node, global_group, master_group, local_node_group
         )
@@ -283,7 +283,8 @@ class SlowMoDistributedDataParallel(Module):
         self.ef1: Optional[List[torch.Tensor]] = None
         self.global_momentum_buffers_initialized = False
 
-        if self.master_group is None and (self.localsgd or self.sgp):
+        if self.master_group is None:
+            assert self.localsgd or self.sgp
             self.localsgd = self.sgp = False
             self.logger.warning("Disabling LocalSGD and SGP since a local allreduce will suffice")
 
@@ -377,6 +378,7 @@ class SlowMoDistributedDataParallel(Module):
         self, local_node_group: Optional[torch.distributed.ProcessGroup], process_rank: int, logical_world_size: int
     ) -> None:
         if self.nprocs_per_node == 1:
+            self.local_node_group = None
             return
 
         if local_node_group is not None:
@@ -390,6 +392,7 @@ class SlowMoDistributedDataParallel(Module):
             new_local_group = create_process_group(node_processes_ranks)
             if process_rank in node_processes_ranks:
                 self.local_node_group = new_local_group
+        assert self.local_node_group is not None
         self.logger.debug("Initialization of local groups complete")
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Union[torch.Tensor, List[torch.Tensor]]:
@@ -398,7 +401,7 @@ class SlowMoDistributedDataParallel(Module):
 
     def _sync_params(self) -> None:
         """ Synchronize parameters across devices (intra-node) """
-        if self.nprocs_per_node <= 1 or self.local_node_group is None:
+        if self.local_node_group is None:
             return
 
         # intra-node parameter sync
@@ -599,7 +602,7 @@ class SlowMoDistributedDataParallel(Module):
         # Done here in case the global momentum buffers have not been initialized by the caller.
         # In an ideal implementation, this would be called by the caller. We do it here instead of
         # waiting for it to happen in the global_momentum step function so that we store a copy of
-        # the version of the parameters at iteration 0 and can use them for a slow momentum step later
+        # the version of the parameters at iteration 0 and can use them for a slow momentum step later.
         if not self.global_momentum_buffers_initialized:
             self._init_global_momentum_buffers(optimizer)
 
@@ -797,7 +800,7 @@ class SlowMoDistributedDataParallel(Module):
 
         def hook(*unused: Any) -> None:
             # reduce gradients across devices on a single machine
-            if self.nprocs_per_node > 1 and self.local_node_group is not None:
+            if self.local_node_group is not None:
                 grads = []
                 for p in self.module.parameters():
                     if not p.requires_grad or p.grad is None:
@@ -869,7 +872,7 @@ class SlowMoDistributedDataParallel(Module):
         self.dist_config.update({"graph": graph, "mixing": mixing, "push_sum": push_sum})
 
         self.overlap = overlap
-        assert self.overlap is False
+        assert not self.overlap  # currently disabled, see docstring
 
         self.synch_freq = synch_freq
         self.asynch = synch_freq > 0
