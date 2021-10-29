@@ -132,9 +132,7 @@ class Gossiper(object):
         """ Update mixing-matrix weights """
         self.mixing_weights = self._mixing_manager.get_mixing_weights(residual_adjusted)
 
-    def mix_out_msg_(
-        self, out_msg: torch.Tensor, ps_weight: torch.Tensor
-    ) -> Iterator[torch.Tensor]:
+    def mix_out_msg_(self, out_msg: torch.Tensor, ps_weight: torch.Tensor) -> Iterator[torch.Tensor]:
         """ Returns a generator mixing messages on the fly """
         self.refresh_mixing_weights_(residual_adjusted=True)
         self.ps_weight = ps_weight
@@ -169,9 +167,7 @@ class Gossiper(object):
         else:
             return msg, self.ps_weight * self.peers_per_itr_device
 
-    def mix(
-        self, out_msg: torch.Tensor, ps_weight: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def mix(self, out_msg: torch.Tensor, ps_weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """ Single gossip step """
         raise NotImplementedError
 
@@ -179,9 +175,7 @@ class Gossiper(object):
 class PushSum(Gossiper):
     """ 1-peer Push-Sum consensus averaging module """
 
-    def mix(
-        self, out_msg: torch.Tensor, ps_weight: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def mix(self, out_msg: torch.Tensor, ps_weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """ Consensus averaging step """
         # out_msg must be on the correct device
         assert out_msg.device.type == self.device.type
@@ -222,9 +216,7 @@ class PushSum(Gossiper):
 class PushPull(Gossiper):
     """ Doubly-stochastic consensus averaging module """
 
-    def mix(
-        self, out_msg: torch.Tensor, ps_weight: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def mix(self, out_msg: torch.Tensor, ps_weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # out_msg must be on the correct device
         assert out_msg.device.type == self.device.type
         if self.logger is not None:
