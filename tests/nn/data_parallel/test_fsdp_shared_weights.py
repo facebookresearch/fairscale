@@ -45,9 +45,15 @@ class Model(Module):
             assert sharing is None or sharing == "share_none"
 
         if with_fsdp:
-            self.l1 = FSDP(self.l1, flatten_parameters=inner_flat)
+            # Shared layers much be un-flatten.
+            self.l1 = FSDP(self.l1, flatten_parameters=False)
             self.l2 = FSDP(self.l2, flatten_parameters=inner_flat)
-            self.l3 = FSDP(self.l3, flatten_parameters=inner_flat)
+            self.l3 = FSDP(self.l3, flatten_parameters=False)
+
+            if sharing in ["share_both", "share_only_weights"]:
+                self.l3.append_shared_param(self.l1.module.weight)
+            if sharing in ["share_both", "share_only_bias"] and has_bias:
+                self.l3.append_shared_param(self.l1.module.bias)
 
     def forward(self, x):
         x = self.l0(x)

@@ -414,6 +414,30 @@ class FullyShardedDataParallel(nn.Module):
         assert isinstance(self._fsdp_wrapped_module, FlattenParamsWrapper)
         return self._fsdp_wrapped_module
 
+    def append_shared_param(self, p: Parameter) -> None:
+        """ Add a param that's already owned by another FSDP wrapper.
+
+            .. warning:: This is experimental!
+
+            This only works with all sharing FSDP modules are un-flattened.
+
+            p must to be already sharded by the owning module.
+
+            Check the corresponding unit test to see how is it used and tested.
+            In particular, the sharing FSDP wrappers are "siblings" not "parent"
+            and "child" of each other in the nested module structure.
+
+        Args:
+            p (Parameter):
+                The shared parameter.
+        """
+        assert self._is_root is None
+        assert not self.flatten_parameters
+        assert isinstance(p, Parameter)
+        assert p._is_sharded
+        p._is_shared = True
+        self.params.append(p)
+
     def apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":
         """
         Applies ``fn`` recursively to every submodule (as returned by
@@ -916,8 +940,16 @@ class FullyShardedDataParallel(nn.Module):
                     yield
                 finally:
                     stack.close()
-                    assert len(full_tensors) == len(self.params)
-                    for p, (full_tensor, safe_to_free) in zip(self.params, full_tensors):
+                    non_shared_params = self.params
+                    # filter out shared params for all but the owner FSDP module.
+                    if len(full_tensors) < len(non_shared_params):
+                        non_shared_params = list(
+                            filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params)
+                        )
+                    assert len(full_tensors) == len(
+                        non_shared_params
+                    ), f"{len(full_tensors)} vs. {len(non_shared_params)}"
+                    for p, (full_tensor, safe_to_free) in zip(non_shared_params, full_tensors):
                         if not volatile:
                             # Copy any changes made to the full params back into
                             # the corresponding local shards.
@@ -1329,7 +1361,10 @@ class FullyShardedDataParallel(nn.Module):
             return  # don't register grad hooks if grad isn't enabled
         for p in self.params:
             if p.requires_grad:
-                if hasattr(p, "_shard_bwd_hook"):
+                if hasattr(p, "_shard_bwd_hook") and not (hasattr(p, "_is_shared") and p._is_shared):
+                    # We don't register if it is already registered, unless this is a
+                    # shared param, which means multiple FSDP wrappers would need the
+                    # callbacks.
                     continue
                 # Register a hook on the first call, empirically, autograd
                 # fires it at the end for this param, which makes sense.
@@ -1565,6 +1600,10 @@ class FullyShardedDataParallel(nn.Module):
                     # 2. output tensors are `requires_grad==False`. In this case,
                     # pre-backward hook is not registered, so it is in IDLE state.
                     m.assert_state([TrainingState.BACKWARD_PRE, TrainingState.IDLE])
+                # We call _free_full_params() in case m contains a shared param,
+                # in which case its post-backward might not be called to free
+                # the full params.
+                m._free_full_params()
                 m.training_state = TrainingState.IDLE
 
                 if m._is_root:
@@ -1650,6 +1689,9 @@ class FullyShardedDataParallel(nn.Module):
                 if not p._is_sharded:  # e.g., when world_size == 1
                     update_p_data()
                 else:
+                    if p.data.shape == p._orig_size:
+                        assert p._is_shared, "only shared param can be rebuilt multiple times"
+                        continue
                     # If self.move_params_to_cpu and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
                     p_data = p.data.to(p._full_param_padded.device, non_blocking=True)

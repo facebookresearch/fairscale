@@ -9,6 +9,7 @@ class Parameter(Tensor):
     # These are dynamic attributes added by shard_params_data_parallel class.
     # Added here for better type checking.
     _is_sharded: bool
+    _is_shared: bool
     _orig_size: Size
     _cpu_grad: Tensor
     _full_param_padded: Tensor
