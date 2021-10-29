@@ -55,6 +55,7 @@ modules and easy to use APIs.
    tutorials/offload_model
    tutorials/adascale
    tutorials/pipe
+   tutorials/layer_memory_tracking
 
 |
 |
