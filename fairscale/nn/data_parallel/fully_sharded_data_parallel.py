@@ -1400,6 +1400,12 @@ class FullyShardedDataParallel(nn.Module):
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         self.training_state = TrainingState.BACKWARD_POST
         if param.grad is None:
+            # For a shared param, post backward could be called on
+            # it multiple times and the first one will see p.grad
+            # being not none. The rest will see none, but still need
+            # to _free_full_params to keep the state correct.
+            if hasattr(param, "_is_shared") and param._is_shared:
+                self._free_full_params([param])
             return
 
         if param.grad.requires_grad:
@@ -1600,10 +1606,6 @@ class FullyShardedDataParallel(nn.Module):
                     # 2. output tensors are `requires_grad==False`. In this case,
                     # pre-backward hook is not registered, so it is in IDLE state.
                     m.assert_state([TrainingState.BACKWARD_PRE, TrainingState.IDLE])
-                # We call _free_full_params() in case m contains a shared param,
-                # in which case its post-backward might not be called to free
-                # the full params.
-                m._free_full_params()
                 m.training_state = TrainingState.IDLE
 
                 if m._is_root:
@@ -1689,8 +1691,10 @@ class FullyShardedDataParallel(nn.Module):
                 if not p._is_sharded:  # e.g., when world_size == 1
                     update_p_data()
                 else:
-                    if p.data.shape == p._orig_size:
-                        assert p._is_shared, "only shared param can be rebuilt multiple times"
+                    # Skip if already built. Only shared param can be rebuilt multiple times.
+                    # A corner case is p._orig_size = (1,), which means the shape equality is
+                    # not a perfect check. But we assume we don't share a param with shape (1,).
+                    if p.data.shape == p._orig_size and hasattr(p, "_is_shared") and p._is_shared:
                         continue
                     # If self.move_params_to_cpu and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
