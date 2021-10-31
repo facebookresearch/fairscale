@@ -22,25 +22,20 @@ from fairscale.utils.testing import dist_init, objects_are_equal, skip_if_single
 
 
 class Model(Module):
-    def __init__(self, with_fsdp=False, inner_flat=False, has_bias=False, sharing=None):
+    def __init__(self, with_fsdp=False, inner_flat=False, sharing=None):
         super().__init__()
-        self.l0 = Linear(4, 4, bias=has_bias).cuda()
-        self.l1 = Linear(4, 4, bias=has_bias).cuda()
-        self.l2 = Linear(4, 4, bias=has_bias).cuda()
-        self.l3 = Linear(4, 4, bias=has_bias).cuda()
+        self.l0 = Linear(4, 4, bias=True).cuda()
+        self.l1 = Linear(4, 4, bias=True).cuda()
+        self.l2 = Linear(4, 4, bias=True).cuda()
+        self.l3 = Linear(4, 4, bias=True).cuda()
 
-        # share the weights.
+        # share the weights. the layer must have at least 1 param is that's not
+        # shared. Therefore, we have bias=True and testing either sharing the
+        # weight or the bias.
         if sharing == "share_only_weights":
             self.l1.weight = self.l3.weight
         elif sharing == "share_only_bias":
-            if has_bias:
-                self.l1.bias = self.l3.bias
-            else:
-                pytest.skip("skipping share_only_bias but does not have bias cases")
-        elif sharing == "share_both":
-            self.l1.weight = self.l3.weight
-            if has_bias:
-                self.l1.bias = self.l3.bias
+            self.l1.bias = self.l3.bias
         else:
             assert sharing is None or sharing == "share_none"
 
@@ -50,9 +45,9 @@ class Model(Module):
             self.l2 = FSDP(self.l2, flatten_parameters=inner_flat)
             self.l3 = FSDP(self.l3, flatten_parameters=False)
 
-            if sharing in ["share_both", "share_only_weights"]:
+            if sharing in ["share_only_weights"]:
                 self.l3.append_shared_param(self.l1.module.weight)
-            if sharing in ["share_both", "share_only_bias"] and has_bias:
+            if sharing in ["share_only_bias"]:
                 self.l3.append_shared_param(self.l1.module.bias)
 
     def forward(self, x):
@@ -74,18 +69,16 @@ def temp_files():
 @skip_if_single_gpu
 @pytest.mark.parametrize("outer_flat", ["outer_flat", "outer_nonflat"])
 @pytest.mark.parametrize("inner_flat", ["inner_flat", "inner_nonflat"])
-@pytest.mark.parametrize("has_bias", ["has_bias", "no_bias"])
-@pytest.mark.parametrize("sharing", ["share_none", "share_only_weights", "share_only_bias", "share_both"])
-def test_shared_weight(temp_files, outer_flat, inner_flat, has_bias, sharing):
+@pytest.mark.parametrize("sharing", ["share_none", "share_only_weights", "share_only_bias"])
+def test_shared_weight(temp_files, outer_flat, inner_flat, sharing):
     """Test FSDP with a model with shared weights."""
 
     outer_flat = outer_flat == "outer_flat"
     inner_flat = inner_flat == "inner_flat"
-    has_bias = has_bias == "has_bias"
     world_size = 2
 
     # Get ref.
-    model = Model(has_bias=has_bias, sharing=sharing)
+    model = Model(sharing=sharing)
     sd_before = deepcopy(model.state_dict())
     in_data = torch.rand(1, 4).cuda()
     _train(model, in_data, world_size)
@@ -100,11 +93,11 @@ def test_shared_weight(temp_files, outer_flat, inner_flat, has_bias, sharing):
 
     # Run FSDP
     mp.spawn(
-        _dist_worker, (world_size, temp_files, outer_flat, inner_flat, has_bias, sharing), nprocs=world_size,
+        _dist_worker, (world_size, temp_files, outer_flat, inner_flat, sharing), nprocs=world_size,
     )
 
 
-def _dist_worker(rank, world_size, files, outer_flat, inner_flat, has_bias, sharing):
+def _dist_worker(rank, world_size, files, outer_flat, inner_flat, sharing):
 
     # Get data from files.
     file1, file2, sd_before, sd_after, in_data = files
@@ -115,9 +108,7 @@ def _dist_worker(rank, world_size, files, outer_flat, inner_flat, has_bias, shar
     result = dist_init(rank=rank, world_size=world_size, filename=file1, filename_rpc=file2)
     assert result, "Dist init failed"
 
-    fsdp_model = FSDP(
-        Model(with_fsdp=True, inner_flat=inner_flat, has_bias=has_bias, sharing=sharing), flatten_parameters=outer_flat
-    )
+    fsdp_model = FSDP(Model(with_fsdp=True, inner_flat=inner_flat, sharing=sharing), flatten_parameters=outer_flat)
     fsdp_model.load_state_dict(sd_before)
 
     _train(fsdp_model, in_data)

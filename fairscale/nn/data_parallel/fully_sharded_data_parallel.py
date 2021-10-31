@@ -436,6 +436,9 @@ class FullyShardedDataParallel(nn.Module):
         assert isinstance(p, Parameter)
         assert p._is_sharded
         p._is_shared = True
+        assert (
+            len(list(filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params))) > 0
+        ), "Must have at least 1 non-shared param."
         self.params.append(p)
 
     def apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":
@@ -1361,10 +1364,7 @@ class FullyShardedDataParallel(nn.Module):
             return  # don't register grad hooks if grad isn't enabled
         for p in self.params:
             if p.requires_grad:
-                if hasattr(p, "_shard_bwd_hook") and not (hasattr(p, "_is_shared") and p._is_shared):
-                    # We don't register if it is already registered, unless this is a
-                    # shared param, which means multiple FSDP wrappers would need the
-                    # callbacks.
+                if hasattr(p, "_shard_bwd_hook"):
                     continue
                 # Register a hook on the first call, empirically, autograd
                 # fires it at the end for this param, which makes sense.
@@ -1400,14 +1400,15 @@ class FullyShardedDataParallel(nn.Module):
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         self.training_state = TrainingState.BACKWARD_POST
         if param.grad is None:
-            # For a shared param, post backward could be called on
-            # it multiple times and the first one will see p.grad
-            # being not none. The rest will see none, but still need
-            # to _free_full_params to keep the state correct.
-            if hasattr(param, "_is_shared") and param._is_shared:
-                self._free_full_params([param])
             return
 
+        if hasattr(param, "_linked_param"):
+            # This links to a shared param. We should finish the shared param here.
+            assert param.shape == (1,), param.shape
+            assert param._linked_param._is_shared
+            param = param._linked_param
+
+        assert param.grad is not None
         if param.grad.requires_grad:
             raise RuntimeError("FSDP only works with gradients that don't require gradients")
 
