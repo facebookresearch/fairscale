@@ -77,7 +77,7 @@ def test_shared_weight(temp_files, outer_flat, inner_flat, sharing):
     inner_flat = inner_flat == "inner_flat"
     world_size = 2
 
-    # Get ref.
+    # Get reference results.
     model = Model(sharing=sharing)
     sd_before = deepcopy(model.state_dict())
     in_data = torch.rand(1, 4).cuda()
@@ -114,13 +114,6 @@ def _dist_worker(rank, world_size, files, outer_flat, inner_flat, sharing):
     _train(fsdp_model, in_data)
 
     objects_are_equal(sd_after, fsdp_model.state_dict(), raise_exception=True)
-
-    # if not inner_flat:
-    #    # Non FSDP an FSDP should be equal.
-    #    objects_are_equal(model.state_dict(), fsdp_model.state_dict(), raise_exception=True)
-    # else:
-    #    # Otherwise, weight sharing should cause them to be not equal.
-    #    assert not objects_are_equal(model.state_dict(), fsdp_model.state_dict())
 
     teardown()
 
