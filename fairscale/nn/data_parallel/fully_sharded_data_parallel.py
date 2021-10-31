@@ -1403,10 +1403,14 @@ class FullyShardedDataParallel(nn.Module):
             return
 
         if hasattr(param, "_linked_param"):
-            # This links to a shared param. We should finish the shared param here.
+            # This links to a shared param. We should finalize the linked param here.
             assert param.shape == (1,), param.shape
-            assert param._linked_param._is_shared
-            param = param._linked_param
+            # If the _is_shared flag is set, then this shared weight is indeed being
+            # shared between different FSDP wrappers. Otherwise, they are linked but
+            # likely in the same FSDP wrapper, which means we shouldn't finalize the
+            # linked param..
+            if hasattr(param._linked_param, "_is_shared") and param._linked_param._is_shared:
+                param = param._linked_param
 
         assert param.grad is not None
         if param.grad.requires_grad:
@@ -1751,7 +1755,7 @@ class FullyShardedDataParallel(nn.Module):
                     assert p._fp16_shard.storage().size() != 0
                     p.data = p._fp16_shard
             else:
-                assert p._full_param_padded.storage().size() != 0
+                assert p._full_param_padded.storage().size() != 0, f"{p._orig_size} {id(self)}"
                 p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
 
     @torch.no_grad()
