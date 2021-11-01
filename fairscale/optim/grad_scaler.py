@@ -21,11 +21,7 @@ class _GeneralMultiDeviceReplicator(object):
     """
 
     def __init__(self, master_tensor: torch.Tensor) -> None:
-        assert (
-            master_tensor.is_cuda
-            or master_tensor.device.type == "xla"
-            or master_tensor.device.type == "cpu"
-        )
+        assert master_tensor.is_cuda or master_tensor.device.type == "xla" or master_tensor.device.type == "cpu"
         self.master = master_tensor
         self._per_device_tensors: Dict[torch.device, torch.Tensor] = {}
 
@@ -55,11 +51,7 @@ def _refresh_per_optimizer_state() -> Dict:
 
 class GradScaler(TorchGradScaler):
     def _unscale_grads_(
-        self,
-        optimizer: Optimizer,
-        inv_scale: torch.Tensor,
-        found_inf: torch.Tensor,
-        allow_fp16: bool,
+        self, optimizer: Optimizer, inv_scale: torch.Tensor, found_inf: torch.Tensor, allow_fp16: bool,
     ) -> Dict[torch.device, torch.Tensor]:
         return super()._unscale_grads_(optimizer, inv_scale, found_inf, True)
 
@@ -90,9 +82,7 @@ class ShardedGradScaler(TorchGradScaler):
             enabled=enabled,
         )
         if enabled and amp_definitely_not_available():
-            warnings.warn(
-                "torch.cuda.amp.GradScaler is enabled, but CUDA is not available.  Disabling."
-            )
+            warnings.warn("torch.cuda.amp.GradScaler is enabled, but CUDA is not available.  Disabling.")
             self._enabled = False
         else:
             self._enabled = enabled
@@ -116,26 +106,18 @@ class ShardedGradScaler(TorchGradScaler):
 
         # Short-circuit for the common case.
         if isinstance(outputs, torch.Tensor):
-            assert (
-                outputs.is_cuda
-                or outputs.device.type == "xla"
-                or outputs.device.type == "cpu"
-            )
+            assert outputs.is_cuda or outputs.device.type == "xla" or outputs.device.type == "cpu"
             if self._scale is None:
                 self._lazy_init_scale_growth_tracker(outputs.device)
             assert self._scale is not None
             return outputs * self._scale.to(device=outputs.device, non_blocking=True)
 
         # Invoke the more complex machinery only if we're treating multiple outputs.
-        stash: List[
-            _GeneralMultiDeviceReplicator
-        ] = []  # holds a reference that can be overwritten by apply_scale
+        stash: List[_GeneralMultiDeviceReplicator] = []  # holds a reference that can be overwritten by apply_scale
 
         def apply_scale(val):
             if isinstance(val, torch.Tensor):
-                assert (
-                    val.is_cuda or val.device.type == "xla" or val.device.type == "cpu"
-                )
+                assert val.is_cuda or val.device.type == "xla" or val.device.type == "cpu"
                 if len(stash) == 0:
                     if self._scale is None:
                         self._lazy_init_scale_growth_tracker(val.device)
@@ -153,9 +135,7 @@ class ShardedGradScaler(TorchGradScaler):
 
         return apply_scale(outputs)
 
-    def _foreach_non_finite_check_and_unscale_cpu_(
-        self, grads: List, found_inf: torch.Tensor, inv_scale: torch.Tensor
-    ):
+    def _foreach_non_finite_check_and_unscale_cpu_(self, grads: List, found_inf: torch.Tensor, inv_scale: torch.Tensor):
         if len(grads) == 0:
             return
         assert inv_scale.numel() == 1, "inv_scale must be a 1-element tensor."
@@ -168,10 +148,7 @@ class ShardedGradScaler(TorchGradScaler):
             # check for non_overlapping_and_dense doesn't exist in the python world
             # as remarked here https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/native/cuda/AmpKernels.cu#L108
             # we assume tensor is not MTA(multi tensor apply) safe. iterate through each item regardless of dtype
-            if (
-                torch.isinf(tensor).any().item() is True
-                or torch.isnan(tensor).any().item() is True
-            ):
+            if torch.isinf(tensor).any().item() is True or torch.isnan(tensor).any().item() is True:
                 found_inf.data = torch.tensor([1.0])
                 break
             else:
@@ -207,23 +184,17 @@ class ShardedGradScaler(TorchGradScaler):
                         to_unscale = param.grad
 
                     # TODO: is there a way to split by device and dtype without appending in the inner loop?
-                    per_device_and_dtype_grads[to_unscale.device][
-                        to_unscale.dtype
-                    ].append(to_unscale)
+                    per_device_and_dtype_grads[to_unscale.device][to_unscale.dtype].append(to_unscale)
 
             for device, per_dtype_grads in per_device_and_dtype_grads.items():
                 for grads in per_dtype_grads.values():
                     if grads[0].device.type == "cpu":
                         self._foreach_non_finite_check_and_unscale_cpu_(
-                            grads,
-                            per_device_found_inf.get(device),
-                            per_device_inv_scale.get(device),
+                            grads, per_device_found_inf.get(device), per_device_inv_scale.get(device),
                         )
                     else:
                         torch._amp_foreach_non_finite_check_and_unscale_(
-                            grads,
-                            per_device_found_inf.get(device),
-                            per_device_inv_scale.get(device),
+                            grads, per_device_found_inf.get(device), per_device_inv_scale.get(device),
                         )
 
         return per_device_found_inf._per_device_tensors
@@ -240,9 +211,7 @@ class ShardedGradScaler(TorchGradScaler):
         for v in optimizer_state["found_inf_per_device"].values():
             if v.device.type == "cpu":
                 v_on_cuda = v.cuda()
-                last_handle = dist.all_reduce(
-                    v_on_cuda, async_op=True, group=self.group
-                )
+                last_handle = dist.all_reduce(v_on_cuda, async_op=True, group=self.group)
                 v_on_cuda.cpu()
             else:
                 last_handle = dist.all_reduce(v, async_op=True, group=self.group)
@@ -279,25 +248,18 @@ class ShardedGradScaler(TorchGradScaler):
             return optimizer.step(*args, **kwargs)
 
         if "closure" in kwargs:
-            raise RuntimeError(
-                "Closure use is not currently supported if GradScaler is enabled."
-            )
+            raise RuntimeError("Closure use is not currently supported if GradScaler is enabled.")
 
         self._check_scale_growth_tracker("step")
 
         optimizer_state = self._per_optimizer_states[id(optimizer)]
 
         if optimizer_state["stage"] is OptState.STEPPED:
-            raise RuntimeError(
-                "step() has already been called since the last update()."
-            )
+            raise RuntimeError("step() has already been called since the last update().")
 
         retval = None
 
-        if (
-            hasattr(optimizer, "_step_supports_amp_scaling")
-            and optimizer._step_supports_amp_scaling
-        ):
+        if hasattr(optimizer, "_step_supports_amp_scaling") and optimizer._step_supports_amp_scaling:
             # This optimizer has customized scale-handling logic, so we can call optimizer.step() directly.
             # The contract with custom optimizers is that their step() should accept an additional,
             # optional grad_scaler kwarg.  We append self to the kwargs so the custom optimizer has full information:
@@ -309,9 +271,7 @@ class ShardedGradScaler(TorchGradScaler):
         if optimizer_state["stage"] is OptState.READY:
             self.unscale_(optimizer)
 
-        assert (
-            len(optimizer_state["found_inf_per_device"]) > 0
-        ), "No inf checks were recorded for this optimizer."
+        assert len(optimizer_state["found_inf_per_device"]) > 0, "No inf checks were recorded for this optimizer."
         retval = self._maybe_opt_step(optimizer, optimizer_state, *args, **kwargs)
         optimizer_state["stage"] = OptState.STEPPED
         return retval
