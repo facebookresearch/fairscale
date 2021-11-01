@@ -186,7 +186,7 @@ class TestStateDictDeviceDtype(DistributedTest):
         )
         spawn_and_init(test_fn)
 
-    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_state_dict_device_cuda(self, mixed_precision, cpu_offload):
         test_fn = functools.partial(
             self._test_state_dict_device,
@@ -194,7 +194,7 @@ class TestStateDictDeviceDtype(DistributedTest):
         )
         spawn_and_init(test_fn)
 
-    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_state_dict_device_cpu(self, mixed_precision, cpu_offload):
         test_fn = functools.partial(
             self._test_state_dict_device,
