@@ -58,24 +58,6 @@ class DistributedTest(unittest.TestCase):
         return loss.detach()
 
     @staticmethod
-    def _train_with_config(model, autocast):
-        model.train()
-        model_device = torch.device("cuda")
-        optim = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-        optim.zero_grad()
-        with torch.cuda.amp.autocast(enabled=autocast):
-            # Inputs always cuda regardless of move_grads_cpu, or model.device
-            input = model.module.get_input(torch.device("cuda"))
-            output = model(*input)
-            loss = model.module.get_loss(input, output).to(model_device)
-        assert loss.dtype == torch.float32
-        model.module.run_backward(loss)
-        optim.step()
-        if isinstance(model, FullyShardedDataParallel):
-            model.assert_state(TrainingState.IDLE)
-        return loss.detach()
-
-    @staticmethod
     def _eval_for_several_steps(model, num_steps, autocast, lr=0.01, norm_type=None):
         model.eval()
         # Inputs always cuda regardless of move_grads_cpu, or model.device
@@ -84,14 +66,6 @@ class DistributedTest(unittest.TestCase):
         for _ in range(num_steps):
             with torch.cuda.amp.autocast(enabled=autocast):
                 output = model(*input)
-
-    @staticmethod
-    def get_wrapped_model(group, cuda_first=False, config={}, **model_kwargs) -> FullyShardedDataParallel:
-        if cuda_first:
-            model = FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs).cuda(), group, **config)
-        else:
-            model = FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs), group, **config).cuda()
-        return model
 
     @classmethod
     def _test_identical_outputs_eval(
@@ -171,7 +145,7 @@ class TestSsdMemory(DistributedTest):
         time_keeper.print_time("FSDP_MODEL", 1.0)
 
         self._eval_for_several_steps(model, 1, autocast=False)
-        time_keeper.print_time("TRAIN_1")
+        time_keeper.print_time("EVAL")
 
         fileList = glob.glob(os.getcwd() + "/*_rank*")
         for file in fileList:
@@ -238,10 +212,13 @@ class TestModuleProperties(DistributedTest):
         before_wrap_model = TransformerWithSharedParams(group)
         before_wrap_params = before_wrap_model.named_parameters()
 
-        # Train the model for 1 step.
-        model = self.get_wrapped_model(group, cuda_first=False, config=config)
+        config["ssd_offload"] = True
+        model = FullyShardedDataParallel(before_wrap_model, **config)
 
-        self._eval_with_config(model, autocast=False)
+        if not config["ssd_offload"]:
+            model = model.cuda()
+
+        self._eval_with_config(model, autocast=config["mixed_precision"])
 
         # Get the named parameters after wrapping to compare.
         after_wrap_params = model.named_parameters()
@@ -253,30 +230,14 @@ class TestModuleProperties(DistributedTest):
             named_params_flat = [p for p in after_wrap_params][0][0]
             assert "flat_param_0" in named_params_flat
 
-        # Compare name and size under the `summon_full_params` context.
-        with model.summon_full_params():
-            after_wrap_params = model.named_parameters()
+        after_wrap_params = model.named_parameters()
 
-            for before_nm, after_nm_original in zip(before_wrap_params, after_wrap_params):
-                assert before_nm[0] == after_nm_original[0]
-                torch.testing.assert_allclose(before_nm[1].shape, after_nm_original[1].cpu().shape)
+        for before_nm, after_nm_original in zip(before_wrap_params, after_wrap_params):
+            assert before_nm[0] == after_nm_original[0]
+            torch.testing.assert_allclose(before_nm[1].shape, after_nm_original[1].shape)
 
 
 class TestSsdLoading(DistributedTest):
-    def test_ssd_offloading_train_simple_param(self):
-        test_fn = functools.partial(self._test_ssd_offload_train_simple_param)
-        spawn_and_init(test_fn)
-
-    def test_ssd_offloading_train_fsdp(self):
-        # Uncomment the following lines once training works.
-        # By not spawning it is easier to gdb into the stack.
-        test_fn = functools.partial(self._test_ssd_offload_train_fsdp)
-        spawn_and_init(test_fn)
-
-    def test_ssd_offloading_train_simple(self):
-        test_fn = functools.partial(self._test_ssd_offload_train_simple)
-        spawn_and_init(test_fn)
-
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_ssd_offloading_eval(self, config):
         test_fn = functools.partial(self._test_ssd_offload_eval, config=config)
@@ -284,41 +245,7 @@ class TestSsdLoading(DistributedTest):
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_parameterized(self, config):
-        # Test every combination of these options:
         spawn_and_init(functools.partial(self._test_identical_outputs_eval, TransformerWithSharedParams, config))
-
-    @classmethod
-    def _test_ssd_offload_train_simple_param(self, rank, group):
-        with tempfile.NamedTemporaryFile() as f:
-            orig_tensor = torch.randn((4, 4))
-
-            with torch.no_grad():
-                orig_copy = torch.empty_like(orig_tensor)
-                orig_copy.copy_(orig_tensor)
-                param = torch.nn.Parameter(orig_copy)
-
-            ssd_param = so.SsdParameter(orig_tensor.shape, orig_tensor.dtype)
-            ssd_param.point_to_tensor(orig_copy)
-            ssd_param.set_file_params(f.name, 0)
-            ssd_param.to_file(release_tensor_after_write=True)
-
-            assert torch.equal(ssd_param.to_tensor(), orig_tensor)
-            optimizer_ssd = torch.optim.SGD([ssd_param], lr=0.1)
-            optimizer_orig = torch.optim.SGD([param], lr=0.1)
-
-            y1 = ssd_param + 1
-            optimizer_ssd.zero_grad()
-            y1.sum().backward()
-            optimizer_ssd.step()
-
-            y2 = param + 1
-            optimizer_orig.zero_grad()
-            y2.sum().backward()
-            optimizer_orig.step()
-
-            # make sure we are using the file version not the cached tensor
-            ssd_param.point_to_file(f.name, 0)
-            assert torch.equal(ssd_param.to_tensor(), param)
 
     @classmethod
     def _test_ssd_offload_eval(self, rank, group, config):

@@ -7,6 +7,7 @@
 
 import contextlib
 import unittest
+
 import pytest
 import torch
 from torch import nn
@@ -29,6 +30,7 @@ def test_ssd_eval_with_checkpointing():
         mp.spawn(
             _test_func_with_ssd_offload, args=(world_size, temp_file_name, unused), nprocs=world_size, join=True,
         )
+
 
 @skip_if_single_gpu
 @pytest.mark.parametrize("flatten", ["flat", "nonflat"])

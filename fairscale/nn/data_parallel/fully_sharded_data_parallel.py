@@ -10,6 +10,7 @@ import functools
 import logging
 from math import inf
 import os
+from random import randint
 import time
 import traceback
 import typing
@@ -63,6 +64,7 @@ else:
 
 try:
     import fairscale.experimental.nn.ssd_offload as ssd_offload
+    from fairscale.experimental.nn.ssd_offload import StorageState
 except ImportError:
     # The PyTorch version required
     pass
@@ -320,7 +322,7 @@ class FullyShardedDataParallel(nn.Module):
         # enable pytorch sync_bn just in case model contains sync_bn layers.
         enable_pytorch_sync_bn(module)
 
-         # We set this boolean at the beginning to enable us to populate some of the
+        # We set this boolean at the beginning to enable us to populate some of the
         # metadata required for sharding and flattening. We don't use the tensor data
         # of the parameters.
         self.training_state = None
@@ -417,7 +419,6 @@ class FullyShardedDataParallel(nn.Module):
             for m in self.modules():  # includes self
                 if isinstance(m, FullyShardedDataParallel):
                     m._free_ssd_offload()
-
 
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
@@ -761,7 +762,8 @@ class FullyShardedDataParallel(nn.Module):
         # TODO(anj): Use `copy_into_tensor` in order to provide a copy of the
         # parameters and not the actual parameters. Ideally we don't users to operate on
         # actual params.
-        if self.ssd_offload and list(self.ssd_buffer.buffer.size()) == [1]:
+        # if self.ssd_offload and list(self.ssd_buffer.buffer.size()) == [1]:
+        if self.ssd_offload and self.ssd_buffer.storage_state == StorageState.ON_DISK:
             self.ssd_buffer.from_disk(self.buffer_size)
 
         return super().parameters(recurse=recurse)
@@ -792,7 +794,7 @@ class FullyShardedDataParallel(nn.Module):
         # TODO(anj): Use `copy_into_tensor` in order to provide a copy of the
         # parameters and not the actual parameters. Ideally we don't users to operate on
         # actual params.
-        if self.ssd_offload and list(self.ssd_buffer.buffer.size()) == [1]:
+        if self.ssd_offload and self.ssd_buffer.storage_state == StorageState.ON_DISK:
             self.ssd_buffer.from_disk(self.buffer_size)
 
         named_param = super().named_parameters(*args, **kwargs)
@@ -892,7 +894,7 @@ class FullyShardedDataParallel(nn.Module):
         self._return_full_state_dict = False
 
         if self.ssd_offload:
-            if list(self.ssd_buffer.buffer.size()) == [1]:
+            if self.ssd_buffer.storage_state == StorageState.ON_DISK:
                 self.ssd_buffer.from_disk(self.buffer_size)
 
             for p, handle in zip(self.params, self.ssd_buffer.get_tensors()):
@@ -1270,7 +1272,7 @@ class FullyShardedDataParallel(nn.Module):
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         if self.ssd_offload:
-            if list(self.ssd_buffer.buffer.size()) == [1]:
+            if self.ssd_buffer.storage_state == StorageState.ON_DISK:
                 # TODO(anj): we have a similar check elsewhere. Should we do this automatically?
                 self.ssd_buffer.from_disk(self.buffer_size)
 
@@ -1342,7 +1344,7 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _free_ssd_offload(self) -> None:
         if self.ssd_offload:
-            if list(self.ssd_buffer.buffer.size()) == [1]:
+            if self.ssd_buffer.storage_state == StorageState.ON_DISK:
                 return
             self.ssd_buffer.to_disk()
 
@@ -1787,8 +1789,7 @@ class FullyShardedDataParallel(nn.Module):
             p.data = p.data[: p._orig_size.numel()].view(p._orig_size)
 
         if self.ssd_offload:
-            if list(self.ssd_buffer.buffer.size()) == [1]:
-                # TODO(anj): we have a similar check elsewhere. Should we do this automatically?
+            if self.ssd_buffer.storage_state == StorageState.ON_DISK:
                 self.ssd_buffer.from_disk(self.buffer_size, dtype=self.compute_dtype)
 
                 # The params are on disk and need to be moved to the CPU.
