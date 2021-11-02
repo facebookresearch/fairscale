@@ -14,6 +14,7 @@ import torch
 
 from fairscale.experimental.nn import TorchFuseAllTiled
 from fairscale.experimental.nn.mevo import BaselineSoftmaxNllLoss, get_data
+from fairscale.utils import torch_version
 from fairscale.utils.testing import skip_if_no_cuda
 
 
@@ -29,6 +30,11 @@ _dense_grad = {}  # type: ignore
 
 @skip_if_no_cuda
 def test_torch_fuse_all():
+    """Test the MEVO kernel by itself."""
+
+    if torch_version() < (1, 9, 0):
+        pytest.skip("only support 1.9+")
+
     torch.random.manual_seed(os.getpid())
     shape = ((5, 3), (3, 7))
     large = True

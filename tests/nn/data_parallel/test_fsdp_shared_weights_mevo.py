@@ -19,6 +19,7 @@ from torch.optim import SGD
 
 from fairscale.experimental.nn import TorchFuseAllTiled
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+from fairscale.utils import torch_version
 from fairscale.utils.testing import dist_init, objects_are_equal, skip_if_single_gpu, teardown, temp_files_ctx
 
 VOCAB = 4
@@ -90,6 +91,9 @@ def temp_files():
 @pytest.mark.parametrize("wrap_middle", ["none", "flat", "nonflat"])
 def test_shared_weight(temp_files, wrap_middle):
     """Test FSDP with a model with shared weights."""
+
+    if torch_version() < (1, 9, 0):
+        pytest.skip("only support 1.9+")
 
     world_size = 2
 
