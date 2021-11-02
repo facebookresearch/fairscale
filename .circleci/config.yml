@@ -116,7 +116,7 @@ install_dep_pytorch_nightly: &install_dep_pytorch_nightly
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.10 && exit 0; fi
         # start installing
-        pip install --progress-bar off --pre torch==1.11.0.dev20211018+cu111 torchvision==0.12.0.dev20211018+cu111 -f https://download.pytorch.org/whl/nightly/cu111/torch_nightly.html
+        pip install --progress-bar off --pre torch==1.11.0.dev20211101+cu111 torchvision==0.12.0.dev20211101+cu111 -f https://download.pytorch.org/whl/nightly/cu111/torch_nightly.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -249,7 +249,7 @@ commands:
        - run:
            name: Setup pyenv
            command: |
-             git clone git://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
+             git clone https://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
              pyenv update
              pyenv install -f <<parameters.version>>
              pyenv global <<parameters.version>>

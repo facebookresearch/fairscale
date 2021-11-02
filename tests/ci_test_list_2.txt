@@ -1,3 +1,4 @@
+tests/nn/data_parallel/test_fsdp_shared_weights.py
 tests/nn/data_parallel/test_fsdp_pre_backward_hook.py
 tests/nn/data_parallel/test_fsdp_overlap.py
 tests/nn/data_parallel/test_fsdp_multiple_forward.py
@@ -48,3 +49,4 @@ tests/experimental/nn/test_offload.py
 tests/experimental/nn/test_auto_shard.py
 tests/experimental/optim/test_dynamic_loss_scaler.py
 tests/experimental/tooling/test_layer_memory_tracker.py
+tests/experimental/nn/test_ssd_offload.py
