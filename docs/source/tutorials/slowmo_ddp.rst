@@ -3,8 +3,11 @@ Efficient Data Parallel Training with SlowMo Distributed Data Parallel
 
 SlowMo Distributed Data Parallel reduces the communication between different
 nodes while performing data parallel training. It is mainly useful for use on
-clusters with low interconnect speeds between different nodes. Let's see
-that your trainer looks like:
+clusters with low interconnect speeds between different nodes. When using
+SlowMo, the models on the different nodes are no longer kept in sync after each
+iteration, which leads to the optimization dynamics being affected. The end
+result is close to the results of Distributed Data Parallel, but is not exactly
+the same. but Let's suppose that your trainer looks like:
 
 .. code-block:: python
 
@@ -43,9 +46,9 @@ that your trainer looks like:
 
 
 Then using SlowMo Distributed Data Parallel is simply replacing the DDP call with a call to
-`fairscale.experimental.nn.data_parallel.SlowMoDistributedDataParallel` and adding a
-`model.perform_slowmo(optimizer)` call after `optimizer.step()`, as follows. The different
-points at which `use_slowmo` is used below helps demonstrate these changes.
+``fairscale.experimental.nn.data_parallel.SlowMoDistributedDataParallel`` and adding a
+``model.perform_slowmo(optimizer)`` call after ``optimizer.step()``, as follows. The different
+points at which `use_slowmo` is used below help demonstrate these changes.
 
 .. code-block:: python
 
@@ -90,9 +93,9 @@ points at which `use_slowmo` is used below helps demonstrate these changes.
                     model.perform_slowmo(optimizer)  # SlowMoDDP specific
 
 In the example above, when using SlowMoDDP, we are reducing the total communication between
-nodes by 3 times as the default `localsgd_frequency` is set to 3.
-SlowMoDDP takes in `slowmo_momentum` as a parameter. This parameter may need to be tuned
-depending on your use case. It also takes in `nproces_per_node` which should be typically set
+nodes by 3 times as the default ``localsgd_frequency`` is set to 3.
+SlowMoDDP takes in ``slowmo_momentum`` as a parameter. This parameter may need to be tuned
+depending on your use case. It also takes in ``nproces_per_node`` which should be typically set
 to the number of GPUs on a node. Please look at the
 `documentation <https://fairscale.readthedocs.io/en/latest/api/experimental/nn/slowmo_ddp.html>`_
 for more details on these parameters as well as other advanced settings of the SlowMo algorithm.

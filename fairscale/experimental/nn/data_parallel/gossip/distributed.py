@@ -500,7 +500,8 @@ class SlowMoDistributedDataParallel(Module):
                         # This division and multiplication with the same number is done
                         # to ensure that we do not lose bits of information when we divide
                         # before the all_reduce. In order to preserve these bits in an
-                        # error feedback like manner, we are forcing the bits to be lost
+                        # error feedback (https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.1050.5040&rep=rep1&type=pdf)
+                        # like manner, we are forcing the bits to be lost
                         # initially, and storing the lost information in error feedback
                         p_fp16.div_(self.logical_world_size)
                         p_fp16.mul_(self.logical_world_size)
