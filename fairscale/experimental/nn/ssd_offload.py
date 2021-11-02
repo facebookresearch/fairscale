@@ -250,7 +250,6 @@ class SsdBuffer:
     def allocate(self, num_elems: int) -> SsdTensorHandle:
         """Allocates a new tensor handle of size num_elems."""
         assert num_elems > 0
-        # assert list(self.buffer.size()) != [1]
         assert self.storage_state == StorageState.IN_MEMORY
         assert self.can_alloc(num_elems)
 
@@ -266,7 +265,6 @@ class SsdBuffer:
 
     def insert(self, tensor: torch.Tensor) -> SsdTensorHandle:
         """Insert a new tensor by allocating memory and creating a corresponding handle."""
-        # assert list(self.buffer.size()) != [1]
         assert self.storage_state == StorageState.IN_MEMORY
         # For the non sharded case, the tensor will not be flattened
         tensor = tensor.reshape(-1)
@@ -278,7 +276,6 @@ class SsdBuffer:
     def can_alloc(self, num_elems: int) -> bool:
         """Verify that you can allocate a tensor within the bounds 
         of the larger SsdBuffer memory buffer."""
-        # assert list(self.buffer.size()) != [1]
         assert self.storage_state == StorageState.IN_MEMORY
         return (self.offset + num_elems) <= self.buffer.numel()
 
@@ -288,7 +285,6 @@ class SsdBuffer:
 
     def to_disk(self) -> None:
         """Writes all tensors backed by handles to disk."""
-        # assert list(self.buffer.size()) != [1]
         assert self.storage_state == StorageState.IN_MEMORY
         # TODO(anj): Add comment about why we use `narrow`.
         valid_data = self.buffer.narrow(0, 0, self.offset)
