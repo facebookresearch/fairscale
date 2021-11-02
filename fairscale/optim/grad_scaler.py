@@ -83,7 +83,7 @@ class ShardedGradScaler(TorchGradScaler):
             growth_interval=growth_interval,
             enabled=enabled,
         )
-        if enabled and common.amp_definitely_not_available():
+        if enabled and common.amp_definitely_not_available():  # type: ignore
             warnings.warn("torch.cuda.amp.GradScaler is enabled, but CUDA is not available.  Disabling.")
             self._enabled = False
         else:
