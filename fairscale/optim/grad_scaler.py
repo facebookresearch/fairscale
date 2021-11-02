@@ -3,15 +3,15 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import warnings
 from collections import abc, defaultdict
 from enum import Enum
 from typing import Any, Dict, List
+import warnings
 
 import torch
-import torch.distributed as dist
 from torch.cuda.amp import GradScaler as TorchGradScaler
 from torch.cuda.amp.common import amp_definitely_not_available
+import torch.distributed as dist
 from torch.optim import Optimizer
 
 

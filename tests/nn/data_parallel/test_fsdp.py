@@ -5,26 +5,30 @@
 
 import functools
 import itertools
+from math import inf
 import pickle
 import sys
-import unittest
-from math import inf
 from typing import Dict
+import unittest
 from unittest import mock
 
-import torch
-import torch.distributed
 from parameterized import parameterized
+import torch
 from torch import nn
+import torch.distributed
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
 from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.utils import torch_version
-from fairscale.utils.testing import (DeviceAndTypeCheckModule,
-                                     DummyProcessGroup, dist_init,
-                                     get_cycles_per_ms, objects_are_equal,
-                                     spawn_for_all_world_sizes)
+from fairscale.utils.testing import (
+    DeviceAndTypeCheckModule,
+    DummyProcessGroup,
+    dist_init,
+    get_cycles_per_ms,
+    objects_are_equal,
+    spawn_for_all_world_sizes,
+)
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
