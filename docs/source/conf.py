@@ -92,6 +92,15 @@ master_doc = "index"
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
 
+napoleon_custom_sections = [
+    ("SlowMo Parameters", "params_style"),
+    ("LocalSGD Parameters", "params_style"),
+    ("SGP Parameters", "params_style"),
+    ("Debugging Parameters", "params_style"),
+    ("Parameters for Advanced Users (these are automatically handled otherwise)", "params_style"),
+]
+
+
 # -- Options for HTML output -------------------------------------------------
 
 
