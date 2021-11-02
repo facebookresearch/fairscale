@@ -11,7 +11,7 @@ import warnings
 import torch
 from torch.cuda import FloatTensor  # type: ignore
 from torch.cuda.amp import GradScaler as TorchGradScaler
-from torch.cuda.amp.common import amp_definitely_not_available
+from torch.cuda.amp import common
 import torch.distributed as dist
 from torch.optim import Optimizer
 from torch.optim.sgd import SGD
@@ -83,7 +83,7 @@ class ShardedGradScaler(TorchGradScaler):
             growth_interval=growth_interval,
             enabled=enabled,
         )
-        if enabled and amp_definitely_not_available():
+        if enabled and common.amp_definitely_not_available():
             warnings.warn("torch.cuda.amp.GradScaler is enabled, but CUDA is not available.  Disabling.")
             self._enabled = False
         else:
