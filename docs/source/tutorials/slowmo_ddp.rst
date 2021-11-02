@@ -7,7 +7,7 @@ clusters with low interconnect speeds between different nodes. When using
 SlowMo, the models on the different nodes are no longer kept in sync after each
 iteration, which leads to the optimization dynamics being affected. The end
 result is close to the results of Distributed Data Parallel, but is not exactly
-the same. but Let's suppose that your trainer looks like:
+the same. Let's suppose that your trainer looks like:
 
 .. code-block:: python
 
