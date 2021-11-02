@@ -92,6 +92,10 @@ master_doc = "index"
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
 
+# List of custom sections allowed. It is especially useful when the argument
+# list is very long for a constructor or function. This helps split the
+# arguments into different sections, helping us to understand the arguments
+# better.
 napoleon_custom_sections = [
     ("SlowMo Parameters", "params_style"),
     ("LocalSGD Parameters", "params_style"),

@@ -962,7 +962,7 @@ class SlowMoDistributedDataParallel(Module):
             self.is_sgp_ps_numerator = True
 
     def _sgp_unbias(self) -> None:
-        """ Convert moel params to de-biased estimate """
+        """ Convert model params to de-biased estimate """
         if self.is_sgp_ps_numerator:
             if not self.lazy_mixing:
                 ps_weight = self.ps_weight
