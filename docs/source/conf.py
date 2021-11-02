@@ -101,7 +101,7 @@ napoleon_custom_sections = [
     ("LocalSGD Parameters", "params_style"),
     ("SGP Parameters", "params_style"),
     ("Debugging Parameters", "params_style"),
-    ("Parameters for Advanced Users (these are automatically handled otherwise)", "params_style"),
+    ("Optional Parameters for Advanced Users", "params_style"),
 ]
 
 

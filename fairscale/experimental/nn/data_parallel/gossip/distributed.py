@@ -146,7 +146,7 @@ class SlowMoDistributedDataParallel(Module):
             Prints various logs which are useful for debugging (default: False)
         profile_mode (bool):
             Prints the time taken by different parts of the code, which can help in finding bottlenecks (default: False)
-    Parameters for Advanced Users (these are automatically handled otherwise):
+    Optional Parameters for Advanced Users:
         process_rank (Optional[int]):
             Rank of the current process in the process group (default: None)
         process_world_size (Optional[int]):
