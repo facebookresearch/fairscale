@@ -334,7 +334,6 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         config = {"mixed_precision": False, "cpu_offload": True, "move_grads_to_cpu": True}
         test_fn = functools.partial(
             self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
-
         )
         spawn_and_init(test_fn)
 
