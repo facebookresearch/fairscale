@@ -10,6 +10,7 @@ Mixing Manager Class
               for gossip
 """
 
+from abc import ABC, abstractmethod
 from typing import Dict, Optional, Union
 
 import torch
@@ -17,7 +18,7 @@ import torch
 from .graph_manager import GraphManager
 
 
-class MixingManager(object):
+class MixingManager(ABC):
     def __init__(self, graph: GraphManager, device: Optional[torch.device]) -> None:
         self.graph_manager = graph
         self.device = device
@@ -29,10 +30,12 @@ class MixingManager(object):
         """
         return self.graph_manager.is_regular_graph() and self.is_uniform()
 
+    @abstractmethod
     def is_uniform(self) -> bool:
         """ Whether mixing weights are distributed uniformly over peers """
         raise NotImplementedError
 
+    @abstractmethod
     def get_mixing_weights(self, residual_adjusted: bool = True) -> Dict[Union[str, int], torch.Tensor]:
         """ Create mixing weight dictionary using uniform allocation """
         raise NotImplementedError

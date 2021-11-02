@@ -10,6 +10,7 @@ Graph Manager Class
     communication topologies, and cycling through peers.
 """
 
+from abc import ABC, abstractmethod
 from math import log as mlog
 from typing import List, Optional, Tuple
 
@@ -29,7 +30,7 @@ class Edge(object):
             dist.all_reduce(initializer_tensor, group=self.process_group)
 
 
-class GraphManager(object):
+class GraphManager(ABC):
     def __init__(
         self, rank: int, world_size: int, nprocs_per_node: int = 1, local_rank: int = 0, peers_per_itr: int = 1
     ) -> None:
@@ -53,6 +54,7 @@ class GraphManager(object):
         # set group-indices attr. --- point to out-peers in phone-book
         self._group_indices = list(range(v))
 
+    @abstractmethod
     def _make_graph(self) -> None:
         """
         Returns a nested list of peers; the outer-list is indexed by rank,
@@ -73,18 +75,22 @@ class GraphManager(object):
                     )
                 )
 
+    @abstractmethod
     def is_regular_graph(self) -> bool:
         """ Whether each node has the same number of in-peers as out-peers """
         raise NotImplementedError
 
+    @abstractmethod
     def is_bipartite_graph(self) -> bool:
         """ Whether graph is bipartite or not """
         raise NotImplementedError
 
+    @abstractmethod
     def is_passive(self, rank: Optional[int] = None) -> bool:
         """ Whether 'rank' is a passive node or not """
         raise NotImplementedError
 
+    @abstractmethod
     def is_dynamic_graph(self) -> bool:
         """ Whether the graph-type is dynamic (as opposed to static) """
         raise NotImplementedError
