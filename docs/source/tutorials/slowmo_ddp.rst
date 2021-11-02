@@ -48,7 +48,7 @@ the same. Let's suppose that your trainer looks like:
 Then using SlowMo Distributed Data Parallel is simply replacing the DDP call with a call to
 ``fairscale.experimental.nn.data_parallel.SlowMoDistributedDataParallel`` and adding a
 ``model.perform_slowmo(optimizer)`` call after ``optimizer.step()``, as follows. The different
-points at which `use_slowmo` is used below help demonstrate these changes.
+points at which ``use_slowmo`` is used below help demonstrate these changes.
 
 .. code-block:: python
 
