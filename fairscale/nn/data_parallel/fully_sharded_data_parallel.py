@@ -890,7 +890,7 @@ class FullyShardedDataParallel(nn.Module):
         finally:
             self._return_full_state_dict = backup
 
-    def _move_params_to_memory(self):
+    def _move_params_to_memory(self) -> None:
         if self.ssd_buffer.storage_state == StorageState.ON_DISK:
             self.ssd_buffer.from_disk(self.buffer_size)
 

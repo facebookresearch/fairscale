@@ -135,7 +135,7 @@ class TestSsdMemory(DistributedTest):
         a = torch.empty(1)
         b = a.cuda()
         # wait for cuda to fully load
-        time.sleep(5)
+        time.sleep(1)
         time_keeper.print_time("INIT_CUDA", 1.0)
         model = SimpleLinear(group, input_size=SIZE, output_size=SIZE, layers=4)
         time_keeper.print_time("CPU_MODEL", 1.0)
@@ -194,7 +194,7 @@ class TimeKeeper:
     def __init__(self):
         self.start_time = time.time()
 
-    def print_time(self, s: str, wait_time: float = 5.0):
+    def print_time(self, s: str, wait_time: float = 1.0):
         cur_time = time.time()
         print(f"@time: {cur_time - self.start_time:0.2f} {s}")
         time.sleep(wait_time)

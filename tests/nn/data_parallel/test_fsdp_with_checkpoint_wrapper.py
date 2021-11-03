@@ -6,7 +6,6 @@
 """ Test FSDP with an submodule that is FSDP(checkpoint_wrapper()) or checkpoint_wrapper(FSDP()). """
 
 import contextlib
-import unittest
 
 import pytest
 import torch
@@ -16,21 +15,7 @@ import torch.multiprocessing as mp
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.utils import torch_version
 from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
-
-
-@skip_if_single_gpu
-def test_ssd_eval_with_checkpointing():
-    if torch_version() < (1, 10, 0):
-        pytest.skip("older pytorch doesn't support reduce_scatter")
-
-    world_size = 2
-
-    with temp_files_ctx(2) as (temp_file_name, unused):
-        mp.spawn(
-            _test_func_with_ssd_offload, args=(world_size, temp_file_name, unused), nprocs=world_size, join=True,
-        )
 
 
 @skip_if_single_gpu
@@ -116,32 +101,6 @@ def _test_func(
 
     # And finally do another train step.
     _train_step(model, optim, expected_param_shapes, amp_context, mixed_precision, half_input)
-
-    teardown()
-
-
-def _test_func_with_ssd_offload(rank, world_size, tempfile_name, unused):
-    result = dist_init(rank, world_size, tempfile_name, unused)
-    assert result, "Dist init failed"
-
-    # Keep initialization deterministic.
-    torch.manual_seed(0)
-
-    model = FullyShardedDataParallel(SimpleModuleWithCheckpointing(), ssd_offload=True)
-
-    if not model.flatten_parameters:
-        raise unittest.skipTest("This test requires flatten_parameters to be set to True.")
-
-    shape = [tuple(p.shape) for p in model.params]
-    expected_shape = [(12,)]
-    assert expected_shape == shape
-
-    torch.manual_seed(1 + rank)
-
-    model.eval()
-    with torch.no_grad():
-        input = torch.randn(2, 3).cuda()
-        model(input).sum()
 
     teardown()
 
