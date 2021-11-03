@@ -91,11 +91,6 @@ def temp_files():
 @pytest.mark.parametrize("wrap_middle", ["none", "flat", "nonflat"])
 def test_shared_weight_mevo(temp_files, wrap_middle):
     """Test FSDP with a model with shared weights."""
-
-    # from fairscale.utils import torch_version
-    # if torch_version() < (1, 9, 0):
-    #    pytest.skip("only support 1.9+")
-
     world_size = 2
 
     # Get ref.

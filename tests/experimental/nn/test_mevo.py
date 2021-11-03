@@ -30,11 +30,6 @@ _dense_grad = {}  # type: ignore
 @skip_if_no_cuda
 def test_mevo():
     """Test the MEVO kernel by itself."""
-
-    # from fairscale.utils import torch_version
-    # if torch_version() < (1, 9, 0):
-    #    pytest.skip("only support 1.9+")
-
     torch.random.manual_seed(os.getpid())
     shape = ((5, 3), (3, 7))
     # Turn on large data for local testing.
