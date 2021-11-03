@@ -7,10 +7,12 @@ import functools
 import unittest
 
 from parameterized import parameterized
+import pytest
 import torch
 from torch import nn
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+from fairscale.utils import torch_version
 from fairscale.utils.testing import dist_init, objects_are_equal, skip_if_cuda, teardown, temp_files_ctx
 
 from .test_fsdp import (
@@ -24,6 +26,9 @@ from .test_fsdp import (
 
 
 class TestLocalStateDict(DistributedTest):
+    if torch_version() < (1, 9, 0):
+        pytest.skip("pytorch version >= 1.9.0 required")
+
     @parameterized.expand([[True, True], [False, False]], name_func=rename_test)
     def test_load_local_state_dict(self, flatten_params, mixed_precision):
         test_fn = functools.partial(
@@ -70,6 +75,9 @@ class TestLocalStateDict(DistributedTest):
 
 
 class TestSaveLoadStateDict(DistributedTest):
+    if torch_version() < (1, 9, 0):
+        pytest.skip("pytorch version >= 1.9.0 required")
+
     @parameterized.expand([[False], [True]], name_func=rename_test)
     def test_calling_state_dict_twice_mixed_precision(self, mixed_precision):
         test_fn = functools.partial(
@@ -179,6 +187,9 @@ class TestSaveLoadStateDict(DistributedTest):
 
 
 class TestStateDictDeviceDtype(DistributedTest):
+    if torch_version() < (1, 9, 0):
+        pytest.skip("pytorch version >= 1.9.0 required")
+
     @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
     def test_state_dict_device(self, mixed_precision, cpu_offload):
         test_fn = functools.partial(

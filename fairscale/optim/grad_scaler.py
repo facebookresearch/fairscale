@@ -205,10 +205,28 @@ class ShardedGradScaler(TorchGradScaler):
 
         return per_device_found_inf._per_device_tensors
 
-    def unscale_(self, optimizer: Optimizer) -> None:
+    def unscale_(self, optimizer: SGD) -> None:  # type: ignore
         # Could be a mistake, this scaler is supposed to work with ZeroRedundancyOptimizer only
         # Call the upstream unscale_ method which will only act on this rank's gradients
-        super().unscale_(optimizer)
+        if not self._enabled:
+            return
+
+        super()._check_scale_growth_tracker("unscale_")  # type: ignore
+
+        optimizer_state = self._per_optimizer_states[id(optimizer)]
+
+        if optimizer_state["stage"] is OptState.UNSCALED:
+            raise RuntimeError("unscale_() has already been called on this optimizer since the last update().")
+        elif optimizer_state["stage"] is OptState.STEPPED:
+            raise RuntimeError("unscale_() is being called after step().")
+
+        # FP32 division can be imprecise for certain compile options, so we carry out the reciprocal in FP64.
+        assert self._scale is not None
+        inv_scale = self._scale.double().reciprocal().float()
+        found_inf = torch.full((1,), 0.0, dtype=torch.float32, device=self._scale.device)
+
+        optimizer_state["found_inf_per_device"] = self._unscale_grads_(optimizer, inv_scale, found_inf, True)
+        optimizer_state["stage"] = OptState.UNSCALED
 
         # Synchronize the detected inf across the ranks
         optimizer_state = self._per_optimizer_states[id(optimizer)]
@@ -227,7 +245,7 @@ class ShardedGradScaler(TorchGradScaler):
         if last_handle is not None:
             last_handle.wait()
 
-    def step(self, optimizer: Optimizer, *args, **kwargs) -> Optional[float]:  # type: ignore
+    def step(self, optimizer: SGD, *args, **kwargs) -> Optional[float]:  # type: ignore
         """
         :meth:`step` carries out the following two operations:
 

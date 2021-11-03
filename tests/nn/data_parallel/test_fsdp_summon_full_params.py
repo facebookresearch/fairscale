@@ -8,7 +8,10 @@ import gc
 import unittest
 
 from parameterized import parameterized
+import pytest
 import torch
+
+from fairscale.utils.version import torch_version
 
 from .test_fsdp import CONFIG_OPTIONS, DistributedTest, rename_test, spawn_and_init
 
@@ -20,6 +23,9 @@ def get_cuda_mem():
 
 
 class TestMemory(DistributedTest):
+    if torch_version() < (1, 9, 0):
+        pytest.skip("pytorch version >= 1.9.0 required")
+
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_memory(self, config):
         spawn_and_init(functools.partial(self._test_memory, config))
