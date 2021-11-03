@@ -274,14 +274,12 @@ def rename_test(testcase_func, param_num, param):
     return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
 
 
+@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestComparisonToPyTorchDDP(DistributedTest):
     """
     Compare losses and parameter values after several updates when using
     PyTorch DDP vs. FullyShardedDataParallel.
     """
-
-    if torch_version() < (1, 9, 0):
-        pytest.skip("pytorch version >= 1.9.0 required")
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_nested_wrapped_model(self, config):
@@ -493,12 +491,10 @@ class TestSerialization(DistributedTest):
         optim.step()
 
 
+@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestHooks(DistributedTest):
     # Feel free to modify these tests as the implementation changes.
     # They aspire to make sure that backward hooks are registered and used
-    if torch_version() < (1, 9, 0):
-        pytest.skip("pytorch version >= 1.9.0 required")
-
     @parameterized.expand([[True], [False]])
     def test_output_backward_hooks(self, cuda_first):
         fn = functools.partial(self._test_output_backward_hooks, cuda_first=cuda_first)
@@ -551,10 +547,8 @@ class TestHooks(DistributedTest):
         assert model._register_pre_backward_hooks.called
 
 
+@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestNoGrad(DistributedTest):
-    if torch_version() < (1, 9, 0):
-        pytest.skip("pytorch version >= 1.9.0 required")
-
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_parameterized(self, config):
         test_fn = functools.partial(self._test_transformer, config=config)

@@ -25,10 +25,8 @@ from .test_fsdp import (
 )
 
 
+@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestLocalStateDict(DistributedTest):
-    if torch_version() < (1, 9, 0):
-        pytest.skip("pytorch version >= 1.9.0 required")
-
     @parameterized.expand([[True, True], [False, False]], name_func=rename_test)
     def test_load_local_state_dict(self, flatten_params, mixed_precision):
         test_fn = functools.partial(
@@ -74,10 +72,8 @@ class TestLocalStateDict(DistributedTest):
             raise AssertionError(f"params {unchanged} not changed after training")
 
 
+@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestSaveLoadStateDict(DistributedTest):
-    if torch_version() < (1, 9, 0):
-        pytest.skip("pytorch version >= 1.9.0 required")
-
     @parameterized.expand([[False], [True]], name_func=rename_test)
     def test_calling_state_dict_twice_mixed_precision(self, mixed_precision):
         test_fn = functools.partial(
@@ -186,10 +182,8 @@ class TestSaveLoadStateDict(DistributedTest):
             ), f"{key}, {ref_state_dict[key]} != {state_dict[key]}"
 
 
+@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestStateDictDeviceDtype(DistributedTest):
-    if torch_version() < (1, 9, 0):
-        pytest.skip("pytorch version >= 1.9.0 required")
-
     @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
     def test_state_dict_device(self, mixed_precision, cpu_offload):
         test_fn = functools.partial(

@@ -22,10 +22,8 @@ from .test_fsdp import (
 )
 
 
+@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestApply(DistributedTest):
-    if torch_version() < (1, 9, 0):
-        pytest.skip("pytorch version >= 1.9.0 required")
-
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_weight_init(self, config):
         model_init_fn = functools.partial(model_init_and_apply_custom_weight_init, TransformerWithSharedParams)
