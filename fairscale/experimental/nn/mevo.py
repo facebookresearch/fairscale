@@ -84,7 +84,10 @@ class BaselineSoftmax(nn.Module):
         super().__init__()
         out_dim, in_dim = proj_weight.shape
         assert "cuda" in str(proj_weight.device), "weight should be on GPU"
-        self.fc = nn.Linear(in_dim, out_dim, bias=False, device="cuda", dtype=proj_weight.dtype)
+        self.fc = nn.Linear(in_dim, out_dim, bias=False).to("cuda")
+        assert proj_weight.dtype in [torch.float16, torch.float32]
+        if proj_weight.dtype == torch.float16:
+            self.fc = self.fc.half()
         self.fc.weight = proj_weight
         assert self.fc.weight.dtype in [torch.float16, torch.float32], self.fc.weight.dtype
         self.fp16 = self.fc.weight.dtype == torch.float16
