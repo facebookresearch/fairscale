@@ -78,7 +78,9 @@ def test_mevo():
     g2 = weight.grad.clone()
     input_grad2 = input.grad.cpu()
 
+    # Print the diff. We use .cuda() since in 1.7 and 1.8, min() and max() are not
+    # implemented for cpu float16.
     diff = g1 - g2
-    print("weight grad diff", diff.min(), diff.max())
+    print("weight grad diff", diff.cuda().min(), diff.cuda().max())
     diff = input_grad1 - input_grad2
-    print("input grad diff", diff.min(), diff.max())
+    print("input grad diff", diff.cuda().min(), diff.cuda().max())
