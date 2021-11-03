@@ -20,6 +20,9 @@ def _next_power_of_2_or_max(n: int, max_n: int) -> int:
 
         Useful when used in splitting a tensor into chunks with power-of-2 sizes.
     """
+    # special case, just split to 1 element chunks.
+    if n == 0:
+        return 1
     orig_n = n
     n -= 1
     n |= n >> 1
@@ -51,7 +54,8 @@ def get_data(
     (tokens, d1), (d2, vocabs) = shape
     assert d1 == d2
     input = torch.rand(tokens, d1, device=device, dtype=dtype).requires_grad_(True)
-    weight = nn.Linear(d2, vocabs, bias=False, device=device, dtype=dtype).weight
+    # before pytorch 1.9, nn.Linear does not support device=device init option. So we use to()
+    weight = nn.Linear(d2, vocabs, bias=False, dtype=dtype).to(device).weight
     target = (torch.rand(tokens, device=device) * vocabs).long()
     return input, weight, target
 
