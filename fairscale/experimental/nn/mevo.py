@@ -54,8 +54,13 @@ def get_data(
     (tokens, d1), (d2, vocabs) = shape
     assert d1 == d2
     input = torch.rand(tokens, d1, device=device, dtype=dtype).requires_grad_(True)
-    # before pytorch 1.9, nn.Linear does not support device=device init option. So we use to()
-    weight = nn.Linear(d2, vocabs, bias=False, dtype=dtype).to(device).weight
+    # Before pytorch 1.9, nn.Linear does not support device and dtype init option. So we use to()
+    # and an if condition.
+    layer = nn.Linear(d2, vocabs, bias=False).to(device)
+    assert dtype in [torch.float16, torch.float32]
+    if dtype == torch.float16:
+        layer = layer.half()
+    weight = layer.weight
     target = (torch.rand(tokens, device=device) * vocabs).long()
     return input, weight, target
 
