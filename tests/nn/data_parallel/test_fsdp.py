@@ -20,7 +20,6 @@ import torch.distributed
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
-from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.utils import torch_version
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
@@ -30,6 +29,9 @@ from fairscale.utils.testing import (
     objects_are_equal,
     spawn_for_all_world_sizes,
 )
+
+if torch_version() >= (1, 9, 0):
+    from fairscale.optim.grad_scaler import ShardedGradScaler
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
@@ -575,6 +577,7 @@ class TestNoGrad(DistributedTest):
         assert objects_are_equal(ref_output, no_grad_output, raise_exception=True)
 
 
+@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestModuleProperties(DistributedTest):
     @parameterized.expand([[{"flatten_parameters": False}], [{"flatten_parameters": True}]], name_func=rename_test)
     def test_named_parameters(self, config):

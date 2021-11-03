@@ -18,7 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from fairscale.nn import FullyShardedDataParallel
-from fairscale.optim.grad_scaler import ShardedGradScaler
+from fairscale.utils import torch_version
 from fairscale.utils.testing import skip_if_no_cuda
 
 try:
@@ -27,9 +27,12 @@ except ImportError:
     # Older version doesn't support autocast. Skip this file.
     pytestmark = pytest.mark.skip
 
+if torch_version() >= (1, 9, 0):
+    from fairscale.optim.grad_scaler import ShardedGradScaler
 
 # Mixed precision needs cuda.
 @skip_if_no_cuda
+@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 def test_scaler_cpu_offload_breaks():
     device = torch.device("cuda")
     torch.cuda.set_device(0)
