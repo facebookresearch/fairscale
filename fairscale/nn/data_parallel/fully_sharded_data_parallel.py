@@ -414,6 +414,33 @@ class FullyShardedDataParallel(nn.Module):
         assert isinstance(self._fsdp_wrapped_module, FlattenParamsWrapper)
         return self._fsdp_wrapped_module
 
+    def append_shared_param(self, p: Parameter) -> None:
+        """ Add a param that's already owned by another FSDP wrapper.
+
+            .. warning:: This is experimental!
+
+            This only works with all sharing FSDP modules are un-flattened.
+
+            p must to be already sharded by the owning module.
+
+            Check the corresponding unit test to see how is it used and tested.
+            In particular, the sharing FSDP wrappers are "siblings" not "parent"
+            and "child" of each other in the nested module structure.
+
+        Args:
+            p (Parameter):
+                The shared parameter.
+        """
+        assert self._is_root is None
+        assert not self.flatten_parameters
+        assert isinstance(p, Parameter)
+        assert p._is_sharded
+        p._is_shared = True
+        assert (
+            len(list(filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params))) > 0
+        ), "Must have at least 1 non-shared param."
+        self.params.append(p)
+
     def apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":
         """
         Applies ``fn`` recursively to every submodule (as returned by
@@ -916,8 +943,16 @@ class FullyShardedDataParallel(nn.Module):
                     yield
                 finally:
                     stack.close()
-                    assert len(full_tensors) == len(self.params)
-                    for p, (full_tensor, safe_to_free) in zip(self.params, full_tensors):
+                    non_shared_params = self.params
+                    # filter out shared params for all but the owner FSDP module.
+                    if len(full_tensors) < len(non_shared_params):
+                        non_shared_params = list(
+                            filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params)
+                        )
+                    assert len(full_tensors) == len(
+                        non_shared_params
+                    ), f"{len(full_tensors)} vs. {len(non_shared_params)}"
+                    for p, (full_tensor, safe_to_free) in zip(non_shared_params, full_tensors):
                         if not volatile:
                             # Copy any changes made to the full params back into
                             # the corresponding local shards.
@@ -1367,6 +1402,17 @@ class FullyShardedDataParallel(nn.Module):
         if param.grad is None:
             return
 
+        if hasattr(param, "_linked_param"):
+            # This links to a shared param. We should finalize the linked param here.
+            assert param.shape == (1,), param.shape
+            # If the _is_shared flag is set, then this shared weight is indeed being
+            # shared between different FSDP wrappers. Otherwise, they are linked but
+            # likely in the same FSDP wrapper, which means we shouldn't finalize the
+            # linked param..
+            if hasattr(param._linked_param, "_is_shared") and param._linked_param._is_shared:
+                param = param._linked_param
+
+        assert param.grad is not None
         if param.grad.requires_grad:
             raise RuntimeError("FSDP only works with gradients that don't require gradients")
 
@@ -1650,6 +1696,11 @@ class FullyShardedDataParallel(nn.Module):
                 if not p._is_sharded:  # e.g., when world_size == 1
                     update_p_data()
                 else:
+                    # Skip if already built. Only shared param can be rebuilt multiple times.
+                    # A corner case is p._orig_size = (1,), which means the shape equality is
+                    # not a perfect check. But we assume we don't share a param with shape (1,).
+                    if p.data.shape == p._orig_size and hasattr(p, "_is_shared") and p._is_shared:
+                        continue
                     # If self.move_params_to_cpu and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
                     p_data = p.data.to(p._full_param_padded.device, non_blocking=True)
@@ -1704,7 +1755,7 @@ class FullyShardedDataParallel(nn.Module):
                     assert p._fp16_shard.storage().size() != 0
                     p.data = p._fp16_shard
             else:
-                assert p._full_param_padded.storage().size() != 0
+                assert p._full_param_padded.storage().size() != 0, f"{p._orig_size} {id(self)}"
                 p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
 
     @torch.no_grad()
