@@ -17,7 +17,7 @@ from torch import nn
 import torch.multiprocessing as mp
 from torch.optim import SGD
 
-from fairscale.experimental.nn import TorchFuseAllTiled
+from fairscale.experimental.nn import MEVO
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.utils import torch_version
 from fairscale.utils.testing import dist_init, objects_are_equal, skip_if_single_gpu, teardown, temp_files_ctx
@@ -43,7 +43,7 @@ class Model(nn.Module):
         super().__init__()
         self.l0 = nn.Embedding(VOCAB, D_MODEL).cuda().half()
         nn.init.uniform_(self.l0.weight, -1.0e-1, 1.0e-1)
-        self.l1 = TorchFuseAllTiled(self.l0.weight, tile_factor=TILE, reduction="sum")
+        self.l1 = MEVO(self.l0.weight, tile_factor=TILE, reduction="sum")
         self.middle = nn.Linear(D_MODEL, D_MODEL).cuda().half()
         # LNs are not strictly needed for this test, but they help reduce the loss quickly
         # and improves the numerical stability.
@@ -55,8 +55,9 @@ class Model(nn.Module):
             self.l0 = FSDP(self.l0, flatten_parameters=False, mixed_precision=False, compute_dtype=torch.float16)
             self.l1 = FSDP(self.l1, flatten_parameters=False, mixed_precision=False, compute_dtype=torch.float16)
             self.l1.append_shared_param(self.l0.module.weight)
-            print(id(self.l0), "is emb")
-            print(id(self.l1), "is out")
+            # These are for debugging.
+            # print(id(self.l0), "is emb")
+            # print(id(self.l1), "is out")
             assert wrap_middle in ["none", "flat", "nonflat"]
             if wrap_middle != "none":
                 self.middle = FSDP(
@@ -65,7 +66,7 @@ class Model(nn.Module):
                     mixed_precision=False,
                     compute_dtype=torch.float16,
                 )
-                print(id(self.middle), "is middle")
+                # print(id(self.middle), "is middle")
 
     def forward(self, x):
         target = x + 1

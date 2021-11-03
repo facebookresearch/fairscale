@@ -13,11 +13,10 @@ import torch
 from torch import nn
 from torch.cuda import Event
 
-from fairscale.experimental.nn import BaselineSoftmaxNllLoss, TorchFuseAllTiled
+from fairscale.experimental.nn import MEVO, BaselineSoftmaxNllLoss
 from fairscale.experimental.nn.mevo import get_data
-from fairscale.utils.testing import get_smi_memory
 
-""" Benchmarking various softmax kernels. Some are dense and some are with label and top-K sparsity. """
+"""Benchmarking the MEVO kernel and its Baseline."""
 
 SHAPES = [
     # name, activation, FC weights
@@ -31,15 +30,8 @@ SHAPES = [
 ]
 KERNELS = [
     BaselineSoftmaxNllLoss,
-    TorchFuseAllTiled,
+    MEVO,
 ]
-
-
-def my_nll_loss(lprobs, target):
-    """ Like that in fairseq, when lprobs.numel > 2r9, it uses a loss like this. """
-    target = target.unsqueeze(-1)
-    nll_loss = -lprobs.gather(dim=-1, index=target)
-    return nll_loss.mean()
 
 
 def run_on_gpu(kernel, data, repeats, no_grad, fwd_bwd):
@@ -47,13 +39,15 @@ def run_on_gpu(kernel, data, repeats, no_grad, fwd_bwd):
     tokens = data[0].shape[0]
 
     def get_cuda_data():
+        """Move the data from CPU to GPU. We make a new weight parameter with this call."""
         with torch.no_grad():
-            i, w, t = data  # i, t are tensors, w is param
+            i, w, t = data  # i, t are tensors, w is a param
             w = nn.Linear(w.shape[1], w.shape[0], bias=False, dtype=w.dtype, device="cuda").weight
             assert w.requires_grad
             return i.cuda().requires_grad_(True), w, t.cuda()
 
     def _test(kernel_obj, event):
+        """Forward and backward passes."""
         context = contextlib.suppress()
         if no_grad:
             context = torch.no_grad()
@@ -63,10 +57,7 @@ def run_on_gpu(kernel, data, repeats, no_grad, fwd_bwd):
             out = kernel_obj(input, target)
             if fwd_bwd:
                 assert not no_grad
-                if kernel not in [BaselineSoftmaxNllLoss, TorchFuseAllTiled]:
-                    my_nll_loss(out, target).backward()
-                else:
-                    out.backward()
+                out.backward()
             del out
         if fwd_bwd:
             assert input.grad is not None, input
@@ -76,19 +67,17 @@ def run_on_gpu(kernel, data, repeats, no_grad, fwd_bwd):
             weight.grad = None
 
     def _get_kernel():
-        return kernel(
-            weight, k=200, tile_factor=16
-        )  # 16 is good for TorchFuseAllTiled, 8 and 32 are both slower. Power of 2 is much better. memory wise, 16 is good enough and their seems to be a floor of 2.xGB no matter what with no_grad
+        """Get a kernel instance."""
+        return kernel(weight, tile_factor=16)
 
     #
-    # Run once to measure memory.
+    # Run the test once to measure memory.
     #
 
-    # Ensure GPU memory is minimal and get_smi_memory is good
+    # Ensure GPU memory is clean, empty, 0.
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     cur_mem_before = round(torch.cuda.memory_allocated() / 1024 / 1024)
-    smi_mem_before = get_smi_memory()
     assert cur_mem_before == 0, cur_mem_before
 
     # Move tensors to GPU.
@@ -101,7 +90,7 @@ def run_on_gpu(kernel, data, repeats, no_grad, fwd_bwd):
     # Might wait for gpu here
     torch.cuda.synchronize()
 
-    # Free memory
+    # Free memory, ensure everything is clean, no leak.
     del k
     del input
     del weight
@@ -111,9 +100,7 @@ def run_on_gpu(kernel, data, repeats, no_grad, fwd_bwd):
 
     # Get peak mem
     peak_mem_after = round(torch.cuda.max_memory_allocated() / 1024 / 1024)
-    smi_mem_after = get_smi_memory()
     peak_mem = peak_mem_after - cur_mem_before
-    smi_peak_mem = smi_mem_after - smi_mem_before
 
     #
     # Run multiple times to get both CPU timing and average GPU timing.
@@ -131,13 +118,13 @@ def run_on_gpu(kernel, data, repeats, no_grad, fwd_bwd):
     for i in range(repeats):
         _test(k, events[i])
     events[i + 1].record()  # end time of the last run
-    # Cpu is done
+    # CPU could be done much sooner than the GPU here.
     cpu_time = time.time() - cpu_start_time
     # Might wait for gpu here
     torch.cuda.synchronize()
 
     # Get the durations
-    durations = [cpu_time * 1000]  # convert seconds to ms.
+    durations = [cpu_time * 1000]  # convert CPU time, from seconds to ms.
     for x, y in zip(events, events[1:]):
         durations.append(x.elapsed_time(y))
     assert len(durations) == repeats + 1
@@ -148,14 +135,14 @@ def run_on_gpu(kernel, data, repeats, no_grad, fwd_bwd):
     cur_mem_after = round(torch.cuda.memory_allocated() / 1024 / 1024)
     assert cur_mem_after == 0, cur_mem_after
 
-    # skip 2 for cpu time and first warm up time.
+    # Skip 2 for cpu time and first warm up time to compute the average.
     time_per_call = mean(durations[2:])  # ms
     time_per_token = time_per_call * 1000 / tokens  # us
-    return peak_mem, smi_peak_mem, durations[:2] + [time_per_call, time_per_token]
+    return peak_mem, durations[:2] + [time_per_call, time_per_token]
 
 
 def main():
-    parser = argparse.ArgumentParser("Benchmarking softmax kernels")
+    parser = argparse.ArgumentParser("Benchmarking MEVO")
 
     parser.add_argument("--dtype", type=str, choices=["fp16", "fp32"], default="fp16")
     parser.add_argument("--grad", type=str, choices=["grad", "no_grad"], default="grad")
@@ -165,22 +152,20 @@ def main():
     repeats = 9
     results = {}
     results["peak cached"] = {}
-    results["peak smi"] = {}
     results["durations"] = {}
     for shape in SHAPES:
         name = shape[0]
         results["peak cached"][name] = {}
-        results["peak smi"][name] = {}
         results["durations"][name] = {}
         dtype = torch.float32 if args.dtype == "fp32" else torch.float16
-        data = get_data(shape[1:], dtype, "cpu")  # Use cpu memory to ensure we always start with empty GPU
+        # Use cpu memory to ensure we always start with an empty GPU
+        data = get_data(shape[1:], dtype, "cpu")
         for kernel in KERNELS:
             k_name = kernel.__name__
             no_grad = args.grad
             print(f"Running {k_name} with {name} {dtype} {no_grad} data")
-            peak_mem, smi_peak_mem, durations = run_on_gpu(kernel, data, repeats, no_grad == "no_grad", args.fwd_bwd)
+            peak_mem, durations = run_on_gpu(kernel, data, repeats, no_grad == "no_grad", args.fwd_bwd)
             results["peak cached"][name][k_name] = peak_mem
-            results["peak smi"][name][k_name] = smi_peak_mem
             results["durations"][name][k_name] = durations
     pprint(results)
 

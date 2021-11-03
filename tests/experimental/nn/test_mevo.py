@@ -12,7 +12,7 @@ import os
 import pytest
 import torch
 
-from fairscale.experimental.nn import TorchFuseAllTiled
+from fairscale.experimental.nn import MEVO
 from fairscale.experimental.nn.mevo import BaselineSoftmaxNllLoss, get_data
 from fairscale.utils import torch_version
 from fairscale.utils.testing import skip_if_no_cuda
@@ -43,7 +43,7 @@ def test_torch_fuse_all():
     print("\nshapes are", shape)
 
     input, weight, target = get_data(shape, dtype=torch.float16)
-    k = TorchFuseAllTiled(weight, tile_factor=16)
+    k = MEVO(weight, tile_factor=16)
 
     o = k(input, target)
     o.backward()

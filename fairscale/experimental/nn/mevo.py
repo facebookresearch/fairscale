@@ -11,11 +11,16 @@ from torch import nn
 import torch.distributed as dist
 import torch.nn.functional as F
 
+# Debugging flag to enable some prints. Useful to debug with FSDP.
 DEBUG = False
 
 
-def next_power_of_2_or_max(n: int, max_n: int) -> int:
-    """Return the smallest power of 2 greater than or equal to n"""
+def _next_power_of_2_or_max(n: int, max_n: int) -> int:
+    """ Return the smallest power of 2 greater than or equal to n, with a limit.
+
+        Useful when used in splitting a tensor into chunks with power-of-2 sizes.
+    """
+    orig_n = n
     n -= 1
     n |= n >> 1
     n |= n >> 2
@@ -23,9 +28,20 @@ def next_power_of_2_or_max(n: int, max_n: int) -> int:
     n |= n >> 8
     n |= n >> 16
     n += 1
+    assert n >= orig_n, f"{n} vs. {orig_n}"
+    assert bin(n).count("1") == 1, bin(n)  # Catch the case n is too large for this function.
     if n > max_n:
         return max_n
     return n
+
+
+def _reshape_inputs(input: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Convert 3D inputs to 2D for this kernel"""
+    if len(input.shape) == 3:
+        input = input.reshape(-1, input.shape[2])
+    if len(target.shape) == 2:
+        target = target.reshape(-1)
+    return input, target
 
 
 def get_data(
@@ -41,13 +57,24 @@ def get_data(
 
 
 class BaselineSoftmax(nn.Module):
-    """ Baseline softmax that does an output projection and a softmax. """
+    """ Baseline softmax that does an output linear projection and a softmax.
 
-    def __init__(
-        self, proj_weight: torch.nn.Parameter, k: int = 0, tile_factor: int = 0, log: bool = True
-    ):  # k, tile_factor are ignored.
+        This is intended to be used with an embedding layer with shared weights.
+
+    Args:
+        proj_weight (nn.Parameter):
+            The shared weight.
+        tile_factor (int):
+            Unused. It is here to make kernel init easier with MEVO.
+        log (bool):
+            If True, use log_softmax instead of softmax.
+
+    """
+
+    def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 0, log: bool = True):
         super().__init__()
         out_dim, in_dim = proj_weight.shape
+        assert "cuda" in str(proj_weight.device), "weight should be on GPU"
         self.fc = nn.Linear(in_dim, out_dim, bias=False, device="cuda", dtype=proj_weight.dtype)
         self.fc.weight = proj_weight
         assert self.fc.weight.dtype in [torch.float16, torch.float32], self.fc.weight.dtype
@@ -55,13 +82,16 @@ class BaselineSoftmax(nn.Module):
         self.log = log
 
     def forward(self, *input: Any, **kwargs: Any) -> Any:
+        """ Forward function that computes softmax output with the input and target."""
         assert kwargs == {}
         input, target = input
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
+        input, target = _reshape_inputs(input, target)
         if self.fp16:
             assert input.dtype == torch.float16
         x = self.fc(input)
+        # Note that we do softmax in FP32, which is important for numerical stability.
         if self.log:
             x = F.log_softmax(x, dim=-1, dtype=torch.float32)
         else:
@@ -71,37 +101,33 @@ class BaselineSoftmax(nn.Module):
 
 
 class BaselineSoftmaxNllLoss(BaselineSoftmax):
-    """ Baseline that does an output projection, a softmax NLL loss. """
+    """ Baseline that does an output projection, a softmax & a NLL loss (cross-entropy).
 
-    def __init__(
-        self, proj_weight: nn.Parameter, k: int = 0, tile_factor: int = 0, log: bool = True
-    ):  # k, tile_factor are ignored.
-        super().__init__(proj_weight, k, tile_factor, log)
+        See BaselineSoftmax above. Constructor is the same. Only difference is in the
+        forward function.
+    """
+
+    def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 0, log: bool = True):
+        super().__init__(proj_weight, tile_factor, log)
 
     def forward(self, *input: Any, **kwargs: Any) -> Any:
+        """Forward that directly compute the loss."""
         assert kwargs == {}
         input, target = input
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
-        if len(input.shape) == 3:
-            input = input.reshape(-1, input.shape[2])
-        if len(target.shape) == 2:
-            target = target.reshape(-1)
-        if self.fp16:
-            assert input.dtype == torch.float16
-        x = self.fc(input)
-        if self.log:
-            x = F.log_softmax(x, dim=-1, dtype=torch.float32)
-        else:
-            x = F.softmax(x, dim=-1, dtype=torch.float32)
-        assert x.dtype == torch.float32
+        input, target = _reshape_inputs(input, target)
+        x = super().forward(input, target)
         x = F.nll_loss(x, target, reduction="sum")
         return x
 
 
 class GetMaxFunction(torch.autograd.Function):
+    """Custom checkpointed function to get max-per-token from an input and a weight"""
+
     @staticmethod
     def get_max(i: torch.Tensor, w: torch.Tensor, fp: bool) -> torch.Tensor:
+        """ i: (split-of-tokens, d_model), w: (split-of-vocabs, d_model)"""
         _m = torch.matmul(i, w.T)
         if fp:
             _m = _m.float()
@@ -113,11 +139,12 @@ class GetMaxFunction(torch.autograd.Function):
         ctx: Any,
         i: torch.Tensor,
         w: torch.Tensor,
-        kernel_obj: "TorchFuseAllTiled",
+        kernel_obj: "MemoryEfficientVocabOutput",
         w_idx: int,
         w_split_size: int,
         split_dim: int,
     ) -> torch.Tensor:
+        """Forward function that computes the max, without saving activations."""
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG max fwd")
         ctx.save_for_backward(i, w)
@@ -131,6 +158,10 @@ class GetMaxFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, *args: Any) -> Any:
+        """Recompute the forward max and backward grad.
+
+           Accumulate the grad to the right split of the full grad.
+        """
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG max bwd")
         assert len(args) == 1
@@ -148,6 +179,7 @@ class GetMaxFunction(torch.autograd.Function):
         with torch.enable_grad():
             maxs = GetMaxFunction.get_max(i, w, ctx.kernel_obj.fp_max)
         torch.autograd.backward(maxs, *args)
+
         # Accumulate the grads.
         assert w.grad is not None
         with torch.no_grad():
@@ -157,8 +189,11 @@ class GetMaxFunction(torch.autograd.Function):
 
 
 class GetSumFunction(torch.autograd.Function):
+    """Custom checkpointed function to get sum-per-token from an input and a weight."""
+
     @staticmethod
     def get_sum(i: torch.Tensor, w: torch.Tensor, maxs: torch.Tensor, fp: bool) -> torch.Tensor:
+        """ i: (split-of-tokens, d_model), w: (split-of-vocabs, d_model)"""
         _s = torch.matmul(i, w.T)
         if fp:
             _s = _s.float()
@@ -171,11 +206,12 @@ class GetSumFunction(torch.autograd.Function):
         i: torch.Tensor,
         w: torch.Tensor,
         maxs: torch.Tensor,
-        kernel_obj: "TorchFuseAllTiled",
+        kernel_obj: "MemoryEfficientVocabOutput",
         w_idx: int,
         w_split_size: int,
         split_dim: int,
     ) -> torch.Tensor:
+        """Forward function that computes the sum, without saving activations."""
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG sum fwd")
         ctx.save_for_backward(i, w, maxs)
@@ -188,11 +224,17 @@ class GetSumFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, *args: Any) -> Any:
+        """Recompute the forward sum and backward grad.
+
+           Accumulate the grad to the right split of the full grad.
+        """
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG sum bwd")
         assert len(args) == 1
         # Gradients should already exist due to TargetScoreFunction's backward.
         assert ctx.kernel_obj.proj_weight.grad is not None
+
+        # Get saved i, w, and maxs.
         i, w, maxs = ctx.saved_tensors
         assert i.requires_grad
         assert w.requires_grad
@@ -200,10 +242,12 @@ class GetSumFunction(torch.autograd.Function):
         i = i.detach().requires_grad_(True)
         w = w.detach().requires_grad_(True)
         maxs = maxs.detach().requires_grad_(True)
+
         # Forward + backward again.
         with torch.enable_grad():
             sums = GetSumFunction.get_sum(i, w, maxs, ctx.kernel_obj.fp_sum)
         torch.autograd.backward(sums, *args)
+
         # Accumulate the grads.
         assert w.grad is not None
         with torch.no_grad():
@@ -213,6 +257,8 @@ class GetSumFunction(torch.autograd.Function):
 
 
 class TargetScoreFunction(torch.autograd.Function):
+    """Custom checkpointed function to compute the target score."""
+
     @staticmethod
     def get_target_score(i: torch.Tensor, w: torch.Tensor, target: torch.Tensor, fp: bool) -> torch.Tensor:
         tokens, d_model = i.shape
@@ -227,8 +273,9 @@ class TargetScoreFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(  # type: ignore
-        ctx: Any, i: torch.Tensor, w: torch.Tensor, target: torch.Tensor, kernel_obj: "TorchFuseAllTiled"
+        ctx: Any, i: torch.Tensor, w: torch.Tensor, target: torch.Tensor, kernel_obj: "MemoryEfficientVocabOutput"
     ) -> torch.Tensor:
+        """Forward, without activations."""
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG target fwd")
         ctx.save_for_backward(i, w, target)
@@ -239,6 +286,7 @@ class TargetScoreFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, *args: Any) -> Any:
+        """Forward and backward again, assign or accumulate the gradients."""
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG target bwd")
         assert len(args) == 1
@@ -260,10 +308,13 @@ class TargetScoreFunction(torch.autograd.Function):
 
 
 class BackwardTriggerFn(torch.autograd.Function):
+    """A backward trigger function."""
+
     @staticmethod
     def forward(  # type: ignore
         ctx: Any, w: torch.Tensor, trigger_tensor: torch.Tensor
     ) -> torch.Tensor:
+        """We take a weight tensor and the trigger as inputs and output the weight directly."""
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG trigger fwd")
         ctx.save_for_backward(w, trigger_tensor)
@@ -271,6 +322,7 @@ class BackwardTriggerFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, *args: Any) -> Any:
+        """We return zero grad for the trigger only."""
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG trigger bwd")
         assert len(args) == 1
@@ -281,6 +333,28 @@ class BackwardTriggerFn(torch.autograd.Function):
 
 
 class BackwardTrigger(nn.Module):
+    """A backward trigger module.
+
+       This module takes a parameter as an input and create a linked parameter
+       from a newly created trigger parameter.
+
+       The way to use:
+
+       ```
+       def __init__():
+         ...
+         self.trigger = BackwardTrigger(some_layer.weight)
+         ...
+
+       def forward():
+         w = self.trigger()
+         ... continue to use w ...
+       ```
+
+       As a resule, the trigger's backward hook will be called at the end of
+       the backward for the module that uses this trigger.
+    """
+
     def __init__(self, linked_param: torch.Tensor):
         super().__init__()
         assert isinstance(linked_param, nn.Parameter)
@@ -291,14 +365,21 @@ class BackwardTrigger(nn.Module):
         return BackwardTriggerFn.apply(self.trigger._linked_param, self.trigger)
 
 
-class TorchFuseAllTiled(nn.Module):
-    """ Torch fuse fc + softmax + nll_loss in a tiled fashion.
+class MemoryEfficientVocabOutput(nn.Module):  # AKA. MEVO
+    """ Fused fc + softmax + nll_loss in a tiled fashion.
 
-        This uses less memory but is quite a bit slower.
+        This uses much less memory but is quite a bit slower.
+
+    Args:
+        proj_weight (nn.Parameter):
+            Sharing this weight with an embedding layer.
+        tile_factor (int):
+            Number of splits to use on the input sequence and vocab dimensions.
+        reduction (str):
+            Reduction OP (sum or mean).
     """
 
-    def __init__(self, proj_weight: nn.Parameter, k: int = 0, tile_factor: int = 16, reduction: str = "sum"):
-        # k is ignored.
+    def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 16, reduction: str = "sum"):
         super().__init__()
         self.proj_weight = proj_weight
         self.tf_in, self.tf_w = tile_factor, tile_factor
@@ -316,17 +397,10 @@ class TorchFuseAllTiled(nn.Module):
                 f"reduction={self.reduction}"
             )
 
-    def get_max(self, i: torch.Tensor, w: torch.Tensor, w_idx: int, w_split_size: int, split_dim: int) -> torch.Tensor:
-        return GetMaxFunction.apply(i, w, self, w_idx, w_split_size, split_dim)
-
-    def get_sum(
-        self, i: torch.Tensor, w: torch.Tensor, maxs_at_idx: torch.Tensor, w_idx: int, w_split_size: int, split_dim: int
-    ) -> torch.Tensor:
-        return GetSumFunction.apply(i, w, maxs_at_idx, self, w_idx, w_split_size, split_dim)
-
     def get_target_nlprob(
         self, i: torch.Tensor, w: torch.Tensor, target: torch.Tensor, debase_max: torch.Tensor, exp_sums: torch.Tensor
     ) -> torch.Tensor:
+        """Get target's negative log probability."""
         target_score = TargetScoreFunction.apply(i, w, target, self)
         prob = (target_score - debase_max).exp() / exp_sums
         if self.log_softmax:
@@ -336,26 +410,23 @@ class TorchFuseAllTiled(nn.Module):
         return -prob.sum()
 
     def forward(self, *input: Any, **kwargs: Any) -> Any:
-        cur_mem = round(torch.cuda.memory_allocated() / 1024 / 1024)
-        mem = round(torch.cuda.max_memory_allocated() / 1024 / 1024)
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
+            cur_mem = round(torch.cuda.memory_allocated() / 1024 / 1024)
+            mem = round(torch.cuda.max_memory_allocated() / 1024 / 1024)
             print("DEBUG cur, peak", cur_mem, mem)
         assert kwargs == {}
         input, target = input
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
         assert input.requires_grad
-        if len(input.shape) == 3:
-            input = input.reshape(-1, input.shape[2])
-        if len(target.shape) == 2:
-            target = target.reshape(-1)
+        input, target = _reshape_inputs(input, target)
 
         tokens, d_model = input.shape
         vocab, d2 = self.proj_weight.shape
         assert d_model == d2
         split_dim = 0
-        input_split_size = next_power_of_2_or_max(tokens // self.tf_in, tokens)
-        weight_split_size = next_power_of_2_or_max(vocab // self.tf_w, vocab)
+        input_split_size = _next_power_of_2_or_max(tokens // self.tf_in, tokens)
+        weight_split_size = _next_power_of_2_or_max(vocab // self.tf_w, vocab)
         inputs = torch.split(input, input_split_size, split_dim)
         weight = self.trigger()
         weights = torch.split(weight, weight_split_size, split_dim)
@@ -365,7 +436,7 @@ class TorchFuseAllTiled(nn.Module):
         for i in inputs:
             m = None  # max with (tokens_tile,) shape
             for w_idx, w in enumerate(weights):
-                _m = self.get_max(i, w, w_idx, weight_split_size, split_dim)
+                _m = GetMaxFunction.apply(i, w, self, w_idx, weight_split_size, split_dim)
                 if m is None:
                     m = _m
                 else:
@@ -380,7 +451,7 @@ class TorchFuseAllTiled(nn.Module):
         for idx, i in enumerate(inputs):
             s = None  # sum with (tokens_tile,) shape
             for w_i, w in enumerate(weights):
-                _s = self.get_sum(i, w, maxs[idx], w_i, weight_split_size, split_dim)
+                _s = GetSumFunction.apply(i, w, maxs[idx], self, w_i, weight_split_size, split_dim)
                 if s is None:
                     s = _s
                 else:

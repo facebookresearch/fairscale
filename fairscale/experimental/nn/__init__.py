@@ -5,7 +5,8 @@
 
 from typing import List
 
-from .mevo import BaselineSoftmaxNllLoss, TorchFuseAllTiled
+from .mevo import BaselineSoftmaxNllLoss
+from .mevo import MemoryEfficientVocabOutput as MEVO
 from .offload import OffloadModel
 from .sync_batchnorm import SyncBatchNorm
 
