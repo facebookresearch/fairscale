@@ -29,7 +29,7 @@ _dense_grad = {}  # type: ignore
 
 
 @skip_if_no_cuda
-def test_torch_fuse_all():
+def test_mevo():
     """Test the MEVO kernel by itself."""
 
     if torch_version() < (1, 9, 0):

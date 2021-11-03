@@ -7,7 +7,7 @@
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
 
-""" Test FSDP with shared weights between wrappers using a model with fused kernel. """
+""" Test FSDP with shared weights between wrappers using a model with mevo kernel. """
 
 from copy import deepcopy
 
@@ -31,7 +31,7 @@ TILE = 2
 _large = True
 
 if _large:
-    VOCAB = 1024 * 100
+    VOCAB = 1024 * 50
     D_MODEL = 1024
     BS = 2
     SEQ = 16
@@ -90,7 +90,7 @@ def temp_files():
 
 @skip_if_single_gpu
 @pytest.mark.parametrize("wrap_middle", ["none", "flat", "nonflat"])
-def test_shared_weight(temp_files, wrap_middle):
+def test_shared_weight_mevo(temp_files, wrap_middle):
     """Test FSDP with a model with shared weights."""
 
     if torch_version() < (1, 9, 0):
