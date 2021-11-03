@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [FSDP]: limited support of shared weights between FSDP wrappers. This allows large parameter
           and gradient memory to be sharded despite being needed from different layers due to
           weight sharing. [#836]
+- SlowMoDistributedDataParallel[feature][experimental] ([#378])
 
 ## [0.4.1] - 2021-09-17
 ### Fixed
