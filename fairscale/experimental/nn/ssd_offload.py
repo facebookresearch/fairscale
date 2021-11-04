@@ -304,7 +304,7 @@ class SsdBuffer:
 
     def from_disk(self, num_elems: int, dtype: torch.dtype = torch.float32) -> None:
         """Reads all tensors backed by handles into memory."""
-        if self.ssd_buffer.storage_state == StorageState.ON_CPU:
+        if self.storage_state == StorageState.ON_CPU:
             return
         assert self.storage_state == StorageState.ON_DISK, self.storage_state
         if num_elems < self.offset:
