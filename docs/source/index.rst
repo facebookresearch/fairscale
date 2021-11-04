@@ -42,6 +42,7 @@ modules and easy to use APIs.
    deep_dive/adascale
    deep_dive/pipeline_parallelism
    deep_dive/activation_checkpointing
+   deep_dive/slowmo_ddp
 
 |
 |
