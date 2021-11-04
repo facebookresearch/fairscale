@@ -64,9 +64,11 @@ else:
 
 try:
     import fairscale.experimental.nn.ssd_offload as ssd_offload
-    from fairscale.experimental.nn.ssd_offload import StorageState
+
+    import_ssd_offload = True
 except ImportError:
     # The latest nightly PyTorch version required
+    import_ssd_offload = False
     pass
 
 
@@ -322,11 +324,6 @@ class FullyShardedDataParallel(nn.Module):
         # enable pytorch sync_bn just in case model contains sync_bn layers.
         enable_pytorch_sync_bn(module)
 
-        # We set this boolean at the beginning to enable us to populate some of the
-        # metadata required for sharding and flattening. We don't use the tensor data
-        # of the parameters.
-        self.training_state = None
-
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to
         # shard any leftover parameters.
@@ -344,6 +341,7 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_size = sum(p.numel() for p in params)
         self.ssd_buffer_filename = ""
         if self.ssd_offload:
+            assert import_ssd_offload, "We need to import ssd_offload.py to enable the `ssd_offload` feature."
             self.ssd_buffer_filename = f"{randint(1, int(10E6))}_rank{self.rank}"
             self.ssd_buffer = ssd_offload.SsdBuffer(self.buffer_size, self.ssd_buffer_filename)
             self.move_grads_to_cpu = True
@@ -763,8 +761,7 @@ class FullyShardedDataParallel(nn.Module):
         # TODO(anj): Use `copy_into_tensor` in order to provide a copy of the
         # parameters and not the actual parameters. Ideally we don't users to operate on
         # actual params.
-        if self.ssd_offload and self.ssd_buffer.storage_state == StorageState.ON_DISK:
-            self.ssd_buffer.from_disk(self.buffer_size)
+        self.ssd_buffer.from_disk(self.buffer_size)
 
         return super().parameters(recurse=recurse)
 
@@ -782,8 +779,7 @@ class FullyShardedDataParallel(nn.Module):
         # TODO(anj): Use `copy_into_tensor` in order to provide a copy of the
         # parameters and not the actual parameters. Ideally we don't users to operate on
         # actual params.
-        if self.ssd_offload and self.ssd_buffer.storage_state == StorageState.ON_DISK:
-            self.ssd_buffer.from_disk(self.buffer_size)
+        self.ssd_buffer.from_disk(self.buffer_size)
 
         named_param = super().named_parameters(*args, **kwargs)
         for name, param in named_param:
@@ -891,8 +887,8 @@ class FullyShardedDataParallel(nn.Module):
             self._return_full_state_dict = backup
 
     def _move_params_to_memory(self) -> None:
-        if self.ssd_buffer.storage_state == StorageState.ON_DISK:
-            self.ssd_buffer.from_disk(self.buffer_size)
+        """Move params from disk to CPU."""
+        self.ssd_buffer.from_disk(self.buffer_size)
 
         for p, handle in zip(self.params, self.ssd_buffer.get_tensors()):
             p.data = handle.get_tensor().view(p._shard_size)  # type: ignore
@@ -1335,8 +1331,7 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _free_ssd_offload(self) -> None:
         if self.ssd_offload:
-            if self.ssd_buffer.storage_state == StorageState.IN_MEMORY:
-                self.ssd_buffer.to_disk()
+            self.ssd_buffer.to_disk()
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
         """Register pre-backward hook to run before the wrapped module's
@@ -1779,14 +1774,12 @@ class FullyShardedDataParallel(nn.Module):
             p.data = p.data[: p._orig_size.numel()].view(p._orig_size)
 
         if self.ssd_offload:
-            if self.ssd_buffer.storage_state == StorageState.ON_DISK:
-                # self.ssd_buffer.from_disk(self.buffer_size, dtype=self.compute_dtype)
-                self.ssd_buffer.from_disk(self.buffer_size)
+            self.ssd_buffer.from_disk(self.buffer_size)
 
-                # The params are on disk and need to be moved to the CPU.
-                for p, handle in zip(self.params, self.ssd_buffer.get_tensors()):
-                    p._fp32_shard = handle.get_tensor().view(p._shard_size)  # type: ignore
-                    p.data = p._fp32_shard
+            # The params are on disk and need to be moved to the CPU.
+            for p, handle in zip(self.params, self.ssd_buffer.get_tensors()):
+                p._fp32_shard = handle.get_tensor().view(p._shard_size)  # type: ignore
+                p.data = p._fp32_shard
 
             self.has_full_params = False
 
