@@ -21,9 +21,11 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
-from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.utils import torch_version
 from fairscale.utils.testing import check_same_model_params, skip_if_no_cuda, skip_if_single_gpu, temp_files_ctx
+
+if torch_version() >= (1, 9, 0):
+    from fairscale.optim.grad_scaler import ShardedGradScaler
 
 """
 Check that ShardedDDP gets the same results as DDP in a variety of scenarii

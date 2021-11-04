@@ -53,7 +53,9 @@ class TestLocalStateDict(DistributedTest):
             state_1_module_weight = model.module.state_dict()[weight_key]
             torch.testing.assert_allclose(state_1_weight, state_1_module_weight)
             torch.testing.assert_allclose(state_1_weight, model.module.embed_tokens.weight)
-        self._train_for_several_steps(model, 1, model.mixed_precision)
+        # increasing number of epochs from 1 to 6 for ShardedGradScaler to work properly.
+        # test fails for num_epochs < 6 since the updates are skipped due to gradient being inf.
+        self._train_for_several_steps(model, 6, model.mixed_precision)
 
         state_2 = model.local_state_dict()
         state_after_training = {k: v.cpu().clone() for k, v in state_2.items()}
