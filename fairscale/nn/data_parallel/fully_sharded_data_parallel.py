@@ -324,6 +324,11 @@ class FullyShardedDataParallel(nn.Module):
         # enable pytorch sync_bn just in case model contains sync_bn layers.
         enable_pytorch_sync_bn(module)
 
+        # We set this boolean at the beginning to enable us to populate some of the
+        # metadata required for sharding and flattening. We don't use the tensor data
+        # of the parameters.
+        self.training_state = None
+
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to
         # shard any leftover parameters.
