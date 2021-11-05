@@ -8,7 +8,6 @@ import glob
 import itertools
 import os
 import sys
-import tempfile
 import time
 import unittest
 
@@ -18,7 +17,6 @@ import torch
 from torch import nn
 import torch.distributed
 
-import fairscale.experimental.nn.ssd_offload as so
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
 from fairscale.utils import torch_version
@@ -276,69 +274,6 @@ class TestSsdLoading(DistributedTest):
         for file in fileList:
             rmf(file)
 
-    @classmethod
-    def _test_ssd_offload_train_simple(self, rank, group):
-
-        with tempfile.NamedTemporaryFile() as f:
-            orig_tensor = torch.randn((4, 4), requires_grad=True)
-
-            with torch.no_grad():
-                orig_copy = torch.empty_like(orig_tensor)
-                orig_copy.copy_(orig_tensor)
-                orig_copy.requires_grad = True
-
-            ssd_handle = so.SsdTensorHandle.from_tensor(orig_tensor)
-            ssd_handle.set_file_params(f.name, 0)
-            ssd_handle.to_file(release_tensor_after_write=True)
-
-            assert torch.equal(ssd_handle.to_tensor(), orig_tensor)
-            optimizer_ssd = torch.optim.SGD([ssd_handle], lr=0.1)
-            optimizer_orig = torch.optim.SGD([orig_copy], lr=0.1)
-
-            y1 = ssd_handle + 1
-            optimizer_ssd.zero_grad()
-            y1.sum().backward()
-            optimizer_ssd.step()
-
-            y2 = orig_copy + 1
-            optimizer_orig.zero_grad()
-            y2.sum().backward()
-            optimizer_orig.step()
-
-            # make sure we are using the file version not the cached tensor
-            ssd_handle.point_to_file(f.name, 0)
-            assert torch.equal(ssd_handle.to_tensor(), orig_copy)
-
-    @classmethod
-    def _test_ssd_offload_train_fsdp(self, rank, group):
-        SIZE = 16 * 16
-
-        config = {}
-        config["ssd_offload"] = True
-        config["mixed_precision"] = False
-        model = FullyShardedDataParallel(SimpleLinear(group, input_size=SIZE, output_size=SIZE, layers=4), **config)
-        if not config["ssd_offload"]:
-            model = model.cuda()
-        model_device = torch.device("cuda")
-        optim = torch.optim.SGD(model.parameters(), lr=4, momentum=0.9)
-        optim.zero_grad()
-        # Inputs always cuda regardless of move_grads_cpu, or model.device
-        input = model.get_input(torch.device("cuda"))
-        output = model(*input)
-        loss = model.module.get_loss(input, output).to(model_device)
-        assert loss.dtype == torch.float32
-
-        model.module.run_backward(loss)
-
-        optim.step()
-
-        if isinstance(model, FullyShardedDataParallel):
-            model.assert_state(TrainingState.IDLE)
-
-        fileList = glob.glob(os.getcwd() + "/*_rank*")
-        for file in fileList:
-            rmf(file)
-
 
 class TransformerWithSharedParams(nn.Module):
     def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=True, **unused_kwargs):
@@ -436,15 +371,6 @@ class NestedWrappedModule(nn.Module):
 
     def run_backward(self, loss):
         loss.backward()
-
-
-class DummyDDP(nn.Module):
-    def __init__(self, module):
-        super().__init__()
-        self.module = module
-
-    def forward(self, *args, **kwargs):
-        return self.module(*args, **kwargs)
 
 
 def spawn_and_init(fn, args=None, **spawn_kwargs):
