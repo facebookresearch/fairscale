@@ -38,7 +38,7 @@ gpu: &gpu
     # This image actually has cuda-11.1 installed, but it doesn't seems to affect us
     # using pytorch cu10 builds below.
     image: ubuntu-1604-cuda-10.2:202012-01
-  resource_class: gpu.nvidia.medium
+  resource_class: gpu.large
 
 gpu_cu111: &gpu_cu111
   environment:
@@ -46,7 +46,7 @@ gpu_cu111: &gpu_cu111
     CUDA_HOME: /usr/local/cuda-11.2
   machine:
     image: ubuntu-2004-cuda-11.2:202103-01
-  resource_class: gpu.nvidia.medium
+  resource_class: gpu.large
 
 # -------------------------------------------------------------------------------------
 # Re-usable commands
@@ -65,14 +65,14 @@ setup_venv: &setup_venv
         pip install --upgrade pip
 
 # most recent LTS version
-install_dep_1_8_2: &install_dep_1_8_2
+install_dep_1_8_1: &install_dep_1_8_1
   - run:
-      name: Install Dependencies with torch 1.8.2 (LTS)
+      name: Install Dependencies with torch 1.8.1 (LTS)
       command: |
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.8 && exit 0; fi
         # start installing
-        pip install --progress-bar off torch==1.8.2+cu102 torchvision==0.9.2+cu102 -f https://download.pytorch.org/whl/lts/1.8/torch_lts.html
+        pip install --progress-bar off torch==1.8.1+cu102 torchvision==0.9.1+cu102 -f https://download.pytorch.org/whl/lts/1.8/torch_lts.html
         pip install --progress-bar off -r requirements-test.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -347,7 +347,7 @@ jobs:
       - store_test_results:
           path: test-results
 
-  gpu_tests_1_8_2:
+  gpu_tests_1_8_1:
     parameters:
       test_list_file:
         type: string
@@ -371,14 +371,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py37-gpu-182-102-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py37-gpu-181-102-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
-      - <<: *install_dep_1_8_2
+      - <<: *install_dep_1_8_1
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py37-gpu-182-102-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py37-gpu-181-102-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -571,19 +571,19 @@ workflows:
       - cpu_tests_py37
       - cpu_tests_py38
       - cpu_tests_py39
-      - gpu_tests_1_8_2:
+      - gpu_tests_1_8_1:
           test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_1_10_0:
           test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_pytorch_nightly:
           test_list_file: tests/ci_test_list_1.txt
-      - gpu_tests_1_8_2:
+      - gpu_tests_1_8_1:
           test_list_file: tests/ci_test_list_2.txt
       - gpu_tests_1_10_0:
           test_list_file: tests/ci_test_list_2.txt
       - gpu_tests_pytorch_nightly:
           test_list_file: tests/ci_test_list_2.txt
-      - gpu_tests_1_8_2:
+      - gpu_tests_1_8_1:
           test_list_file: tests/ci_test_list_3.txt
       - gpu_tests_1_10_0:
           test_list_file: tests/ci_test_list_3.txt
