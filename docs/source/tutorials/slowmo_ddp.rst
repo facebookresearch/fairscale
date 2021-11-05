@@ -12,9 +12,9 @@ the same.
 If you have code that is setup to use Distributed Data Parallel, using SlowMo Distributed Data Parallel
 is simply replacing the DDP call with a call to
 ``fairscale.experimental.nn.data_parallel.SlowMoDistributedDataParallel``, adding a
-``model.perform_slowmo(optimizer)`` call after ``optimizer.step()``, and moving the ``model.zero_grad()``
-to be after ``optimizer.step()``, as follows. The different points at which ``use_slowmo`` is used
-below help demonstrate these changes:
+``model.perform_slowmo(optimizer)`` call after ``optimizer.step()``, and moving the
+``model.zero_grad(set_to_none=True)`` to be after ``optimizer.step()``, as follows.
+The different points at which ``use_slowmo`` is used below help demonstrate these changes:
 
 .. code-block:: python
 
@@ -57,7 +57,7 @@ below help demonstrate these changes:
                 loss.backward()
                 optimizer.step()
                 if use_slowmo:
-                    model.zero_grad()
+                    model.zero_grad(set_to_none=True)
                     model.perform_slowmo(optimizer)  # SlowMoDDP specific
 
 In the example above, when using SlowMoDDP, we are reducing the total communication between
