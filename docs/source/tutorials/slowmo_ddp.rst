@@ -7,7 +7,7 @@ clusters with low interconnect speeds between different nodes. When using
 SlowMo, the models on the different nodes are no longer kept in sync after each
 iteration, which leads to the optimization dynamics being affected. The end
 result is close to the results of Distributed Data Parallel, but is not exactly
-the same. 
+the same.
 
 If you have code that is setup to use Distributed Data Parallel, using SlowMo Distributed Data Parallel
 is simply replacing the DDP call with a call to
@@ -61,7 +61,7 @@ below help demonstrate these changes:
                     model.perform_slowmo(optimizer)  # SlowMoDDP specific
 
 In the example above, when using SlowMoDDP, we are reducing the total communication between
-nodes by 3 times as the default ``localsgd_frequency`` is set to 3 by default.
+nodes by 3 times as the default ``localsgd_frequency`` is set to 3.
 SlowMoDDP takes in ``slowmo_momentum`` as a parameter. This parameter may need to be tuned
 depending on your use case. It also takes in ``nproces_per_node`` which should be typically set
 to the number of GPUs on a node. Please look at the

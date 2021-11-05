@@ -13,7 +13,7 @@ nodes.  It uses one of the following two algorithms (configurable) as a base alg
 
 * `Stochastic Gradient Push <https://arxiv.org/abs/1811.10792>`_ (SGP). This algorithm involves one-to-one communications between nodes.
 
-These base algorithms (LocalSGD and SGP), when used only by themselves, result in reduced model quality (measured as accuracy in a classification 
+These base algorithms (LocalSGD and SGP), when used only by themselves, result in reduced model quality (measured as accuracy in a classification
 setting). The `SlowMo <https://arxiv.org/abs/1910.00643>`_ algorithm alleviates this issue by doing a slow momentum step, typically, every 48 iterations.
 
 The training process with SlowMo looks as follows:
@@ -42,15 +42,16 @@ Best practices for using ``SlowMoDistributedDataParallel``
 
    :math:`\textrm{time_taken_for_all_reduce_of_gradients} \times (1 - \frac{1}{\textrm{localsgd_frequency}} ) > \textrm{time_taken_for_backward_pass}`
 
-   Notes: 
+   Notes:
 
    * In case you are using SGP as the base algorithm, the value of ``localsgd_frequency`` can be plugged in as 2.
 
-   * The formula above is a simplified version of: 
-     :math:`\textrm{time_taken_for_all_reduce_of_gradients} > \textrm{time_taken_for_backward_pass} + \frac{\textrm{time_taken_for_all_reduce_of_gradients}}{\textrm{localsgd_frequency}}` 
-     The left and right hand side denote the time taken for the backward pass and communication combined for DDP and SlowMo DDP respectively. 
-     ``time_taken_for_backward_pass`` is extra on the right hand side because we do not overlap the backward pass with communication in the 
-     current implementation of SlowMo.
+   * The formula above is a simplified version of:
+     :math:`\textrm{time_taken_for_all_reduce_of_gradients} > \textrm{time_taken_for_backward_pass} + \frac{\textrm{time_taken_for_all_reduce_of_gradients}}{\textrm{localsgd_frequency}}`
+     The left and right hand sides denote the total backward duration (combining the computation of gradients in the backward pass and the
+     communication cost) for DDP and SlowMo DDP, respectively. Since DDP overlaps the computation of gradients with their communication, it is
+     bottlenecked by the latter.  In contrast, there is an extra ``time_taken_for_backward_pass`` on the right hand side because we do not
+     overlap the backward pass with communication in the current implementation of SlowMo.
 
    * In clusters with slower interconnect, ``time_taken_for_all_reduce_of_gradients`` will go up, leading to SlowMo being more useful. ``localsgd_frequency``
      is also an important factor here. More details on varying that to affect performance are in tip 2 of
@@ -75,4 +76,5 @@ Performance tips for ``SlowMoDistributedDataParallel``
 3. ``slowmo_memory_efficient`` should typically be used (this is the default behavior). It reduces memory usage by sharding the additional
    slow momentum optimizer's parameters in a `Zero-1`_ like manner.
 
-4. A call to ``model.zero_grad()`` should be made after ``optimizer.step()`` in order to save memory for the ``model.perform_slowmo()`` step.
+4. A call to ``model.zero_grad()`` should be made after ``optimizer.step()`` in order to save memory for the ``model.perform_slowmo()`` step. More details
+   about this can be found in the `documentation <../api/experimental/nn/slowmo_ddp.html>`_ for ``perform_slowmo()``.
