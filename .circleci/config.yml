@@ -35,36 +35,52 @@ cpu_py39: &cpu_py39
 # gpu.nvidia.small.multi = 2 gpus with 16 GB ram each
 # gpu.nvidia.medium.multi = 4 gpus with 16 GB ram each
 
-gpu_cu_11_1_small_multi_: &gpu_cu_11_1_small_multi
+# gpu_cu_11_1_small_multi_: &gpu_cu_11_1_small_multi
+#   environment:
+#     CUDA_VERSION: "11.1"
+#     CUDA_HOME: /usr/local/cuda-11.1
+#   machine:
+#     image: ubuntu-1604-cuda-11.1:202012-01
+#   resource_class: gpu.nvidia.small.multi
+
+# gpu_cu_11_1_medium_multi: &gpu_cu_11_1_medium_multi
+#   environment:
+#     CUDA_VERSION: "11.1"
+#     CUDA_HOME: /usr/local/cuda-11.1
+#   machine:
+#     image: ubuntu-1604-cuda-11.1:202012-01
+#   resource_class: gpu.nvidia.medium.multi
+
+# gpu_cu_11_2_small_multi: &gpu_cu_11_2_small_multi
+#   environment:
+#     CUDA_VERSION: "11.2"
+#     CUDA_HOME: /usr/local/cuda-11.2
+#   machine:
+#     image: ubuntu-2004-cuda-11.2:202103-01
+#   resource_class: gpu.nvidia.small.multi
+
+# gpu_cu_11_2_medium_multi: &gpu_cu_11_2_medium_multi
+#   environment:
+#     CUDA_VERSION: "11.2"
+#     CUDA_HOME: /usr/local/cuda-11.2
+#   machine:
+#     image: ubuntu-2004-cuda-11.2:202103-01
+#   resource_class: gpu.nvidia.medium.multi
+
+gpu_cu_11_4_small_multi: &gpu_cu_11_4_small_multi
   environment:
-    CUDA_VERSION: "11.1"
-    CUDA_HOME: /usr/local/cuda-11.1
+    CUDA_VERSION: "11.4"
+    CUDA_HOME: /usr/local/cuda-11.4
   machine:
-    image: ubuntu-1604-cuda-11.1:202012-01
+    image: ubuntu-2004-cuda-11.4:202110-01
   resource_class: gpu.nvidia.small.multi
 
-gpu_cu_11_1_medium_multi: &gpu_cu_11_1_medium_multi
+gpu_cu_11_4_medium_multi: &gpu_cu_11_4_medium_multi
   environment:
-    CUDA_VERSION: "11.1"
-    CUDA_HOME: /usr/local/cuda-11.1
+    CUDA_VERSION: "11.4"
+    CUDA_HOME: /usr/local/cuda-11.4
   machine:
-    image: ubuntu-1604-cuda-11.1:202012-01
-  resource_class: gpu.nvidia.medium.multi
-
-gpu_cu_11_2_small_multi: &gpu_cu_11_2_small_multi
-  environment:
-    CUDA_VERSION: "11.2"
-    CUDA_HOME: /usr/local/cuda-11.2
-  machine:
-    image: ubuntu-2004-cuda-11.2:202103-01
-  resource_class: gpu.nvidia.small.multi
-
-gpu_cu_11_2_medium_multi: &gpu_cu_11_2_medium_multi
-  environment:
-    CUDA_VERSION: "11.2"
-    CUDA_HOME: /usr/local/cuda-11.2
-  machine:
-    image: ubuntu-2004-cuda-11.2:202103-01
+    image: ubuntu-2004-cuda-11.4:202110-01
   resource_class: gpu.nvidia.medium.multi
 
 # -------------------------------------------------------------------------------------
@@ -167,7 +183,6 @@ check_test_list: &check_test_list
       name: Verify that unit test list files are correct
       command: |
         bash ./tests/ci_test_list_check.sh
-
 
 upload_coverage: &upload_coverage
   - codecov/upload:
@@ -371,7 +386,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu_11_1_medium_multi
+    <<: *gpu_cu_11_4_medium_multi
 
     working_directory: ~/fairscale
 
@@ -414,7 +429,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu_11_1_small_multi
+    <<: *gpu_cu_11_4_small_multi
 
     working_directory: ~/fairscale
 
@@ -455,7 +470,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu_11_2_medium_multi
+    <<: *gpu_cu_11_4_medium_multi
 
     working_directory: ~/fairscale
 
@@ -491,7 +506,7 @@ jobs:
           path: test-results
 
   benchmarks_1:
-    <<: *gpu_cu_11_1_small_multi
+    <<: *gpu_cu_11_4_small_multi
 
     working_directory: ~/fairscale
 
@@ -540,7 +555,7 @@ jobs:
           key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
   benchmarks_2:
-    <<: *gpu_cu_11_1_medium_multi
+    <<: *gpu_cu_11_4_medium_multi
 
     working_directory: ~/fairscale
 
