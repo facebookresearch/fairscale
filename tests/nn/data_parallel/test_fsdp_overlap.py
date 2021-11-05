@@ -212,9 +212,9 @@ def _distributed_worker(
         long.append(e2["cpu_wait"])  # all gather should happen and prolong the cpu-gpu wait.
     for s in short:
         for l in long:
-            # 10X longer is a safe margin, since the GPU work timing is around 100X more
+            # 5X longer is a safe margin, since the GPU work timing is around 100X more
             # of that of the CPU.
-            assert s * 10 < l, f"{s} * 10 < {l} in " + debug_string
+            assert s * 5 < l, f"{s} * 5 < {l} in " + debug_string
 
     # Check the GPU timing.
     short = [e1["gpu_compute"], e1["gpu_total"], e2["gpu_compute"]]
