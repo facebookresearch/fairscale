@@ -206,7 +206,7 @@ class SsdTensorHandle(torch.Tensor):
         """Intercepts all operations performed on this handle object. 
 
         Before any operation, the tensor attribute is unwrapped from the handle 
-        and used in the operation. We maintain a refernce to the tensor and its current 
+        and used in the operation. We maintain a reference to the tensor and its current 
         versions to track if modifications have been made. If we detect changes to the 
         tensor, we write it to the file maintained by the Handle.
         """

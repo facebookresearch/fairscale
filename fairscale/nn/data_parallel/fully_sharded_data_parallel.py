@@ -324,11 +324,6 @@ class FullyShardedDataParallel(nn.Module):
         # enable pytorch sync_bn just in case model contains sync_bn layers.
         enable_pytorch_sync_bn(module)
 
-        # We set this boolean at the beginning to enable us to populate some of the
-        # metadata required for sharding and flattening. We don't use the tensor data
-        # of the parameters.
-        self.training_state = None
-
         # Only handle params which are not already sharded. This enables
         # sharding individual layers of a Module, with an outer wrapper to
         # shard any leftover parameters.
@@ -342,11 +337,12 @@ class FullyShardedDataParallel(nn.Module):
         self._has_params = len(params) > 0
 
         # TODO(anj): Should we conditionally do this only if we have params?
-        # TODO(anj): this won't work for MOE params.
+        # TODO(anj): Figure out if we can allocate the buffer during sharding.
         self.buffer_size = sum(p.numel() for p in params)
         self.ssd_buffer_filename = ""
         if self.ssd_offload:
             assert import_ssd_offload, "We need to import ssd_offload.py to enable the `ssd_offload` feature."
+            # TODO(anj): Add support for temp file and directory as possible API params.
             self.ssd_buffer_filename = f"{randint(1, int(10E6))}_rank{self.rank}"
             self.ssd_buffer = ssd_offload.SsdBuffer(self.buffer_size, self.ssd_buffer_filename)
             self.move_grads_to_cpu = True
@@ -651,14 +647,18 @@ class FullyShardedDataParallel(nn.Module):
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
-                p._is_sharded = False
-                self.numel_padded_per_param.append(0)
-                # Insert tensor into the SSD buffer and free parameter storage.
                 if self.ssd_offload:
+                    # Insert tensor into the SSD buffer and free parameter storage.
+                    p._is_sharded = False
+                    self.numel_padded_per_param.append(0)
                     p._shard_size = p.data.size()  # type: ignore
                     p._handle = self.ssd_buffer.insert(p.data)  # type: ignore
                     free_storage_(p.data)
-                continue
+                    continue
+                else:
+                    p._is_sharded = False
+                    self.numel_padded_per_param.append(0)
+                    continue
             p._is_sharded = True
 
             # Replace p.data with the relevant shard.
@@ -766,7 +766,8 @@ class FullyShardedDataParallel(nn.Module):
         # TODO(anj): Use `copy_into_tensor` in order to provide a copy of the
         # parameters and not the actual parameters. Ideally we don't users to operate on
         # actual params.
-        self.ssd_buffer.from_disk(self.buffer_size)
+        if self.ssd_offload:
+            self.ssd_buffer.from_disk(self.buffer_size)
 
         return super().parameters(recurse=recurse)
 
@@ -784,7 +785,8 @@ class FullyShardedDataParallel(nn.Module):
         # TODO(anj): Use `copy_into_tensor` in order to provide a copy of the
         # parameters and not the actual parameters. Ideally we don't users to operate on
         # actual params.
-        self.ssd_buffer.from_disk(self.buffer_size)
+        if self.ssd_offload:
+            self.ssd_buffer.from_disk(self.buffer_size)
 
         named_param = super().named_parameters(*args, **kwargs)
         for name, param in named_param:
