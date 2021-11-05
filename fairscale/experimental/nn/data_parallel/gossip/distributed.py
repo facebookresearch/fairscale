@@ -284,7 +284,9 @@ class SlowMoDistributedDataParallel(Module):
 
         self.slowmo_memory_efficient = slowmo_memory_efficient
         self.slowmo_num_shards = min(self.process_world_size, slowmo_num_shards) if self.slowmo_memory_efficient else 1
-        self.is_computing_slowmo = self.process_rank < self.slowmo_num_shards if self.slowmo_memory_efficient else True
+        self.is_current_node_a_slowmo_shard = (
+            self.process_rank < self.slowmo_num_shards if self.slowmo_memory_efficient else True
+        )
 
         self.nprocs_per_node_device = torch.tensor([self.nprocs_per_node], device=comm_device, dtype=first_param_dtype)
 
@@ -660,7 +662,7 @@ class SlowMoDistributedDataParallel(Module):
 
         self.world_portion_length = (total_elements + self.slowmo_num_shards - 1) // self.slowmo_num_shards
 
-        if not self.is_computing_slowmo:
+        if not self.is_current_node_a_slowmo_shard:
             return
 
         self.portion_start = self.process_rank * self.world_portion_length if self.slowmo_memory_efficient else 0
@@ -747,7 +749,7 @@ class SlowMoDistributedDataParallel(Module):
         if self.slowmo_memory_efficient:
             self._distributed_comm(optimizer, mode="gather")
 
-        if self.is_computing_slowmo:
+        if self.is_current_node_a_slowmo_shard:
             self._perform_local_optimization(optimizer)
 
         if self.slowmo_memory_efficient:
