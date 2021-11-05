@@ -93,10 +93,8 @@ class BaselineSoftmax(nn.Module):
         self.fp16 = self.fc.weight.dtype == torch.float16
         self.log = log
 
-    def forward(self, *input: Any, **kwargs: Any) -> Any:
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:  # type: ignore
         """ Forward function that computes softmax output with the input and target."""
-        assert kwargs == {}
-        input, target = input
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
         input, target = _reshape_inputs(input, target)
@@ -122,10 +120,8 @@ class BaselineSoftmaxNllLoss(BaselineSoftmax):
     def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 0, log: bool = True):
         super().__init__(proj_weight, tile_factor, log)
 
-    def forward(self, *input: Any, **kwargs: Any) -> Any:
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:  # type: ignore
         """Forward that directly compute the loss."""
-        assert kwargs == {}
-        input, target = input
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
         input, target = _reshape_inputs(input, target)
@@ -165,6 +161,9 @@ class GetMaxFunction(torch.autograd.Function):
         ctx.w_split_size = w_split_size
         ctx.args = {}
         assert split_dim == 0
+        # During forward, we use ``no_grad'' to avoid saving the activations.
+        # The activations will be recomputed in backward below and freed
+        # immediately after use. This saves the overall GPU peak memory of this layer.
         with torch.no_grad():
             return GetMaxFunction.get_max(i, w, kernel_obj.fp_max)
 
@@ -184,15 +183,21 @@ class GetMaxFunction(torch.autograd.Function):
         i, w = ctx.saved_tensors
         assert i.requires_grad
         assert w.requires_grad
+        # We use ``detach()'' to ensure the backward call below does not
+        # trigger backward computation that produced i and w here. Otherwise,
+        # the backward call below would trigger backward all the way to
+        # the batch input.
         i = i.detach().requires_grad_(True)
         w = w.detach().requires_grad_(True)
 
         # Forward + backward again.
         with torch.enable_grad():
+            # This saves the activations.
             maxs = GetMaxFunction.get_max(i, w, ctx.kernel_obj.fp_max)
+        # This will use the activations and free them immediately.
         torch.autograd.backward(maxs, *args)
 
-        # Accumulate the grads.
+        # Accumulate the computed gradients into the bigger weight tensor's gradient tensor.
         assert w.grad is not None
         with torch.no_grad():
             grads = torch.split(ctx.kernel_obj.proj_weight.grad, ctx.w_split_size)
@@ -350,7 +355,7 @@ class BackwardTrigger(nn.Module):
        This module takes a parameter as an input and create a linked parameter
        from a newly created trigger parameter.
 
-       The way to use:
+       The way to use it in a module's ``__init__'' and ``forward'' functions:
 
        ```
        def __init__():
@@ -373,7 +378,7 @@ class BackwardTrigger(nn.Module):
         self.trigger = nn.Parameter(torch.rand(1, dtype=linked_param.dtype))
         self.trigger._linked_param = linked_param
 
-    def forward(self, *input: Any, **kwargs: Any) -> Any:
+    def forward(self) -> torch.Tensor:  # type: ignore
         return BackwardTriggerFn.apply(self.trigger._linked_param, self.trigger)
 
 
@@ -421,13 +426,11 @@ class MemoryEfficientVocabOutput(nn.Module):  # AKA. MEVO
         # nlprob, then sum over all tokens.
         return -prob.sum()
 
-    def forward(self, *input: Any, **kwargs: Any) -> Any:
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:  # type: ignore
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             cur_mem = round(torch.cuda.memory_allocated() / 1024 / 1024)
             mem = round(torch.cuda.max_memory_allocated() / 1024 / 1024)
             print("DEBUG cur, peak", cur_mem, mem)
-        assert kwargs == {}
-        input, target = input
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
         assert input.requires_grad
@@ -470,11 +473,11 @@ class MemoryEfficientVocabOutput(nn.Module):  # AKA. MEVO
                     s += _s
             assert s is not None
             sums.append(s)  # (tokens_tile,)
-        sums = torch.cat(sums)  # (tokens,)
-        assert sums.shape == (tokens,)
+        sums_tensor = torch.cat(sums)  # (tokens,)
+        assert sums_tensor.shape == (tokens,)
 
         # select weights for targets
-        result = self.get_target_nlprob(input, self.proj_weight, target, maxs_tensor, sums)
+        result = self.get_target_nlprob(input, self.proj_weight, target, maxs_tensor, sums_tensor)
         if self.reduction == "mean":
             result /= tokens
         return result
