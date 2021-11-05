@@ -29,24 +29,43 @@ cpu_py39: &cpu_py39
   resource_class: large
 
 # Here are list of GPU images:
-#   https://circleci.com/docs/2.0/configuration-reference/#available-linux-gpu-images
-gpu: &gpu
+# https://circleci.com/docs/2.0/configuration-reference/#available-linux-gpu-images
+# We need to use multiple gpus for several jobs. the resource_class values are
+# available here T101565170
+# gpu.nvidia.small.multi = 2 gpus with 16 GB ram each
+# gpu.nvidia.medium.multi = 4 gpus with 16 GB ram each
+
+gpu_cu_11_1_small_multi_: &gpu_cu_11_1_small_multi
   environment:
-    CUDA_VERSION: "10.2"
-    CUDA_HOME: /usr/local/cuda-10.2
+    CUDA_VERSION: "11.1"
+    CUDA_HOME: /usr/local/cuda-11.1
   machine:
-    # This image actually has cuda-11.1 installed, but it doesn't seems to affect us
-    # using pytorch cu10 builds below.
-    image: ubuntu-1604-cuda-10.2:202012-01
+    image: ubuntu-1604-cuda-11.1:202012-01
   resource_class: gpu.nvidia.small.multi
 
-gpu_cu111: &gpu_cu111
+gpu_cu_11_1_medium_multi: &gpu_cu_11_1_medium_multi
+  environment:
+    CUDA_VERSION: "11.1"
+    CUDA_HOME: /usr/local/cuda-11.1
+  machine:
+    image: ubuntu-1604-cuda-11.1:202012-01
+  resource_class: gpu.nvidia.medium.multi
+
+gpu_cu_11_2_small_multi: &gpu_cu_11_2_small_multi
   environment:
     CUDA_VERSION: "11.2"
     CUDA_HOME: /usr/local/cuda-11.2
   machine:
     image: ubuntu-2004-cuda-11.2:202103-01
   resource_class: gpu.nvidia.small.multi
+
+gpu_cu_11_2_medium_multi: &gpu_cu_11_2_medium_multi
+  environment:
+    CUDA_VERSION: "11.2"
+    CUDA_HOME: /usr/local/cuda-11.2
+  machine:
+    image: ubuntu-2004-cuda-11.2:202103-01
+  resource_class: gpu.nvidia.medium.multi
 
 # -------------------------------------------------------------------------------------
 # Re-usable commands
@@ -192,7 +211,6 @@ run_oss_for_each: &run_oss_for_each
        name: Run OSS with Torch AMP and ForEach optmizer
        command: |
          python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp --multi_tensor_optim
-
 
 run_doc_build: &run_doc_build
    - run:
@@ -353,7 +371,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu
+    <<: *gpu_cu_11_1_medium_multi
 
     working_directory: ~/fairscale
 
@@ -396,7 +414,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu111
+    <<: *gpu_cu_11_1_small_multi
 
     working_directory: ~/fairscale
 
@@ -437,7 +455,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu111
+    <<: *gpu_cu_11_2_medium_multi
 
     working_directory: ~/fairscale
 
@@ -473,7 +491,7 @@ jobs:
           path: test-results
 
   benchmarks_1:
-    <<: *gpu
+    <<: *gpu_cu_11_1_small_multi
 
     working_directory: ~/fairscale
 
@@ -522,7 +540,7 @@ jobs:
           key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
   benchmarks_2:
-    <<: *gpu
+    <<: *gpu_cu_11_1_medium_multi
 
     working_directory: ~/fairscale
 
