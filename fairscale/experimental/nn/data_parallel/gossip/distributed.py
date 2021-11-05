@@ -598,9 +598,9 @@ class SlowMoDistributedDataParallel(Module):
         the base algorithm (SGP/ LocalSGD) and the slow momentum step. Since LocalSGD and the slow
         momentum step are not performed every iteration, it only performs those when needed.
 
-        It is recommended to call ``model.zero_grad()`` just before calling this function. This is because
-        ``model.zero_grad()`` frees up the memory occupied by the gradients, some of which may be reused
-        by this function.
+        It is recommended to call ``model.zero_grad(set_to_none=True)`` just before calling this function. This 
+        is because ``model.zero_grad(set_to_none=True)`` frees up the memory occupied by the gradients, some of which 
+        may be reused by this function.
 
         Args:
             optimizer (torch.optim.Optimizer): The optimizer being used for training the model

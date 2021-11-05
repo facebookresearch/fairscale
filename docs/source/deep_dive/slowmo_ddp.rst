@@ -76,5 +76,5 @@ Performance tips for ``SlowMoDistributedDataParallel``
 3. ``slowmo_memory_efficient`` should typically be used (this is the default behavior). It reduces memory usage by sharding the additional
    slow momentum optimizer's parameters in a `Zero-1`_ like manner.
 
-4. A call to ``model.zero_grad()`` should be made after ``optimizer.step()`` in order to save memory for the ``model.perform_slowmo()`` step. More details
-   about this can be found in the `documentation`_ for ``perform_slowmo()``.
+4. A call to ``model.zero_grad(set_to_none=True)`` should be made after ``optimizer.step()`` in order to save memory for the 
+   ``model.perform_slowmo()`` step. More details about this can be found in the `documentation`_ for ``perform_slowmo()``.
