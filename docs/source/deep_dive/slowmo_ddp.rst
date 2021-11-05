@@ -77,4 +77,5 @@ Performance tips for ``SlowMoDistributedDataParallel``
    slow momentum optimizer's parameters in a `Zero-1`_ like manner.
 
 4. A call to ``model.zero_grad(set_to_none=True)`` should be made after ``optimizer.step()`` in order to save memory for the 
-   ``model.perform_slowmo()`` step. More details about this can be found in the `documentation`_ for ``perform_slowmo()``.
+   ``model.perform_slowmo()`` step. More details about this can be found in the 
+   `documentation for perform_slowmo() <../api/experimental/nn/slowmo_ddp.html#:~:text=net.perform_slowmo(optimizer)-,perform_slowmo,-(optimizer%3A%20torch.optim>`_.
