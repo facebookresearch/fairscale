@@ -75,12 +75,12 @@ class BaselineSoftmax(nn.Module):
             The shared weight.
         tile_factor (int):
             Unused. It is here to make kernel init easier with MEVO.
-        log (bool):
+        log_softmax (bool):
             If True, use log_softmax instead of softmax.
 
     """
 
-    def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 0, log: bool = True):
+    def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 0, log_softmax: bool = True):
         super().__init__()
         out_dim, in_dim = proj_weight.shape
         assert "cuda" in str(proj_weight.device), "weight should be on GPU"
@@ -91,7 +91,7 @@ class BaselineSoftmax(nn.Module):
         self.fc.weight = proj_weight
         assert self.fc.weight.dtype in [torch.float16, torch.float32], self.fc.weight.dtype
         self.fp16 = self.fc.weight.dtype == torch.float16
-        self.log = log
+        self.log_softmax = log_softmax
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:  # type: ignore
         """ Forward function that computes softmax output with the input and target."""
@@ -102,7 +102,7 @@ class BaselineSoftmax(nn.Module):
             assert input.dtype == torch.float16
         x = self.fc(input)
         # Note that we do softmax in FP32, which is important for numerical stability.
-        if self.log:
+        if self.log_softmax:
             x = F.log_softmax(x, dim=-1, dtype=torch.float32)
         else:
             x = F.softmax(x, dim=-1, dtype=torch.float32)
@@ -115,10 +115,12 @@ class BaselineSoftmaxNllLoss(BaselineSoftmax):
 
         See BaselineSoftmax above. Constructor is the same. Only difference is in the
         forward function.
+
+        This class is used for testing and benchmarking.
     """
 
-    def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 0, log: bool = True):
-        super().__init__(proj_weight, tile_factor, log)
+    def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 0, log_softmax: bool = True):
+        super().__init__(proj_weight, tile_factor, log_softmax)
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:  # type: ignore
         """Forward that directly compute the loss."""
@@ -126,18 +128,22 @@ class BaselineSoftmaxNllLoss(BaselineSoftmax):
         assert isinstance(target, torch.Tensor)
         input, target = _reshape_inputs(input, target)
         x = super().forward(input, target)
-        x = F.nll_loss(x, target, reduction="sum")
-        return x
+        return F.nll_loss(x, target, reduction="sum")
 
 
 class GetMaxFunction(torch.autograd.Function):
     """Custom checkpointed function to get max-per-token from an input and a weight"""
 
     @staticmethod
-    def get_max(i: torch.Tensor, w: torch.Tensor, fp: bool) -> torch.Tensor:
-        """ i: (split-of-tokens, d_model), w: (split-of-vocabs, d_model)"""
+    def get_max(i: torch.Tensor, w: torch.Tensor, full_precision: bool) -> torch.Tensor:
+        """
+        Throughout this code:
+
+          i: input data with shape = (split-of-tokens, d_model)
+          w: weight data with shape = (split-of-vocabs, d_model)
+        """
         _m = torch.matmul(i, w.T)
-        if fp:
+        if full_precision:
             _m = _m.float()
         _m = _m.max(dim=1)[0]
         return _m
@@ -209,10 +215,9 @@ class GetSumFunction(torch.autograd.Function):
     """Custom checkpointed function to get sum-per-token from an input and a weight."""
 
     @staticmethod
-    def get_sum(i: torch.Tensor, w: torch.Tensor, maxs: torch.Tensor, fp: bool) -> torch.Tensor:
-        """ i: (split-of-tokens, d_model), w: (split-of-vocabs, d_model)"""
+    def get_sum(i: torch.Tensor, w: torch.Tensor, maxs: torch.Tensor, full_precision: bool) -> torch.Tensor:
         _s = torch.matmul(i, w.T)
-        if fp:
+        if full_precision:
             _s = _s.float()
         _s = (_s - maxs.reshape(-1, 1)).exp().sum(dim=1)
         return _s
@@ -277,13 +282,13 @@ class TargetScoreFunction(torch.autograd.Function):
     """Custom checkpointed function to compute the target score."""
 
     @staticmethod
-    def get_target_score(i: torch.Tensor, w: torch.Tensor, target: torch.Tensor, fp: bool) -> torch.Tensor:
+    def get_target_score(i: torch.Tensor, w: torch.Tensor, target: torch.Tensor, full_precision: bool) -> torch.Tensor:
         tokens, d_model = i.shape
         assert d_model == w.shape[1]
         tw = w.gather(dim=0, index=target.reshape(target.shape[0], 1).expand(target.shape[0], d_model))
         assert tw.shape == (tokens, d_model)
         target_score = i * tw
-        if fp:
+        if full_precision:
             target_score = target_score.float()
         target_score = target_score.sum(dim=1)  # sum into target scores with shape (tokens,)
         return target_score
@@ -399,6 +404,7 @@ class MemoryEfficientVocabOutput(nn.Module):  # AKA. MEVO
     def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 16, reduction: str = "sum"):
         super().__init__()
         self.proj_weight = proj_weight
+        # TODO (Min): these two factors doesn't have to be the same. More tuning can be done.
         self.tf_in, self.tf_w = tile_factor, tile_factor
         self.fp_max = True
         self.fp_sum = True  # This is esp. important when tensors are large. Otherwise, you get inf.
@@ -465,8 +471,8 @@ class MemoryEfficientVocabOutput(nn.Module):  # AKA. MEVO
         sums = []
         for idx, i in enumerate(inputs):
             s = None  # sum with (tokens_tile,) shape
-            for w_i, w in enumerate(weights):
-                _s = GetSumFunction.apply(i, w, maxs[idx], self, w_i, weight_split_size, split_dim)
+            for w_idx, w in enumerate(weights):
+                _s = GetSumFunction.apply(i, w, maxs[idx], self, w_idx, weight_split_size, split_dim)
                 if s is None:
                     s = _s
                 else:
