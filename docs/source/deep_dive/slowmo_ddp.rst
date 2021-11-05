@@ -38,13 +38,23 @@ Best practices for using ``SlowMoDistributedDataParallel``
 
 1. SlowMo will be useful in deep learning workloads which run on more than 2 nodes in clusters with a slow interconnect, eg Ethernet.
 
-2. SlowMo should be useful in your workload if the following condition holds (in case you are using SGP as the base algorithm, the value of ``localsgd_frequency`` can be plugged in as 2):
+2. SlowMo should be useful in your workload if the following condition holds:
 
    :math:`\textrm{time_taken_for_all_reduce_of_gradients} \times (1 - \frac{1}{\textrm{localsgd_frequency}} ) > \textrm{time_taken_for_backward_pass}`
 
-   In clusters with slower interconnect, ``time_taken_for_all_reduce_of_gradients`` will go up, leading to SlowMo being more useful. ``localsgd_frequency``
-   is also an important factor here. More details on varying that to affect performance are in tip 2 of
-   `Performance tips for SlowMoDistributedDataParallel`_.
+   Notes: 
+
+   * In case you are using SGP as the base algorithm, the value of ``localsgd_frequency`` can be plugged in as 2.
+
+   * The formula above is a simplified version of: 
+     :math:`\textrm{time_taken_for_all_reduce_of_gradients} > \textrm{time_taken_for_backward_pass} + \frac{\textrm{time_taken_for_all_reduce_of_gradients}}{\textrm{localsgd_frequency}}` 
+     The left and right hand side denote the time taken for the backward pass and communication combined for DDP and SlowMo DDP respectively. 
+     ``time_taken_for_backward_pass`` is extra on the right hand side because we do not overlap the backward pass with communication in the 
+     current implementation of SlowMo.
+
+   * In clusters with slower interconnect, ``time_taken_for_all_reduce_of_gradients`` will go up, leading to SlowMo being more useful. ``localsgd_frequency``
+     is also an important factor here. More details on varying that to affect performance are in tip 2 of
+     `Performance tips for SlowMoDistributedDataParallel`_.
 
 3. ``slowmo_momentum`` will need to be tuned for obtaining good model quality. A grid search across {0.0, 0.1, 0.2, 0.4, 0.6} should be good enough
    for tuning. This ``slowmo_momentum`` value holds consistent across multiple runs with similar settings.  When the number of nodes used is increased,
