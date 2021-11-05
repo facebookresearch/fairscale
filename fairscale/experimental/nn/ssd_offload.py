@@ -80,7 +80,6 @@ class StorageState(Enum):
     UNALLOCATED = auto()
     ON_DISK = auto()
     ON_CPU = auto()
-    ON_GPU = auto()
 
 
 class SsdTensorHandle(torch.Tensor):

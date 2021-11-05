@@ -156,9 +156,6 @@ def test_ssd_buffer_null_buffer():
         ssd_buf.to_disk()
 
         with pytest.raises(AssertionError):
-            ssd_buf.to_disk()
-
-        with pytest.raises(AssertionError):
             hdl_a = ssd_buf.insert(refa_tensor)
 
         with pytest.raises(AssertionError):
