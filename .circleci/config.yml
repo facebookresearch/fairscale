@@ -51,37 +51,37 @@ cpu_py39: &cpu_py39
 #     image: ubuntu-1604-cuda-11.1:202012-01
 #   resource_class: gpu.nvidia.medium.multi
 
-# gpu_cu_11_2_small_multi: &gpu_cu_11_2_small_multi
-#   environment:
-#     CUDA_VERSION: "11.2"
-#     CUDA_HOME: /usr/local/cuda-11.2
-#   machine:
-#     image: ubuntu-2004-cuda-11.2:202103-01
-#   resource_class: gpu.nvidia.small.multi
-
-# gpu_cu_11_2_medium_multi: &gpu_cu_11_2_medium_multi
-#   environment:
-#     CUDA_VERSION: "11.2"
-#     CUDA_HOME: /usr/local/cuda-11.2
-#   machine:
-#     image: ubuntu-2004-cuda-11.2:202103-01
-#   resource_class: gpu.nvidia.medium.multi
-
-gpu_cu_11_4_small_multi: &gpu_cu_11_4_small_multi
+gpu_cu_11_2_small_multi: &gpu_cu_11_2_small_multi
   environment:
-    CUDA_VERSION: "11.4"
-    CUDA_HOME: /usr/local/cuda-11.4
+    CUDA_VERSION: "11.2"
+    CUDA_HOME: /usr/local/cuda-11.2
   machine:
-    image: ubuntu-2004-cuda-11.4:202110-01
+    image: ubuntu-2004-cuda-11.2:202103-01
   resource_class: gpu.nvidia.small.multi
 
-gpu_cu_11_4_medium_multi: &gpu_cu_11_4_medium_multi
+gpu_cu_11_2_medium_multi: &gpu_cu_11_2_medium_multi
   environment:
-    CUDA_VERSION: "11.4"
-    CUDA_HOME: /usr/local/cuda-11.4
+    CUDA_VERSION: "11.2"
+    CUDA_HOME: /usr/local/cuda-11.2
   machine:
-    image: ubuntu-2004-cuda-11.4:202110-01
+    image: ubuntu-2004-cuda-11.2:202103-01
   resource_class: gpu.nvidia.medium.multi
+
+# gpu_cu_11_4_small_multi: &gpu_cu_11_4_small_multi
+#   environment:
+#     CUDA_VERSION: "11.4"
+#     CUDA_HOME: /usr/local/cuda-11.4
+#   machine:
+#     image: ubuntu-2004-cuda-11.4:202110-01
+#   resource_class: gpu.nvidia.small.multi
+
+# gpu_cu_11_4_medium_multi: &gpu_cu_11_4_medium_multi
+#   environment:
+#     CUDA_VERSION: "11.4"
+#     CUDA_HOME: /usr/local/cuda-11.4
+#   machine:
+#     image: ubuntu-2004-cuda-11.4:202110-01
+#   resource_class: gpu.nvidia.medium.multi
 
 # -------------------------------------------------------------------------------------
 # Re-usable commands
@@ -386,7 +386,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu_11_4_medium_multi
+    <<: *gpu_cu_11_2_medium_multi
 
     working_directory: ~/fairscale
 
@@ -404,14 +404,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py37-gpu-181-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py37-gpu-181-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_1_8_1
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py37-gpu-181-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py37-gpu-181-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -429,7 +429,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu_11_4_small_multi
+    <<: *gpu_cu_11_2_small_multi
 
     working_directory: ~/fairscale
 
@@ -447,14 +447,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py38-gpu-1100-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py38-gpu-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_1_10_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py38-gpu-1100-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py38-gpu-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -470,7 +470,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu_11_4_medium_multi
+    <<: *gpu_cu_11_2_medium_multi
 
     working_directory: ~/fairscale
 
@@ -488,14 +488,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py38-gpu-pytorch-nightly-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py38-gpu-pytorch-nightly-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_pytorch_nightly
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py38-gpu-pytorch-nightly-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py38-gpu-pytorch-nightly-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -506,7 +506,7 @@ jobs:
           path: test-results
 
   benchmarks_1:
-    <<: *gpu_cu_11_4_small_multi
+    <<: *gpu_cu_11_2_small_multi
 
     working_directory: ~/fairscale
 
@@ -523,7 +523,7 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py37-benchmarks-1100-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py37-benchmarks-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       # Cache the MNIST directory that contains benchmark data
       - restore_cache:
@@ -535,7 +535,7 @@ jobs:
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py37-benchmarks-1100-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py37-benchmarks-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -555,7 +555,7 @@ jobs:
           key: cache-key-benchmark-MNIST-{{ checksum "benchmarks/datasets/mnist.py"}}
 
   benchmarks_2:
-    <<: *gpu_cu_11_4_medium_multi
+    <<: *gpu_cu_11_2_medium_multi
 
     working_directory: ~/fairscale
 
@@ -572,7 +572,7 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py37-benchmarks-1100-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py37-benchmarks-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
 
       # Cache the MNIST directory that contains benchmark data
@@ -585,7 +585,7 @@ jobs:
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py37-benchmarks-1100-114-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py37-benchmarks-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -601,26 +601,26 @@ workflows:
   version: 2
   build:
     jobs:
-      # - cpu_tests_py37
-      # - cpu_tests_py38
-      # - cpu_tests_py39
-      # - gpu_tests_1_8_1:
-      #     test_list_file: tests/ci_test_list_1.txt
-      # - gpu_tests_1_10_0:
-      #     test_list_file: tests/ci_test_list_1.txt
-      # - gpu_tests_pytorch_nightly:
-      #     test_list_file: tests/ci_test_list_1.txt
-      # - gpu_tests_1_8_1:
-      #     test_list_file: tests/ci_test_list_2.txt
-      # - gpu_tests_1_10_0:
-      #     test_list_file: tests/ci_test_list_2.txt
-      # - gpu_tests_pytorch_nightly:
-      #     test_list_file: tests/ci_test_list_2.txt
-      # - gpu_tests_1_8_1:
-      #     test_list_file: tests/ci_test_list_3.txt
-      # - gpu_tests_1_10_0:
-      #     test_list_file: tests/ci_test_list_3.txt
-      # - gpu_tests_pytorch_nightly:
-      #     test_list_file: tests/ci_test_list_3.txt
+      - cpu_tests_py37
+      - cpu_tests_py38
+      - cpu_tests_py39
+      - gpu_tests_1_8_1:
+          test_list_file: tests/ci_test_list_1.txt
+      - gpu_tests_1_10_0:
+          test_list_file: tests/ci_test_list_1.txt
+      - gpu_tests_pytorch_nightly:
+          test_list_file: tests/ci_test_list_1.txt
+      - gpu_tests_1_8_1:
+          test_list_file: tests/ci_test_list_2.txt
+      - gpu_tests_1_10_0:
+          test_list_file: tests/ci_test_list_2.txt
+      - gpu_tests_pytorch_nightly:
+          test_list_file: tests/ci_test_list_2.txt
+      - gpu_tests_1_8_1:
+          test_list_file: tests/ci_test_list_3.txt
+      - gpu_tests_1_10_0:
+          test_list_file: tests/ci_test_list_3.txt
+      - gpu_tests_pytorch_nightly:
+          test_list_file: tests/ci_test_list_3.txt
       - benchmarks_1
-      # - benchmarks_2
+      - benchmarks_2
