@@ -601,26 +601,26 @@ workflows:
   version: 2
   build:
     jobs:
-      - cpu_tests_py37
-      - cpu_tests_py38
-      - cpu_tests_py39
-      - gpu_tests_1_8_1:
-          test_list_file: tests/ci_test_list_1.txt
-      - gpu_tests_1_10_0:
-          test_list_file: tests/ci_test_list_1.txt
-      - gpu_tests_pytorch_nightly:
-          test_list_file: tests/ci_test_list_1.txt
-      - gpu_tests_1_8_1:
-          test_list_file: tests/ci_test_list_2.txt
-      - gpu_tests_1_10_0:
-          test_list_file: tests/ci_test_list_2.txt
-      - gpu_tests_pytorch_nightly:
-          test_list_file: tests/ci_test_list_2.txt
-      - gpu_tests_1_8_1:
-          test_list_file: tests/ci_test_list_3.txt
-      - gpu_tests_1_10_0:
-          test_list_file: tests/ci_test_list_3.txt
-      - gpu_tests_pytorch_nightly:
-          test_list_file: tests/ci_test_list_3.txt
+      # - cpu_tests_py37
+      # - cpu_tests_py38
+      # - cpu_tests_py39
+      # - gpu_tests_1_8_1:
+      #     test_list_file: tests/ci_test_list_1.txt
+      # - gpu_tests_1_10_0:
+      #     test_list_file: tests/ci_test_list_1.txt
+      # - gpu_tests_pytorch_nightly:
+      #     test_list_file: tests/ci_test_list_1.txt
+      # - gpu_tests_1_8_1:
+      #     test_list_file: tests/ci_test_list_2.txt
+      # - gpu_tests_1_10_0:
+      #     test_list_file: tests/ci_test_list_2.txt
+      # - gpu_tests_pytorch_nightly:
+      #     test_list_file: tests/ci_test_list_2.txt
+      # - gpu_tests_1_8_1:
+      #     test_list_file: tests/ci_test_list_3.txt
+      # - gpu_tests_1_10_0:
+      #     test_list_file: tests/ci_test_list_3.txt
+      # - gpu_tests_pytorch_nightly:
+      #     test_list_file: tests/ci_test_list_3.txt
       - benchmarks_1
-      - benchmarks_2
+      # - benchmarks_2
