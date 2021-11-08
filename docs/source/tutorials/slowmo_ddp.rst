@@ -11,9 +11,9 @@ the same.
 
 If you have code that is setup to use Distributed Data Parallel, using SlowMo Distributed Data Parallel
 is simply replacing the DDP call with a call to
-``fairscale.experimental.nn.data_parallel.SlowMoDistributedDataParallel``, adding a
-``model.perform_slowmo(optimizer)`` call after ``optimizer.step()``, and moving the
-``model.zero_grad(set_to_none=True)`` to be after ``optimizer.step()``, as follows.
+``fairscale.experimental.nn.data_parallel.SlowMoDistributedDataParallel``, and adding a
+``model.perform_slowmo(optimizer)`` call after ``optimizer.step()`` -- preceded by
+``model.zero_grad(set_to_none=True)`` in order to reduce peak memory usage.
 The different points at which ``use_slowmo`` is used below help demonstrate these changes:
 
 .. code-block:: python
@@ -44,21 +44,19 @@ The different points at which ``use_slowmo`` is used below help demonstrate thes
         loss_ln = MyVeryRelevantLoss()
         optimizer = MyAmazingOptimizer()
 
-        # Any relevant training loop, with a line at the very end specific to SlowMoDDP. For example:
+        # Any relevant training loop, with a line at the very end specific to SlowMoDDP, e.g.:
         model.train()
         for e in range(epochs):
             for (data, target) in dataloader:
                 data, target = data.to(rank), target.to(rank)
                 # Train
-                if not use_slowmo:
-                    model.zero_grad()
                 outputs = model(data)
                 loss = loss_fn(outputs, target)
                 loss.backward()
                 optimizer.step()
+                model.zero_grad(set_to_none=use_slowmo)  # free memory for the perform_slowmo() call below
                 if use_slowmo:
-                    model.zero_grad(set_to_none=True)
-                    model.perform_slowmo(optimizer)  # SlowMoDDP specific
+                    model.perform_slowmo(optimizer)
 
 In the example above, when using SlowMoDDP, we are reducing the total communication between
 nodes by 3 times as the default ``localsgd_frequency`` is set to 3.
