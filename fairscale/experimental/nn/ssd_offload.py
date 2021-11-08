@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from enum import Enum, auto
 from functools import reduce
 import io
 import os
@@ -68,6 +69,19 @@ def read(input_tensor: torch.Tensor, filename: str, file_offset_bytes: int = 0) 
             assert data_read == chunk_end - chunk_start
 
 
+class StorageState(Enum):
+    """
+    Simple enum to indicate whether the tensor handle is pointing
+    to data on disk or memory. This is useful for asserting on 
+    whether the tensor is available for operations or if it needs
+    to be moved from disk to CPU or device.
+    """
+
+    UNALLOCATED = auto()
+    ON_DISK = auto()
+    ON_CPU = auto()
+
+
 class SsdTensorHandle(torch.Tensor):
     """
     This class extends from torch.Tensor and represents a Tensor which is backed by SSD storage.
@@ -104,6 +118,7 @@ class SsdTensorHandle(torch.Tensor):
         # valid if loaded to memory
         self.tensor: Optional[torch.Tensor] = None
         self.requires_grad = requires_grad
+        self.storage_state = StorageState.UNALLOCATED
 
     @classmethod
     def from_file(
@@ -112,6 +127,7 @@ class SsdTensorHandle(torch.Tensor):
         """Returns a new SsdTensorHandle from a file."""
         handle = cls(shape=shape, dtype=dtype, requires_grad=requires_grad)
         handle.filename = filename
+        handle.storage_state = StorageState.ON_DISK
         return handle
 
     @classmethod
@@ -119,6 +135,7 @@ class SsdTensorHandle(torch.Tensor):
         """Returns a new SsdTensorHandle from a tensor."""
         handle = cls(shape=tensor.shape, dtype=tensor.dtype, requires_grad=tensor.requires_grad)
         handle.tensor = tensor
+        handle.storage_state = StorageState.ON_CPU
         return handle
 
     def is_available(self) -> bool:
@@ -153,6 +170,7 @@ class SsdTensorHandle(torch.Tensor):
             result_tensor = torch.empty(size=self._shape, dtype=self._dtype, requires_grad=self.requires_grad)
             self.copy_into_tensor(result_tensor)
             self.tensor = result_tensor
+            self.storage_state = StorageState.ON_CPU
             return self.tensor
 
     def to_file(self, release_tensor_after_write: bool = True) -> None:
@@ -161,6 +179,7 @@ class SsdTensorHandle(torch.Tensor):
         write(self.tensor, self.filename, self.offset * self.tensor.element_size())
         if release_tensor_after_write:
             self.tensor = None
+            self.storage_state = StorageState.ON_DISK
 
     def copy_into_tensor(self, tensor: torch.Tensor) -> None:
         """Copies SsdTensorHandle's data into the given tensor.
@@ -225,11 +244,12 @@ class SsdBuffer:
         self.filename = filename
         self.offset = 0
         self.tensors: Dict[int, SsdTensorHandle] = {}
+        self.storage_state = StorageState.ON_CPU
 
     def allocate(self, num_elems: int) -> SsdTensorHandle:
         """Allocates a new tensor handle of size num_elems."""
         assert num_elems > 0
-        assert list(self.buffer.size()) != [1]
+        assert self.storage_state == StorageState.ON_CPU, self.storage_state
         assert self.can_alloc(num_elems)
 
         tensor = self.buffer.narrow(0, self.offset, num_elems)
@@ -244,7 +264,7 @@ class SsdBuffer:
 
     def insert(self, tensor: torch.Tensor) -> SsdTensorHandle:
         """Insert a new tensor by allocating memory and creating a corresponding handle."""
-        assert list(self.buffer.size()) != [1]
+        assert self.storage_state == StorageState.ON_CPU, self.storage_state
         # For the non sharded case, the tensor will not be flattened
         tensor = tensor.reshape(-1)
         assert self.buffer.dtype == tensor.dtype
@@ -255,7 +275,7 @@ class SsdBuffer:
     def can_alloc(self, num_elems: int) -> bool:
         """Verify that you can allocate a tensor within the bounds
         of the larger SsdBuffer memory buffer."""
-        assert list(self.buffer.size()) != [1]
+        assert self.storage_state == StorageState.ON_CPU, self.storage_state
         return (self.offset + num_elems) <= self.buffer.numel()
 
     def get_tensors(self) -> List[SsdTensorHandle]:
@@ -264,8 +284,11 @@ class SsdBuffer:
 
     def to_disk(self) -> None:
         """Writes all tensors backed by handles to disk."""
-        assert list(self.buffer.size()) != [1]
-        # TODO(anj): Add comment about why we use `narrow`.
+        if self.storage_state == StorageState.ON_DISK:
+            return
+        assert self.storage_state == StorageState.ON_CPU, self.storage_state
+        # We use `narrow` so that we write valid tensors that have been allocated
+        # as opposed to the entire SSD buffer.
         valid_data = self.buffer.narrow(0, 0, self.offset)
         write(valid_data, self.filename)
 
@@ -276,9 +299,13 @@ class SsdBuffer:
         # TODO(anj-s): Setting this to None does not result in GC picking
         # this reference up.
         self.buffer = torch.empty((1))
+        self.storage_state = StorageState.ON_DISK
 
     def from_disk(self, num_elems: int, dtype: torch.dtype = torch.float32) -> None:
         """Reads all tensors backed by handles into memory."""
+        if self.storage_state == StorageState.ON_CPU:
+            return
+        assert self.storage_state == StorageState.ON_DISK, self.storage_state
         if num_elems < self.offset:
             raise RuntimeError(
                 f"Attempted to load from file ssdbuffer of size: {self.offset} into a buffer that is of size: {num_elems}"
@@ -289,3 +316,5 @@ class SsdBuffer:
 
         for offset, t in self.tensors.items():
             t.point_to_tensor(self.buffer.narrow(0, t.offset, t._numel))
+
+        self.storage_state = StorageState.ON_CPU
