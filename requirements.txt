@@ -1,2 +1,2 @@
 # FairScale should only depends on torch, not things higher level than torch.
-torch >= 1.7.0
+torch >= 1.8.0
