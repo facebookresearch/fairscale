@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
           and gradient memory to be sharded despite being needed from different layers due to
           weight sharing. [#836]
 - [MEVO]: a custom layer to help big vocab trainings. Experimental. Docs is still TBD. [#840]
+- SlowMoDistributedDataParallel[feature][experimental] - This is a distributed training wrapper which should be useful on clusters with slow network interconnects (eg Ethernet). This improves on performance as compared to Distributed Data Parallel in such clusters. [#378]
 
 ## [0.4.1] - 2021-09-17
 ### Fixed

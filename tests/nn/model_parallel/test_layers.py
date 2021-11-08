@@ -298,22 +298,18 @@ def run_test_row_parallel_linear(rank, model_parallel_size, filename, filename_r
         print(" >> passed the test :-)")
 
 
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-
-
 def test_affine_weight():
-    spawn_for_all_world_sizes(run_test_initialize_affine_weight)
+    spawn_for_all_world_sizes(run_test_initialize_affine_weight, deterministic=True)
 
 
 def test_embedding():
-    spawn_for_all_world_sizes(run_test_parallel_embedding)
+    spawn_for_all_world_sizes(run_test_parallel_embedding, deterministic=True)
 
 
 def test_column_parallel():
-    spawn_for_all_world_sizes(run_test_column_parallel_linear)
+    spawn_for_all_world_sizes(run_test_column_parallel_linear, deterministic=True)
 
 
 @pytest.mark.skipif("OMPI_COMM_WORLD_RANK" not in os.environ, reason="only works on mpi")
 def test_row_parallel():
-    spawn_for_all_world_sizes(run_test_row_parallel_linear)
+    spawn_for_all_world_sizes(run_test_row_parallel_linear, deterministic=True)
