@@ -35,22 +35,6 @@ cpu_py39: &cpu_py39
 # gpu.nvidia.small.multi = 2 gpus with 16 GB ram each
 # gpu.nvidia.medium.multi = 4 gpus with 16 GB ram each
 
-# gpu_cu_11_1_small_multi_: &gpu_cu_11_1_small_multi
-#   environment:
-#     CUDA_VERSION: "11.1"
-#     CUDA_HOME: /usr/local/cuda-11.1
-#   machine:
-#     image: ubuntu-1604-cuda-11.1:202012-01
-#   resource_class: gpu.nvidia.small.multi
-
-# gpu_cu_11_1_medium_multi: &gpu_cu_11_1_medium_multi
-#   environment:
-#     CUDA_VERSION: "11.1"
-#     CUDA_HOME: /usr/local/cuda-11.1
-#   machine:
-#     image: ubuntu-1604-cuda-11.1:202012-01
-#   resource_class: gpu.nvidia.medium.multi
-
 gpu_cu_11_2_small_multi: &gpu_cu_11_2_small_multi
   environment:
     CUDA_VERSION: "11.2"
@@ -66,22 +50,6 @@ gpu_cu_11_2_medium_multi: &gpu_cu_11_2_medium_multi
   machine:
     image: ubuntu-2004-cuda-11.2:202103-01
   resource_class: gpu.nvidia.medium.multi
-
-# gpu_cu_11_4_small_multi: &gpu_cu_11_4_small_multi
-#   environment:
-#     CUDA_VERSION: "11.4"
-#     CUDA_HOME: /usr/local/cuda-11.4
-#   machine:
-#     image: ubuntu-2004-cuda-11.4:202110-01
-#   resource_class: gpu.nvidia.small.multi
-
-# gpu_cu_11_4_medium_multi: &gpu_cu_11_4_medium_multi
-#   environment:
-#     CUDA_VERSION: "11.4"
-#     CUDA_HOME: /usr/local/cuda-11.4
-#   machine:
-#     image: ubuntu-2004-cuda-11.4:202110-01
-#   resource_class: gpu.nvidia.medium.multi
 
 # -------------------------------------------------------------------------------------
 # Re-usable commands
