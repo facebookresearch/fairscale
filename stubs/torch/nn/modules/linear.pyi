@@ -4,6 +4,9 @@ from .module import Module
 from .. import Parameter
 from ... import Tensor
 
+import torch
+from typing import Union
+
 
 class Identity(Module):
 
@@ -20,7 +23,7 @@ class Linear(Module):
     weight: Parameter = ...
     bias: Parameter = ...
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = ...) -> None: ...
+    def __init__(self, in_features: int, out_features: int, bias: bool = ..., device:str = ..., dtype:Union[str, torch.dtype] = ...) -> None: ...
 
     def reset_parameters(self) -> None: ...
 

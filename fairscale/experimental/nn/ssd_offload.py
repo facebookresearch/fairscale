@@ -185,9 +185,9 @@ class SsdTensorHandle(torch.Tensor):
         """Copies SsdTensorHandle's data into the given tensor.
 
         If the tensor is in memory, this function copies the data
-        into the passed in tensor. Otherwise, it reads from file into tensor, 
+        into the passed in tensor. Otherwise, it reads from file into tensor,
         using the read() function.
-        This does not modify modify self.tensor unlike the to_tensor() 
+        This does not modify modify self.tensor unlike the to_tensor()
         function. This can be useful for calls like named_parameters() when
         the tensor is already offloaded to disk.
         """
@@ -202,11 +202,11 @@ class SsdTensorHandle(torch.Tensor):
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
-        """Intercepts all operations performed on this handle object. 
+        """Intercepts all operations performed on this handle object.
 
-        Before any operation, the tensor attribute is unwrapped from the handle 
-        and used in the operation. We maintain a reference to the tensor and its current 
-        versions to track if modifications have been made. If we detect changes to the 
+        Before any operation, the tensor attribute is unwrapped from the handle
+        and used in the operation. We maintain a refernce to the tensor and its current
+        versions to track if modifications have been made. If we detect changes to the
         tensor, we write it to the file maintained by the Handle.
         """
         ssd_tensor_handles = []
@@ -231,12 +231,12 @@ class SsdTensorHandle(torch.Tensor):
 
 class SsdBuffer:
     """
-    The SsdBuffer represents a single buffer containing a list of tensors. Each of the 
+    The SsdBuffer represents a single buffer containing a list of tensors. Each of the
     tensors are represented by a `SsdTensorHandle`.
 
     Args:
         num_elems (int): Dictates the size of the 1-D tensor.
-        dtype (torch.dtype): Dtype of the buffer. 
+        dtype (torch.dtype): Dtype of the buffer.
     """
 
     def __init__(self, num_elems: int, filename: str, dtype: torch.dtype = torch.float32) -> None:
@@ -273,7 +273,7 @@ class SsdBuffer:
         return handle
 
     def can_alloc(self, num_elems: int) -> bool:
-        """Verify that you can allocate a tensor within the bounds 
+        """Verify that you can allocate a tensor within the bounds
         of the larger SsdBuffer memory buffer."""
         assert self.storage_state == StorageState.ON_CPU, self.storage_state
         return (self.offset + num_elems) <= self.buffer.numel()
