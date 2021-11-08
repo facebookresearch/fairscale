@@ -22,6 +22,9 @@ FairScale was designed with the following values in mind:
 
 ## What's New:
 
+* November 2021 [fairscale 0.4.2 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.2).
+* We have a new experimental API called the LayerwiseMemoryTracker to help track, visualize and suggest fixes for memory issues occurring during the forward/backward pass of your models.
+* Introducing SlowMoDistributedDataParallel API, a distributed training wrapper that is useful on clusters with slow network interconnects (e.g. Ethernet).
 * September 2021 [`master` branch renamed to `main`](https://github.com/github/renaming).
 * September 2021 [fairscale 0.4.1 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.1).
 
