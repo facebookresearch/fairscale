@@ -260,14 +260,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py37-1100-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-cpu-py37-torch-1-10-0-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_1_10_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py37-1100-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-py37-torch-1-10-0-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -294,13 +294,13 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py38-1100-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-cpu-py38-torch-1-10-0-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
       - <<: *install_dep_1_10_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py38-1100-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-py38-torch-1-10-0-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -327,14 +327,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py39-1100-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-cpu-py39-torch-1-10-0-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_1_10_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py39-1100-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-cpu-py39-torch-1-10-0-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -354,7 +354,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu_11_2_medium_multi
+    <<: *gpu_cu_11_2_small_multi
 
     working_directory: ~/fairscale
 
@@ -372,14 +372,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py37-gpu-181-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py37-gpu-torch-1-8-1-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_1_8_1
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py37-gpu-181-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py37-gpu-torch-1-8-1-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -415,14 +415,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py38-gpu-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py38-gpu-torch-1-10-0-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_1_10_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py38-gpu-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py38-gpu-torch-1-10-0-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -438,7 +438,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu_11_2_medium_multi
+    <<: *gpu_cu_11_2_small_multi
 
     working_directory: ~/fairscale
 
@@ -456,14 +456,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py38-gpu-pytorch-nightly-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py38-gpu-pytorch-nightly-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_dep_pytorch_nightly
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py38-gpu-pytorch-nightly-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py38-gpu-pytorch-nightly-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -491,7 +491,7 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py37-benchmarks-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py37-benchmarks-torch-1-10-0-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       # Cache the MNIST directory that contains benchmark data
       - restore_cache:
@@ -503,7 +503,7 @@ jobs:
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py37-benchmarks-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py37-benchmarks-torch-1-10-0-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
@@ -540,7 +540,7 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py37-benchmarks-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+            - cache-key-py37-benchmarks-torch-1-10-0-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
 
       # Cache the MNIST directory that contains benchmark data
@@ -553,7 +553,7 @@ jobs:
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py37-benchmarks-1100-112-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
+          key: cache-key-py37-benchmarks-torch-1-10-0-cuda-11-2-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
 
