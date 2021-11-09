@@ -197,7 +197,10 @@ class Context:
         pass
 
 
-def save_rng_states(device: torch.device, rng_states: Deque[RNGStates],) -> None:
+def save_rng_states(
+    device: torch.device,
+    rng_states: Deque[RNGStates],
+) -> None:
     """:meth:`Checkpoint.forward` captures the current PyTorch's random number
     generator states at CPU and GPU to reuse in :meth:`Recompute.backward`.
 
@@ -217,7 +220,10 @@ def save_rng_states(device: torch.device, rng_states: Deque[RNGStates],) -> None
 
 
 @contextmanager
-def restore_rng_states(device: torch.device, rng_states: Deque[RNGStates],) -> Generator[None, None, None]:
+def restore_rng_states(
+    device: torch.device,
+    rng_states: Deque[RNGStates],
+) -> Generator[None, None, None]:
     """:meth:`Recompute.backward` restores the random number generator states
     captured by :func:`save_rng_states` within its context.
 
@@ -264,7 +270,10 @@ class Checkpoint(torch.autograd.Function):
         return output
 
     @staticmethod
-    def backward(ctx: Context, *grad_output: Tensor,) -> Tuple[Optional[Tensor], ...]:  # pragma: no cover
+    def backward(
+        ctx: Context,
+        *grad_output: Tensor,
+    ) -> Tuple[Optional[Tensor], ...]:  # pragma: no cover
         output, input_leaf = ctx.recomputed.pop()
 
         if isinstance(output, tuple):

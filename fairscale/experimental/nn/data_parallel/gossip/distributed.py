@@ -312,7 +312,7 @@ class SlowMoDistributedDataParallel(Module):
         self.logger.debug("Initialization of SlowMoDistributedDataParallel complete")
 
     def _initialize_logger(self, verbose: bool, process_rank: int) -> None:
-        """ Initializes the logger """
+        """Initializes the logger"""
         self.logger = logging.getLogger(__name__)
         if verbose:
             self.logger.setLevel(logging.DEBUG)
@@ -331,7 +331,7 @@ class SlowMoDistributedDataParallel(Module):
         master_group: Optional[torch.distributed.ProcessGroup],
         local_node_group: Optional[torch.distributed.ProcessGroup],
     ) -> Tuple[int, int]:
-        """ Creates the process groups required for the SlowMo implementation """
+        """Creates the process groups required for the SlowMo implementation"""
 
         self.local_rank = process_rank % self.nprocs_per_node
         assert (
@@ -392,7 +392,12 @@ class SlowMoDistributedDataParallel(Module):
 
         self.logger.debug("Initializing local process groups")
         for node in range(logical_world_size):
-            node_processes_ranks = list(range(node * self.nprocs_per_node, (node + 1) * self.nprocs_per_node,))
+            node_processes_ranks = list(
+                range(
+                    node * self.nprocs_per_node,
+                    (node + 1) * self.nprocs_per_node,
+                )
+            )
             # Process group to communicate between processes on this machine
             new_local_group = create_process_group(node_processes_ranks)
             if process_rank in node_processes_ranks:
@@ -401,24 +406,26 @@ class SlowMoDistributedDataParallel(Module):
         self.logger.debug("Initialization of local groups complete")
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Union[torch.Tensor, List[torch.Tensor]]:
-        """ Forward pass performed in parallel across all devices on node """
+        """Forward pass performed in parallel across all devices on node"""
         return self.module(*inputs, **kwargs)
 
     def _sync_params(self) -> None:
-        """ Synchronize parameters across devices (intra-node) """
+        """Synchronize parameters across devices (intra-node)"""
         if self.local_node_group is None:
             return
 
         # intra-node parameter sync
         params = cast(List[torch.Tensor], list(self.module.parameters()))
         communication_op = functools.partial(
-            dist.broadcast, src=self.logical_rank * self.nprocs_per_node, group=self.local_node_group,
+            dist.broadcast,
+            src=self.logical_rank * self.nprocs_per_node,
+            group=self.local_node_group,
         )
         communicate(params, communication_op)
         self.logger.debug("Intra-node param sync complete")
 
     def _sync_buffers(self) -> None:
-        """ Synchronize buffers across nodes """
+        """Synchronize buffers across nodes"""
         # module buffer sync
         if self.broadcast_buffers and len(self.module_buffers) > 0:
             # Synchronize buffers across processes.
@@ -432,17 +439,18 @@ class SlowMoDistributedDataParallel(Module):
         dist._broadcast_coalesced(process_group, tensors, buffer_size)
 
     def _create_event_recorder(self, event_name: str) -> EventRecorder:
-        """ Creates an cuda event recorder which helps in profiling """
+        """Creates an cuda event recorder which helps in profiling"""
         return create_event_recorder(event_name, dummy=not self.profile_mode)
 
     def _fp16_fp32_iterator(
         self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor]
     ) -> Iterable[Tuple[torch.Tensor, torch.Tensor]]:
-        """ Iterator for those fp16 parameters which have a fp32 copy """
+        """Iterator for those fp16 parameters which have a fp32 copy"""
         # Handle apex fp16 optimizer
         if hasattr(optimizer, "_amp_stash") and hasattr(optimizer._amp_stash, "fp16_groups"):
             for p_fp16_group, p_fp32_group in zip(
-                optimizer._amp_stash.fp16_groups, optimizer._amp_stash.fp32_from_fp16_groups,
+                optimizer._amp_stash.fp16_groups,
+                optimizer._amp_stash.fp32_from_fp16_groups,
             ):
                 for p_fp16, p_fp32 in zip(p_fp16_group, p_fp32_group):
                     yield p_fp16, p_fp32
@@ -594,12 +602,12 @@ class SlowMoDistributedDataParallel(Module):
                     ef1.copy_(p_fp32 - p_fp16.float())
 
     def perform_slowmo(self, optimizer: torch.optim.Optimizer, fp32_params: Optional[torch.Tensor] = None) -> None:
-        """ This is to be called after optimizer.step(). It performs the approximate averaging using
+        """This is to be called after optimizer.step(). It performs the approximate averaging using
         the base algorithm (SGP/ LocalSGD) and the slow momentum step. Since LocalSGD and the slow
         momentum step are not performed every iteration, it only performs those when needed.
 
-        It is recommended to call ``model.zero_grad(set_to_none=True)`` just before calling this function. This 
-        is because ``model.zero_grad(set_to_none=True)`` frees up the memory occupied by the gradients, some of which 
+        It is recommended to call ``model.zero_grad(set_to_none=True)`` just before calling this function. This
+        is because ``model.zero_grad(set_to_none=True)`` frees up the memory occupied by the gradients, some of which
         may be reused by this function.
 
         Args:
@@ -645,7 +653,7 @@ class SlowMoDistributedDataParallel(Module):
         self.num_updates += 1
 
     def _init_global_momentum_buffers(self, optimizer: torch.optim.Optimizer) -> None:
-        """ Initializes the slow momentum buffers """
+        """Initializes the slow momentum buffers"""
         self.global_momentum_buffers_initialized = True
 
         if not self.slowmo:
@@ -707,7 +715,7 @@ class SlowMoDistributedDataParallel(Module):
         self.global_momentum_buffer = torch.zeros_like(self.old_params).detach()
 
     def _distributed_comm(self, optimizer: torch.optim.Optimizer, mode: str) -> None:
-        """ Performs the communication needed for the efficient SlowMo implementation """
+        """Performs the communication needed for the efficient SlowMo implementation"""
         offset = 0
         slowmo_comm_lists: List[List[torch.Tensor]] = [[] for _ in range(self.slowmo_num_shards)]
         with torch.no_grad():
@@ -743,7 +751,7 @@ class SlowMoDistributedDataParallel(Module):
                 communicate(slowmo_comm_list, communication_op)
 
     def _global_momentum_step(self, optimizer: torch.optim.Optimizer) -> None:
-        """ Performs the slow momentum step """
+        """Performs the slow momentum step"""
         if not self.slowmo:
             return
 
@@ -760,7 +768,7 @@ class SlowMoDistributedDataParallel(Module):
             self._distributed_comm(optimizer, mode="scatter")
 
     def _perform_local_optimization(self, optimizer: torch.optim.Optimizer) -> None:
-        """ Performs the slow momentum on the local shard """
+        """Performs the slow momentum on the local shard"""
         assert self.portion_start is not None
 
         with torch.no_grad():
@@ -838,7 +846,7 @@ class SlowMoDistributedDataParallel(Module):
         self.logger.debug("making forward pre-hook")
 
         def hook(*unused: Any) -> None:
-            """ Query gossip queue and de-bias during forward pass """
+            """Query gossip queue and de-bias during forward pass"""
             # sync buffers before the forward pass
             self._sync_buffers()
 
@@ -869,7 +877,7 @@ class SlowMoDistributedDataParallel(Module):
         use_streams: bool = True,
         slowmo_sgp_average_params: bool = False,
     ) -> None:
-        """ Perform initialization for Stochastic Gradient Push base algorithm """
+        """Perform initialization for Stochastic Gradient Push base algorithm"""
 
         if graph is None:
             graph = NPDDEGraph(logical_rank, logical_world_size, self.nprocs_per_node, self.local_rank)
@@ -959,7 +967,7 @@ class SlowMoDistributedDataParallel(Module):
         super(SlowMoDistributedDataParallel, self).load_state_dict(cast(Dict[str, torch.Tensor], state_dict))
 
     def _sgp_ps_numerator(self) -> None:
-        """ Convert model params to ps-numerator """
+        """Convert model params to ps-numerator"""
         if not self.is_sgp_ps_numerator:
             if not self.lazy_mixing:
                 ps_weight = self.ps_weight
@@ -969,7 +977,7 @@ class SlowMoDistributedDataParallel(Module):
             self.is_sgp_ps_numerator = True
 
     def _sgp_unbias(self) -> None:
-        """ Convert model params to de-biased estimate """
+        """Convert model params to de-biased estimate"""
         if self.is_sgp_ps_numerator:
             if not self.lazy_mixing:
                 ps_weight = self.ps_weight
@@ -992,7 +1000,7 @@ class SlowMoDistributedDataParallel(Module):
         return self
 
     def _sgp_query_gossip_queue(self, non_blocking: bool = False) -> bool:
-        """ Check gossip-queue for push-sum residuals and update model """
+        """Check gossip-queue for push-sum residuals and update model"""
         if not self.gossip_enable:
             return False
 
@@ -1046,7 +1054,7 @@ class SlowMoDistributedDataParallel(Module):
         return False
 
     def _sgp_transfer_params(self, mix: bool = True) -> bool:
-        """ Transfers COPY of model parameters to gossip queue """
+        """Transfers COPY of model parameters to gossip queue"""
         if not self.gossip_enable or self.process_rank % self.nprocs_per_node != 0:
             return False
 
@@ -1130,7 +1138,7 @@ class SlowMoDistributedDataParallel(Module):
         gossip_ps_factor: torch.Tensor,
         gossip_stream: torch.cuda.Stream,
     ) -> None:
-        """ Gossip thread, which performs push-sum on model params """
+        """Gossip thread, which performs push-sum on model params"""
         logger = make_logger(dist_config["logical_rank"], dist_config["verbose"])
 
         gossip_params_by_dtype = group_by_dtype(gossip_params)

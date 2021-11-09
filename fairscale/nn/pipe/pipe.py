@@ -106,7 +106,9 @@ class BalanceError(ValueError):
 
 
 def split_module(
-    module: nn.Sequential, balance: Iterable[int], devices: List[torch.device],
+    module: nn.Sequential,
+    balance: Iterable[int],
+    devices: List[torch.device],
 ) -> Tuple[List[nn.Sequential], List[int], List[torch.device]]:
     """Splits a module into multiple partitions.
 
@@ -350,12 +352,12 @@ class Pipe(Module):
         raise MOVING_DENIED
 
     def to(self, *args: Any, **kwargs: Any) -> "Pipe":
-        """ Deny these usages:
-         - to(device[, dtype, non_blocking])
-         - to(tensor[, non_blocking])
+        """Deny these usages:
+        - to(device[, dtype, non_blocking])
+        - to(tensor[, non_blocking])
 
-         But allow this:
-         - to(dtype[, non_blocking])"""
+        But allow this:
+        - to(dtype[, non_blocking])"""
 
         if "device" in kwargs or "tensor" in kwargs:
             raise MOVING_DENIED

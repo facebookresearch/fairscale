@@ -111,7 +111,9 @@ def test_memory_tracking_ddp():
     with temp_files_ctx(num=2) as sync_files:
         world_size = 2
         mp.spawn(
-            _layer_memory_tracking_ddp_worker, (sync_files, world_size), nprocs=world_size,
+            _layer_memory_tracking_ddp_worker,
+            (sync_files, world_size),
+            nprocs=world_size,
         )
 
 
@@ -129,7 +131,13 @@ def _layer_memory_tracking_ddp_worker(gpu_id: int, sync_files: Tuple[str, str], 
     # Create a simple model
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
-    model = nn.Sequential(nn.Linear(10, 32), nn.ReLU(), nn.Linear(32, 32), nn.ReLU(), nn.Linear(32, 10),)
+    model = nn.Sequential(
+        nn.Linear(10, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 10),
+    )
     model = model.cuda(gpu_id)
     ddp_model = DistributedDataParallel(model, device_ids=[gpu_id])
 
@@ -156,7 +164,9 @@ def test_memory_tracking_fsdp():
     with temp_files_ctx(num=2) as sync_files:
         world_size = 2
         mp.spawn(
-            _layer_memory_tracking_fsdp_worker, (sync_files, world_size), nprocs=world_size,
+            _layer_memory_tracking_fsdp_worker,
+            (sync_files, world_size),
+            nprocs=world_size,
         )
 
 
@@ -181,9 +191,17 @@ def _layer_memory_tracking_fsdp_worker(gpu_id: int, sync_files: Tuple[str, str],
     model = nn.Sequential(
         nn.Linear(10, 10).cuda(gpu_id),
         nn.ReLU(),
-        FullyShardedDataParallel(nn.Linear(10, 10).cuda(gpu_id), flatten_parameters=False, process_group=group,),
+        FullyShardedDataParallel(
+            nn.Linear(10, 10).cuda(gpu_id),
+            flatten_parameters=False,
+            process_group=group,
+        ),
         nn.ReLU(),
-        FullyShardedDataParallel(nn.Linear(10, 10).cuda(gpu_id), flatten_parameters=True, process_group=group,),
+        FullyShardedDataParallel(
+            nn.Linear(10, 10).cuda(gpu_id),
+            flatten_parameters=True,
+            process_group=group,
+        ),
     )
     model = model.cuda(gpu_id)
     dist_model = FullyShardedDataParallel(model, flatten_parameters=False, process_group=group)

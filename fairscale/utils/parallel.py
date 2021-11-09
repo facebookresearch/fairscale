@@ -27,8 +27,8 @@ def chunk_and_pad(tensor: torch.Tensor, num_chunks: int) -> List[torch.Tensor]:
 
 def validate_process_group(device: torch.device, process_group: ProcessGroup) -> None:
     """Do a quick test in case user called FSDP without calling torch.cuda.set_device()
-       correctly. This can easily happen in cpu_offload case where the model resides on
-       the CPU.
+    correctly. This can easily happen in cpu_offload case where the model resides on
+    the CPU.
     """
     if not hasattr(process_group, "allgather"):
         # Likely a dummy pg for unit test, skip checking.
@@ -47,7 +47,7 @@ def validate_process_group(device: torch.device, process_group: ProcessGroup) ->
 
 def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
     """Call _specify_ddp_gpu_num for all pytorch SyncBN layers so that it
-       is happily running even without DDP. E.g. this is used by FSDP.
+    is happily running even without DDP. E.g. this is used by FSDP.
     """
     for layer in module.modules():
         if isinstance(layer, torch.nn.modules.SyncBatchNorm) and hasattr(layer, "_specify_ddp_gpu_num"):

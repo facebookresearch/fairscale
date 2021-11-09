@@ -448,7 +448,7 @@ class FullyShardedDataParallel(nn.Module):
         return self._fsdp_wrapped_module
 
     def append_shared_param(self, p: Parameter) -> None:
-        """ Add a param that's already owned by another FSDP wrapper.
+        """Add a param that's already owned by another FSDP wrapper.
 
             .. warning:: This is experimental!
 
@@ -1248,8 +1248,8 @@ class FullyShardedDataParallel(nn.Module):
                 m._reducer = self._reducer
 
     def _setup_output_hook_list(self) -> None:
-        """ set up a list to avoid registering pre-backward hooks
-            incorrectly.
+        """set up a list to avoid registering pre-backward hooks
+        incorrectly.
         """
         assert self._is_root, "This should only be called on the root"
         self._output_pre_backward_hook_registered = []

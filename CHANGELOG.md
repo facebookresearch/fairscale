@@ -16,11 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
           and gradient memory to be sharded despite being needed from different layers due to
           weight sharing. [#836]
 - OffloadModel: Fix node names to enable correct sharding in auto_shard.py [#830]
-- OSS: Relaxed speed and memory constraints on OSS golden data due to regression when we bumped up the  
+- OSS: Relaxed speed and memory constraints on OSS golden data due to regression when we bumped up the
        PyTorch version to 1.9. [#828] [#825]
 - Chore: Update PyTorch version that we run benchmarks with. [#823]
 - Chore: Update PyTorch version that we run test with. [#809]
-- OffloadModel: Extend auto_shard.py to allow dealing with conditionals automatically when tracing with 
+- OffloadModel: Extend auto_shard.py to allow dealing with conditionals automatically when tracing with
                 torch.fx. This will work for most cases except when the conditional is part of the root instance. [#817]
 - [MEVO]: a custom layer to help big vocab trainings. Experimental. Docs is still TBD. [#840]
 - SlowMoDistributedDataParallel[feature][experimental] - This is a distributed training wrapper which should be useful on clusters with slow network interconnects (eg Ethernet). This improves on performance as compared to Distributed Data Parallel in such clusters. [#378]

@@ -32,18 +32,18 @@ class MixingManager(ABC):
 
     @abstractmethod
     def is_uniform(self) -> bool:
-        """ Whether mixing weights are distributed uniformly over peers """
+        """Whether mixing weights are distributed uniformly over peers"""
         raise NotImplementedError
 
     @abstractmethod
     def get_mixing_weights(self, residual_adjusted: bool = True) -> Dict[Union[str, int], torch.Tensor]:
-        """ Create mixing weight dictionary using uniform allocation """
+        """Create mixing weight dictionary using uniform allocation"""
         raise NotImplementedError
 
 
 class UniformMixing(MixingManager):
     def get_mixing_weights(self, residual_adjusted: bool = True) -> Dict[Union[str, int], torch.Tensor]:
-        """ Create mixing weight dictionary using uniform allocation """
+        """Create mixing weight dictionary using uniform allocation"""
         mixing_weights: Dict[Union[str, int], torch.Tensor] = {}
         out_peers, _ = self.graph_manager.get_peers()
 

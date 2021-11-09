@@ -95,7 +95,10 @@ def is_recomputing() -> bool:
     return thread_local.is_recomputing
 
 
-def checkpoint_wrapper(module: nn.Module, offload_to_cpu: bool = False,) -> nn.Module:
+def checkpoint_wrapper(
+    module: nn.Module,
+    offload_to_cpu: bool = False,
+) -> nn.Module:
     """
     A friendlier wrapper for performing activation checkpointing.
 

@@ -30,7 +30,7 @@ class dist_backend(str, Enum):
 
 
 class Gossiper(object):
-    """ Generic gossip averaging object for multi-peer communication
+    """Generic gossip averaging object for multi-peer communication
 
     Args:
         msg (torch.Tensor): message used to initialize recv buffer
@@ -121,7 +121,7 @@ class Gossiper(object):
         self._graph_manager.peers_per_itr = v
 
     def refresh_peers_(self, rotate: Optional[bool] = None) -> None:
-        """ Update in- and out-peers """
+        """Update in- and out-peers"""
         if rotate is None:
             rotate = self._graph_manager.is_dynamic_graph()
         # cannot cycle peers in a static graph
@@ -129,11 +129,11 @@ class Gossiper(object):
         self.out_edges, self.in_edges = self._graph_manager.get_edges(rotate)
 
     def refresh_mixing_weights_(self, residual_adjusted: bool = False) -> None:
-        """ Update mixing-matrix weights """
+        """Update mixing-matrix weights"""
         self.mixing_weights = self._mixing_manager.get_mixing_weights(residual_adjusted)
 
     def mix_out_msg_(self, out_msg: torch.Tensor, ps_weight: torch.Tensor) -> Iterator[torch.Tensor]:
-        """ Returns a generator mixing messages on the fly """
+        """Returns a generator mixing messages on the fly"""
         self.refresh_mixing_weights_(residual_adjusted=True)
         self.ps_weight = ps_weight
 
@@ -153,14 +153,14 @@ class Gossiper(object):
                 yield out_msg.mul(weight.type(out_msg.dtype))  # type: ignore
 
     def clean_msg_buffers_(self) -> None:
-        """ Clean outgoing message buffer """
+        """Clean outgoing message buffer"""
         while len(self.out_msg_buffer) > 0:
             req, msg = self.out_msg_buffer.pop()
             req.wait()
             msg.set_()
 
     def parse_in_msg_buffer(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """ Parse in-msg buffer and return msg and ps-weight separately """
+        """Parse in-msg buffer and return msg and ps-weight separately"""
         msg = self.in_msg_buffer
         if not self.regular:
             return msg.narrow(0, 0, len(msg) - 1), msg[-1]
@@ -168,15 +168,15 @@ class Gossiper(object):
             return msg, self.ps_weight * self.peers_per_itr_device
 
     def mix(self, out_msg: torch.Tensor, ps_weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """ Single gossip step """
+        """Single gossip step"""
         raise NotImplementedError
 
 
 class PushSum(Gossiper):
-    """ 1-peer Push-Sum consensus averaging module """
+    """1-peer Push-Sum consensus averaging module"""
 
     def mix(self, out_msg: torch.Tensor, ps_weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """ Consensus averaging step """
+        """Consensus averaging step"""
         # out_msg must be on the correct device
         assert out_msg.device.type == self.device.type
         if self.logger is not None:
@@ -189,7 +189,12 @@ class PushSum(Gossiper):
         for out_edge in self.out_edges:
             msg = next(mixed_out_msgs)
             assert self.rank == out_edge.src
-            req = dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group, async_op=True,)
+            req = dist.broadcast(
+                tensor=msg,
+                src=out_edge.src,
+                group=out_edge.process_group,
+                async_op=True,
+            )
             self.out_msg_buffer.append((req, msg))
 
         # blocking recv w/ some code optimization to avoid buffer prep overhead
@@ -204,7 +209,9 @@ class PushSum(Gossiper):
 
             for in_edge in self.in_edges:
                 dist.broadcast(
-                    tensor=self.placeholder, src=in_edge.src, group=in_edge.process_group,
+                    tensor=self.placeholder,
+                    src=in_edge.src,
+                    group=in_edge.process_group,
                 )
                 self.in_msg_buffer.add_(self.placeholder)  # type: ignore
 
@@ -214,7 +221,7 @@ class PushSum(Gossiper):
 
 
 class PushPull(Gossiper):
-    """ Doubly-stochastic consensus averaging module """
+    """Doubly-stochastic consensus averaging module"""
 
     def mix(self, out_msg: torch.Tensor, ps_weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # out_msg must be on the correct device
@@ -232,11 +239,15 @@ class PushPull(Gossiper):
             if not self.passive:
                 dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
                 dist.broadcast(
-                    tensor=self.in_msg_buffer, src=in_edge.src, group=in_edge.process_group,
+                    tensor=self.in_msg_buffer,
+                    src=in_edge.src,
+                    group=in_edge.process_group,
                 )
             else:
                 dist.broadcast(
-                    tensor=self.in_msg_buffer, src=in_edge.src, group=in_edge.process_group,
+                    tensor=self.in_msg_buffer,
+                    src=in_edge.src,
+                    group=in_edge.process_group,
                 )
                 dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
 
@@ -251,11 +262,15 @@ class PushPull(Gossiper):
                 if not self.passive:
                     dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
                     dist.broadcast(
-                        tensor=self.placeholder, src=in_edge.src, group=in_edge.process_group,
+                        tensor=self.placeholder,
+                        src=in_edge.src,
+                        group=in_edge.process_group,
                     )
                 else:
                     dist.broadcast(
-                        tensor=self.placeholder, src=in_edge.src, group=in_edge.process_group,
+                        tensor=self.placeholder,
+                        src=in_edge.src,
+                        group=in_edge.process_group,
                     )
                     dist.broadcast(tensor=msg, src=out_edge.src, group=out_edge.process_group)
                 self.in_msg_buffer.add_(self.placeholder)  # type: ignore

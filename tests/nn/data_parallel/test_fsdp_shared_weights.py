@@ -93,7 +93,9 @@ def test_shared_weight(temp_files, outer_flat, inner_flat, sharing):
 
     # Run FSDP
     mp.spawn(
-        _dist_worker, (world_size, temp_files, outer_flat, inner_flat, sharing), nprocs=world_size,
+        _dist_worker,
+        (world_size, temp_files, outer_flat, inner_flat, sharing),
+        nprocs=world_size,
     )
 
 

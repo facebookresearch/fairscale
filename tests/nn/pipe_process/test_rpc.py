@@ -72,7 +72,11 @@ def check_pipe_against_reference(balance, model_constructor, checkpoint="except_
     reference_model = nn.Sequential(*reference_model).cuda()
 
     pipe = PipeRPCWrapper(
-        model, balance, input_device=torch.cuda.current_device(), worker_map=get_worker_map(), checkpoint=checkpoint,
+        model,
+        balance,
+        input_device=torch.cuda.current_device(),
+        worker_map=get_worker_map(),
+        checkpoint=checkpoint,
     )
 
     pipe.foreach_worker(register_optimizer, include_self=True)
@@ -118,7 +122,8 @@ def rpc_optimizer():
         return [reused_1, nn.ReLU(), reused_1, nn.ReLU(), reused_1, nn.ReLU()]
 
     check_pipe_against_reference(
-        [2, 2, 2], lambda: [nn.Linear(10, 10), nn.ReLU(), nn.Linear(10, 10), nn.ReLU(), nn.Linear(10, 10), nn.ReLU()],
+        [2, 2, 2],
+        lambda: [nn.Linear(10, 10), nn.ReLU(), nn.Linear(10, 10), nn.ReLU(), nn.Linear(10, 10), nn.ReLU()],
     )
     check_pipe_against_reference([2, 1, 1], model_with_reuse)
 
