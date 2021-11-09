@@ -15,16 +15,19 @@ orbs:
 # -------------------------------------------------------------------------------------
 cpu_py37: &cpu_py37
   docker:
+    # python version 3.7.12
     - image: circleci/python:3.7
   resource_class: large
 
 cpu_py38: &cpu_py38
   docker:
+    # python version 3.8.12
     - image: circleci/python:3.8
   resource_class: large
 
 cpu_py39: &cpu_py39
   docker:
+    # python version 3.9.7
     - image: circleci/python:3.9
   resource_class: large
 
