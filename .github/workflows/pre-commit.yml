@@ -18,9 +18,3 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - uses: pre-commit/action@v2.0.3
-      with:
-        extra_args:
-          mypy --no-strict-optional --ignore-missing-imports --scripts-are-modules --pretty
-          flake8 --show-source --statistics
-          black --check
-          isort --check
