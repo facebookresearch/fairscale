@@ -138,7 +138,7 @@ run_mypy: &run_mypy
    - run:
        name: Run type-checking (mypy)
        command: |
-         mypy --ignore-missing-imports --scripts-are-modules --pretty .
+         mypy --no-strict-optional --ignore-missing-imports --scripts-are-modules --pretty .
 
 run_flake8: &run_flake8
   - run:
