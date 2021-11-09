@@ -438,7 +438,7 @@ jobs:
         type: string
         default: "/dev/non_exist"
 
-    <<: *gpu_cu_11_2_small_multi
+    <<: *gpu_cu_11_2_medium_multi
 
     working_directory: ~/fairscale
 
