@@ -225,9 +225,9 @@ def _distributed_worker(
         long.append(e2["gpu_total"])  # all gather should happen and prolong the cpu-gpu wait.
     for s in short:
         for l in long:
-            # 10X longer is a safe margin, since the time is around 100X longer
+            # 5X longer is a safe margin, since the time is around 100X longer
             # when there is work on GPU vs. no work.
-            assert s * 10 < l, f"{s} * 10 < {l} in " + debug_string
+            assert s * 5 < l, f"{s} * 5 < {l} in " + debug_string
 
     # Check the GPU overlapping when there is all-gather.
     if world_size > 1:
