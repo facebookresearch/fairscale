@@ -133,30 +133,6 @@ install_repo: &install_repo
         # Test import.
         python -c 'import sys; sys.path = sys.path[1:]; import fairscale'
 
-run_isort: &run_isort
-   - run:
-       name: Run Linter (isort)
-       command: |
-         isort . --check
-
-run_black: &run_black
-   - run:
-       name: Run Linter (black)
-       command: |
-         black --check .
-
-run_mypy: &run_mypy
-   - run:
-       name: Run type-checking (mypy)
-       command: |
-         mypy --no-strict-optional --ignore-missing-imports --scripts-are-modules --pretty .
-
-run_flake8: &run_flake8
-  - run:
-      name: Run Linter (flake8)
-      command: |
-        flake8 --show-source --statistics
-
 check_test_list: &check_test_list
   - run:
       name: Verify that unit test list files are correct
@@ -281,11 +257,6 @@ jobs:
           key: cache-key-cpu-py37-torch-1-10-0-{{ .Environment.CACHE_VERSION }}-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
-
-      - <<: *run_isort
-      - <<: *run_black
-      - <<: *run_mypy
-      - <<: *run_flake8
       - <<: *run_unittests
       - <<: *run_doc_build
 
@@ -314,11 +285,6 @@ jobs:
           key: cache-key-cpu-py38-torch-1-10-0-{{ .Environment.CACHE_VERSION }}-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
-
-      - <<: *run_isort
-      - <<: *run_black
-      - <<: *run_mypy
-      - <<: *run_flake8
       - <<: *run_unittests
       - <<: *run_doc_build
 
@@ -348,11 +314,6 @@ jobs:
           key: cache-key-cpu-py39-torch-1-10-0-{{ .Environment.CACHE_VERSION }}-{{ checksum "setup.py"}}-{{ checksum "requirements-test.txt"}}
 
       - <<: *install_repo
-
-      - <<: *run_isort
-      - <<: *run_black
-      - <<: *run_mypy
-      - <<: *run_flake8
       - <<: *run_unittests
       - <<: *run_doc_build
 
