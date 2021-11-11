@@ -22,7 +22,7 @@ def get_cuda_mem():
     return torch.cuda.memory_allocated()
 
 
-@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestMemory(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_memory(self, config):

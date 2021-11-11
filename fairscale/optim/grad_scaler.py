@@ -9,17 +9,20 @@ from typing import Any, Dict, List, Optional, Union
 import warnings
 
 import torch
+import torch.distributed as dist
 from torch.cuda import FloatTensor  # type: ignore
 from torch.cuda.amp import GradScaler as TorchGradScaler
 from torch.cuda.amp.common import amp_definitely_not_available
-import torch.distributed as dist
 from torch.optim import Optimizer
 from torch.optim.sgd import SGD
 
+from fairscale.utils import torch_version
 
 class _GeneralMultiDeviceReplicator(object):
     """
     Lazily serves copies of a tensor to requested devices.  Copies are cached per-device.
+    This class adds the cpu option to the _MultiDeviceReplicator class in PyTorch grad_scaler.py.
+   https://pytorch.org/docs/stable/_modules/torch/cuda/amp/grad_scaler.html#GradScaler
     """
 
     def __init__(self, master_tensor: torch.Tensor) -> None:
@@ -266,7 +269,9 @@ class ShardedGradScaler(TorchGradScaler):
         .. warning::
             Closure use is not currently supported.
 
-        Note: This is an exact copy of the step function in grad_scaler.py. If this copy is deleted then the unittest test_cpu_offload_and_cpu_grads fails. This is because the parent class step function calls the parent class unscale_ function which does not handle torch.distributed.all_reduce on cpu.
+        Note: This is an exact copy of the step function in grad_scaler.py. If this copy is deleted then the
+        unittest test_cpu_offload_and_cpu_grads fails. This is because the parent class step function calls
+        the parent class unscale_ function which does not handle torch.distributed.all_reduce on cpu.
         """
         if not self._enabled:
             return optimizer.step(*args, **kwargs)
@@ -301,6 +306,10 @@ class ShardedGradScaler(TorchGradScaler):
         return retval
 
     def _amp_update_scale_cpu_(self, found_inf):  # type: ignore
+        """
+        If found_inf is 1.0 (True), then scale is multiplied by backoff_factor and growth_tracker is set to zero.
+        Otherwise, scale is multiplied by the growth factor when the growth interval is reached.
+        """
         if found_inf.item() == 1.0:
             self._scale *= self._backoff_factor  # type: ignore
             self._growth_tracker = 0
@@ -367,14 +376,24 @@ class ShardedGradScaler(TorchGradScaler):
             if _scale.device.type == "cpu":
                 self._amp_update_scale_cpu_(found_inf_combined)  # type: ignore
             else:
-                torch._amp_update_scale_(  # type: ignore
-                    self._scale,
-                    self._growth_tracker,
-                    found_inf_combined,
-                    self._growth_factor,  # type: ignore
-                    self._backoff_factor,  # type: ignore
-                    self._growth_interval,  # type: ignore
-                )
+                if torch_version() >= (1, 9, 0):
+                      torch._amp_update_scale_(  # type: ignore
+                        self._scale,
+                        self._growth_tracker,
+                        found_inf_combined,
+                        self._growth_factor,  # type: ignore
+                        self._backoff_factor,  # type: ignore
+                        self._growth_interval,  # type: ignore
+                    )
+                elif torch_version() >= (1, 8, 0) and torch_version() < (1, 9, 0):
+                    self._scale = torch._amp_update_scale(  # type: ignore
+                        self._growth_tracker,
+                        _scale,
+                        found_inf_combined,
+                        self._growth_factor,  # type: ignore
+                        self._backoff_factor,  # type: ignore
+                        self._growth_interval,  # type: ignore
+                    )
 
         # To prepare for next iteration, clear the data collected from optimizers this iteration.
         self._per_optimizer_states = defaultdict(_refresh_per_optimizer_state)

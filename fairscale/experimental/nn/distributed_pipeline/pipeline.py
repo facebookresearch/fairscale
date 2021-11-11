@@ -21,8 +21,8 @@ Device = Union[torch.device, int, str]
 
 
 def check_pytorch_version() -> None:
-    if torch_version() < (1, 9, 0):
-        raise Exception("DistributedPipeline requires PyTorch version 1.9 or higher")
+    if torch_version() < (1, 8, 0):
+        raise Exception("DistributedPipeline requires PyTorch version 1.8 or higher")
 
 
 MOVING_DENIED = TypeError(

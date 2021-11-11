@@ -30,7 +30,7 @@ from fairscale.utils.testing import (
     spawn_for_all_world_sizes,
 )
 
-if torch_version() >= (1, 9, 0):
+if torch_version() >= (1, 8, 0):
     from fairscale.optim.grad_scaler import ShardedGradScaler
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
@@ -76,7 +76,6 @@ class DistributedTest(unittest.TestCase):
             scaler.update()
         if hasattr(model, "assert_idle"):
             model.assert_idle()
-            # optim.step()
         if isinstance(model, FullyShardedDataParallel):
             model.assert_state(TrainingState.IDLE)
         return loss.detach()
@@ -276,7 +275,7 @@ def rename_test(testcase_func, param_num, param):
     return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
 
 
-@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
+# @pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestComparisonToPyTorchDDP(DistributedTest):
     """
     Compare losses and parameter values after several updates when using
@@ -493,7 +492,7 @@ class TestSerialization(DistributedTest):
         optim.step()
 
 
-@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestHooks(DistributedTest):
     # Feel free to modify these tests as the implementation changes.
     # They aspire to make sure that backward hooks are registered and used
@@ -577,7 +576,7 @@ class TestNoGrad(DistributedTest):
         assert objects_are_equal(ref_output, no_grad_output, raise_exception=True)
 
 
-@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestModuleProperties(DistributedTest):
     @parameterized.expand([[{"flatten_parameters": False}], [{"flatten_parameters": True}]], name_func=rename_test)
     def test_named_parameters(self, config):

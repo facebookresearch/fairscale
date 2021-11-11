@@ -25,7 +25,7 @@ from .test_fsdp import (
 )
 
 
-@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestLocalStateDict(DistributedTest):
     @parameterized.expand([[True, True], [False, False]], name_func=rename_test)
     def test_load_local_state_dict(self, flatten_params, mixed_precision):
@@ -74,7 +74,7 @@ class TestLocalStateDict(DistributedTest):
             raise AssertionError(f"params {unchanged} not changed after training")
 
 
-@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestSaveLoadStateDict(DistributedTest):
     @parameterized.expand([[False], [True]], name_func=rename_test)
     def test_calling_state_dict_twice_mixed_precision(self, mixed_precision):

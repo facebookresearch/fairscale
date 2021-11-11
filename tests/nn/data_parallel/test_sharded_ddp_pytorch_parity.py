@@ -24,7 +24,7 @@ from fairscale.optim import OSS
 from fairscale.utils import torch_version
 from fairscale.utils.testing import check_same_model_params, skip_if_no_cuda, skip_if_single_gpu, temp_files_ctx
 
-if torch_version() >= (1, 9, 0):
+if torch_version() >= (1, 8, 0):
     from fairscale.optim.grad_scaler import ShardedGradScaler
 
 """
@@ -247,7 +247,7 @@ def test_ddp_parity(
     manual_reduction,
     multiple_fw,
 ):
-    if torch_version() < (1, 9, 0):
+    if torch_version() < (1, 8, 0):
         pytest.skip("pytorch version >= 1.9.0 required")
     if manual_reduction and change_train_graph:
         pytest.skip("Skipping changing model and grad accumulation combination, makes little sense")

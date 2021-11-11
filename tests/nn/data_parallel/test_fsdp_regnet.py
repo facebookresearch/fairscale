@@ -46,7 +46,7 @@ from fairscale.utils.testing import (
     torch_cuda_version,
 )
 
-if torch_version() >= (1, 9, 0):
+if torch_version() >= (1, 8, 0):
     from fairscale.optim.grad_scaler import ShardedGradScaler
 
 # Const test params.
