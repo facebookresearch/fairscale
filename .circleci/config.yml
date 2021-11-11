@@ -505,7 +505,7 @@ jobs:
       - run: nvidia-smi
 
       - setup_pyenv:
-          version: 3.7.0
+          version: 3.8.12
 
       - <<: *setup_venv
 
