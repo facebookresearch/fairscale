@@ -9,14 +9,15 @@ from typing import Any, Dict, List, Optional, Union
 import warnings
 
 import torch
-import torch.distributed as dist
 from torch.cuda import FloatTensor  # type: ignore
 from torch.cuda.amp import GradScaler as TorchGradScaler
 from torch.cuda.amp.common import amp_definitely_not_available
+import torch.distributed as dist
 from torch.optim import Optimizer
 from torch.optim.sgd import SGD
 
 from fairscale.utils import torch_version
+
 
 class _GeneralMultiDeviceReplicator(object):
     """
@@ -86,7 +87,7 @@ class ShardedGradScaler(TorchGradScaler):
             growth_interval=growth_interval,
             enabled=enabled,
         )
-        if enabled and amp_definitely_not_available():  # type: ignore
+        if enabled and amp_definitely_not_available():
             warnings.warn("torch.cuda.amp.GradScaler is enabled, but CUDA is not available.  Disabling.")
             self._enabled = False
         else:
@@ -377,7 +378,7 @@ class ShardedGradScaler(TorchGradScaler):
                 self._amp_update_scale_cpu_(found_inf_combined)  # type: ignore
             else:
                 if torch_version() >= (1, 9, 0):
-                      torch._amp_update_scale_(  # type: ignore
+                    torch._amp_update_scale_(  # type: ignore
                         self._scale,
                         self._growth_tracker,
                         found_inf_combined,
