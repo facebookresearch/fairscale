@@ -23,7 +23,7 @@ class _GeneralMultiDeviceReplicator(object):
     """
     Lazily serves copies of a tensor to requested devices.  Copies are cached per-device.
     This class adds the cpu option to the _MultiDeviceReplicator class in PyTorch grad_scaler.py.
-   https://pytorch.org/docs/stable/_modules/torch/cuda/amp/grad_scaler.html#GradScaler
+    https://pytorch.org/docs/stable/_modules/torch/cuda/amp/grad_scaler.html#GradScaler
     """
 
     def __init__(self, master_tensor: torch.Tensor) -> None:
@@ -57,7 +57,11 @@ def _refresh_per_optimizer_state() -> Dict:
 
 class GradScaler(TorchGradScaler):
     def _unscale_grads_(
-        self, optimizer: Optimizer, inv_scale: torch.Tensor, found_inf: torch.Tensor, allow_fp16: bool,
+        self,
+        optimizer: Optimizer,
+        inv_scale: torch.Tensor,
+        found_inf: torch.Tensor,
+        allow_fp16: bool,
     ) -> Dict[torch.device, torch.Tensor]:
         return super()._unscale_grads_(optimizer, inv_scale, found_inf, True)
 
@@ -200,11 +204,15 @@ class ShardedGradScaler(TorchGradScaler):
                 for grads in per_dtype_grads.values():
                     if grads[0].device.type == "cpu":
                         self._foreach_non_finite_check_and_unscale_cpu_(
-                            grads, per_device_found_inf.get(device), per_device_inv_scale.get(device),
+                            grads,
+                            per_device_found_inf.get(device),
+                            per_device_inv_scale.get(device),
                         )
                     else:
                         torch._amp_foreach_non_finite_check_and_unscale_(  # type: ignore
-                            grads, per_device_found_inf.get(device), per_device_inv_scale.get(device),
+                            grads,
+                            per_device_found_inf.get(device),
+                            per_device_inv_scale.get(device),
                         )
 
         return per_device_found_inf._per_device_tensors
@@ -351,13 +359,13 @@ class ShardedGradScaler(TorchGradScaler):
         if new_scale is not None:
             # Accept a new user-defined scale.
             if isinstance(new_scale, float):
-                self._scale.fill_(new_scale)  # type: ignore[union-attr]
+                self._scale.fill_(new_scale)
             else:
                 reason = "new_scale should be a float or a 1-element torch.cuda.FloatTensor with requires_grad=False."
                 assert isinstance(new_scale, torch.cuda.FloatTensor), reason  # type: ignore[attr-defined]
                 assert new_scale.numel() == 1, reason
                 assert new_scale.requires_grad is False, reason
-                self._scale.copy_(new_scale)  # type: ignore[union-attr]
+                self._scale.copy_(new_scale)
         else:
             # Consume shared inf/nan data collected from optimizers to update the scale.
             # If all found_inf tensors are on the same device as self._scale, this operation is asynchronous.
