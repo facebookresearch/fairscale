@@ -208,8 +208,21 @@ def get_world_sizes() -> List[int]:
     return [x for x in [1, 2, 4, 8] if x <= limit]
 
 
-def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_world_sizes(), args: Any = []) -> None:
+def test_runner(
+    rank: int, test_func: Callable, deterministic: bool = False, *args: List[Any], **kwargs: Dict[str, Any]
+) -> None:
+    # At this point we're in a new process, torch options need to be set again
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.manual_seed(1357)
 
+    test_func(rank, *args, **kwargs)
+
+
+def spawn_for_all_world_sizes(
+    test_func: Callable, world_sizes: List[int] = get_world_sizes(), args: Any = [], deterministic: bool = False
+) -> None:
     for world_size in world_sizes:
         _, filename = tempfile.mkstemp()
         _, filename_rpc = tempfile.mkstemp()
@@ -217,7 +230,12 @@ def spawn_for_all_world_sizes(test_func: Callable, world_sizes: List[int] = get_
         try:
             # (lefaudeux) Let mp handle the process joining, join=False and handling context has
             # been unstable in the past.
-            mp.spawn(test_func, args=(world_size, filename, filename_rpc, *args), nprocs=world_size, join=True)
+            mp.spawn(
+                test_runner,
+                args=(test_func, deterministic, world_size, filename, filename_rpc, *args),
+                nprocs=world_size,
+                join=True,
+            )
         finally:
             rmf(filename)
             rmf(filename_rpc)
@@ -239,8 +257,20 @@ def worker_process(
 
     initialize_model_parallel(1, world_size, **kwargs)
 
+    # Make sure that CUDA operations are repeatable
+    context = (
+        torch.backends.cudnn.flags(benchmark=False, deterministic=True)  # type: ignore
+        if torch.cuda.is_available() and hasattr(torch.backends.cudnn, "flags")
+        else contextlib.suppress()
+    )
+
+    if torch.cuda.is_available() and not hasattr(torch.backends.cudnn, "flags"):
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+
     try:
-        func(*args)
+        with context:
+            func(*args)
         teardown()
     except BaseException as e:
         logging.warning(f" Rank {rank}: {e}")
@@ -351,7 +381,11 @@ class _Block(Base):
         self.ln_1 = nn.LayerNorm(embed_dim)
         self.ln_2 = nn.LayerNorm(embed_dim)
         self.attn = nn.MultiheadAttention(embed_dim, num_heads)  # type: ignore
-        self.mlp = nn.Sequential(nn.Linear(embed_dim, embed_dim * 4), nn.GELU(), nn.Linear(embed_dim * 4, embed_dim),)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.GELU(),
+            nn.Linear(embed_dim * 4, embed_dim),
+        )
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
         x = inputs[0]
@@ -671,7 +705,7 @@ def in_temporary_directory() -> Generator:
 
 @contextlib.contextmanager
 def temp_files_ctx(num: int) -> Generator:
-    """ A context to get tempfiles and ensure they are cleaned up. """
+    """A context to get tempfiles and ensure they are cleaned up."""
     files = [tempfile.mkstemp()[1] for _ in range(num)]
 
     try:

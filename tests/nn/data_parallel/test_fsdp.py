@@ -90,7 +90,16 @@ class DistributedTest(unittest.TestCase):
 
     @classmethod
     def _test_identical_outputs(
-        cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
+        cls,
+        model_init_fn,
+        config,
+        rank,
+        group,
+        num_steps=2,
+        use_cuda=True,
+        lr=0.01,
+        ref_ddp_fn=None,
+        norm_type=2,
     ):
         if config.get("mixed_precision", False):
             autocast = True
@@ -272,7 +281,10 @@ CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([Tru
 
 
 def rename_test(testcase_func, param_num, param):
-    return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
+    return "%s_%s" % (
+        testcase_func.__name__,
+        parameterized.to_safe_name(str(param.args)),
+    )
 
 
 class TestComparisonToPyTorchDDP(DistributedTest):
@@ -380,7 +392,11 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def test_mixture_of_experts_grad_clip_breaks(self):
         config = {"mixed_precision": True}
         test_fn = functools.partial(
-            self._test_identical_outputs, MixtureOfExperts, config, ref_ddp_fn=self._dummy_ddp_fn, norm_type=2,
+            self._test_identical_outputs,
+            MixtureOfExperts,
+            config,
+            ref_ddp_fn=self._dummy_ddp_fn,
+            norm_type=2,
         )
         with self.assertRaises(Exception):
             spawn_and_init(test_fn)
@@ -393,7 +409,10 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def test_clip_norm_transformer(self, norm_type):
         config = {"mixed_precision": True}
         test_fn = functools.partial(
-            self._test_identical_outputs, TransformerWithSharedParams, config, norm_type=norm_type,
+            self._test_identical_outputs,
+            TransformerWithSharedParams,
+            config,
+            norm_type=norm_type,
         )
         spawn_and_init(test_fn)
 
@@ -602,7 +621,11 @@ class TransformerWithSharedParams(nn.Module):
         assert d_vocab >= 12  # we use torch.arange(12) as input
         self.embed_tokens = nn.Embedding(d_vocab, d_model)
         self.transformer = nn.Transformer(
-            d_model=d_model, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=8, dropout=0.1,
+            d_model=d_model,
+            num_encoder_layers=2,
+            num_decoder_layers=2,
+            dim_feedforward=8,
+            dropout=0.1,
         )
         self.output_proj = nn.Linear(d_model, d_vocab)
 
@@ -651,7 +674,12 @@ class NestedWrappedModule(nn.Module):
         torch.manual_seed(0)  # keep everything deterministic
         self.module = nn.Sequential(
             nn.Linear(8, 4),
-            _maybe_wrap(nn.Sequential(_maybe_wrap(nn.Linear(4, 16)), nn.Linear(16, 16),)),
+            _maybe_wrap(
+                nn.Sequential(
+                    _maybe_wrap(nn.Linear(4, 16)),
+                    nn.Linear(16, 16),
+                )
+            ),
             _maybe_wrap(nn.Linear(16, 4)),
             nn.Linear(4, 8),
         )

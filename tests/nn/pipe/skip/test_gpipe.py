@@ -76,7 +76,7 @@ def test_1to3(balance, checkpoint):
     loss = output.mean()
     loss.backward()
 
-    assert torch.allclose(output.norm(), torch.tensor(1039.0, device=out_device), atol=2e-1)
+    assert torch.allclose(output.norm(), torch.tensor(1039.0, device=out_device), atol=5e-1)
     assert torch.allclose(input.grad.norm(), torch.tensor(0.0004533053, device=in_device))
 
 

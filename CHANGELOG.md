@@ -4,15 +4,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## NEXT - TBD
+## [0.4.2] - 2021-11-08
 ### Fixed
 - FSDP: Fixed an pre-backward hook bug for certain type of models and FSDP config. [#833]
 
 ### Added
-- LayerwiseMemoryTracker[feature][experimental] - This is a new experimental tool to help track, visualize and suggest fix for memory issues occurring during the forward/backward pass of your models. [#808]
-- [FSDP]: limited support of shared weights between FSDP wrappers. This allows large parameter
+- FSDP: Add support for SSD offload for eval workloads. This is a new experimental feature and should be
+        used with caution.
+- LayerwiseMemoryTracker[feature][experimental]: This is a new experimental tool to help track, visualize and suggest fix for memory issues occurring during the forward/backward pass of your models. [#808]
+- FSDP: limited support of shared weights between FSDP wrappers. This allows large parameter
           and gradient memory to be sharded despite being needed from different layers due to
           weight sharing. [#836]
+- OffloadModel: Fix node names to enable correct sharding in auto_shard.py [#830]
+- OSS: Relaxed speed and memory constraints on OSS golden data due to regression when we bumped up the
+       PyTorch version to 1.9. [#828] [#825]
+- Chore: Update PyTorch version that we run benchmarks with. [#823]
+- Chore: Update PyTorch version that we run test with. [#809]
+- OffloadModel: Extend auto_shard.py to allow dealing with conditionals automatically when tracing with
+                torch.fx. This will work for most cases except when the conditional is part of the root instance. [#817]
+- [MEVO]: a custom layer to help big vocab trainings. Experimental. Docs is still TBD. [#840]
+- SlowMoDistributedDataParallel[feature][experimental] - This is a distributed training wrapper which should be useful on clusters with slow network interconnects (eg Ethernet). This improves on performance as compared to Distributed Data Parallel in such clusters. [#378]
 
 ## [0.4.1] - 2021-09-17
 ### Fixed

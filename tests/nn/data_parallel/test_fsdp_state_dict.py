@@ -230,17 +230,17 @@ class TestStateDictDeviceDtype(DistributedTest):
         autocast = fsdp_model.mixed_precision or pure_fp16
         self._train_for_several_steps(fsdp_model, 1, autocast)
 
-        sd = fsdp_model.state_dict()
+        state_dict = fsdp_model.state_dict()
 
-        sd_device = config.get("state_dict_device")
-        for k, v in sd.items():
-            if config["cpu_offload"] or (sd_device is not None and sd_device.type == "cpu"):
+        state_dict_device = config.get("state_dict_device")
+        for k, v in state_dict.items():
+            if config["cpu_offload"] or (state_dict_device is not None and state_dict_device.type == "cpu"):
                 assert v.device.type == "cpu", v.device.type
             else:
                 assert v.device.type == "cuda", v.device.type
 
         expected_dtype = torch.float16 if pure_fp16 else torch.float32
-        for k, v in sd.items():
+        for k, v in state_dict.items():
             if not torch.is_floating_point(v):
                 continue
             assert v.dtype == expected_dtype, f"{v.dtype} != {expected_dtype}"

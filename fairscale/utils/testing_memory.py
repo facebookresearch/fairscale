@@ -12,7 +12,7 @@ import torch
 
 
 def find_tensor_by_shape(target_shape: Tuple, only_param: bool = True) -> bool:
-    """ Find a tensor from the heap
+    """Find a tensor from the heap
 
     Args:
         target_shape (tuple):

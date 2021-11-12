@@ -81,7 +81,9 @@ class ResBlock(Module):
         self.bn = BatchNorm2d(width_out)
         self.f = Sequential(
             Sequential(  # block a
-                Conv2d(width_in, width_out, (1, 1), (1, 1), bias=False), BatchNorm2d(width_out), ReLU(_relu_inplace),
+                Conv2d(width_in, width_out, (1, 1), (1, 1), bias=False),
+                BatchNorm2d(width_out),
+                ReLU(_relu_inplace),
             ),
             Sequential(  # block b
                 Conv2d(width_out, width_out, (3, 3), (2, 2), (1, 1), groups=2, bias=False),

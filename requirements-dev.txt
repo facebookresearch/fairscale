@@ -2,4 +2,4 @@
 -r requirements.txt
 
 # For pre-commit hooks.
-pre-commit
+pre-commit >= 2.15.0

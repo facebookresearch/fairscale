@@ -37,12 +37,12 @@ if TYPE_CHECKING:
 
 
 class FlatParameter(nn.Parameter):
-    """ A parameter that is initialized from a list of parameters and can be
-        turned into a list of views as needed.
+    """A parameter that is initialized from a list of parameters and can be
+    turned into a list of views as needed.
     """
 
     def __new__(cls, params: Sequence[nn.Parameter], requires_grad: bool = True) -> "FlatParameter":
-        """ Make an object using the parent's __new__ function. """
+        """Make an object using the parent's __new__ function."""
 
         # A empty of non-list input doesn't make sense.
         if not isinstance(params, (list, tuple)) or len(params) == 0:
@@ -66,7 +66,7 @@ class FlatParameter(nn.Parameter):
         return super(FlatParameter, cls).__new__(cls, data, requires_grad=requires_grad)
 
     def __init__(self, params: Sequence[nn.Parameter], requires_grad: bool = True):
-        """ Initialize the _param_numels and _param_shapes lists. """
+        """Initialize the _param_numels and _param_shapes lists."""
         self._param_numels = [p.numel() for p in params]
         assert self.numel() <= sum(
             self._param_numels
@@ -78,7 +78,7 @@ class FlatParameter(nn.Parameter):
         self._shared_param_infos: List[Tuple[str, str, nn.Module, str, nn.Module, str]] = []
 
     def get_param_views(self, external_data: Optional[Tensor] = None) -> Iterator[Tensor]:
-        """ Return a generator of views that map to the original parameters. """
+        """Return a generator of views that map to the original parameters."""
         # Note, self.data could be sharded, so its numel is <= to the sum.
         assert self.data.numel() <= sum(
             self._param_numels
@@ -96,14 +96,14 @@ class FlatParameter(nn.Parameter):
         return names, self._param_shapes, self._param_numels
 
     def __setstate__(self, state: Tuple[Any, Any, Any, Any]) -> None:
-        """ Use by pickle to set the internal states. """
+        """Use by pickle to set the internal states."""
         (self._param_numels, self._param_shapes, self._param_infos, self._shared_param_infos) = state
         assert self.numel() <= sum(
             self._param_numels
         ), f"Incorrect pickling {self.numel()} vs. {sum(self._param_numels)}"
 
     def __reduce_ex__(self, proto: int) -> Tuple[Any, Any, Any]:
-        """ Support pickling between ranks. """
+        """Support pickling between ranks."""
         return (
             FlatParameter,  # Callable
             # Args to the callable above
@@ -228,15 +228,15 @@ class FlattenParamsWrapper(nn.Module):
 
     @property
     def module(self) -> Any:
-        """ Support fpw.module in case we are immitating DDP, which has .module
-            property to the underlying module.
+        """Support fpw.module in case we are immitating DDP, which has .module
+        property to the underlying module.
         """
         return self._fpw_module
 
     @property
     def flat_param(self) -> nn.Parameter:
-        """ We used to support only a single flat_param. This allows us to
-            be backward compatible.
+        """We used to support only a single flat_param. This allows us to
+        be backward compatible.
         """
         assert len(self.flat_params) == 1, "Incorrect access to flat_param"
         return self.flat_params[0]
@@ -246,7 +246,7 @@ class FlattenParamsWrapper(nn.Module):
     ) -> Tuple[
         List[nn.Parameter], List[Tuple[str, nn.Module, str]], List[Tuple[str, str, nn.Module, str, nn.Module, str]]
     ]:
-        """ Build metadata for need-to-be-flatten parameters and returns a list
+        """Build metadata for need-to-be-flatten parameters and returns a list
             contains the need-to-be-flatten parameters.
 
             This also returns param_infos and shared_param_infos, which
@@ -287,8 +287,8 @@ class FlattenParamsWrapper(nn.Module):
         return chain(*[p._shared_param_infos for p in self.flat_params])
 
     def _flatten_params(self, flat_params: List[FlatParameter]) -> None:
-        """ Flatten the managed parameters and replaced the original
-            attributes with views to the flat params.
+        """Flatten the managed parameters and replaced the original
+        attributes with views to the flat params.
         """
         assert not self.is_flattened
         self.is_flattened = True
@@ -309,8 +309,8 @@ class FlattenParamsWrapper(nn.Module):
         self._unflatten_params_as_views()
 
     def _unflatten_params(self, external_data: Optional[List[Optional[Tensor]]] = None) -> None:
-        """ Undo flattening and create separate parameters from the already flattened
-            self.flat_param or a user supplied external data.
+        """Undo flattening and create separate parameters from the already flattened
+        self.flat_param or a user supplied external data.
         """
         assert self.is_flattened or external_data is not None
         self.is_flattened = False
@@ -336,8 +336,8 @@ class FlattenParamsWrapper(nn.Module):
         self.flat_params = []
 
     def _unflatten_params_as_views(self) -> None:
-        """ Unlike ``_unflatten_params``, this function unflatten into views and keep
-            self.flat_param unchanged.
+        """Unlike ``_unflatten_params``, this function unflatten into views and keep
+        self.flat_param unchanged.
         """
         assert self.is_flattened
         ps = self.get_param_views()
@@ -459,7 +459,7 @@ class FlattenParamsWrapper(nn.Module):
         return self.module(*inputs, **kwinputs)
 
     def get_param_views(self, external_data_list: Optional[List[Optional[Tensor]]] = None) -> Iterator[Tensor]:
-        """ Used to get a generator over all views from a list of external data list. """
+        """Used to get a generator over all views from a list of external data list."""
         params = self.flat_params
         if external_data_list is None:
             external_data_list = [None] * len(params)

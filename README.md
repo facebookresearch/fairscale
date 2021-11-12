@@ -22,6 +22,9 @@ FairScale was designed with the following values in mind:
 
 ## What's New:
 
+* November 2021 [fairscale 0.4.2 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.2).
+* We have a new experimental API called the LayerwiseMemoryTracker to help track, visualize and suggest fixes for memory issues occurring during the forward/backward pass of your models.
+* Introducing SlowMoDistributedDataParallel API, a distributed training wrapper that is useful on clusters with slow network interconnects (e.g. Ethernet).
 * September 2021 [`master` branch renamed to `main`](https://github.com/github/renaming).
 * September 2021 [fairscale 0.4.1 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.1).
 
@@ -151,7 +154,12 @@ At a high level, we want ML researchers to:
 
 ## Testing
 
-We use circleci to test on PyTorch versions 1.7.1, 1.8.1 and 1.9.0. Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
+We use circleci to test FairScale with the following PyTorch versions (with CUDA 11.2):
+* the most recent PyTorch stable release
+* the most recent PyTorch LTS release
+* a recent PyTorch nightly release
+
+Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
 ## Contributors
 

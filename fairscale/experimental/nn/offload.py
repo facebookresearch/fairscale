@@ -80,7 +80,11 @@ class ModelShard(nn.Module):
     """
 
     def __init__(
-        self, cpu_model_shard: nn.Module, device: torch.device, offload_device: torch.device, index: int,
+        self,
+        cpu_model_shard: nn.Module,
+        device: torch.device,
+        offload_device: torch.device,
+        index: int,
     ):
         super().__init__()
         self.model_shard = cpu_model_shard
@@ -138,22 +142,22 @@ class ModelShard(nn.Module):
 
 class OffloadFunction(torch.autograd.Function):
     """
-     This Function enables checkpointing of intermediate activations at
-     shard boundaries by overriding the forward and backward pass of the nn.Module.
+    This Function enables checkpointing of intermediate activations at
+    shard boundaries by overriding the forward and backward pass of the nn.Module.
 
-     - In the FW pass, it drops parameters in the previous shard and
-     loads parameters for the next shard. No graph is constructed in the FW pass.
-     This enables us to offload intermediate activations present at the shard
-     boundaries.
+    - In the FW pass, it drops parameters in the previous shard and
+    loads parameters for the next shard. No graph is constructed in the FW pass.
+    This enables us to offload intermediate activations present at the shard
+    boundaries.
 
-     - In the BW pass, it does the reverse. We run the forward pass using the
-     saved intermediate activations and calculate gradients as needed.
-     The trade-off is latency vs memory when using activation checkpointing.
+    - In the BW pass, it does the reverse. We run the forward pass using the
+    saved intermediate activations and calculate gradients as needed.
+    The trade-off is latency vs memory when using activation checkpointing.
 
-     - Follows heavily from https://pytorch.org/docs/stable/_modules/torch/utils/checkpoint.html#checkpoint.
+    - Follows heavily from https://pytorch.org/docs/stable/_modules/torch/utils/checkpoint.html#checkpoint.
 
-     NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
-     """
+    NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
+    """
 
     @staticmethod
     @_conditional_amp_fwd_decorator  # type: ignore
@@ -303,14 +307,14 @@ class OffloadFunction(torch.autograd.Function):
 
 class ShardSyncLayer(torch.autograd.Function):
     """
-     The shard sync layer is a synchronization point between model shards.
-     - In the forward pass, it drops parameters in the previous shard and
-     loads parameters for the next shard.
-     - In the backward pass, it does the reverse.
-     It does not change or create any outputs at all, instead it just
-     forwards the input as the output.
-     NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
-     """
+    The shard sync layer is a synchronization point between model shards.
+    - In the forward pass, it drops parameters in the previous shard and
+    loads parameters for the next shard.
+    - In the backward pass, it does the reverse.
+    It does not change or create any outputs at all, instead it just
+    forwards the input as the output.
+    NOTE: see https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function
+    """
 
     @staticmethod
     @_conditional_amp_fwd_decorator  # type: ignore
@@ -457,17 +461,25 @@ class OffloadModel(nn.Module):
             # This is already sharded using the auto shard functinality.
             for i, m in enumerate(model):
                 self.model_slices.append(
-                    ModelShard(cpu_model_shard=m, device=device, offload_device=offload_device, index=i,)
+                    ModelShard(
+                        cpu_model_shard=m,
+                        device=device,
+                        offload_device=offload_device,
+                        index=i,
+                    )
                 )
         else:
             # Slice the model into roughly equivalent sequential shards.
-            splits = _split(model, num_slices)
+            splits = _split(model, num_slices)  # type: ignore
 
             for i, split in enumerate(splits):
                 # Add one model handling this slice
                 self.model_slices.append(
                     ModelShard(
-                        cpu_model_shard=nn.Sequential(*split), device=device, offload_device=offload_device, index=i,
+                        cpu_model_shard=nn.Sequential(*split),
+                        device=device,
+                        offload_device=offload_device,
+                        index=i,
                     )
                 )
 
