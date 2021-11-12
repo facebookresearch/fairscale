@@ -35,7 +35,8 @@ class TraceForwardEvent(NamedTuple):
     @classmethod
     def from_dict(cls, serialized: Dict[str, Any]) -> "TraceForwardEvent":
         return TraceForwardEvent(
-            memory_diff=serialized["memory_diff"], memory_activations=serialized["memory_activations"],
+            memory_diff=serialized["memory_diff"],
+            memory_activations=serialized["memory_activations"],
         )
 
 
@@ -410,7 +411,8 @@ class LayerwiseMemoryTracker:
                         all_gathered=self._last_all_gather_memory,
                         cumul_all_gathered=sum(self._cumul_all_gather_memory),
                         event=TraceForwardEvent(
-                            memory_diff=allocated - self._memory_pre_forward, memory_activations=activations,
+                            memory_diff=allocated - self._memory_pre_forward,
+                            memory_activations=activations,
                         ),
                     )
                 )
@@ -593,7 +595,9 @@ def suggest_checkpoint_location(
 
     # Then map it back to module names
     return SuggestedCheckpoints(
-        max_memory=max_memory, split_modules=[modules[i] for i in reset_indices], all_modules=modules,
+        max_memory=max_memory,
+        split_modules=[modules[i] for i in reset_indices],
+        all_modules=modules,
     )
 
 
@@ -609,7 +613,9 @@ def _assert_visualisation_library_installed() -> None:
 
 
 def compare_memory_traces_in_plot(
-    memory_traces_by_job: Dict[str, List[LayerMemoryTrace]], figsize: Tuple[int, int] = (16, 20), capture: bool = False,
+    memory_traces_by_job: Dict[str, List[LayerMemoryTrace]],
+    figsize: Tuple[int, int] = (16, 20),
+    capture: bool = False,
 ) -> Optional[Any]:
     """
     Create a plot of the memory allocation over time during the forward/backward
@@ -684,7 +690,7 @@ class _MemoryGraphCreator:
         ax.plot(x, y_forward, x, y_backward, label=job_name)
 
         max_index = np.argmax(allocated_memory)
-        max_trace = memory_traces[max_index]  # type: ignore
+        max_trace = memory_traces[max_index]
         max_module = ".".join([n for n in max_trace.module_name.split(".") if not n.startswith("_")])
         max_phase = "fwd" if max_trace.is_forward else "bwd"
         ax.set_ylim([None, max_trace.allocated * 1.1])
@@ -722,7 +728,7 @@ class _MemoryGraphCreator:
 
         # Adding the name of the layer with max cumulative all_gathered memory
         max_index = np.argmax(cumul_gathered_memory)
-        max_trace = memory_traces[max_index]  # type: ignore
+        max_trace = memory_traces[max_index]
         max_module = ".".join([n for n in max_trace.module_name.split(".") if not n.startswith("_")])
         ax.set_ylim([None, max_trace.cumul_all_gathered * 1.1])
         x_text, y_text = max(0, max_index * 0.8), max_trace.cumul_all_gathered * 1.04  # type: ignore

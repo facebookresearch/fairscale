@@ -100,11 +100,19 @@ def find_memory_used_by_model(model_class: Type[nn.Module], device: torch.device
 
 
 def _prepare_single_device_module(
-    rank, world_size, tempfile, devices: List[torch.device], slowmo_init_dict: Dict[Any, Any], global_batch_size: int,
+    rank,
+    world_size,
+    tempfile,
+    devices: List[torch.device],
+    slowmo_init_dict: Dict[Any, Any],
+    global_batch_size: int,
 ) -> Tuple[nn.Module, gossip.SlowMoDistributedDataParallel, torch.Tensor, torch.Tensor]:
     if not torch.distributed.is_initialized():
         torch.distributed.init_process_group(
-            "nccl", init_method=f"file://{tempfile}", rank=rank, world_size=world_size,
+            "nccl",
+            init_method=f"file://{tempfile}",
+            rank=rank,
+            world_size=world_size,
         )
     model = Net()
     slowmo_model = gossip.SlowMoDistributedDataParallel(
@@ -145,7 +153,9 @@ def run_test_slowmo_with_slowmo_freq_1(
         rank, world_size, tempfile, devices, slowmo_init_dict, global_batch_size
     )
     model_optimizer = torch.optim.SGD(
-        model.parameters(), lr=slowmo_model.slowmo_lr, momentum=slowmo_model.slowmo_momentum,
+        model.parameters(),
+        lr=slowmo_model.slowmo_lr,
+        momentum=slowmo_model.slowmo_momentum,
     )
     slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=1, momentum=0)
     slowmo_model._init_global_momentum_buffers(slowmo_model_optimizer)
@@ -261,7 +271,9 @@ def run_test_slowmo_with_slowmo_freq_ge_2(
     base_lr, base_momentum = 1, 0
     model_optimizer = torch.optim.SGD(model.parameters(), lr=base_lr, momentum=base_momentum)
     model_slow_momentum_optimizer = torch.optim.SGD(
-        model.parameters(), lr=slowmo_model.slowmo_lr, momentum=slowmo_model.slowmo_momentum,
+        model.parameters(),
+        lr=slowmo_model.slowmo_lr,
+        momentum=slowmo_model.slowmo_momentum,
     )
     slowmo_model_optimizer = torch.optim.SGD(slowmo_model.module.parameters(), lr=base_lr, momentum=base_momentum)
     slowmo_model._init_global_momentum_buffers(slowmo_model_optimizer)
@@ -329,7 +341,10 @@ def run_test_memory_usage_localsgd_with_slowmo(
 
     if not torch.distributed.is_initialized():
         torch.distributed.init_process_group(
-            "nccl", init_method=f"file://{tempfile}", rank=rank, world_size=world_size,
+            "nccl",
+            init_method=f"file://{tempfile}",
+            rank=rank,
+            world_size=world_size,
         )
     if use_gossip_data_parallel:
         model: nn.Module = gossip.SlowMoDistributedDataParallel(
@@ -540,7 +555,11 @@ def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempf
 
     # Memory usage when running optimization locally on a single GPU
     max_memory_local = run_test_memory_usage_localsgd_with_slowmo(
-        rank, world_size, tempfile_1, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+        rank,
+        world_size,
+        tempfile_1,
+        {"localsgd_frequency": 1},
+        use_gossip_data_parallel=False,
     )
 
     # Memory usage when running optimization using LocalSGD-SlowMo
@@ -586,7 +605,10 @@ def run_max_memory_used_localsgd_slowmo_memory_efficient(rank, world_size, tempf
 def test_max_memory_used_localsgd_slowmo_memory_efficient() -> None:
     world_size = 2
     spawn_for_all_world_sizes(
-        run_max_memory_used_localsgd_slowmo_memory_efficient, world_sizes=[world_size], args=(), deterministic=True,
+        run_max_memory_used_localsgd_slowmo_memory_efficient,
+        world_sizes=[world_size],
+        args=(),
+        deterministic=True,
     )
 
 
@@ -595,7 +617,11 @@ def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, temp
     devices = [torch.device("cuda:" + str(i)) for i in int_devices]
 
     max_memory_local = run_test_memory_usage_localsgd_with_slowmo(
-        rank, world_size, tempfile_1, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+        rank,
+        world_size,
+        tempfile_1,
+        {"localsgd_frequency": 1},
+        use_gossip_data_parallel=False,
     )
     max_memory_slowmo = run_test_memory_usage_localsgd_with_slowmo(
         rank,
@@ -629,7 +655,10 @@ def run_max_memory_used_slowmo_memory_efficient(rank: int, world_size: int, temp
 def test_max_memory_used_slowmo_memory_efficient() -> None:
     world_size = 2
     spawn_for_all_world_sizes(
-        run_max_memory_used_slowmo_memory_efficient, world_sizes=[world_size], args=(), deterministic=True,
+        run_max_memory_used_slowmo_memory_efficient,
+        world_sizes=[world_size],
+        args=(),
+        deterministic=True,
     )
 
 
@@ -638,7 +667,11 @@ def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile_1, tempfil
     devices = [torch.device("cuda:" + str(i)) for i in int_devices]
 
     max_memory_local = run_test_memory_usage_localsgd_with_slowmo(
-        rank, world_size, tempfile_1, {"localsgd_frequency": 1}, use_gossip_data_parallel=False,
+        rank,
+        world_size,
+        tempfile_1,
+        {"localsgd_frequency": 1},
+        use_gossip_data_parallel=False,
     )
     max_memory_slowmo = run_test_memory_usage_localsgd_with_slowmo(
         rank,
@@ -673,7 +706,10 @@ def run_max_memory_used_slowmo_no_sharding(rank, world_size, tempfile_1, tempfil
 def test_max_memory_used_slowmo_no_sharding() -> None:
     world_size = 2
     spawn_for_all_world_sizes(
-        run_max_memory_used_slowmo_no_sharding, world_sizes=[world_size], args=(), deterministic=True,
+        run_max_memory_used_slowmo_no_sharding,
+        world_sizes=[world_size],
+        args=(),
+        deterministic=True,
     )
 
 

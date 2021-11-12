@@ -86,7 +86,10 @@ def communicate(tensors: List[torch.Tensor], communication_op: Any, logger: logg
         if logger is not None:
             logger.debug("Commmunication completed")
         with torch.no_grad():
-            for f, t in zip(unflatten_tensors(flat_tensor, tensors_with_same_dtype), tensors_with_same_dtype,):
+            for f, t in zip(
+                unflatten_tensors(flat_tensor, tensors_with_same_dtype),
+                tensors_with_same_dtype,
+            ):
                 t.copy_(f)
         if logger is not None:
             logger.debug("Unflatten completed")

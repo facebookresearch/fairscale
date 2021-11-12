@@ -35,7 +35,7 @@ KERNELS = [
 
 
 def run_on_gpu(kernel, data, repeats, no_grad, fwd_bwd):
-    """ Measure both GPU runtime and peak memory usage of a kernel. """
+    """Measure both GPU runtime and peak memory usage of a kernel."""
     tokens = data[0].shape[0]
 
     def get_cuda_data():

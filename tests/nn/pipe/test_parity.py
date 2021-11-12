@@ -97,5 +97,10 @@ def test_correctness(use_fp16, checkpoint, chunks):
 
     model = _get_model()
     rmodel, ropt, rloss = _train_reg_model(model)
-    pmodel, popt, ploss = _train_pipe_model(model, use_fp16=use_fp16, checkpoint=checkpoint, chunks=chunks,)
+    pmodel, popt, ploss = _train_pipe_model(
+        model,
+        use_fp16=use_fp16,
+        checkpoint=checkpoint,
+        chunks=chunks,
+    )
     _check_parity(rmodel, pmodel, ropt, popt, rloss, ploss)

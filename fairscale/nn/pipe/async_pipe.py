@@ -222,7 +222,10 @@ class AsyncPipe(Module):
         )
 
     def instantiate_partition(
-        self, module: Union[nn.Sequential, List[LazyModule]], balance: List[int], group: torch.distributed.ProcessGroup,
+        self,
+        module: Union[nn.Sequential, List[LazyModule]],
+        balance: List[int],
+        group: torch.distributed.ProcessGroup,
     ) -> List[ModuleWrapper]:
         layers: NamedModules = OrderedDict()
 

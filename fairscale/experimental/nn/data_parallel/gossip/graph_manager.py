@@ -77,26 +77,26 @@ class GraphManager(ABC):
 
     @abstractmethod
     def is_regular_graph(self) -> bool:
-        """ Whether each node has the same number of in-peers as out-peers """
+        """Whether each node has the same number of in-peers as out-peers"""
         raise NotImplementedError
 
     @abstractmethod
     def is_bipartite_graph(self) -> bool:
-        """ Whether graph is bipartite or not """
+        """Whether graph is bipartite or not"""
         raise NotImplementedError
 
     @abstractmethod
     def is_passive(self, rank: Optional[int] = None) -> bool:
-        """ Whether 'rank' is a passive node or not """
+        """Whether 'rank' is a passive node or not"""
         raise NotImplementedError
 
     @abstractmethod
     def is_dynamic_graph(self) -> bool:
-        """ Whether the graph-type is dynamic (as opposed to static) """
+        """Whether the graph-type is dynamic (as opposed to static)"""
         raise NotImplementedError
 
     def get_peers(self, rotate: bool = False) -> Tuple[List[int], List[int]]:
-        """ Returns the out and in-peers corresponding to 'self.rank' """
+        """Returns the out and in-peers corresponding to 'self.rank'"""
         # cycle through in- and out-peers by updating group-index
         if rotate:
             self._rotate_group_indices()
@@ -113,8 +113,8 @@ class GraphManager(ABC):
         return out_peers, in_peers
 
     def get_edges(self, rotate: bool = False) -> Tuple[List[Edge], List[Edge]]:
-        """ Returns the pairwise process groups between rank and the out and
-        in-peers corresponding to 'self.rank' """
+        """Returns the pairwise process groups between rank and the out and
+        in-peers corresponding to 'self.rank'"""
         # cycle through in- and out-peers by updating group-index
         if rotate:
             self._rotate_group_indices()
@@ -131,17 +131,17 @@ class GraphManager(ABC):
         return out_edges, in_edges
 
     def _rotate_group_indices(self) -> None:
-        """ Incerement group indices to point to the next out-peer """
+        """Incerement group indices to point to the next out-peer"""
         increment = self.peers_per_itr
         for i, group_index in enumerate(self._group_indices):
             self._group_indices[i] = int((group_index + increment) % len(self.phone_book[self.rank]))
 
     def _rotate_forward(self, r: int, p: int) -> int:
-        """ Helper function returns peer that is p hops ahead of r """
+        """Helper function returns peer that is p hops ahead of r"""
         return (r + p) % self.world_size
 
     def _rotate_backward(self, r: int, p: int) -> int:
-        """ Helper function returns peer that is p hops behind r """
+        """Helper function returns peer that is p hops behind r"""
         return (r - p) % self.world_size
 
 

@@ -90,7 +90,12 @@ class Portal:
 
         return PortalOrange.apply(self, phony)
 
-    def copy(self, prev_stream: AbstractStream, next_stream: AbstractStream, phony: Tensor,) -> Tensor:
+    def copy(
+        self,
+        prev_stream: AbstractStream,
+        next_stream: AbstractStream,
+        phony: Tensor,
+    ) -> Tensor:
         """Copies the hidden tensor by a :class:`PortalCopy`.
 
         Give a phony and use the returning phony to keep backpropagation::
@@ -202,7 +207,10 @@ class PortalBlue(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def backward(ctx: Context, grad_phony: Tensor,) -> Tuple[None, Tensor]:
+    def backward(
+        ctx: Context,
+        grad_phony: Tensor,
+    ) -> Tuple[None, Tensor]:
         # The paired PortalOrange should keep the gradient.
         grad = ctx.portal.use_grad()
         return None, grad
@@ -236,7 +244,11 @@ class PortalCopy(torch.autograd.Function):
     @staticmethod
     # type: ignore
     def forward(
-        ctx: Context, portal: Portal, prev_stream: AbstractStream, next_stream: AbstractStream, phony: Tensor,
+        ctx: Context,
+        portal: Portal,
+        prev_stream: AbstractStream,
+        next_stream: AbstractStream,
+        phony: Tensor,
     ) -> Tensor:
         ctx.portal = portal
 
@@ -248,7 +260,10 @@ class PortalCopy(torch.autograd.Function):
 
     @staticmethod
     # type: ignore
-    def backward(ctx: Context, grad_phony: Tensor,) -> Tuple[None, None, None, None]:
+    def backward(
+        ctx: Context,
+        grad_phony: Tensor,
+    ) -> Tuple[None, None, None, None]:
         portal = ctx.portal
 
         assert portal.grad is not None

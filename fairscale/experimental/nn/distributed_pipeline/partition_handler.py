@@ -25,7 +25,7 @@ ExcInfo = Tuple[Type[BaseException], BaseException, TracebackType]
 
 
 class DistributedPipelineRecord:
-    """ A class for storing a single mini-batch (consisting of multiple micro-batches) as input to
+    """A class for storing a single mini-batch (consisting of multiple micro-batches) as input to
     a single partition.
     Args:
         device: the local device that runs the partition.
@@ -73,7 +73,7 @@ class DistributedPipelineRecord:
         return {}
 
     def feed(self, chunk: int, input_idx: int, input: Tensor) -> Tensor:
-        """ This function is called remotely to provide individual tensors of a given chunk."""
+        """This function is called remotely to provide individual tensors of a given chunk."""
         if input.device.type == "cpu":
             input = input.to(self.device)
         cuda_stream = torch.cuda.current_stream(input.device) if input.device.type == "cuda" else None
@@ -267,8 +267,8 @@ class PartitionHandler:
 
     def run_pipeline(self, pipeline_record_rref: rpc.RRef) -> Optional[Tensor]:
         """Processes a min-batch on this partition.
-           If this is the last partition (pipeline_record has no consumer), concatenates results of processing
-           all chunks and returns the result as the output of the model on the whole mini-batch.
+        If this is the last partition (pipeline_record has no consumer), concatenates results of processing
+        all chunks and returns the result as the output of the model on the whole mini-batch.
         """
         pipeline_record = pipeline_record_rref.local_value()
         self.run(pipeline_record)

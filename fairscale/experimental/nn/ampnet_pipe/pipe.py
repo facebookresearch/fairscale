@@ -20,9 +20,9 @@ __all__ = ["AMPnetPipe"]
 
 class AMPnetPipe(AsyncPipe):
     """
-        AMPnetPipe is the asynchronous version of the MultiProcessPipe implementation
-        which avoids the bubble issue, by using stale weights and gradients.
-        The implementation closely follows the paper: https://arxiv.org/abs/1705.09786
+    AMPnetPipe is the asynchronous version of the MultiProcessPipe implementation
+    which avoids the bubble issue, by using stale weights and gradients.
+    The implementation closely follows the paper: https://arxiv.org/abs/1705.09786
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -46,8 +46,8 @@ class AMPnetPipe(AsyncPipe):
         assert self.group
         rank = self.group.rank()
 
-        transport = self.pipeline.transport  # type: ignore
-        checkpoint_stop = self.pipeline.checkpoint_stop  # type: ignore
+        transport = self.pipeline.transport
+        checkpoint_stop = self.pipeline.checkpoint_stop
         ampnet_event_loop = AsyncAMPnetEventLoop(
             partitions,
             self.group,
