@@ -548,7 +548,7 @@ class TestHooks(DistributedTest):
         assert model._register_pre_backward_hooks.called
 
 
-@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestNoGrad(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_parameterized(self, config):

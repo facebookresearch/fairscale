@@ -184,7 +184,7 @@ class TestSaveLoadStateDict(DistributedTest):
             ), f"{key}, {ref_state_dict[key]} != {state_dict[key]}"
 
 
-@pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestStateDictDeviceDtype(DistributedTest):
     @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
     def test_state_dict_device(self, mixed_precision, cpu_offload):

@@ -248,7 +248,7 @@ def test_ddp_parity(
     multiple_fw,
 ):
     if torch_version() < (1, 8, 0):
-        pytest.skip("pytorch version >= 1.9.0 required")
+        pytest.skip("pytorch version >= 1.8.0 required")
     if manual_reduction and change_train_graph:
         pytest.skip("Skipping changing model and grad accumulation combination, makes little sense")
 

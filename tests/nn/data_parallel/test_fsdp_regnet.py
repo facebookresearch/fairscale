@@ -352,8 +352,8 @@ def _distributed_worker(
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
 @pytest.mark.parametrize("sync_bn", ["none", "pytorch"])
 def test_regnet(temp_files, ddp_ref, precision, flatten, sync_bn):
-    if torch_version() < (1, 9, 0):
-        pytest.skip("older pytorch doesn't support reduce_scatter")
+    if torch_version() < (1, 8, 0):
+        pytest.skip("pytorch version >= 1.8.0 required")
 
     state_before, inputs, conv_bias, linear_bias, state_after = ddp_ref
 
