@@ -70,7 +70,12 @@ class DistributedPipeline(nn.Module):
 
     DataConsumer = DataConsumer[Partition]
 
-    def __init__(self, graph: PipelineModulesGraph, chunks: int = 1, checkpoint: str = "except_last",) -> None:
+    def __init__(
+        self,
+        graph: PipelineModulesGraph,
+        chunks: int = 1,
+        checkpoint: str = "except_last",
+    ) -> None:
         super().__init__()
 
         check_pytorch_version()

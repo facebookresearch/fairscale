@@ -35,8 +35,7 @@ def _get_mlp(tripwire: bool = False):
         return Sequential(Linear(2, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3), Linear(3, 3))
 
     class Tripwire(torch.nn.Module):
-        """A model made to expose possible corner cases
-        """
+        """A model made to expose possible corner cases"""
 
         def __init__(self) -> None:
             super().__init__()
@@ -323,7 +322,10 @@ def test_train_eval_change():
     world_size = 4
     with temp_files_ctx(num=1) as temp_files:
         mp.spawn(
-            run_test_train_eval_change, args=(world_size, temp_files[0]), nprocs=world_size, join=True,
+            run_test_train_eval_change,
+            args=(world_size, temp_files[0]),
+            nprocs=world_size,
+            join=True,
         )
 
 

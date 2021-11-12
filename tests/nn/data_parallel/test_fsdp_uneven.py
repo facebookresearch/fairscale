@@ -80,7 +80,8 @@ def _test_func(rank, world_size, model, fsdp_config, tempfile_name, unused, test
 @skip_if_single_gpu
 @pytest.mark.parametrize("test_case", [{"inputs": [torch.rand(8, 3)], "assert_ref_out": True}])
 @pytest.mark.parametrize(
-    "fsdp_config", [{}, {"flatten_parameters": False}, {"mixed_precision": True}],
+    "fsdp_config",
+    [{}, {"flatten_parameters": False}, {"mixed_precision": True}],
 )
 @pytest.mark.parametrize("world_size", list(range(2, 9)))
 def test_one_iteration(world_size, test_case, fsdp_config):

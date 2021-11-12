@@ -15,7 +15,7 @@ from .data import DataConsumer
 
 class MultiInputSequential(nn.Module):
     """A variation of nn.Sequential, that allows the first module in the sequence accepts
-        multiple inputs. To be used internally by _split_module
+    multiple inputs. To be used internally by _split_module
     """
 
     def __init__(self, *modules: nn.Module) -> None:
@@ -198,7 +198,9 @@ class PipelineModulesGraph(nn.Module):
                 remote_module = partition[0].module.get_module_rref()
             else:
                 remote_module = rpc.remote(
-                    partition[0].module.on, RemoteSequential, args=([p.module.get_module_rref() for p in partition],),
+                    partition[0].module.on,
+                    RemoteSequential,
+                    args=([p.module.get_module_rref() for p in partition],),
                 )
             partitions.append((partition, remote_module))
 

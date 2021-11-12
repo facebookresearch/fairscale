@@ -381,7 +381,11 @@ class _Block(Base):
         self.ln_1 = nn.LayerNorm(embed_dim)
         self.ln_2 = nn.LayerNorm(embed_dim)
         self.attn = nn.MultiheadAttention(embed_dim, num_heads)  # type: ignore
-        self.mlp = nn.Sequential(nn.Linear(embed_dim, embed_dim * 4), nn.GELU(), nn.Linear(embed_dim * 4, embed_dim),)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.GELU(),
+            nn.Linear(embed_dim * 4, embed_dim),
+        )
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
         x = inputs[0]
@@ -701,7 +705,7 @@ def in_temporary_directory() -> Generator:
 
 @contextlib.contextmanager
 def temp_files_ctx(num: int) -> Generator:
-    """ A context to get tempfiles and ensure they are cleaned up. """
+    """A context to get tempfiles and ensure they are cleaned up."""
     files = [tempfile.mkstemp()[1] for _ in range(num)]
 
     try:

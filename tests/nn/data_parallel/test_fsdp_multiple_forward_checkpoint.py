@@ -247,8 +247,8 @@ def _get_cached_results(
     fp32_reduce_scatter,
     bucket_cap_mb,
 ):
-    """ Cache the training to save time. For DDP, flatten, wrap_bn etc. doesn't matter, so
-        the results can be cached.
+    """Cache the training to save time. For DDP, flatten, wrap_bn etc. doesn't matter, so
+    the results can be cached.
     """
     if not with_fsdp:
         flatten = None

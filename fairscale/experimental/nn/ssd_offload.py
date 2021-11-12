@@ -72,7 +72,7 @@ def read(input_tensor: torch.Tensor, filename: str, file_offset_bytes: int = 0) 
 class StorageState(Enum):
     """
     Simple enum to indicate whether the tensor handle is pointing
-    to data on disk or memory. This is useful for asserting on 
+    to data on disk or memory. This is useful for asserting on
     whether the tensor is available for operations or if it needs
     to be moved from disk to CPU or device.
     """

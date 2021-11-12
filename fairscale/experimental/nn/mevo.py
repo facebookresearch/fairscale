@@ -16,9 +16,9 @@ DEBUG = False
 
 
 def _next_power_of_2_or_max(n: int, max_n: int) -> int:
-    """ Return the smallest power of 2 greater than or equal to n, with a limit.
+    """Return the smallest power of 2 greater than or equal to n, with a limit.
 
-        Useful when used in splitting a tensor into chunks with power-of-2 sizes.
+    Useful when used in splitting a tensor into chunks with power-of-2 sizes.
     """
     # special case, just split to 1 element chunks.
     if n == 0:
@@ -50,7 +50,7 @@ def _reshape_inputs(input: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Te
 def get_data(
     shape: Tuple[Tuple[int, int], Tuple[int, int]], dtype: torch.dtype = torch.float16, device: str = "cuda"
 ) -> Tuple[torch.Tensor, nn.Parameter, torch.Tensor]:
-    """ Utility function for getting some tensors for testing and benchmarking."""
+    """Utility function for getting some tensors for testing and benchmarking."""
     (tokens, d1), (d2, vocabs) = shape
     assert d1 == d2
     input = torch.rand(tokens, d1, device=device, dtype=dtype).requires_grad_(True)
@@ -66,7 +66,7 @@ def get_data(
 
 
 class BaselineSoftmax(nn.Module):
-    """ Baseline softmax that does an output linear projection and a softmax.
+    """Baseline softmax that does an output linear projection and a softmax.
 
         This is intended to be used with an embedding layer with shared weights.
 
@@ -94,7 +94,7 @@ class BaselineSoftmax(nn.Module):
         self.log_softmax = log_softmax
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:  # type: ignore
-        """ Forward function that computes softmax output with the input and target."""
+        """Forward function that computes softmax output with the input and target."""
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
         input, target = _reshape_inputs(input, target)
@@ -111,12 +111,12 @@ class BaselineSoftmax(nn.Module):
 
 
 class BaselineSoftmaxNllLoss(BaselineSoftmax):
-    """ Baseline that does an output projection, a softmax & a NLL loss (cross-entropy).
+    """Baseline that does an output projection, a softmax & a NLL loss (cross-entropy).
 
-        See BaselineSoftmax above. Constructor is the same. Only difference is in the
-        forward function.
+    See BaselineSoftmax above. Constructor is the same. Only difference is in the
+    forward function.
 
-        This class is used for testing and benchmarking.
+    This class is used for testing and benchmarking.
     """
 
     def __init__(self, proj_weight: nn.Parameter, tile_factor: int = 0, log_softmax: bool = True):
@@ -177,7 +177,7 @@ class GetMaxFunction(torch.autograd.Function):
     def backward(ctx: Any, *args: Any) -> Any:
         """Recompute the forward max and backward grad.
 
-           Accumulate the grad to the right split of the full grad.
+        Accumulate the grad to the right split of the full grad.
         """
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG max bwd")
@@ -248,7 +248,7 @@ class GetSumFunction(torch.autograd.Function):
     def backward(ctx: Any, *args: Any) -> Any:
         """Recompute the forward sum and backward grad.
 
-           Accumulate the grad to the right split of the full grad.
+        Accumulate the grad to the right split of the full grad.
         """
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG sum bwd")
@@ -333,9 +333,7 @@ class BackwardTriggerFn(torch.autograd.Function):
     """A backward trigger function."""
 
     @staticmethod
-    def forward(  # type: ignore
-        ctx: Any, w: torch.Tensor, trigger_tensor: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(ctx: Any, w: torch.Tensor, trigger_tensor: torch.Tensor) -> torch.Tensor:  # type: ignore
         """We take a weight tensor and the trigger as inputs and output the weight directly."""
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             print("DEBUG trigger fwd")
@@ -357,24 +355,24 @@ class BackwardTriggerFn(torch.autograd.Function):
 class BackwardTrigger(nn.Module):
     """A backward trigger module.
 
-       This module takes a parameter as an input and create a linked parameter
-       from a newly created trigger parameter.
+    This module takes a parameter as an input and create a linked parameter
+    from a newly created trigger parameter.
 
-       The way to use it in a module's ``__init__'' and ``forward'' functions:
+    The way to use it in a module's ``__init__'' and ``forward'' functions:
 
-       ```
-       def __init__():
-         ...
-         self.trigger = BackwardTrigger(some_layer.weight)
-         ...
+    ```
+    def __init__():
+      ...
+      self.trigger = BackwardTrigger(some_layer.weight)
+      ...
 
-       def forward():
-         w = self.trigger()
-         ... continue to use w ...
-       ```
+    def forward():
+      w = self.trigger()
+      ... continue to use w ...
+    ```
 
-       As a resule, the trigger's backward hook will be called at the end of
-       the backward for the module that uses this trigger.
+    As a resule, the trigger's backward hook will be called at the end of
+    the backward for the module that uses this trigger.
     """
 
     def __init__(self, linked_param: torch.Tensor):
@@ -388,7 +386,7 @@ class BackwardTrigger(nn.Module):
 
 
 class MemoryEfficientVocabOutput(nn.Module):  # AKA. MEVO
-    """ Fused fc + softmax + nll_loss in a tiled fashion.
+    """Fused fc + softmax + nll_loss in a tiled fashion.
 
         This uses much less memory but is quite a bit slower.
 

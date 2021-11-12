@@ -109,7 +109,9 @@ def test_shared_weight_mevo(temp_files, wrap_middle):
 
     # Run FSDP
     mp.spawn(
-        _dist_worker, (world_size, temp_files, wrap_middle), nprocs=world_size,
+        _dist_worker,
+        (world_size, temp_files, wrap_middle),
+        nprocs=world_size,
     )
 
 

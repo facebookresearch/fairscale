@@ -71,7 +71,11 @@ default_auto_wrap_policy.EXCLUDE_WRAP_MODULES = {nn.ModuleList, nn.ModuleDict}  
 default_auto_wrap_policy.FORCE_LEAF_MODULES = {nn.MultiheadAttention}  # type: ignore
 
 
-def config_auto_wrap_policy(module: nn.Module, recurse: bool, unwrapped_params: int,) -> bool:
+def config_auto_wrap_policy(
+    module: nn.Module,
+    recurse: bool,
+    unwrapped_params: int,
+) -> bool:
     """Config based policy function for :func:`auto_wrap`.
 
        Return true for a module to be wrapped if it is already tagged with

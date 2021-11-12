@@ -7,7 +7,7 @@ from collections import namedtuple
 from typing import List, Sequence
 from .container import ModuleList
 
-_ASMoutput = namedtuple('ASMoutput', ['output', 'loss'])
+_ASMoutput = namedtuple('_ASMoutput', ['output', 'loss'])
 
 
 class AdaptiveLogSoftmaxWithLoss(Module):

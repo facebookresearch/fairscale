@@ -109,7 +109,13 @@ def mpi():
 def public_attrs(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
 
-    pipe = pipe_class(model, balance=(1,), worker_map=get_worker_map(), chunks=42, checkpoint="always",)
+    pipe = pipe_class(
+        model,
+        balance=(1,),
+        worker_map=get_worker_map(),
+        chunks=42,
+        checkpoint="always",
+    )
 
     assert pipe.balance == [1]
     assert pipe.chunks == 42
@@ -257,9 +263,27 @@ def checkpoint_mode(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
     input = torch.rand(2, 1)
 
-    always = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="always",)
-    except_last = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="except_last",)
-    never = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="never",)
+    always = pipe_class(
+        model,
+        balance=[1],
+        worker_map=get_worker_map(),
+        chunks=2,
+        checkpoint="always",
+    )
+    except_last = pipe_class(
+        model,
+        balance=[1],
+        worker_map=get_worker_map(),
+        chunks=2,
+        checkpoint="except_last",
+    )
+    never = pipe_class(
+        model,
+        balance=[1],
+        worker_map=get_worker_map(),
+        chunks=2,
+        checkpoint="never",
+    )
 
     always_output = always(input)
     except_last_output = except_last(input)
@@ -277,7 +301,11 @@ def checkpoint_mode_invalid(pipe_class):
 
     with pytest.raises(ValueError, match="checkpoint is not one of 'always', 'except_last', or 'never'"):
         pipe_class(
-            model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint="INVALID_CHECKPOINT",
+            model,
+            balance=[1],
+            worker_map=get_worker_map(),
+            chunks=2,
+            checkpoint="INVALID_CHECKPOINT",
         )
 
 
@@ -288,7 +316,11 @@ def checkpoint_mode_when_chunks_1(pipe_class):
 
     # All checkpoint modes are fine.
     pipe_class(
-        model, balance=[1], worker_map=get_worker_map(), chunks=1, checkpoint="except_last",
+        model,
+        balance=[1],
+        worker_map=get_worker_map(),
+        chunks=1,
+        checkpoint="except_last",
     )
     pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=1, checkpoint="always")
     pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=1, checkpoint="never")
@@ -298,7 +330,12 @@ def checkpoint_mode_when_chunks_1(pipe_class):
 @pytest.mark.parametrize("pipe_class", [AsyncPipe])
 def checkpoint_eval(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
-    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2,)
+    model = pipe_class(
+        model,
+        balance=[1],
+        worker_map=get_worker_map(),
+        chunks=2,
+    )
     input = torch.rand(2, 1)
 
     def find_grad_fn(grad_fn, name):
@@ -335,7 +372,13 @@ def checkpoint_non_float_input(pipe_class):
             return input[0] * 2
 
     model = nn.Sequential(ForkNonFloat(), JoinNonFloat())
-    model = pipe_class(model, balance=[1, 1], worker_map=get_worker_map(), chunks=1, checkpoint="always",)
+    model = pipe_class(
+        model,
+        balance=[1, 1],
+        worker_map=get_worker_map(),
+        chunks=1,
+        checkpoint="always",
+    )
 
     input = torch.rand(1, requires_grad=True)
     output = model(input)
@@ -444,7 +487,12 @@ def input_pair(pipe_class):
             return (self.fc_a(a), self.fc_b(b))
 
     model = nn.Sequential(Two())
-    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2,)
+    model = pipe_class(
+        model,
+        balance=[1],
+        worker_map=get_worker_map(),
+        chunks=2,
+    )
 
     a = torch.rand(10, 1, requires_grad=True)
     b = torch.rand(10, 1, requires_grad=True)
@@ -470,7 +518,12 @@ def input_singleton(pipe_class):
             return (self.fc(a),)
 
     model = nn.Sequential(One())
-    model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=2,)
+    model = pipe_class(
+        model,
+        balance=[1],
+        worker_map=get_worker_map(),
+        chunks=2,
+    )
 
     a = torch.rand(10, 1, requires_grad=True)
 
@@ -549,7 +602,12 @@ def deferred_batch_norm(checkpoint, lazy, pipe_class):
     else:
         model = nn.Sequential(pipe_bn)
     pipe = pipe_class(
-        model, balance=[1], worker_map=get_worker_map(), chunks=2, checkpoint=checkpoint, deferred_batch_norm=True,
+        model,
+        balance=[1],
+        worker_map=get_worker_map(),
+        chunks=2,
+        checkpoint=checkpoint,
+        deferred_batch_norm=True,
     )
 
     x = torch.rand(4, 3, 10, 10)
@@ -573,7 +631,12 @@ def deferred_batch_norm_params(checkpoint, lazy, pipe_class):
     else:
         model = nn.Sequential(pipe_bn)
     pipe = pipe_class(
-        model, balance=[1], worker_map=get_worker_map(), chunks=1, checkpoint=checkpoint, deferred_batch_norm=True,
+        model,
+        balance=[1],
+        worker_map=get_worker_map(),
+        chunks=1,
+        checkpoint=checkpoint,
+        deferred_batch_norm=True,
     )
 
     x = torch.rand(4, 3, 10, 10)
