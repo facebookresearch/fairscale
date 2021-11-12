@@ -4,11 +4,14 @@
 # LICENSE file in the root directory of this source tree.
 """These functions are used by FullyShardedDataParallel to help consolidate and shard optimizer states."""
 import copy
-from typing import Any, Dict, Iterator, List, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Tuple, cast
 
 import torch
 
 from fairscale.nn.misc import FlattenParamsWrapper
+
+if TYPE_CHECKING:
+    from fairscale.nn.data_parallel import FullyShardedDataParallel
 
 # These return keys are used by fairseq. To change, add @sshleifer as a reviewer.
 UNFLAT_RETURN_KEYS = {"state", "param_groups", "uncollected_local_ids", "param_id_map"}
@@ -84,10 +87,11 @@ def _extract_non_tensor_state(combined_state: Dict[int, Dict[str, List]], param_
 
 def _unflatten_optim_state(
     combined_state: Dict[int, Dict],
-    instance_list: List[torch.nn.Module],
+    instance_list: List["FullyShardedDataParallel"],
     world_pad_info: List[List[List[int]]],
     singleton_state: Dict[int, Dict],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
+    """Convert optimizer state for flattened parameters into original, unflatten ones."""
     # local ids are the keys in the current state (combined_state), (usually fewer)
     # global ids will be the keys in the unflattened state
     next_global_id = 0  # gets incremented
@@ -100,7 +104,13 @@ def _unflatten_optim_state(
 
     # Local corresponds to flattened, global corresponds to unflattened.
     # Casting needed only for mypy.
-    num_global_params = [cast(int, m.num_params_managed) for m in instance_list]
+    num_global_params: List[int] = []
+    for m in instance_list:
+        if m.flatten_parameters:
+            num_flatten = cast(int, m.num_params_managed)
+            num_global_params.append(num_flatten)
+        else:
+            num_global_params.append(len(m.non_shared_params()))
     global_to_local_id = {}
     for local_id, num_unflat in enumerate(num_global_params):
         for _ in range(num_unflat):
@@ -129,18 +139,26 @@ def _unflatten_optim_state(
             assert isinstance(v, list), f"got {k}: {v} for {local_id}"
             v_unpad = [t[:-np] if np > 0 else t for t, np in zip(v, pad_info[local_id])]
             flat_buffer = torch.cat(v_unpad)
-            # Casting needed only for mypy.
-            param_views: Iterator = cast(FlattenParamsWrapper, instance_list[local_id]).get_param_views([flat_buffer])
-            for global_id, param_view in zip(sorted(local_to_global[local_id]), param_views):
-                assert k not in unflat_state[global_id], f"already added {k} to {global_id} {local_id}"
-                unflat_state[global_id][k] = param_view
-                unflat_state[global_id].update(singleton_state[local_id])
+            if instance_list[local_id].flatten_parameters:
+                # Unflatten. Casting needed only for mypy.
+                param_views: Iterator = cast(FlattenParamsWrapper, instance_list[local_id]).get_param_views(
+                    [flat_buffer]
+                )
+                for global_id, param_view in zip(sorted(local_to_global[local_id]), param_views):
+                    assert k not in unflat_state[global_id], f"already added {k} to {global_id} {local_id}"
+                    unflat_state[global_id][k] = param_view
+            else:
+                # Copy non-flatten state directly.
+                assert len(local_to_global[local_id]) == 1, "Only support a single non-flatten parameter"
+                global_id = local_to_global[local_id][0]
+                unflat_state[global_id][k] = flat_buffer
+            unflat_state[global_id].update(singleton_state[local_id])
 
     return unflat_state, global_to_local_id
 
 
 def build_unflat_state_dict(
-    instance_list: List[torch.nn.Module],
+    instance_list: List["FullyShardedDataParallel"],
     world_pad_info: List[List[List[int]]],
     state: Dict[int, Dict[str, List[torch.Tensor]]],
     singleton_state: Dict[int, Dict[str, List[torch.Tensor]]],

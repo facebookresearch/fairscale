@@ -476,6 +476,13 @@ class FullyShardedDataParallel(nn.Module):
         self.params.append(p)
         self._has_shared_params = True
 
+    def non_shared_params(self) -> List[nn.Parameter]:
+        """Return the list of non-shared parameters."""
+        if self._has_shared_params:
+            return list(filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params))
+        else:
+            return self.params
+
     def apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":
         """
         Applies ``fn`` recursively to every submodule (as returned by
@@ -1033,9 +1040,7 @@ class FullyShardedDataParallel(nn.Module):
                     non_shared_params = self.params
                     # filter out shared params for all but the owner FSDP module.
                     if len(full_tensors) < len(non_shared_params):
-                        non_shared_params = list(
-                            filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params)
-                        )
+                        non_shared_params = self.non_shared_params()
                     assert len(full_tensors) == len(
                         non_shared_params
                     ), f"{len(full_tensors)} vs. {len(non_shared_params)}"
@@ -2143,7 +2148,14 @@ class FullyShardedDataParallel(nn.Module):
         for k, v in sd_state.items():
             gathered_state[k] = {}
             singleton_state[k] = {}
-            desired_buffer_size = self._fsdp_instances[k].flat_param._full_param_padded.size()  # type: ignore
+            # For shared params, we are not flattening. We have only 1 non-shared
+            # param that has the optimizer state. So we handle it with the correct
+            # parameter list.
+            non_shared_params = cast(FullyShardedDataParallel, self._fsdp_instances[k]).non_shared_params()
+            assert (
+                len(non_shared_params) == 1
+            ), f"Only flatten param or a single non-shared param is supported: len={len(non_shared_params)}"
+            desired_buffer_size = non_shared_params[0]._full_param_padded.size()
             buffer = None  # for sharded tensors
             singleton_buffer = None  # for singleton tensors
             for buffer_name, t in v.items():
@@ -2209,7 +2221,7 @@ class FullyShardedDataParallel(nn.Module):
         return new_state_dict
 
     @property
-    def _fsdp_instances(self) -> List[nn.Module]:
+    def _fsdp_instances(self) -> List["FullyShardedDataParallel"]:
         """Returns all fsdp modules in self.modules() including self."""
         return [m for m in self.modules() if isinstance(m, FullyShardedDataParallel)]
 
