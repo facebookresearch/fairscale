@@ -68,11 +68,9 @@ class GradScaler(TorchGradScaler):
 
 class ShardedGradScaler(TorchGradScaler):
     """
-    A shard-aware :class:`GradScaler<torch.cuda.amp.GradScaler>`, to be used in conjunction with
-    :class:`OSS` and :class:`ShardedOptimizer`.
-
-    Interface and usecases are not changed, more explanations can be found in the corresponding pytorch
-    documentation https://pytorch.org/docs/stable/amp.html#torch.cuda.amp.GradScaler
+    A shard aware Grad Scaler which enables loss scaling in FSDP with/without cpu_offload. This is a
+    slight modification of the pytorch grad scaler.
+    https://pytorch.org/docs/stable/amp.html#torch.cuda.amp.GradScaler
     """
 
     def __init__(
