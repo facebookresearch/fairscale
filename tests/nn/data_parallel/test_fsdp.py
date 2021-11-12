@@ -275,7 +275,6 @@ def rename_test(testcase_func, param_num, param):
     return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
 
 
-# @pytest.mark.skipif(torch_version() < (1, 9, 0), reason="pytorch version >= 1.9.0 required")
 class TestComparisonToPyTorchDDP(DistributedTest):
     """
     Compare losses and parameter values after several updates when using
@@ -304,39 +303,21 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # Test every combination of these options:
         spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config))
 
-    def test_cpu_offload_and_cpu_grads(self):
-        # We don't test the False condition because that requires the optimizer to internally do
-        # the device transfer and PyTorch optimizers don't support this.
-        config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": True}
+    # testing moving params to cpu while using full and mixed precision
+    @parameterized.expand([(True,), (False,)], name_func=rename_test)
+    def test_cpu_offload_and_cpu_grads(self, mixed_precision):
+        config = {"mixed_precision": mixed_precision, "cpu_offload": True}
         test_fn = functools.partial(
             self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
         )
         spawn_and_init(test_fn)
 
-    def test_no_cpu_offload_with_sharded_grad_scaler(self):
-        # We don't test the False condition because that requires the optimizer to internally do
-        # the device transfer and PyTorch optimizers don't support this.
-        config = {"mixed_precision": False, "cpu_offload": False, "move_grads_to_cpu": False}
+    # testing full and mixed precision on the gpu
+    @parameterized.expand([(True,), (False,)], name_func=rename_test)
+    def test_no_cpu_offload_with_sharded_grad_scaler(self, mixed_precision):
+        config = {"mixed_precision": mixed_precision, "move_params_to_cpu": False}
         test_fn = functools.partial(
             self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=True, lr=0.01
-        )
-        spawn_and_init(test_fn)
-
-    def test_no_cpu_offload_with_sharded_grad_scaler_and_mixed_precision(self):
-        # We don't test the False condition because that requires the optimizer to internally do
-        # the device transfer and PyTorch optimizers don't support this.
-        config = {"mixed_precision": True, "cpu_offload": False, "move_grads_to_cpu": False}
-        test_fn = functools.partial(
-            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=True, lr=0.01
-        )
-        spawn_and_init(test_fn)
-
-    def test_cpu_offload_and_cpu_grads_no_mixed_precision(self):
-        # We don't test the False condition because that requires the optimizer to internally do
-        # the device transfer and PyTorch optimizers don't support this.
-        config = {"mixed_precision": False, "cpu_offload": True, "move_grads_to_cpu": True}
-        test_fn = functools.partial(
-            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
         )
         spawn_and_init(test_fn)
 
