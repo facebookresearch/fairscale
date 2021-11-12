@@ -439,7 +439,8 @@ class MemoryEfficientVocabOutput(nn.Module):  # AKA. MEVO
             print("DEBUG cur, peak", cur_mem, mem)
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
-        assert input.requires_grad
+        if torch.is_grad_enabled():
+            assert input.requires_grad
         input, target = _reshape_inputs(input, target)
 
         tokens, d_model = input.shape

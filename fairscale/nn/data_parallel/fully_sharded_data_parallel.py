@@ -335,6 +335,7 @@ class FullyShardedDataParallel(nn.Module):
                 params.append(param)
 
         self._has_params = len(params) > 0
+        self._has_shared_params = False
 
         # TODO(anj): Should we conditionally do this only if we have params?
         # TODO(anj): Figure out if we can allocate the buffer during sharding.
@@ -473,6 +474,7 @@ class FullyShardedDataParallel(nn.Module):
             len(list(filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params))) > 0
         ), "Must have at least 1 non-shared param."
         self.params.append(p)
+        self._has_shared_params = True
 
     def apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":
         """
@@ -1789,6 +1791,18 @@ class FullyShardedDataParallel(nn.Module):
                 p.data = p._fp32_shard
 
             self.has_full_params = False
+
+        if self._has_shared_params:
+            # self.has_full_params flag can be out of sync if a shared param is
+            # sharded by another FSDP instance. An example is that in eval case
+            # with reshard_after_forward=False but the sharing instance has
+            # reshard_after_forward=True. Then, on the second forward, the
+            # other instance can shard the shared param and but this instance
+            # can mistakenly think the full param is already gathered from the
+            # has_full_params flag.
+            #
+            # Therefore, we update the flag accordingly here.
+            self.has_full_params = not any(p._full_param_padded.storage().size() == 0 for p in self.params)
 
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
