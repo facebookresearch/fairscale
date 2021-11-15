@@ -5,6 +5,7 @@
 
 from collections import abc, defaultdict
 from enum import Enum
+import logging
 from typing import Any, Dict, List, Optional, Union
 import warnings
 
@@ -68,7 +69,7 @@ class GradScaler(TorchGradScaler):
 
 class ShardedGradScaler(TorchGradScaler):
     """
-    A shard aware Grad Scaler which enables loss scaling in FSDP with/without cpu_offload. This is a
+    A shard aware Grad Scaler which enables loss scaling with/without cpu_offload. This is a
     slight modification of the pytorch grad scaler.
     https://pytorch.org/docs/stable/amp.html#torch.cuda.amp.GradScaler
     """
@@ -143,6 +144,9 @@ class ShardedGradScaler(TorchGradScaler):
 
         return apply_scale(outputs)
 
+    # This function is required enable cpu based grad scaler. It is inspired from its corresponding CUDA
+    # implementation which can be found here
+    # https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/native/cuda/AmpKernels.cu#L88
     def _foreach_non_finite_check_and_unscale_cpu_(
         self, grads: List, found_inf: torch.Tensor, inv_scale: torch.Tensor
     ) -> None:
@@ -153,7 +157,10 @@ class ShardedGradScaler(TorchGradScaler):
 
         expected_device = grads[0].device
         for tensor in grads[0]:
-            assert tensor.device == expected_device, "grads must be on the same device"
+            try:
+                assert tensor.device == expected_device, "grads must be on the same device"
+            except AssertionError:
+                logging.error("tensor device is %s and expected device is %s" % (tensor.device, expected_device))
 
             # check for non_overlapping_and_dense doesn't exist in the python world
             # as remarked here https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/native/cuda/AmpKernels.cu#L108
@@ -216,8 +223,6 @@ class ShardedGradScaler(TorchGradScaler):
         return per_device_found_inf._per_device_tensors
 
     def unscale_(self, optimizer: SGD) -> None:  # type: ignore
-        # Could be a mistake, this scaler is supposed to work with ZeroRedundancyOptimizer only
-        # Call the upstream unscale_ method which will only act on this rank's gradients
         if not self._enabled:
             return
 
@@ -312,6 +317,9 @@ class ShardedGradScaler(TorchGradScaler):
         optimizer_state["stage"] = OptState.STEPPED
         return retval
 
+    # This function is required enable cpu based grad scaler. It is inspired from its corresponding CUDA
+    # implementation which can be found here
+    # https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/native/cuda/AmpKernels.cu#L219
     def _amp_update_scale_cpu_(self, found_inf):  # type: ignore
         """
         If found_inf is 1.0 (True), then scale is multiplied by backoff_factor and growth_tracker is set to zero.
