@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections import namedtuple
 from distutils.version import LooseVersion
 import io
 import operator
@@ -34,8 +35,6 @@ def _batchify(data, batch_size):
 
 def _get_total_batch_size(benchmark_config, model_specs):
     return model_specs["seq_len"] * benchmark_config["batch_size"]
-
-from collections import namedtuple
 
 DatasetsInfo = namedtuple('DataSetsInfo', ['ntokens', 'train_dataset', 'valid_dataset', 'test_dataset'])
 
