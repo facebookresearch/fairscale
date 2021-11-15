@@ -7,22 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.3] - TBD
 
 ### Changed
-- Moving forward we would be testing all of our code with Python 3.9.7, CUDA 11.2 and the following
-three versions of PyTorch
-        - the latest stable version
-        - the latest LTS version
-        - a recent nightly build
+- Moving forward we would be testing all of our code with Python 3.9.7, CUDA 11.2 and the following three versions of PyTorch [#847]:
+  - the most recent stable version
+  - the most recent LTS version
+  - a recent nightly build
 
 - Developer requirements of python packages will no longer be split into `requirements-dev.txt` and
-`requirements-test.txt`. All package requirements have been merged into `requirements-dev.txt`.
+`requirements-test.txt`. All package requirements have been merged into `requirements-dev.txt`. [#853]
 
 ### Added
 - `Pre-Commit` will be the de-facto standard to run all linter checks (black, isort, mypy, flake8 etc.)
-on all commits locally and in CI.
+on all commits locally and in CI. [#849]
 
 ### Removed
-- `meta.yml` in conda/recipe is no longer supported.
-- `requirements-test.txt` will no longer be needed as all required libraries are listed in `requirements-dev.txt`.
+- `meta.yml` in conda/recipe is no longer supported. [#853]
+- `requirements-test.txt` will no longer be needed as all required libraries are listed in `requirements-dev.txt`. [#853]
 
 ## [0.4.2] - 2021-11-08
 ### Fixed
