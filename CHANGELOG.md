@@ -13,8 +13,8 @@ three versions of PyTorch
         - the latest LTS version
         - a recent nightly build
 
-- Developer requirements of python packages will no longer be split into requirements-dev.txt and
-requirements-test.txt. All package requirements have been merged into requirements-dev.txt.
+- Developer requirements of python packages will no longer be split into `requirements-dev.txt` and
+`requirements-test.txt`. All package requirements have been merged into `requirements-dev.txt`.
 
 ### Added
 - `Pre-Commit` will be the de-facto standard to run all linter checks (black, isort, mypy, flake8 etc.)
@@ -22,6 +22,7 @@ on all commits locally and in CI.
 
 ### Removed
 - `meta.yml` in conda/recipe is no longer supported.
+- `requirements-test.txt` will no longer be needed as all required libraries are listed in `requirements-dev.txt`.
 
 ## [0.4.2] - 2021-11-08
 ### Fixed
