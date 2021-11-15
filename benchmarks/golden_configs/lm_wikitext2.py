@@ -114,7 +114,7 @@ class MOE:
             "scaler": GradScaler(),
             "clip_value": 0.05,
             "num_decoder_layers": 20,
-            "seq_len": 32,
+            "seq_len": 33,  # (seq_len - 1) needs to be divisible by num_local_experts
             "is_moe": True,
             "num_local_experts": 2,
         }

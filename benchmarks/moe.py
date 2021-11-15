@@ -8,7 +8,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from benchmarks.golden_configs.lm_wikitext2 import MOE as MOEConfig
+from golden_configs.lm_wikitext2 import MOE as MOEConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 MPI_PORT = 29500
@@ -62,6 +62,13 @@ def train(rank, world_size, benchmark_config, model_specs, args):
     model = DDP(model, device_ids=[rank], output_device=rank, broadcast_buffers=False)
     lm_dataloader, _, _ = utils.get_data_loader(model_config["dataset_info"], args, benchmark_config, model_specs, num_replicas=world_size, rank=rank)
 
+    def get_batch(source):
+        seq_len = len(source) - 1
+        data = source[0:seq_len]
+        target = source[1 : 1 + seq_len]
+        return data, target
+
+
     for i, batch in enumerate(lm_dataloader):
         if i == 1:
             epoch_start_time = time.time()
@@ -74,13 +81,15 @@ def train(rank, world_size, benchmark_config, model_specs, args):
 
         start_time = time.time()
         optimizer.zero_grad()
-        batch = batch.to(device)
+        source, target = get_batch(batch)
+        source = source.to(device)
+        target = target.to(device)
         try:
-            output = model(batch)
+            output = model(source.to(device))
         except Exception as e:
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
-        loss = criterion(output.view(-1, vocab_size), batch.view(-1))
+        loss = criterion(output.view(-1, vocab_size), target.view(-1))
         loss.backward()
 
         torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
