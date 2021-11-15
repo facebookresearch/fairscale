@@ -7,7 +7,10 @@ import functools
 import unittest
 
 from parameterized import parameterized
+import pytest
 import torch.nn as nn
+
+from fairscale.utils import torch_version
 
 from .test_fsdp import (
     CONFIG_OPTIONS,
@@ -19,6 +22,7 @@ from .test_fsdp import (
 )
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestApply(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_weight_init(self, config):

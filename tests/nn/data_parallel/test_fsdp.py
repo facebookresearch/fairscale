@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from parameterized import parameterized
+import pytest
 import torch
 from torch import nn
 import torch.distributed
@@ -28,6 +29,9 @@ from fairscale.utils.testing import (
     objects_are_equal,
     spawn_for_all_world_sizes,
 )
+
+if torch_version() >= (1, 8, 0):
+    from fairscale.optim.grad_scaler import ShardedGradScaler
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
@@ -49,7 +53,9 @@ class DistributedTest(unittest.TestCase):
         model_device = next(model.parameters()).device
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
-        optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+
+        optim = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=0.9)
+        scaler = ShardedGradScaler()
         for _ in range(num_steps):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
@@ -57,6 +63,7 @@ class DistributedTest(unittest.TestCase):
                 input = model.module.get_input(torch.device("cuda"))
                 output = model(*input)
                 loss = model.module.get_loss(input, output).to(model_device)
+            loss = scaler.scale(loss)
             assert loss.dtype == torch.float32
             model.module.run_backward(loss)
             if norm_type is not None:
@@ -65,10 +72,10 @@ class DistributedTest(unittest.TestCase):
                     model.clip_grad_norm_(clip_norm, norm_type)
                 else:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm, norm_type)
-            params = [p for p in model.parameters()]
-            print(f"params.device {params[0].device} param.grad.device {params[0].grad.device}")
-
-            optim.step()
+            scaler.step(optim)
+            scaler.update()
+        if hasattr(model, "assert_idle"):
+            model.assert_idle()
         if isinstance(model, FullyShardedDataParallel):
             model.assert_state(TrainingState.IDLE)
         return loss.detach()
@@ -308,21 +315,21 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # Test every combination of these options:
         spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config))
 
-    def test_cpu_offload_and_cpu_grads(self):
-        # We don't test the False condition because that requires the optimizer to internally do
-        # the device transfer and PyTorch optimizers don't support this.
-        config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": True}
+    # testing moving params to cpu while using full and mixed precision
+    @parameterized.expand([(True,), (False,)], name_func=rename_test)
+    def test_cpu_offload_and_cpu_grads(self, mixed_precision):
+        config = {"mixed_precision": mixed_precision, "cpu_offload": True}
         test_fn = functools.partial(
             self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
         )
         spawn_and_init(test_fn)
 
-    def test_cpu_offload_and_cpu_grads_no_mixed_precision(self):
-        # We don't test the False condition because that requires the optimizer to internally do
-        # the device transfer and PyTorch optimizers don't support this.
-        config = {"mixed_precision": False, "cpu_offload": True, "move_grads_to_cpu": True}
+    # testing full and mixed precision on the gpu
+    @parameterized.expand([(True,), (False,)], name_func=rename_test)
+    def test_no_cpu_offload_with_sharded_grad_scaler(self, mixed_precision):
+        config = {"mixed_precision": mixed_precision, "move_params_to_cpu": False}
         test_fn = functools.partial(
-            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
+            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=True, lr=0.01
         )
         spawn_and_init(test_fn)
 
@@ -485,10 +492,10 @@ class TestSerialization(DistributedTest):
         optim.step()
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestHooks(DistributedTest):
     # Feel free to modify these tests as the implementation changes.
     # They aspire to make sure that backward hooks are registered and used
-
     @parameterized.expand([[True], [False]])
     def test_output_backward_hooks(self, cuda_first):
         fn = functools.partial(self._test_output_backward_hooks, cuda_first=cuda_first)
@@ -541,6 +548,7 @@ class TestHooks(DistributedTest):
         assert model._register_pre_backward_hooks.called
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestNoGrad(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_parameterized(self, config):
@@ -568,6 +576,7 @@ class TestNoGrad(DistributedTest):
         assert objects_are_equal(ref_output, no_grad_output, raise_exception=True)
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestModuleProperties(DistributedTest):
     @parameterized.expand([[{"flatten_parameters": False}], [{"flatten_parameters": True}]], name_func=rename_test)
     def test_named_parameters(self, config):
