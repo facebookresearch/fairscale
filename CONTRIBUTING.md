@@ -42,7 +42,7 @@ outlined on that page and do not file a public issue.
 ~$ python3 -m venv venv2
 ~$ source venv2/bin/activate
 (venv2) ~$ cd git/fairscale/
-(venv2) ~/git/fairscale $ pip3 install -r requirements-test.txt
+(venv2) ~/git/fairscale $ pip3 install -r requirements-dev.txt
 ```
 
 ## Coding Style
@@ -59,6 +59,10 @@ outlined on that page and do not file a public issue.
 
 ### Pre-commit
 
+We use pre-commit to maintain the coding style. Pre-Commit checks are run via Github Actions on every
+commit. To install all the relevant libraries and run the pre-commit tests locally, execute the following
+commands:
+
 ```
 pip install -r requirements-dev.txt
 pre-commit install
@@ -67,18 +71,12 @@ pre-commit install
 After the above, your `git commit` command will automatically trigger pre-commit
 checks, which are static code analysis tools we use.
 
-### Run statis analysis by hand (without using pre-commit)
-
-Note that, trailing spaces are not checked by the manual commands below, but they are checked by the pre-commit hooks above.
-
-```
-black .
-isort .
-flake8
-mypy --ignore-missing-imports --scripts-are-modules --pretty .
-```
-
 ## Testing
+
+FairScale code is tested on Python 3.9.7, CUDA 11.2 and the following three PyTorch versions:
+- the latest stable version
+- the latest LTS version
+- a recent nightly build
 
 ### Unit tests
 

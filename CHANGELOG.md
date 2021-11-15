@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - TBD
+
+### Changed
+- Moving forward we would be testing all of our code with Python 3.9.7, CUDA 11.2 and the following
+three versions of PyTorch
+        - the latest stable version
+        - the latest LTS version
+        - a recent nightly build
+
+- Developer requirements of python packages will no longer be split into requirements-dev.txt and
+requirements-test.txt. All package requirements have been merged into requirements-dev.txt.
+
+### Added
+- `Pre-Commit` will be the de-facto standard to run all linter checks (black, isort, mypy, flake8 etc.)
+on all commits locally and in CI.
+
+### Removed
+- `meta.yml` in conda/recipe is no longer supported.
+
 ## [0.4.2] - 2021-11-08
 ### Fixed
 - FSDP: Fixed an pre-backward hook bug for certain type of models and FSDP config. [#833]
