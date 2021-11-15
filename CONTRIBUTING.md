@@ -57,7 +57,7 @@ outlined on that page and do not file a public issue.
   and less development overhead in maintaining an importing list.
 * Please setup pre-commit before opening up your PR.
 
-### Pre-commit
+### Pre-Commit
 
 We use pre-commit to maintain the coding style. Pre-Commit checks are run via Github Actions on every
 commit. To install all the relevant libraries and run the pre-commit tests locally, execute the following
@@ -68,8 +68,19 @@ pip install -r requirements-dev.txt
 pre-commit install
 ```
 
-After the above, your `git commit` command will automatically trigger pre-commit
-checks, which are static code analysis tools we use.
+After the above, your `git commit` command will automatically trigger pre-commit checks.
+
+### Running static code analysis manually (Deprecated)
+
+Note that, trailing spaces are not checked by the manual commands below, but they are checked by the
+pre-commit hooks we use above.
+
+```
+black .
+isort .
+flake8
+mypy --ignore-missing-imports --scripts-are-modules --pretty .
+```
 
 ## Testing
 
