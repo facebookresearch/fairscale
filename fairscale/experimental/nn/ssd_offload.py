@@ -9,10 +9,12 @@ from enum import Enum, auto
 from functools import reduce
 import io
 import os
-from typing import Any, Dict, List, Optional, Tuple
+import pickle
+from typing import IO, Any, BinaryIO, Callable, Iterator, List, Optional, Sequence, Tuple, Type, Union
 
 import numpy as np
 import torch
+from torch.serialization import DEFAULT_PROTOCOL as DEFAULT_PROTOCOL
 
 try:
     from torch.utils._pytree import tree_map
@@ -131,7 +133,7 @@ class SsdTensorHandle(torch.Tensor):
         return handle
 
     @classmethod
-    def from_tensor(cls, tensor: torch.Tensor) -> SsdTensorHandle:
+    def from_tensor(cls: Type[SsdTensorHandle], tensor: torch.Tensor) -> SsdTensorHandle:
         """Returns a new SsdTensorHandle from a tensor."""
         handle = cls(shape=tensor.shape, dtype=tensor.dtype, requires_grad=tensor.requires_grad)
         handle.tensor = tensor
@@ -159,6 +161,13 @@ class SsdTensorHandle(torch.Tensor):
         assert self._dtype == tensor.dtype
         self.tensor = tensor
 
+    # if resizing a handle that is part of an ssd buffer, care must be taken that the new size
+    # doesn't conflict with adjacent handles!
+    def point_to_resized_tensor(self, tensor: torch.Tensor) -> None:
+        assert self._dtype == tensor.dtype
+        self._shape = tensor.shape
+        self.tensor = tensor
+
     def to_tensor(self) -> torch.Tensor:
         """Returns the tensor represented by the SsdTensorHandle object.
 
@@ -173,13 +182,15 @@ class SsdTensorHandle(torch.Tensor):
             self.storage_state = StorageState.ON_CPU
             return self.tensor
 
-    def to_file(self, release_tensor_after_write: bool = True) -> None:
+    def to_file(self, permit_when_tensor_none: bool = False, release_tensor_after_write: bool = True) -> None:
         """Saves the tensor to disk and releases memory if specified."""
-        assert self.tensor is not None
-        write(self.tensor, self.filename, self.offset * self.tensor.element_size())
-        if release_tensor_after_write:
-            self.tensor = None
-            self.storage_state = StorageState.ON_DISK
+        assert self.tensor is not None or permit_when_tensor_none
+
+        if self.tensor is not None:
+            write(self.tensor, self.filename, self.offset * self.tensor.element_size())
+            if release_tensor_after_write:
+                self.tensor = None
+                self.storage_state = StorageState.ON_DISK
 
     def copy_into_tensor(self, tensor: torch.Tensor) -> None:
         """Copies SsdTensorHandle's data into the given tensor.
@@ -198,7 +209,7 @@ class SsdTensorHandle(torch.Tensor):
         else:
             read(tensor, self.filename, self.offset * tensor.element_size())
 
-    __torch_function__ = torch._C._disabled_torch_function_impl  # type: ignore
+    __torch_function__ = torch._C._disabled_torch_function_impl
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
@@ -229,92 +240,215 @@ class SsdTensorHandle(torch.Tensor):
         return r
 
 
-class SsdBuffer:
-    """
-    The SsdBuffer represents a single buffer containing a list of tensors. Each of the
-    tensors are represented by a `SsdTensorHandle`.
+# Classes supporting torch.save/load
+class TorchSaver:
+    def __init__(self) -> None:
+        self.pickle_module = DisableMemoizationPicklerModule
 
-    Args:
-        num_elems (int): Dictates the size of the 1-D tensor.
-        dtype (torch.dtype): Dtype of the buffer.
+    def save(
+        self, obj: Any, f: Union[str, os.PathLike, BinaryIO, IO[bytes]], pickle_protocol: int = DEFAULT_PROTOCOL
+    ) -> None:
+        torch.serialization.save(
+            obj, f, self.pickle_module, pickle_protocol=pickle_protocol, _use_new_zipfile_serialization=False
+        )
+
+
+class SsdParameter(torch.nn.Parameter, SsdTensorHandle):
+    @classmethod
+    def from_tensor(cls: Type[SsdParameter], tensor: SsdTensorHandle) -> SsdParameter:  # type: ignore
+        r = cls(tensor.shape, tensor.dtype, tensor.requires_grad)
+        r.tensor = tensor
+        return r
+
+    @staticmethod
+    def __new__(
+        cls: SsdParameter, shape: Tuple[int, ...], dtype: torch.dtype, requires_grad: bool = True
+    ) -> SsdParameter:
+        r = SsdTensorHandle._make_wrapper_subclass(cls, shape, dtype=dtype, requires_grad=requires_grad)  # type: ignore
+
+        return r
+
+    def __init__(self, shape: Tuple[int, ...], dtype: torch.dtype, requires_grad: bool = True) -> None:
+        super(SsdParameter, self).__init__(shape, dtype, requires_grad)  # type: ignore
+
+
+class SsdFlatParameter(torch.nn.Parameter, SsdTensorHandle):
+    """A parameter that is initialized from a list of parameters and can be
+    turned into a list of views as needed.
     """
 
-    def __init__(self, num_elems: int, filename: str, dtype: torch.dtype = torch.float32) -> None:
-        self.buffer: torch.Tensor = torch.empty((num_elems,), dtype=dtype)
+    def __new__(
+        cls, params: Sequence[torch.nn.Parameter], filename: str, requires_grad: bool = True
+    ) -> "SsdFlatParameter":
+        """Make an object using the parent's __new__ function."""
+
+        # A empty of non-list input doesn't make sense.
+        if not isinstance(params, (list, tuple)) or len(params) == 0:
+            raise ValueError("An non-empty list or tuple argument is needed")
+
+        # Normally, all items are Parameters. But during pickling, we will have a single
+        # Tensor as the input and later in __init__, the correct _param_numels and _param_shapes
+        # are set.
+        if not all(isinstance(p, (torch.nn.Parameter, torch.Tensor)) for p in params):
+            raise ValueError("List items need to be Parameter types")
+
+        # Flattening involves (1) making a tensor flat (i.e. single dimensional) and (2) making a module
+        # heirarchy flat (using a single tensor to replace a tree of tensors). Therefore,
+        # adding back nesting and heirarchy is counter-productive. If nesting is encountered
+        # in the future, the reasonable thing to do is likely for the top level SsdFlatParameter to
+        # absorb the nested one and keep the result flat, free from hierarchy.
+        if any(isinstance(p, SsdFlatParameter) for p in params):
+            raise ValueError("Nesting SsdFlatParameter is not supported")
+
+        dtype = params[0].dtype
+        size = sum(p.numel() for p in params)
+        r = SsdTensorHandle._make_wrapper_subclass(cls, (size,), dtype=dtype, requires_grad=requires_grad)  # type: ignore
+        return r
+
+    def __init__(self, params: Sequence[torch.nn.Parameter], filename: str, requires_grad: bool = True):
+        """Initialize the _param_numels and _param_shapes lists."""
+        self._param_numels = [p.numel() for p in params]
+        total_numels = sum(self._param_numels)
+        assert (
+            self.numel() <= total_numels
+        ), f"Something wrong with __new__ method, {self.numel()} vs. {sum(self._param_numels)}"
+        self._param_shapes = [p.size() for p in params]
+
+        # These are set by FPW class below, not by this class itself.
+        self._param_infos: List[Tuple[str, torch.nn.Module, str]] = []
+        self._shared_param_infos: List[Tuple[str, str, torch.nn.Module, str, torch.nn.Module, str]] = []
+
+        super(SsdFlatParameter, self).__init__(shape=(total_numels,), dtype=params[0].dtype, requires_grad=requires_grad)  # type: ignore
+
+        tensor = torch.cat(
+            [p.detach().reshape(-1) if isinstance(p, torch.nn.Parameter) else p.reshape(-1) for p in params], 0
+        )
+        tensor.requires_grad = requires_grad
+        self.set_file_params(filename, 0)
+        self.point_to_tensor(tensor)
+
+    def get_param_views(self, external_data: Optional[torch.Tensor] = None) -> Iterator[torch.Tensor]:
+        """Return a generator of views that map to the original parameters."""
+        # Note, self.data could be sharded, so its numel is <= to the sum.
+        """
+        assert self.data.numel() <= sum(
+            self._param_numels
+        ), f"Incorrect internal state {self.data.numel()} vs. {sum(self._param_numels)}"
+        """
+        if external_data:
+            if external_data.numel() != sum(self._param_numels):
+                raise ValueError(
+                    f"Incorrect numel of supplied data: got {external_data.numel()} but expected {sum(self._param_numels)}"
+                )
+            return (t.view(s) for (t, s) in zip(external_data.split(self._param_numels), self._param_shapes))
+        else:
+            return (t.view(s) for (t, s) in zip(self.split(self._param_numels), self._param_shapes))
+
+    def metadata(self) -> Tuple[List[str], List[torch.Size], List[int]]:
+        """Return tuple of (names, shapes, numels) metadata for this flat parameter."""
+        names = [".".join([m, n]) if m else n for (m, _, n) in self._param_infos]
+        return names, self._param_shapes, self._param_numels
+
+    def __setstate__(self, state: Tuple[Any, Any, Any, Any]) -> None:
+        """Use by pickle to set the internal states."""
+        (self._param_numels, self._param_shapes, self._param_infos, self._shared_param_infos) = state
+        assert self.numel() <= sum(
+            self._param_numels
+        ), f"Incorrect pickling {self.numel()} vs. {sum(self._param_numels)}"
+
+    def __reduce_ex__(self, proto: int) -> Tuple[Any, Any, Any]:
+        """Support pickling between ranks."""
+        return (
+            SsdFlatParameter,  # Callable
+            # Args to the callable above
+            ([self.data], self.filename, self.requires_grad),
+            # Args to __setstate__
+            (self._param_numels, self._param_shapes, self._param_infos, self._shared_param_infos),
+        )
+
+
+class DisableMemoizationPicklerModule:
+    @classmethod
+    def Pickler(cls, data_buf: io.BytesIO, protocol: int) -> pickle.Pickler:
+        p = pickle.Pickler(data_buf, protocol)
+        p.fast = True
+        return p
+
+    @classmethod
+    def dump(cls, obj: Any, f: io.BytesIO, protocol: int) -> None:
+        pickle.dump(obj, f, protocol)
+
+
+class FileChunkingIterator:
+    """
+    chunk_size_bytes determines how large each chunk that we break the file
+    into. It is important to consider limiting the size because by when
+    python unpickles an object, by default it will read up to 1000 list
+    elements at a time. So memory usage while unpickling will be on the
+    order of O(min(file_size, 1000 * chunk_size_bytes)).
+    """
+
+    def __init__(self, filename: str, chunk_size_bytes: int = DEFAULT_CHUNK_SIZE) -> None:
         self.filename = filename
-        self.offset = 0
-        self.tensors: Dict[int, SsdTensorHandle] = {}
-        self.storage_state = StorageState.ON_CPU
+        self.file: Optional[Union[BinaryIO, IO[bytes]]] = None
+        self.chunk_size_bytes = chunk_size_bytes
+        self.num_chunks_read = 0
 
-    def allocate(self, num_elems: int) -> SsdTensorHandle:
-        """Allocates a new tensor handle of size num_elems."""
-        assert num_elems > 0
-        assert self.storage_state == StorageState.ON_CPU, self.storage_state
-        assert self.can_alloc(num_elems)
+    def __iter__(self) -> Iterator[bytes]:
+        self.file = io.open(self.filename, "rb", buffering=0)
+        self.num_chunks_read = 0
+        return self
 
-        tensor = self.buffer.narrow(0, self.offset, num_elems)
+    def __next__(self) -> bytes:
+        assert self.file
+        next_chunk = self.file.read(self.chunk_size_bytes)
 
-        tensor_offset = self.offset
-        handle = SsdTensorHandle.from_tensor(tensor)
-        self.tensors[tensor_offset] = handle
-        handle.set_file_params(self.filename, tensor_offset)
-        self.offset += num_elems
+        if len(next_chunk) == 0:
+            raise StopIteration
+        self.num_chunks_read += 1
 
-        return handle
+        return next_chunk
 
-    def insert(self, tensor: torch.Tensor) -> SsdTensorHandle:
-        """Insert a new tensor by allocating memory and creating a corresponding handle."""
-        assert self.storage_state == StorageState.ON_CPU, self.storage_state
-        # For the non sharded case, the tensor will not be flattened
-        tensor = tensor.reshape(-1)
-        assert self.buffer.dtype == tensor.dtype
-        handle = self.allocate(tensor.numel())
-        handle.get_tensor().copy_(tensor)
-        return handle
 
-    def can_alloc(self, num_elems: int) -> bool:
-        """Verify that you can allocate a tensor within the bounds
-        of the larger SsdBuffer memory buffer."""
-        assert self.storage_state == StorageState.ON_CPU, self.storage_state
-        return (self.offset + num_elems) <= self.buffer.numel()
+class SsdTensor:
+    def __init__(self, shape: Tuple[int, ...], filename: str, dtype: torch.dtype = torch.float) -> None:
+        self.filename = filename
+        self.f: Optional[Union[BinaryIO, IO[bytes]]] = None
+        self.shape = shape
+        self.dtype = dtype
 
-    def get_tensors(self) -> List[SsdTensorHandle]:
-        """Returns the list of tensor handles in SsdBuffer."""
-        return [t for t in self.tensors.values()]
+    @classmethod
+    def __unpickle__(cls, shape: Tuple[int, ...], filename: str, dtype: torch.dtype) -> SsdTensor:
+        result = cls(shape, filename, dtype)
+        result.f = io.open(result.filename, "wb")
+        return result
 
-    def to_disk(self) -> None:
-        """Writes all tensors backed by handles to disk."""
-        if self.storage_state == StorageState.ON_DISK:
-            return
-        assert self.storage_state == StorageState.ON_CPU, self.storage_state
-        # We use `narrow` so that we write valid tensors that have been allocated
-        # as opposed to the entire SSD buffer.
-        valid_data = self.buffer.narrow(0, 0, self.offset)
-        write(valid_data, self.filename)
+    @classmethod
+    def fromtensor(cls, tensor: torch.Tensor, filename: str) -> SsdTensor:
+        result = cls(tensor.shape, filename, tensor.dtype)
+        write(tensor, result.filename)
+        return result
 
-        # Remove all Tensor references
-        for offset, t in self.tensors.items():
-            t.point_to_file(self.filename, offset)
+    def __reduce_ex__(self, protocol: int) -> Tuple[Callable, Any, Any, Any]:
+        # adding _2 to the filename is just a hack to prevent overwriting the original SsdTensor data
+        return (
+            type(self).__unpickle__,
+            (
+                self.shape,
+                self.filename + "_2",
+                self.dtype,
+            ),
+            None,
+            iter(FileChunkingIterator(self.filename)),
+        )
 
-        # TODO(anj-s): Setting this to None does not result in GC picking
-        # this reference up.
-        self.buffer = torch.empty((1))
-        self.storage_state = StorageState.ON_DISK
+    def append(self, item: bytes) -> None:
+        assert self.f
+        self.f.write(item)
 
-    def from_disk(self, num_elems: int, dtype: torch.dtype = torch.float32) -> None:
-        """Reads all tensors backed by handles into memory."""
-        if self.storage_state == StorageState.ON_CPU:
-            return
-        assert self.storage_state == StorageState.ON_DISK, self.storage_state
-        if num_elems < self.offset:
-            raise RuntimeError(
-                f"Attempted to load from file ssdbuffer of size: {self.offset} into a buffer that is of size: {num_elems}"
-            )
-        self.buffer = torch.empty((num_elems,), dtype=dtype)
-        valid_data = self.buffer.narrow(0, 0, self.offset)
-        read(valid_data, self.filename)
+    def extend(self, items: List[bytes]) -> None:
+        for i in items:
+            self.append(i)
 
-        for offset, t in self.tensors.items():
-            t.point_to_tensor(self.buffer.narrow(0, t.offset, t._numel))
 
-        self.storage_state = StorageState.ON_CPU
+torch_saver = TorchSaver()
