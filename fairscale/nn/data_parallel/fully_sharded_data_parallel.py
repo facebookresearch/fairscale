@@ -358,9 +358,7 @@ class FullyShardedDataParallel(nn.Module):
             self.ssd_buffer_filepath_dir = (
                 offload_config.ssd_filepath_dir if offload_config.ssd_filepath_dir else tempfile.gettempdir()
             )
-            print(f"ssd_buffer_filepath_dir {self.ssd_buffer_filepath_dir}")
             self.ssd_buffer_filename = tempfile.mkstemp(dir=self.ssd_buffer_filepath_dir)
-            print(f"ssd_buffer_filename {self.ssd_buffer_filename}")
             self.ssd_buffer = ssd_offload.SsdBuffer(self.buffer_size, self.ssd_buffer_filename[1])
             self.move_grads_to_cpu = True
             self.move_params_to_cpu = True
