@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.3] - TBD
 
 ### Added
-- Sharded Grad Scaler works with cpu offload in mixed and full precision.
+- Sharded Grad Scaler works with cpu offload in mixed and full precision. [#831]
 - Chore: `Pre-Commit` will be the de-facto standard to run all linter checks (black, isort, mypy, flake8 etc.)
 on all commits locally and in CI. [#849]
 

@@ -57,7 +57,7 @@ outlined on that page and do not file a public issue.
   and less development overhead in maintaining an importing list.
 * Please setup pre-commit before opening up your PR.
 
-### Pre-Commit
+### Pre-Commit (Recommended)
 
 We use pre-commit to maintain the coding style. Pre-Commit checks are run via Github Actions on every
 commit. To install all the relevant libraries and run the pre-commit tests locally, execute the following
@@ -87,7 +87,9 @@ mypy --ignore-missing-imports --scripts-are-modules --pretty .
 FairScale code is tested on Python 3.9.7, CUDA 11.2 and the following three PyTorch versions:
 - the latest stable version
 - the latest LTS version
-- a recent nightly build
+- a recent nightly release
+
+See the [README](https://github.com/facebookresearch/fairscale/blob/main/README.md#testing) for the exact version numbers.
 
 ### Unit tests
 
