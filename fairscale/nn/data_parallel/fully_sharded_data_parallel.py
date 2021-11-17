@@ -275,6 +275,7 @@ class FullyShardedDataParallel(nn.Module):
         verbose: bool = False,
         cpu_offload: bool = False,
         gradient_predivide_factor: Optional[float] = None,
+        enable_prefetch_next_module_params: Optional[float] = None,
     ):
         init_start = time.time()
         super().__init__()
@@ -390,7 +391,8 @@ class FullyShardedDataParallel(nn.Module):
         # Flag to guard against preparing gradients multiple times per iteration.
         # This is reset at the end of the backward pass.
         self._pre_backward_hook_has_run = False
-
+        self.enable_prefetch_next_module_params = enable_prefetch_next_module_params
+        
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
         while world_size % factor == 0 and world_size / factor > factor:
@@ -937,8 +939,11 @@ class FullyShardedDataParallel(nn.Module):
     def _reset_lazy_init(self) -> None:
         """Reset instance so :func:`_lazy_init` will run on the next forward."""
         self._is_root: Optional[bool] = None
+        self._fsdp_forward_ordering: List[nn.Module] = []
+        self._my_fsdp_instance_idx: Optional[int] = None
         self._streams: Dict[str, torch.cuda.Stream] = {}
         self._reducer: Optional[ReduceScatterBucketer] = None
+        
         for p in self.params:
             if hasattr(p, "_fp32_shard"):
                 del p._fp32_shard  # reset _init_param_attributes
@@ -1063,6 +1068,8 @@ class FullyShardedDataParallel(nn.Module):
         # As the root, we now set all children instances to False and
         # give them a closure to try to queue a wait_for_post_backward.
         self.children_share_process_group = True
+        
+        # fsdp_module_list = []
         for n, m in self.named_modules():
             # `n != ""` excludes self.
             if n != "" and isinstance(m, FullyShardedDataParallel):
@@ -1079,6 +1086,9 @@ class FullyShardedDataParallel(nn.Module):
                 m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
                     (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
                 )
+                # fsdp_module_list.append(m)
+                m._fsdp_forward_ordering = self._fsdp_forward_ordering
+            
 
     def _setup_streams(self) -> None:
         """Create streams to overlap data transfer and computation."""
@@ -1127,6 +1137,10 @@ class FullyShardedDataParallel(nn.Module):
         # the conversion).
         if self._is_root and self.mixed_precision:
             args, kwargs = cast_floats_to_right_precision(True, True, *args, **kwargs)
+
+        if self not in self._fsdp_forward_ordering:
+            self._my_fsdp_instance_idx = len(self._fsdp_forward_ordering)
+            self._fsdp_forward_ordering.append(self)
 
         # If enabled, convert the input to FP32 if we are in full precision.
         # no_grad is not used because the input might be for a non-root instance,
@@ -1333,6 +1347,7 @@ class FullyShardedDataParallel(nn.Module):
             # get updated before the next forward. This saves networking
             # bandwidth but uses more GPU memory.
             self._free_full_params([param])
+            
 
         if self.mixed_precision:
             # This is a no-op if reshard_after_forward is True, since we already
@@ -1345,6 +1360,14 @@ class FullyShardedDataParallel(nn.Module):
 
         if not self._require_backward_grad_sync:
             return
+
+        if (
+            self.reshard_after_forward 
+            and self.enable_prefetch_next_module_params 
+            and self._fsdp_forward_ordering is not None 
+            and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
+        ):
+            self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params()
 
         # Wait for all work in the current stream to finish, then start the
         # reductions in post_backward stream.
