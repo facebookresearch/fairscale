@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Sharded Grad Scaler works with cpu offload in mixed and full precision. [#831]
+- API for specifying SSD offload for params with FSDP. You can use a OffloadConfig to specify the type of offload
+  and the file path for storing params on SSD. Note: This is an experimental feature. [#855]
 
 ### Changed
 - Cleanup: Moving forward we would be testing all of our code with Python 3.9.7, CUDA 11.2 and the following three versions of PyTorch [#847]:
