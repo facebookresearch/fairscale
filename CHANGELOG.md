@@ -4,12 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## next tbd
-
-### Fixed
-- MEVO: fixed eval and checkpointing code paths [#851]
+## [0.4.3] - TBD
 
 ### Added
+- Sharded Grad Scaler works with cpu offload in mixed and full precision. [#831]
+- API for specifying SSD offload for params with FSDP. You can use a OffloadConfig to specify the type of offload
+  and the file path for storing params on SSD. Note: This is an experimental feature. [#855]
+
+### Changed
+- MEVO: fixed eval and checkpointing code paths [#851]
+- Cleanup: Moving forward we would be testing all of our code with Python 3.9.7, CUDA 11.2 and the following three versions of PyTorch [#847]:
+  - the most recent stable version
+  - the most recent LTS version
+  - a recent nightly build
 
 ## [0.4.2] - 2021-11-08
 ### Fixed

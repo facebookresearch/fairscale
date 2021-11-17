@@ -4,10 +4,9 @@
 # LICENSE file in the root directory of this source tree.
 
 import functools
-import glob
 import itertools
-import os
 import sys
+import tempfile
 import time
 import unittest
 
@@ -18,11 +17,12 @@ from torch import nn
 import torch.distributed
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
-from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
+from fairscale.nn.data_parallel import FullyShardedDataParallel, OffloadConfig, TrainingState
 from fairscale.utils import torch_version
-from fairscale.utils.testing import dist_init, rmf, spawn_for_all_world_sizes
+from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
 
 # Note: We need the nightly version for SSD offload to work. Hence I am checking for the next PyTorch release.
+print(f"torch version {torch_version()}")
 pytestmark = pytest.mark.skipif(torch_version() < (1, 11, 0), reason="requires torch version >= 1.11.0")
 
 
@@ -32,8 +32,6 @@ pytestmark = pytest.mark.skipif(torch_version() < (1, 11, 0), reason="requires t
 
 class DistributedTest(unittest.TestCase):
     def setUp(self):
-        if torch_version() < (1, 6, 0):
-            raise unittest.SkipTest("Need pytorch version >= 1.6 due to lack of reduce_scatter")
         if not torch.cuda.is_available():
             raise unittest.SkipTest("CUDA not available, skipping test")
         if sys.platform == "win32":
@@ -102,8 +100,12 @@ class DistributedTest(unittest.TestCase):
                 ref_state_dict[k] = ref_state_dict[k].cpu()
 
         # Confirm we get the same behavior using FullyShardedDataParallel.
+        if config.get("ssd_offload", False):
+            config["offload_config"] = OffloadConfig(offload_type="ssd_offload")
+
+        del config["ssd_offload"]
         model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
-        if not config.get("ssd_offload", False):
+        if not model.ssd_offload and not model.move_params_to_cpu:
             if use_cuda:
                 model = model.cuda()
             else:
@@ -149,16 +151,14 @@ class TestSsdMemory(DistributedTest):
         model = SimpleLinear(group, input_size=SIZE, output_size=SIZE, layers=4)
         time_keeper.print_time("CPU_MODEL", 1.0)
 
-        config["ssd_offload"] = True
-        model = FullyShardedDataParallel(model, **config)
-        time_keeper.print_time("FSDP_MODEL", 1.0)
+        with tempfile.TemporaryDirectory() as current_tempdir:
+            config["offload_config"] = OffloadConfig(offload_type="ssd_offload", ssd_filepath_dir=current_tempdir)
 
-        self._eval_for_several_steps(model, 1, autocast=False)
-        time_keeper.print_time("EVAL")
+            model = FullyShardedDataParallel(model, **config)
+            time_keeper.print_time("FSDP_MODEL", 1.0)
 
-        fileList = glob.glob(os.getcwd() + "/*_rank*")
-        for file in fileList:
-            rmf(file)
+            self._eval_for_several_steps(model, 1, autocast=False)
+            time_keeper.print_time("EVAL")
 
 
 class SimpleLinear(nn.Module):
@@ -221,29 +221,33 @@ class TestModuleProperties(DistributedTest):
         before_wrap_model = TransformerWithSharedParams(group)
         before_wrap_params = before_wrap_model.named_parameters()
 
-        config["ssd_offload"] = True
-        model = FullyShardedDataParallel(before_wrap_model, **config)
+        with tempfile.TemporaryDirectory() as current_tempdir:
+            if config["ssd_offload"]:
+                config["offload_config"] = OffloadConfig(offload_type="ssd_offload", ssd_filepath_dir=current_tempdir)
+            del config["ssd_offload"]
 
-        if not config["ssd_offload"]:
-            model = model.cuda()
+            model = FullyShardedDataParallel(before_wrap_model, **config)
+            print(f"model.ssd_offload {model.ssd_offload}")
+            if not model.ssd_offload and not model.move_params_to_cpu:
+                model = model.cuda()
 
-        self._eval_with_config(model, autocast=config["mixed_precision"])
+            self._eval_with_config(model, autocast=config["mixed_precision"])
 
-        # Get the named parameters after wrapping to compare.
-        after_wrap_params = model.named_parameters()
+            # Get the named parameters after wrapping to compare.
+            after_wrap_params = model.named_parameters()
 
-        if not config.get("flatten_parameters", False):
-            for before_nm, after_nm in zip(before_wrap_params, after_wrap_params):
-                assert before_nm[0] == after_nm[0]
-        else:
-            named_params_flat = [p for p in after_wrap_params][0][0]
-            assert "flat_param_0" in named_params_flat
+            if not config.get("flatten_parameters", False):
+                for before_nm, after_nm in zip(before_wrap_params, after_wrap_params):
+                    assert before_nm[0] == after_nm[0]
+            else:
+                named_params_flat = [p for p in after_wrap_params][0][0]
+                assert "flat_param_0" in named_params_flat
 
-        after_wrap_params = model.named_parameters()
+            after_wrap_params = model.named_parameters()
 
-        for before_nm, after_nm_original in zip(before_wrap_params, after_wrap_params):
-            assert before_nm[0] == after_nm_original[0]
-            torch.testing.assert_allclose(before_nm[1].shape, after_nm_original[1].shape)
+            for before_nm, after_nm_original in zip(before_wrap_params, after_wrap_params):
+                assert before_nm[0] == after_nm_original[0]
+                torch.testing.assert_allclose(before_nm[1].shape, after_nm_original[1].shape)
 
 
 class TestSsdLoading(DistributedTest):
@@ -252,7 +256,7 @@ class TestSsdLoading(DistributedTest):
         test_fn = functools.partial(self._test_ssd_offload_eval, config=config)
         spawn_and_init(test_fn)
 
-    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
+    @parameterized.expand(CONFIG, name_func=rename_test)
     def test_transformer_parameterized(self, config):
         spawn_and_init(functools.partial(self._test_identical_outputs_eval, TransformerWithSharedParams, config))
 
@@ -264,26 +268,23 @@ class TestSsdLoading(DistributedTest):
         nested_wrapping = config["nested_wrapping"]
         del config["nested_wrapping"]
 
-        config["ssd_offload"] = True
-        if nested_wrapping:
-            model = FullyShardedDataParallel(NestedWrappedModule(group, wrap_everything=True, wrapper_config=config))
-        else:
-            model = FullyShardedDataParallel(model, **config)
+        with tempfile.TemporaryDirectory() as current_tempdir:
+            config["offload_config"] = OffloadConfig(offload_type="ssd_offload", ssd_filepath_dir=current_tempdir)
+            if nested_wrapping:
+                model = FullyShardedDataParallel(
+                    NestedWrappedModule(group, wrap_everything=True, wrapper_config=config)
+                )
+            else:
+                model = FullyShardedDataParallel(model, **config)
 
-        if not config["ssd_offload"]:
-            model = model.cuda()
-        self._eval_with_config(model, autocast=config["mixed_precision"])
+            self._eval_with_config(model, autocast=config["mixed_precision"])
 
-        # With SSD offload only local_state_dict will work. We can support global
-        # state dict if we think it is necessary.
-        state_dict = model.local_state_dict()
-        model.load_local_state_dict(state_dict)
+            # With SSD offload only local_state_dict will work. We can support global
+            # state dict if we think it is necessary.
+            state_dict = model.local_state_dict()
+            model.load_local_state_dict(state_dict)
 
-        self._eval_with_config(model, config["mixed_precision"])
-
-        fileList = glob.glob(os.getcwd() + "/*_rank*")
-        for file in fileList:
-            rmf(file)
+            self._eval_with_config(model, config["mixed_precision"])
 
 
 class TransformerWithSharedParams(nn.Module):
