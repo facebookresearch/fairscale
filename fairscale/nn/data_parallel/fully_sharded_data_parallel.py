@@ -106,7 +106,7 @@ class TrainingState(Enum):
 # Offload config for specifying SSD options (initially at least)
 @dataclass
 class OffloadConfig:
-    """Class for specifying all arguments related to offloading params to SSD."""
+    """Class for specifying all arguments related to offloading parameters."""
 
     # Offload type: currently only supports: "ssd_offload"
     offload_type: str = None
@@ -274,6 +274,10 @@ class FullyShardedDataParallel(nn.Module):
         cpu_offload (bool, Optional):
             if ``True``, offload params to CPU. Note: This arg will be deprecated in favor of
             *``move_params_to_cpu``* in an upcoming release.
+        offload_config (OffloadConfig):
+            The `OffloadConfig` object is used to specify the type of offload (i.e SSD, CPU) and
+            other required knobs when offloading parameters from GPU. Currently the OffloadConfig
+            only supports specifying SSD offload as an option. Note: This is an experimental feature.
     """
 
     def __init__(
