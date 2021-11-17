@@ -2,6 +2,7 @@
 
 - Update the CHANGELOG.md
 - Update "what's new" in README.md
+- If needed, update the PyTorch versions in README.md in the Testing section.
 - Update `fairscale/__init__.py` and `docs/source/conf.py` for the new version number
 - git commit the change with title like "[chore] 0.3.1 release"
 - make a tag, like `git tag v0.3.1`
