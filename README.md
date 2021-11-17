@@ -155,9 +155,9 @@ At a high level, we want ML researchers to:
 ## Testing
 
 We use circleci to test FairScale with the following PyTorch versions (with CUDA 11.2):
-* the most recent PyTorch stable release
-* the most recent PyTorch LTS release
-* a recent PyTorch nightly release
+* the latest stable release (1.10)
+* the latest LTS release (1.8)
+* a recent nightly release (1.11.0.dev20211101+cu111)
 
 Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.
 
