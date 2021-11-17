@@ -5,12 +5,13 @@
 
 import contextlib
 import copy
+from dataclasses import dataclass
 from enum import Enum, auto
 import functools
 import logging
 from math import inf
 import os
-from random import randint
+import tempfile
 import time
 import traceback
 import typing
@@ -98,6 +99,19 @@ class TrainingState(Enum):
     BACKWARD_PRE = auto()
     BACKWARD_POST = auto()
     SUMMON_FULL_PARAMS = auto()
+
+
+# Data classes containing FSDP parameter constructs
+
+# Offload config for specifying SSD options (initially at least)
+@dataclass
+class OffloadConfig:
+    """Class for specifying all arguments related to offloading params to SSD."""
+
+    # Offload type: currently only supports: "ssd_offload"
+    offload_type: str = None
+    # Path to the directory for storing parameters offloaded to disk.
+    ssd_filepath_dir: str = None
 
 
 class FullyShardedDataParallel(nn.Module):
@@ -282,7 +296,7 @@ class FullyShardedDataParallel(nn.Module):
         force_input_to_fp32: bool = False,
         verbose: bool = False,
         cpu_offload: bool = False,
-        **kwargs: Dict[str, Any],
+        offload_config: OffloadConfig = None,
     ):
         init_start = time.time()
         super().__init__()
@@ -306,7 +320,7 @@ class FullyShardedDataParallel(nn.Module):
         self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
         # Experimental feature for now. Use at your own risk.
-        self.ssd_offload = kwargs.get("ssd_offload", False)
+        self.ssd_offload = True if offload_config and offload_config.offload_type == "ssd_offload" else False
 
         self.gradient_predivide_factor: float = self._get_gradient_predivide_factor(self.world_size)
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
@@ -339,12 +353,15 @@ class FullyShardedDataParallel(nn.Module):
         # TODO(anj): Should we conditionally do this only if we have params?
         # TODO(anj): Figure out if we can allocate the buffer during sharding.
         self.buffer_size = sum(p.numel() for p in params)
-        self.ssd_buffer_filename = ""
         if self.ssd_offload:
             assert import_ssd_offload, "We need to import ssd_offload.py to enable the `ssd_offload` feature."
-            # TODO(anj): Add support for temp file and directory as possible API params.
-            self.ssd_buffer_filename = f"{randint(1, int(10E6))}_rank{self.rank}"
-            self.ssd_buffer = ssd_offload.SsdBuffer(self.buffer_size, self.ssd_buffer_filename)
+            self.ssd_buffer_filepath_dir = (
+                offload_config.ssd_filepath_dir if offload_config.ssd_filepath_dir else tempfile.gettempdir()
+            )
+            print(f"ssd_buffer_filepath_dir {self.ssd_buffer_filepath_dir}")
+            self.ssd_buffer_filename = tempfile.mkstemp(dir=self.ssd_buffer_filepath_dir)
+            print(f"ssd_buffer_filename {self.ssd_buffer_filename}")
+            self.ssd_buffer = ssd_offload.SsdBuffer(self.buffer_size, self.ssd_buffer_filename[1])
             self.move_grads_to_cpu = True
             self.move_params_to_cpu = True
 
