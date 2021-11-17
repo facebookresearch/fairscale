@@ -292,7 +292,7 @@ class OSS(Optimizer):
             if clip_coef < 1:
                 for device, device_params in self._per_device_params.items():
                     for p in filter(lambda x: x.grad is not None, device_params[self.rank]):
-                        p.grad.detach().mul_(clip_coef.to(device))  # type: ignore   # mypy trips on the filter
+                        p.grad.detach().mul_(clip_coef.to(device))
 
         return total_norm
 
@@ -341,7 +341,9 @@ class OSS(Optimizer):
                 else:
                     obj_list = [state_to_share]
                     dist.broadcast_object_list(
-                        obj_list, src=self.global_rank, group=self.group,
+                        obj_list,
+                        src=self.global_rank,
+                        group=self.group,
                     )
             else:
                 # Fetch the optim state from the other replicas
@@ -355,7 +357,9 @@ class OSS(Optimizer):
                 else:
                     obj_list = [torch.tensor([0], dtype=torch.uint8, device=dist_device)]
                     dist.broadcast_object_list(
-                        obj_list, src=self._local_to_global_rank[rank], group=self.group,
+                        obj_list,
+                        src=self._local_to_global_rank[rank],
+                        group=self.group,
                     )
                     replica_state = obj_list[0]
 

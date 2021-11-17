@@ -83,7 +83,10 @@ class AMPnetDelegate(object):
 
 class FakeDataset(Dataset):
     def __init__(
-        self, input_dim=10, output_dim=10, total_samples=100,
+        self,
+        input_dim=10,
+        output_dim=10,
+        total_samples=100,
     ):
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -104,7 +107,13 @@ class FakeDataset(Dataset):
 @torch_spawn([2])
 def async_event_loop_interleave_simple():
     model = nn.Sequential(nn.Linear(10, 10), nn.ReLU(inplace=False), nn.Linear(10, 10), nn.ReLU(inplace=False))
-    pipe = AMPnetPipe(module=model, balance=[2, 2], worker_map=get_worker_map(), chunks=10, checkpoint="never",)
+    pipe = AMPnetPipe(
+        module=model,
+        balance=[2, 2],
+        worker_map=get_worker_map(),
+        chunks=10,
+        checkpoint="never",
+    )
     fake_dataset = FakeDataset()
     fake_dataloader = DataLoader(fake_dataset, batch_size=4, shuffle=True, num_workers=0)
     loss = nn.MSELoss()
@@ -116,7 +125,13 @@ def async_event_loop_interleave_simple():
 @torch_spawn([4])
 def async_event_loop_interleave_hard():
     model = nn.Sequential(nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 10))
-    pipe = AMPnetPipe(module=model, balance=[1, 1, 1, 1], worker_map=get_worker_map(), chunks=10, checkpoint="never",)
+    pipe = AMPnetPipe(
+        module=model,
+        balance=[1, 1, 1, 1],
+        worker_map=get_worker_map(),
+        chunks=10,
+        checkpoint="never",
+    )
     fake_dataset = FakeDataset()
     fake_dataloader = DataLoader(fake_dataset, batch_size=4, shuffle=True, num_workers=0)
     loss = nn.MSELoss()

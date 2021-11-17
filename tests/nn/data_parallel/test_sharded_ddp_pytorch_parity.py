@@ -21,9 +21,11 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
-from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.utils import torch_version
 from fairscale.utils.testing import check_same_model_params, skip_if_no_cuda, skip_if_single_gpu, temp_files_ctx
+
+if torch_version() >= (1, 8, 0):
+    from fairscale.optim.grad_scaler import ShardedGradScaler
 
 """
 Check that ShardedDDP gets the same results as DDP in a variety of scenarii
@@ -169,7 +171,11 @@ def run_ddp_parity(
 
         def sharded_closure(input_tensor=input_tensor):
             return closure(
-                sharded_ddp_model, sharded_scaler, input_tensor, grad_accumulation, _manual_reduction=manual_reduction,
+                sharded_ddp_model,
+                sharded_scaler,
+                input_tensor,
+                grad_accumulation,
+                _manual_reduction=manual_reduction,
             )
 
         # Step/scale both
@@ -245,6 +251,8 @@ def test_ddp_parity(
     manual_reduction,
     multiple_fw,
 ):
+    if torch_version() < (1, 8, 0):
+        pytest.skip("pytorch version >= 1.8.0 required")
     if manual_reduction and change_train_graph:
         pytest.skip("Skipping changing model and grad accumulation combination, makes little sense")
 
@@ -329,7 +337,9 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_b
         torch.cuda.synchronize(device)
 
         check_same_model_params(
-            sharded_ddp_model, ddp_model, f"DDP parity two optim test failing, step {i}, buffers {reduce_buffer_size}",
+            sharded_ddp_model,
+            ddp_model,
+            f"DDP parity two optim test failing, step {i}, buffers {reduce_buffer_size}",
         )
 
     dist.destroy_process_group()

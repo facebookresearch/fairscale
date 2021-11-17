@@ -106,7 +106,9 @@ class BalanceError(ValueError):
 
 
 def split_module(
-    module: nn.Sequential, balance: Iterable[int], devices: List[torch.device],
+    module: nn.Sequential,
+    balance: Iterable[int],
+    devices: List[torch.device],
 ) -> Tuple[List[nn.Sequential], List[int], List[torch.device]]:
     """Splits a module into multiple partitions.
 

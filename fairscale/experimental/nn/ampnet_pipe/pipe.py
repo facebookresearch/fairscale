@@ -46,8 +46,8 @@ class AMPnetPipe(AsyncPipe):
         assert self.group
         rank = self.group.rank()
 
-        transport = self.pipeline.transport  # type: ignore
-        checkpoint_stop = self.pipeline.checkpoint_stop  # type: ignore
+        transport = self.pipeline.transport
+        checkpoint_stop = self.pipeline.checkpoint_stop
         ampnet_event_loop = AsyncAMPnetEventLoop(
             partitions,
             self.group,

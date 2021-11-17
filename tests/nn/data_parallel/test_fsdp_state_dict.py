@@ -7,10 +7,12 @@ import functools
 import unittest
 
 from parameterized import parameterized
+import pytest
 import torch
 from torch import nn
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+from fairscale.utils import torch_version
 from fairscale.utils.testing import dist_init, objects_are_equal, skip_if_cuda, teardown, temp_files_ctx
 
 from .test_fsdp import (
@@ -23,6 +25,7 @@ from .test_fsdp import (
 )
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestLocalStateDict(DistributedTest):
     @parameterized.expand([[True, True], [False, False]], name_func=rename_test)
     def test_load_local_state_dict(self, flatten_params, mixed_precision):
@@ -50,7 +53,9 @@ class TestLocalStateDict(DistributedTest):
             state_1_module_weight = model.module.state_dict()[weight_key]
             torch.testing.assert_allclose(state_1_weight, state_1_module_weight)
             torch.testing.assert_allclose(state_1_weight, model.module.embed_tokens.weight)
-        self._train_for_several_steps(model, 1, model.mixed_precision)
+        # increasing number of epochs from 1 to 6 for ShardedGradScaler to work properly.
+        # test fails for num_epochs < 6 since the updates are skipped due to gradient being inf.
+        self._train_for_several_steps(model, 6, model.mixed_precision)
 
         state_2 = model.local_state_dict()
         state_after_training = {k: v.cpu().clone() for k, v in state_2.items()}
@@ -69,6 +74,7 @@ class TestLocalStateDict(DistributedTest):
             raise AssertionError(f"params {unchanged} not changed after training")
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestSaveLoadStateDict(DistributedTest):
     @parameterized.expand([[False], [True]], name_func=rename_test)
     def test_calling_state_dict_twice_mixed_precision(self, mixed_precision):
@@ -178,6 +184,7 @@ class TestSaveLoadStateDict(DistributedTest):
             ), f"{key}, {ref_state_dict[key]} != {state_dict[key]}"
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestStateDictDeviceDtype(DistributedTest):
     @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
     def test_state_dict_device(self, mixed_precision, cpu_offload):
@@ -186,7 +193,7 @@ class TestStateDictDeviceDtype(DistributedTest):
         )
         spawn_and_init(test_fn)
 
-    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_state_dict_device_cuda(self, mixed_precision, cpu_offload):
         test_fn = functools.partial(
             self._test_state_dict_device,
@@ -194,7 +201,7 @@ class TestStateDictDeviceDtype(DistributedTest):
         )
         spawn_and_init(test_fn)
 
-    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_state_dict_device_cpu(self, mixed_precision, cpu_offload):
         test_fn = functools.partial(
             self._test_state_dict_device,
@@ -223,17 +230,17 @@ class TestStateDictDeviceDtype(DistributedTest):
         autocast = fsdp_model.mixed_precision or pure_fp16
         self._train_for_several_steps(fsdp_model, 1, autocast)
 
-        sd = fsdp_model.state_dict()
+        state_dict = fsdp_model.state_dict()
 
-        sd_device = config.get("state_dict_device")
-        for k, v in sd.items():
-            if config["cpu_offload"] or (sd_device is not None and sd_device.type == "cpu"):
+        state_dict_device = config.get("state_dict_device")
+        for k, v in state_dict.items():
+            if config["cpu_offload"] or (state_dict_device is not None and state_dict_device.type == "cpu"):
                 assert v.device.type == "cpu", v.device.type
             else:
                 assert v.device.type == "cuda", v.device.type
 
         expected_dtype = torch.float16 if pure_fp16 else torch.float32
-        for k, v in sd.items():
+        for k, v in state_dict.items():
             if not torch.is_floating_point(v):
                 continue
             assert v.dtype == expected_dtype, f"{v.dtype} != {expected_dtype}"

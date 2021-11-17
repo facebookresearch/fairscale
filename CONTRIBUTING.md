@@ -42,7 +42,7 @@ outlined on that page and do not file a public issue.
 ~$ python3 -m venv venv2
 ~$ source venv2/bin/activate
 (venv2) ~$ cd git/fairscale/
-(venv2) ~/git/fairscale $ pip3 install -r requirements-test.txt
+(venv2) ~/git/fairscale $ pip3 install -r requirements-dev.txt
 ```
 
 ## Coding Style
@@ -57,19 +57,23 @@ outlined on that page and do not file a public issue.
   and less development overhead in maintaining an importing list.
 * Please setup pre-commit before opening up your PR.
 
-### Pre-commit
+### Pre-Commit (Recommended)
+
+We use pre-commit to maintain the coding style. Pre-Commit checks are run via Github Actions on every
+commit. To install all the relevant libraries and run the pre-commit tests locally, execute the following
+commands:
 
 ```
 pip install -r requirements-dev.txt
 pre-commit install
 ```
 
-After the above, your `git commit` command will automatically trigger pre-commit
-checks, which are static code analysis tools we use.
+After the above, your `git commit` command will automatically trigger pre-commit checks.
 
-### Run statis analysis by hand (without using pre-commit)
+### Running static code analysis manually (Deprecated)
 
-Note that, trailing spaces are not checked by the manual commands below, but they are checked by the pre-commit hooks above.
+Note that, trailing spaces are not checked by the manual commands below, but they are checked by the
+pre-commit hooks we use above.
 
 ```
 black .
@@ -79,6 +83,13 @@ mypy --ignore-missing-imports --scripts-are-modules --pretty .
 ```
 
 ## Testing
+
+FairScale code is tested on Python 3.9.7, CUDA 11.2 and the following three PyTorch versions:
+- the latest stable version
+- the latest LTS version
+- a recent nightly release
+
+See the [README](https://github.com/facebookresearch/fairscale/blob/main/README.md#testing) for the exact version numbers.
 
 ### Unit tests
 

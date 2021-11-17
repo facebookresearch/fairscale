@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from parameterized import parameterized
+import pytest
 import torch
 from torch import nn
 import torch.distributed
@@ -28,6 +29,9 @@ from fairscale.utils.testing import (
     objects_are_equal,
     spawn_for_all_world_sizes,
 )
+
+if torch_version() >= (1, 8, 0):
+    from fairscale.optim.grad_scaler import ShardedGradScaler
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
@@ -49,7 +53,9 @@ class DistributedTest(unittest.TestCase):
         model_device = next(model.parameters()).device
         # use SGD with momentum instead of Adam, since Adam is scale invariant
         # and this makes it bad for tests
-        optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+
+        optim = torch.optim.SGD(params=model.parameters(), lr=lr, momentum=0.9)
+        scaler = ShardedGradScaler()
         for _ in range(num_steps):
             optim.zero_grad()
             with torch.cuda.amp.autocast(enabled=autocast):
@@ -57,6 +63,7 @@ class DistributedTest(unittest.TestCase):
                 input = model.module.get_input(torch.device("cuda"))
                 output = model(*input)
                 loss = model.module.get_loss(input, output).to(model_device)
+            loss = scaler.scale(loss)
             assert loss.dtype == torch.float32
             model.module.run_backward(loss)
             if norm_type is not None:
@@ -65,7 +72,10 @@ class DistributedTest(unittest.TestCase):
                     model.clip_grad_norm_(clip_norm, norm_type)
                 else:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm, norm_type)
-            optim.step()
+            scaler.step(optim)
+            scaler.update()
+        if hasattr(model, "assert_idle"):
+            model.assert_idle()
         if isinstance(model, FullyShardedDataParallel):
             model.assert_state(TrainingState.IDLE)
         return loss.detach()
@@ -80,7 +90,16 @@ class DistributedTest(unittest.TestCase):
 
     @classmethod
     def _test_identical_outputs(
-        cls, model_init_fn, config, rank, group, num_steps=2, use_cuda=True, lr=0.01, ref_ddp_fn=None, norm_type=2,
+        cls,
+        model_init_fn,
+        config,
+        rank,
+        group,
+        num_steps=2,
+        use_cuda=True,
+        lr=0.01,
+        ref_ddp_fn=None,
+        norm_type=2,
     ):
         if config.get("mixed_precision", False):
             autocast = True
@@ -262,7 +281,10 @@ CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([Tru
 
 
 def rename_test(testcase_func, param_num, param):
-    return "%s_%s" % (testcase_func.__name__, parameterized.to_safe_name(str(param.args)),)
+    return "%s_%s" % (
+        testcase_func.__name__,
+        parameterized.to_safe_name(str(param.args)),
+    )
 
 
 class TestComparisonToPyTorchDDP(DistributedTest):
@@ -293,12 +315,21 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # Test every combination of these options:
         spawn_and_init(functools.partial(self._test_identical_outputs, TransformerWithSharedParams, config))
 
-    def test_cpu_offload_and_cpu_grads(self):
-        # We don't test the False condition because that requires the optimizer to internally do
-        # the device transfer and PyTorch optimizers don't support this.
-        config = {"mixed_precision": True, "cpu_offload": True, "move_grads_to_cpu": True}
+    # testing moving params to cpu while using full and mixed precision
+    @parameterized.expand([(True,), (False,)], name_func=rename_test)
+    def test_cpu_offload_and_cpu_grads(self, mixed_precision):
+        config = {"mixed_precision": mixed_precision, "cpu_offload": True}
         test_fn = functools.partial(
             self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=False, lr=0.01
+        )
+        spawn_and_init(test_fn)
+
+    # testing full and mixed precision on the gpu
+    @parameterized.expand([(True,), (False,)], name_func=rename_test)
+    def test_no_cpu_offload_with_sharded_grad_scaler(self, mixed_precision):
+        config = {"mixed_precision": mixed_precision, "move_params_to_cpu": False}
+        test_fn = functools.partial(
+            self._test_identical_outputs, TransformerWithSharedParams, config, use_cuda=True, lr=0.01
         )
         spawn_and_init(test_fn)
 
@@ -361,7 +392,11 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def test_mixture_of_experts_grad_clip_breaks(self):
         config = {"mixed_precision": True}
         test_fn = functools.partial(
-            self._test_identical_outputs, MixtureOfExperts, config, ref_ddp_fn=self._dummy_ddp_fn, norm_type=2,
+            self._test_identical_outputs,
+            MixtureOfExperts,
+            config,
+            ref_ddp_fn=self._dummy_ddp_fn,
+            norm_type=2,
         )
         with self.assertRaises(Exception):
             spawn_and_init(test_fn)
@@ -374,7 +409,10 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     def test_clip_norm_transformer(self, norm_type):
         config = {"mixed_precision": True}
         test_fn = functools.partial(
-            self._test_identical_outputs, TransformerWithSharedParams, config, norm_type=norm_type,
+            self._test_identical_outputs,
+            TransformerWithSharedParams,
+            config,
+            norm_type=norm_type,
         )
         spawn_and_init(test_fn)
 
@@ -403,14 +441,14 @@ class TestParamInit(DistributedTest):
 
 
 class TestSerialization(DistributedTest):
-    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_pickle(self, mixed_precision, cpu_offload):
         """Ensure that wrapped modules can be pickled/unpickled."""
         config = {"mixed_precision": mixed_precision, "cpu_offload": cpu_offload}
         test_fn = functools.partial(self._test_pickle, config=config)
         spawn_and_init(test_fn, world_sizes=[2])
 
-    @parameterized.expand([[False, False], [True, False], [True, True]], name_func=rename_test)
+    @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_multiprocessing(self, mixed_precision, cpu_offload):
         """Ensure that wrapped modules can be sent via multiprocessing."""
         config = {"mixed_precision": mixed_precision, "cpu_offload": cpu_offload}
@@ -454,10 +492,10 @@ class TestSerialization(DistributedTest):
         optim.step()
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestHooks(DistributedTest):
     # Feel free to modify these tests as the implementation changes.
     # They aspire to make sure that backward hooks are registered and used
-
     @parameterized.expand([[True], [False]])
     def test_output_backward_hooks(self, cuda_first):
         fn = functools.partial(self._test_output_backward_hooks, cuda_first=cuda_first)
@@ -510,6 +548,7 @@ class TestHooks(DistributedTest):
         assert model._register_pre_backward_hooks.called
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestNoGrad(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_parameterized(self, config):
@@ -537,6 +576,7 @@ class TestNoGrad(DistributedTest):
         assert objects_are_equal(ref_output, no_grad_output, raise_exception=True)
 
 
+@pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")
 class TestModuleProperties(DistributedTest):
     @parameterized.expand([[{"flatten_parameters": False}], [{"flatten_parameters": True}]], name_func=rename_test)
     def test_named_parameters(self, config):
@@ -581,7 +621,11 @@ class TransformerWithSharedParams(nn.Module):
         assert d_vocab >= 12  # we use torch.arange(12) as input
         self.embed_tokens = nn.Embedding(d_vocab, d_model)
         self.transformer = nn.Transformer(
-            d_model=d_model, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=8, dropout=0.1,
+            d_model=d_model,
+            num_encoder_layers=2,
+            num_decoder_layers=2,
+            dim_feedforward=8,
+            dropout=0.1,
         )
         self.output_proj = nn.Linear(d_model, d_vocab)
 
@@ -630,7 +674,12 @@ class NestedWrappedModule(nn.Module):
         torch.manual_seed(0)  # keep everything deterministic
         self.module = nn.Sequential(
             nn.Linear(8, 4),
-            _maybe_wrap(nn.Sequential(_maybe_wrap(nn.Linear(4, 16)), nn.Linear(16, 16),)),
+            _maybe_wrap(
+                nn.Sequential(
+                    _maybe_wrap(nn.Linear(4, 16)),
+                    nn.Linear(16, 16),
+                )
+            ),
             _maybe_wrap(nn.Linear(16, 4)),
             nn.Linear(4, 8),
         )

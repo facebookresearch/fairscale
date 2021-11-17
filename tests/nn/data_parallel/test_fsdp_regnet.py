@@ -35,7 +35,6 @@ from torch.optim import SGD
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import TrainingState, auto_wrap_bn
-from fairscale.optim.grad_scaler import ShardedGradScaler
 from fairscale.utils import torch_version
 from fairscale.utils.testing import (
     dist_init,
@@ -46,6 +45,9 @@ from fairscale.utils.testing import (
     teardown,
     torch_cuda_version,
 )
+
+if torch_version() >= (1, 8, 0):
+    from fairscale.optim.grad_scaler import ShardedGradScaler
 
 # Const test params.
 #   Reduce iterations to 1 for debugging.
@@ -79,7 +81,9 @@ class ResBlock(Module):
         self.bn = BatchNorm2d(width_out)
         self.f = Sequential(
             Sequential(  # block a
-                Conv2d(width_in, width_out, (1, 1), (1, 1), bias=False), BatchNorm2d(width_out), ReLU(_relu_inplace),
+                Conv2d(width_in, width_out, (1, 1), (1, 1), bias=False),
+                BatchNorm2d(width_out),
+                ReLU(_relu_inplace),
             ),
             Sequential(  # block b
                 Conv2d(width_out, width_out, (3, 3), (2, 2), (1, 1), groups=2, bias=False),
@@ -350,8 +354,8 @@ def _distributed_worker(
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
 @pytest.mark.parametrize("sync_bn", ["none", "pytorch"])
 def test_regnet(temp_files, ddp_ref, precision, flatten, sync_bn):
-    if torch_version() < (1, 6, 0):
-        pytest.skip("older pytorch doesn't support reduce_scatter")
+    if torch_version() < (1, 8, 0):
+        pytest.skip("pytorch version >= 1.8.0 required")
 
     state_before, inputs, conv_bias, linear_bias, state_after = ddp_ref
 

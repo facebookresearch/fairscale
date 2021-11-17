@@ -64,7 +64,13 @@ class AsyncPipeline:
         skip_trackers = [SkipTrackerThroughPotals(self.skip_layout, i) for i in range(len(batches))]
 
         rank = self.group.rank()
-        event_loop = AsyncEventLoop(self.partitions, self.group, self.transport, self.training, self.checkpoint_stop,)
+        event_loop = AsyncEventLoop(
+            self.partitions,
+            self.group,
+            self.transport,
+            self.training,
+            self.checkpoint_stop,
+        )
         if rank == 0 and not self.final_stage:
             logging.debug(f"{torch.distributed.get_rank()}: entered event head")
             event_loop.event_loop_head(batches, skip_trackers, event)

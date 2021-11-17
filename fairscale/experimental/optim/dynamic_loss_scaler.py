@@ -200,6 +200,8 @@ class DynamicLossScaler(object):
     def state_dict(self) -> Optional[Dict[str, float]]:
         if self.loss_scale is not None:
             return {"loss_scale": self.loss_scale}
+        else:
+            return None
 
     def load_state_dict(self, state_dict: Dict[str, float]) -> None:
         if "loss_scale" in state_dict:

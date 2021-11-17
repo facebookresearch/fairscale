@@ -52,8 +52,7 @@ def _split_nodes(traced_graph_module: torch.fx.GraphModule, shard_count: int = 3
     # Find the total number of params in the model and
     # the number of params per shard we are aiming for.
     for name, module in traced_graph_module.named_modules():
-        if "." in name:
-            continue
+        name = name.replace(".", "_")
         param_count[name] = sum([x.numel() for x in module.parameters()])
     logging.info(f"Total number of params are {param_count['']}")
     per_shard_param = param_count[""] // shard_count

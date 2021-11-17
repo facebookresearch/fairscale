@@ -330,7 +330,12 @@ if __name__ == "__main__":
         logging.info("\n*** Benchmark OSS with ShardedDDP")
         mp.spawn(
             train,  # type: ignore
-            args=(args, BACKEND, OptimType.oss_sharded_ddp, args.check_regression,),
+            args=(
+                args,
+                BACKEND,
+                OptimType.oss_sharded_ddp,
+                args.check_regression,
+            ),
             nprocs=args.world_size,
             join=True,
         )

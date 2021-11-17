@@ -82,7 +82,11 @@ class Min10:
 
 
 def _distributed_worker(
-    gpu_id, world_size, fsdp_config, tempfile, tempfile_rpc,
+    gpu_id,
+    world_size,
+    fsdp_config,
+    tempfile,
+    tempfile_rpc,
 ):
     torch.cuda.set_device(gpu_id)
 
@@ -212,9 +216,9 @@ def _distributed_worker(
         long.append(e2["cpu_wait"])  # all gather should happen and prolong the cpu-gpu wait.
     for s in short:
         for l in long:
-            # 10X longer is a safe margin, since the GPU work timing is around 100X more
+            # 5X longer is a safe margin, since the GPU work timing is around 100X more
             # of that of the CPU.
-            assert s * 10 < l, f"{s} * 10 < {l} in " + debug_string
+            assert s * 5 < l, f"{s} * 5 < {l} in " + debug_string
 
     # Check the GPU timing.
     short = [e1["gpu_compute"], e1["gpu_total"], e2["gpu_compute"]]
@@ -252,5 +256,7 @@ def test_forward_overlap(world_size, flatten, mixed):
     }
     with temp_files_ctx(2) as temp_files:
         mp.spawn(
-            _distributed_worker, (world_size, fsdp_config, temp_files[0], temp_files[1]), nprocs=world_size,
+            _distributed_worker,
+            (world_size, fsdp_config, temp_files[0], temp_files[1]),
+            nprocs=world_size,
         )

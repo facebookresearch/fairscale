@@ -248,7 +248,8 @@ class Skippable(nn.Module):
 
 # TODO(sublee): Move to above of Skippable class for better read flow.
 def skippable(
-    stash: Iterable[str] = (), pop: Iterable[str] = (),
+    stash: Iterable[str] = (),
+    pop: Iterable[str] = (),
 ) -> Callable[[Type[SkippableModule]], Type[Skippable]]:
     """The decorator to define a :class:`nn.Module <torch.nn.Module>` with skip
     connections. Decorated modules are called "skippable". This functionality

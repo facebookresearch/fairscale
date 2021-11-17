@@ -198,7 +198,9 @@ class PipelineModulesGraph(nn.Module):
                 remote_module = partition[0].module.get_module_rref()
             else:
                 remote_module = rpc.remote(
-                    partition[0].module.on, RemoteSequential, args=([p.module.get_module_rref() for p in partition],),
+                    partition[0].module.on,
+                    RemoteSequential,
+                    args=([p.module.get_module_rref() for p in partition],),
                 )
             partitions.append((partition, remote_module))
 

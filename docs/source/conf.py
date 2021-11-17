@@ -29,7 +29,7 @@ copyright = "2020-2021, Facebook AI Research"
 author = "Facebook AI Research"
 
 # The full version, including alpha/beta/rc tags
-release = "0.4.1"
+release = "0.4.2"
 
 
 # -- General configuration ---------------------------------------------------
@@ -91,6 +91,19 @@ master_doc = "index"
 
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
+
+# List of custom sections allowed. It is especially useful when the argument
+# list is very long for a constructor or function. This helps split the
+# arguments into different sections, helping us to understand the arguments
+# better.
+napoleon_custom_sections = [
+    ("SlowMo Parameters", "params_style"),
+    ("LocalSGD Parameters", "params_style"),
+    ("SGP Parameters", "params_style"),
+    ("Debugging Parameters", "params_style"),
+    ("Parameters for Advanced Users", "params_style"),
+]
+
 
 # -- Options for HTML output -------------------------------------------------
 
