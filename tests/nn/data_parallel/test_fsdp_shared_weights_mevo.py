@@ -98,14 +98,16 @@ def test_shared_weight_mevo(temp_files, wrap_middle, test_fn):
     model = Model()
     sd_before = deepcopy(model.state_dict())
     in_data = (torch.rand(BS, SEQ) * (VOCAB - 1)).cuda().long()
-    _train(model, in_data, world_size)
-    sd_after = deepcopy(model.state_dict())
-    # Before and after state should not be equal.
-    assert not objects_are_equal(sd_before, sd_after)
+    if test_fn == "train":
+        _train(model, in_data, world_size)
+        sd_after = deepcopy(model.state_dict())
+        # Before and after state should not be equal.
+        assert not objects_are_equal(sd_before, sd_after)
 
     # Save data
     torch.save(sd_before, temp_files[2])
-    torch.save(sd_after, temp_files[3])
+    if test_fn == "train":
+        torch.save(sd_after, temp_files[3])
     torch.save(in_data, temp_files[4])
 
     # Run FSDP
@@ -121,7 +123,8 @@ def _dist_worker(rank, world_size, files, wrap_middle, test_fn):
     # Get data from files.
     file1, file2, sd_before, sd_after, in_data = files
     sd_before = torch.load(sd_before, map_location=lambda storage, loc: storage.cuda(rank))
-    sd_after = torch.load(sd_after, map_location=lambda storage, loc: storage.cuda(rank))
+    if test_fn == "train":
+        sd_after = torch.load(sd_after, map_location=lambda storage, loc: storage.cuda(rank))
     in_data = torch.load(in_data, map_location=lambda storage, loc: storage.cuda(rank))
 
     result = dist_init(rank=rank, world_size=world_size, filename=file1, filename_rpc=file2)
