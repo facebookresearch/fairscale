@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the file path for storing params on SSD. Note: This is an experimental feature. [#855]
 
 ### Changed
+- MEVO: fixed eval and checkpointing code paths [#851]
 - Cleanup: Moving forward we would be testing all of our code with Python 3.9.7, CUDA 11.2 and the following three versions of PyTorch [#847]:
   - the most recent stable version
   - the most recent LTS version

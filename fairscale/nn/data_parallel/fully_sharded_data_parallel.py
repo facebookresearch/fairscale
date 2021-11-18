@@ -353,6 +353,7 @@ class FullyShardedDataParallel(nn.Module):
                 params.append(param)
 
         self._has_params = len(params) > 0
+        self._has_shared_params = False
 
         # TODO(anj): Should we conditionally do this only if we have params?
         # TODO(anj): Figure out if we can allocate the buffer during sharding.
@@ -492,6 +493,14 @@ class FullyShardedDataParallel(nn.Module):
             len(list(filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params))) > 0
         ), "Must have at least 1 non-shared param."
         self.params.append(p)
+        self._has_shared_params = True
+
+    def non_shared_params(self) -> List[nn.Parameter]:
+        """Return the list of non-shared parameters."""
+        if self._has_shared_params:
+            return list(filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params))
+        else:
+            return self.params
 
     def apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":
         """
@@ -1050,9 +1059,7 @@ class FullyShardedDataParallel(nn.Module):
                     non_shared_params = self.params
                     # filter out shared params for all but the owner FSDP module.
                     if len(full_tensors) < len(non_shared_params):
-                        non_shared_params = list(
-                            filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params)
-                        )
+                        non_shared_params = self.non_shared_params()
                     assert len(full_tensors) == len(
                         non_shared_params
                     ), f"{len(full_tensors)} vs. {len(non_shared_params)}"
@@ -1809,6 +1816,18 @@ class FullyShardedDataParallel(nn.Module):
 
             self.has_full_params = False
 
+        if self._has_shared_params:
+            # self.has_full_params flag can be out of sync if a shared param is
+            # sharded by another FSDP instance. An example is that in eval case
+            # with reshard_after_forward=False but the sharing instance has
+            # reshard_after_forward=True. Then, on the second forward, the
+            # other instance can shard the shared param and but this instance
+            # can mistakenly think the full param is already gathered from the
+            # has_full_params flag.
+            #
+            # Therefore, we update the flag accordingly here.
+            self.has_full_params = not any(p._full_param_padded.storage().size() == 0 for p in self.params)
+
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
             for p in self.params:
@@ -2148,7 +2167,14 @@ class FullyShardedDataParallel(nn.Module):
         for k, v in sd_state.items():
             gathered_state[k] = {}
             singleton_state[k] = {}
-            desired_buffer_size = self._fsdp_instances[k].flat_param._full_param_padded.size()  # type: ignore
+            # For shared params, we are not flattening. We have only 1 non-shared
+            # param that has the optimizer state. So we handle it with the correct
+            # parameter list.
+            non_shared_params = cast(FullyShardedDataParallel, self._fsdp_instances[k]).non_shared_params()
+            assert (
+                len(non_shared_params) == 1
+            ), f"Only flatten param or a single non-shared param is supported: len={len(non_shared_params)}"
+            desired_buffer_size = non_shared_params[0]._full_param_padded.size()
             buffer = None  # for sharded tensors
             singleton_buffer = None  # for singleton tensors
             for buffer_name, t in v.items():
@@ -2214,7 +2240,7 @@ class FullyShardedDataParallel(nn.Module):
         return new_state_dict
 
     @property
-    def _fsdp_instances(self) -> List[nn.Module]:
+    def _fsdp_instances(self) -> List["FullyShardedDataParallel"]:
         """Returns all fsdp modules in self.modules() including self."""
         return [m for m in self.modules() if isinstance(m, FullyShardedDataParallel)]
 

@@ -11,8 +11,6 @@ tests/utils/test_containers.py
 tests/utils/test_parallel.py
 tests/utils/test_state_dict.py
 tests/utils/test_version.py
-tests/nn/checkpoint/test_checkpoint_activations.py
-tests/nn/checkpoint/test_checkpoint_activations_norm.py
 tests/nn/misc/test_grad_bucket.py
 tests/nn/misc/test_param_bucket.py
 tests/nn/wrap/test_wrap.py

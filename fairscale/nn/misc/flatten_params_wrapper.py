@@ -238,7 +238,9 @@ class FlattenParamsWrapper(nn.Module):
         """We used to support only a single flat_param. This allows us to
         be backward compatible.
         """
-        assert len(self.flat_params) == 1, "Incorrect access to flat_param"
+        assert (
+            len(self.flat_params) == 1
+        ), f"Incorrect access to flat_param: len(self.flat_params)={len(self.flat_params)}"
         return self.flat_params[0]
 
     def _init_flatten_params(

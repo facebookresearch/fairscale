@@ -378,7 +378,7 @@ class BackwardTrigger(nn.Module):
     def __init__(self, linked_param: torch.Tensor):
         super().__init__()
         assert isinstance(linked_param, nn.Parameter)
-        self.trigger = nn.Parameter(torch.rand(1, dtype=linked_param.dtype))
+        self.trigger = nn.Parameter(torch.rand(1, dtype=linked_param.dtype, device=linked_param.device))
         self.trigger._linked_param = linked_param
 
     def forward(self) -> torch.Tensor:  # type: ignore
@@ -437,7 +437,8 @@ class MemoryEfficientVocabOutput(nn.Module):  # AKA. MEVO
             print("DEBUG cur, peak", cur_mem, mem)
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
-        assert input.requires_grad
+        if torch.is_grad_enabled():
+            assert input.requires_grad
         input, target = _reshape_inputs(input, target)
 
         tokens, d_model = input.shape
