@@ -50,7 +50,7 @@ class Model(nn.Module):
         self.ln2 = nn.LayerNorm(D_MODEL).cuda().half()
 
         if with_fsdp:
-            # Shared layers much be un-flatten.
+            # Shared layers must be un-flatten.
             self.l0 = FSDP(self.l0, flatten_parameters=False, mixed_precision=False, compute_dtype=torch.float16)
             self.l1 = FSDP(self.l1, flatten_parameters=False, mixed_precision=False, compute_dtype=torch.float16)
             self.l1.append_shared_param(self.l0.module.weight)
@@ -89,7 +89,8 @@ def temp_files():
 
 @skip_if_single_gpu
 @pytest.mark.parametrize("wrap_middle", ["none", "flat", "nonflat"])
-def test_shared_weight_mevo(temp_files, wrap_middle):
+@pytest.mark.parametrize("test_fn", ["train", "eval", "optim_state"])
+def test_shared_weight_mevo(temp_files, wrap_middle, test_fn):
     """Test FSDP with a model with shared weights."""
     world_size = 2
 
@@ -110,12 +111,12 @@ def test_shared_weight_mevo(temp_files, wrap_middle):
     # Run FSDP
     mp.spawn(
         _dist_worker,
-        (world_size, temp_files, wrap_middle),
+        (world_size, temp_files, wrap_middle, test_fn),
         nprocs=world_size,
     )
 
 
-def _dist_worker(rank, world_size, files, wrap_middle):
+def _dist_worker(rank, world_size, files, wrap_middle, test_fn):
 
     # Get data from files.
     file1, file2, sd_before, sd_after, in_data = files
@@ -136,11 +137,28 @@ def _dist_worker(rank, world_size, files, wrap_middle):
     )
     fsdp_model.load_state_dict(sd_before)
 
-    _train(fsdp_model, in_data)
-
-    objects_are_equal(sd_after, fsdp_model.state_dict(), raise_exception=True)
+    if test_fn == "train":
+        _train(fsdp_model, in_data)
+        objects_are_equal(sd_after, fsdp_model.state_dict(), raise_exception=True)
+    elif test_fn == "eval":
+        _eval(fsdp_model, in_data)
+    elif test_fn == "optim_state":
+        pass
+    else:
+        assert 0, f"invalid test_fn {test_fn}"
 
     teardown()
+
+
+def _eval(model, in_data):
+    # run in eval mode
+    model.eval()
+    for _ in range(5):
+        out = model(in_data)
+    # adding torch.no_grad()
+    for _ in range(5):
+        with torch.no_grad():
+            out = model(in_data)
 
 
 def _train(model, in_data, steps_per_iter=1):
