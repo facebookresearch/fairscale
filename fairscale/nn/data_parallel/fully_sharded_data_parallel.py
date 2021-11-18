@@ -275,7 +275,8 @@ class FullyShardedDataParallel(nn.Module):
         verbose: bool = False,
         cpu_offload: bool = False,
         gradient_predivide_factor: Optional[float] = None,
-        enable_prefetch_next_module_params: Optional[float] = None,
+        enable_prefetch_next_module_params: Optional[bool] = None,
+        prefetch_before_backward: Optional[float] = None,
     ):
         init_start = time.time()
         super().__init__()
@@ -392,6 +393,7 @@ class FullyShardedDataParallel(nn.Module):
         # This is reset at the end of the backward pass.
         self._pre_backward_hook_has_run = False
         self.enable_prefetch_next_module_params = enable_prefetch_next_module_params
+        self.prefetch_before_backward = prefetch_before_backward
         
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
@@ -1230,7 +1232,14 @@ class FullyShardedDataParallel(nn.Module):
             # idempotent.  So in case they are called unnecessarily, they don't incur much
             # overhead.
             if self.reshard_after_forward:
-                self._rebuild_full_params()
+                self._rebuild_full_params(wait_for_all_gather_stream=True)
+                if (
+                    self.enable_prefetch_next_module_params
+                    and self.prefetch_before_backward
+                    and self._fsdp_forward_ordering is not None
+                    and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
+                ):
+                    self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params(wait_for_all_gather_stream=False)
             else:
                 self._use_full_params()
 
@@ -1362,8 +1371,9 @@ class FullyShardedDataParallel(nn.Module):
             return
 
         if (
-            self.reshard_after_forward 
-            and self.enable_prefetch_next_module_params 
+            self.reshard_after_forward
+            and self.enable_prefetch_next_module_params
+            and not self.prefetch_before_backward
             and self._fsdp_forward_ordering is not None 
             and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
         ):
@@ -1551,7 +1561,7 @@ class FullyShardedDataParallel(nn.Module):
                     self._post_backward_callback_queued = False
 
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(self, force_full_precision: bool = False, wait_for_all_gather_stream=True) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -1601,6 +1611,9 @@ class FullyShardedDataParallel(nn.Module):
 
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
+            if wait_for_all_gather_stream:
+                torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
+
             for p in self.params:
                 update_p_data()
             return output_tensors
@@ -1644,7 +1657,8 @@ class FullyShardedDataParallel(nn.Module):
 
                     if self.mixed_precision and not force_full_precision:
                         self._free_fp16_param_shard([p])
-        torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
+        if wait_for_all_gather_stream:
+            torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
         return output_tensors
 
     @torch.no_grad()
