@@ -92,6 +92,10 @@ def temp_files():
 @pytest.mark.parametrize("test_fn", ["train", "eval", "optim_state"])
 def test_shared_weight_mevo(temp_files, wrap_middle, test_fn):
     """Test FSDP with a model with shared weights."""
+    if test_fn == "optim_state":
+        if wrap_middle != "flat":
+            pytest.skip("only support optim_state when root and middle part is flat")
+
     world_size = 2
 
     # Get ref.
@@ -134,7 +138,7 @@ def _dist_worker(rank, world_size, files, wrap_middle, test_fn):
         # To debug: first make with_fsdp=False (no inner wrapping) work, then enable inner wrapping
         # and make that work.
         Model(with_fsdp=True, wrap_middle=wrap_middle),
-        flatten_parameters=False,
+        flatten_parameters=test_fn == "optim_state",
         mixed_precision=False,
         compute_dtype=torch.float16,
     )
@@ -146,7 +150,17 @@ def _dist_worker(rank, world_size, files, wrap_middle, test_fn):
     elif test_fn == "eval":
         _eval(fsdp_model, in_data)
     elif test_fn == "optim_state":
-        pass
+        optim = SGD(fsdp_model.parameters(), lr=0.1)
+        for _ in range(3):
+            out = fsdp_model(in_data)
+            out.backward()
+            optim.step()
+        sd = fsdp_model.gather_full_optim_state_dict(optim)
+        if rank == 0:
+            # There should 8 momentum buffers in the state.
+            assert len(sd["state"].keys()) == 8
+        else:
+            assert sd is None, "only rank 0 should have the optim state"
     else:
         assert 0, f"invalid test_fn {test_fn}"
 

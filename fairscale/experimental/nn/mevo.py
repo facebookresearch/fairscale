@@ -378,7 +378,7 @@ class BackwardTrigger(nn.Module):
     def __init__(self, linked_param: torch.Tensor):
         super().__init__()
         assert isinstance(linked_param, nn.Parameter)
-        self.trigger = nn.Parameter(torch.rand(1, dtype=linked_param.dtype))
+        self.trigger = nn.Parameter(torch.rand(1, dtype=linked_param.dtype, device=linked_param.device))
         self.trigger._linked_param = linked_param
 
     def forward(self) -> torch.Tensor:  # type: ignore
