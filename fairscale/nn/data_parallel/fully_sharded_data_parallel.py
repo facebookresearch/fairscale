@@ -493,14 +493,13 @@ class FullyShardedDataParallel(nn.Module):
         ), "Must have at least 1 non-shared param."
         self.params.append(p)
 
-
     def _apply(self, fn):
         if self.ssd_offload:
             self.ssd_buffer.from_disk(self.buffer_size)
 
             # The params are on disk and need to be moved to the CPU.
             for p, handle in zip(self.params, self.ssd_buffer.get_tensors()):
-                p.data= handle.get_tensor().view(p._shard_size)  # type: ignore
+                p.data = handle.get_tensor().view(p._shard_size)  # type: ignore
         return super()._apply(fn)
 
     def apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":

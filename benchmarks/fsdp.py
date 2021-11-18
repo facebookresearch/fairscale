@@ -329,7 +329,7 @@ def benchmark_fsdp(rank, args, world_size):
     config = {}
     if args.ssd_offload:
         config["offload_config"] = OffloadConfig(offload_type="ssd_offload")
-    
+
     if args.full_fp16:
         config["compute_dtype"] = torch.float16
         config["mixed_precision"] = False
@@ -375,5 +375,8 @@ if __name__ == "__main__":
     assert num_devices > 0
 
     mp.spawn(
-        benchmark_fsdp, args=(args, num_devices), nprocs=num_devices, join=True,
+        benchmark_fsdp,
+        args=(args, num_devices),
+        nprocs=num_devices,
+        join=True,
     )
