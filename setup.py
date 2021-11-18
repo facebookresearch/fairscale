@@ -22,10 +22,12 @@ def fetch_requirements():
 # https://packaging.python.org/guides/single-sourcing-package-version/
 def find_version(version_file_path):
     with open(version_file_path) as version_file:
-        version_match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]", version_file.read(), re.M)
+        version_match = re.search(r"^__version_tuple__ = (.*)", version_file.read(), re.M)
         if version_match:
-            return version_match.group(1)
-        raise RuntimeError("Unable to find version string.")
+            ver_tup = eval(version_match.group(1))
+            ver_str = ".".join([str(x) for x in ver_tup])
+            return ver_str
+        raise RuntimeError("Unable to find version tuple.")
 
 
 extensions = []
