@@ -3,8 +3,6 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from __future__ import annotations
-
 from enum import Enum, auto
 from functools import reduce
 import io
