@@ -13,8 +13,6 @@ repos:
     -   id: trailing-whitespace
     -   id: check-ast
     -   id: check-merge-conflict
-    -   id: no-commit-to-branch
-        args: ['--branch=main']
     -   id: check-added-large-files
         args: ['--maxkb=500']
     -   id: end-of-file-fixer
