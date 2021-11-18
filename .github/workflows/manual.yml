@@ -5,7 +5,8 @@ name: Manual workflow
 # Controls when the action will run. Workflow runs when manually triggered using the UI
 # or API.
 on:
-  [push, workflow_dispatch]:
+  push:
+  workflow_dispatch:
     # Inputs the workflow accepts.
     inputs:
       name:
