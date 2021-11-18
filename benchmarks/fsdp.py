@@ -25,6 +25,7 @@ from torch.optim import Adam
 from benchmarks.golden_configs.lm_wikitext2 import FSDP as lm_wikitext2
 from fairscale.nn import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+from fairscale.nn.data_parallel import OffloadConfig
 
 RPC_PORT = 29501
 
@@ -62,7 +63,10 @@ def get_lm_model(args, device, config):
     nhid = config["nhid"]
     ndecoder = config["num_decoder_layers"]
 
-    return transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
+    if args.ssd_offload:
+        return transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder)
+    else:
+        return transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
 
 def get_tensors_by_size_bucket():
@@ -85,15 +89,15 @@ def log_number_of_parameters(model):
         if torch.cuda.is_available():
             total = total.cuda()
         torch.distributed.all_reduce(total, group=model.group)
-        logging.debug(
+        print(
             f"training model, #params = {num_params/10**6}M, group: {model.group.rank()}, grank:"
             f" {torch.distributed.get_rank()}, sizes {model.group.size()}"
         )
         torch.distributed.barrier()
         if model.group.rank() == 0:
-            logging.debug(f"total #prams = {total.item()}")
+            print(f"total #prams = {total.item()}")
     else:
-        logging.debug(f"training model, #params = {num_params/10**6}M")
+        print(f"training model, #params = {num_params/10**6}M")
 
 
 def get_device(model, index):
@@ -127,7 +131,8 @@ def train(model_config, model, benchmark_config, model_specs, args):
     vocab_size = model_specs["vocab_size"]
     optimizer = model_config["optimizer"]
 
-    model.train()
+    if not args.benchmark_eval:
+        model.train()
     log_number_of_parameters(model)
 
     total_loss = 0.0
@@ -154,17 +159,21 @@ def train(model_config, model, benchmark_config, model_specs, args):
             epoch_start_time = time.time()
 
         source, target = get_batch(batch)
+        if args.full_fp16:
+            # source = source.half()
+            target = target.half()
         if args.max_batch and i > args.max_batch:
             break
 
         if i > 0:
             total_tokens += source.numel()
 
-        if args.benchmark_eval:
+        if args.benchmark_eval or args.ssd_offload:
             input = source.cuda()
             target = target.cuda()
             output = model(input)
-            loss = criterion(output.view(-1, vocab_size), target.view(-1))
+            print(f"output.dtype {output.dtype}, target.dtype {target.dtype}")
+            loss = torch.nn.CrossEntropyLoss()(output.view(-1, vocab_size), target.view(-1))
         else:
             optimizer.zero_grad()
             input = source.cuda()
@@ -185,7 +194,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
             cur_loss = total_loss / log_interval
             elapsed = time.time() - start_time
             if dist.get_rank() == 0:
-                logging.debug(
+                print(
                     "| batch {:5d} | wps {:5.2f} | loss {:5.2f} | ppl {:8.2f}".format(
                         i, total_tokens_per_log_interval / elapsed, cur_loss, math.exp(cur_loss)
                     )
@@ -217,17 +226,17 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
     epoch = benchmark_config["epochs"]
     start_time = time.time()
     if dist.get_rank() == dist.get_world_size() - 1:
-        logging.debug("-" * 110)
-        logging.debug("| start of epoch {:1d}".format(epoch))
-        logging.debug("-" * 110)
+        print("-" * 110)
+        print("| start of epoch {:1d}".format(epoch))
+        print("-" * 110)
     wps, loss = train(model_config, model, benchmark_config, model_specs, args)
     elapsed_time = time.time() - start_time
     if dist.get_rank() == dist.get_world_size() - 1:
-        logging.debug("-" * 110)
-        logging.debug("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
-        logging.debug("-" * 110)
-        logging.debug("Throughput(wps) is {:.2f}.".format(wps))
-    logging.debug(
+        print("-" * 110)
+        print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
+        print("-" * 110)
+        print("Throughput(wps) is {:.2f}.".format(wps))
+    print(
         "Peak allocated bytes on cuda:{}: {:4f}GB".format(
             dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"] / 2 ** 30
         )
@@ -311,19 +320,30 @@ def benchmark_fsdp(rank, args, world_size):
 
     torch.cuda.set_device(rank)
     init_random_seed(0)
-    logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
+    logging.basicConfig(level=logging.DEBUG)
 
     benchmark_config = create_benchmark_config(args.model_name)
     model_specs = get_model_specs(args.model_name)
     model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
     model = model_config["model"]
+    config = {}
+    if args.ssd_offload:
+        config["offload_config"] = OffloadConfig(offload_type="ssd_offload")
+    
+    if args.full_fp16:
+        config["compute_dtype"] = torch.float16
+        config["mixed_precision"] = False
 
     if args.enable_auto_wrap:
-        with enable_wrap(wrapper_cls=FSDP, flatten_parameters=False):
+        with enable_wrap(wrapper_cls=FSDP, **config):
             fsdp_model = auto_wrap(model, auto_wrap_policy=default_auto_wrap_policy)
-            fsdp_model = FSDP(fsdp_model)
+            fsdp_model = FSDP(fsdp_model, **config)
     else:
-        fsdp_model = FSDP(model)
+        fsdp_model = FSDP(model, **config)
+
+    if args.full_fp16:
+        fsdp_model = fsdp_model.half()
+    print(f"param dtype {[p.dtype for p in fsdp_model.parameters()]}")
     if args.dry_run:
         train(model_config, fsdp_model, benchmark_config, model_specs, args)
     else:
@@ -343,12 +363,14 @@ parser.add_argument(
 parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
 parser.add_argument("--enable_auto_wrap", action="store_true", default=False, help="Use auto_wrap with FSDP")
 parser.add_argument("--benchmark_eval", action="store_true", default=False, help="Benchmark evaluation workflow.")
+parser.add_argument("--ssd_offload", action="store_true", default=False, help="Benchmark ssd_offload workflow.")
+parser.add_argument("--full_fp16", action="store_true", default=False, help="Benchmark in full fp16 mode.")
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO if not args.debug else logging.DEBUG)
+    logging.basicConfig(level=logging.DEBUG)
 
-    logging.debug(f"Running FSDP benchmark with args: {args}")
+    print(f"Running FSDP benchmark with args: {args}")
     num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
     assert num_devices > 0
 
