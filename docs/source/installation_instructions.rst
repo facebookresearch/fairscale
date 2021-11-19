@@ -41,5 +41,5 @@ Installing from source
     # -e signified dev mode since e stands for editable
     pip install -e .
 
-
-Note: If either of the above fails, add `--no-build-isolation` to the `pip install` command (this could be a problem with recent versions of pip).
+Note: If either of the above fails, add ``--no-build-isolation`` to the ``pip install``
+command (this could be a problem with recent versions of pip).
