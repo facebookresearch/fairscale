@@ -41,5 +41,8 @@ Installing from source
     # -e signified dev mode since e stands for editable
     pip install -e .
 
+To build with GPU-support enabled, be sure to set ``BUILD_CUDA_EXTENSIONS=1``
+as well as an appropriate ``TORCH_CUDA_ARCH_LIST``.
+
 Note: If either of the above fails, add ``--no-build-isolation`` to the ``pip install``
 command (this could be a problem with recent versions of pip).
