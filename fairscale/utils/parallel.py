@@ -5,7 +5,7 @@
 
 """Useful functions for parallel training."""
 
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import torch
 import torch.distributed as dist
@@ -25,7 +25,7 @@ def chunk_and_pad(tensor: torch.Tensor, num_chunks: int) -> List[torch.Tensor]:
     return chunks
 
 
-def validate_process_group(device: torch.device, process_group: ProcessGroup) -> None:
+def validate_process_group(device: torch.device, process_group: Dict[str, ProcessGroup]) -> None:
     """Do a quick test in case user called FSDP without calling torch.cuda.set_device()
     correctly. This can easily happen in cpu_offload case where the model resides on
     the CPU.
@@ -34,11 +34,11 @@ def validate_process_group(device: torch.device, process_group: ProcessGroup) ->
         # Likely a dummy pg for unit test, skip checking.
         return
 
-    world_size = process_group.size()
+    world_size = process_group["all_gather_group"].size()
     if "cuda" in str(device):
         input_tensor = torch.ones(1).to(device)
         output = list(torch.zeros(world_size).to(device).chunk(world_size))
-        dist.all_gather(output, input_tensor, group=process_group)
+        dist.all_gather(output, input_tensor, group=process_group["all_gather_group"])
         assert torch.cat(output).sum() == float(world_size), (
             f"found {torch.cat(output).sum()} devices in process group but "
             f"world_size={world_size}. Check torch.cuda.set_device is called properly"
@@ -58,7 +58,7 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
             layer._specify_ddp_gpu_num(1)  # type: ignore
 
 
-def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGroup:
+def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> Dict[str, ProcessGroup]:
     """
     Singleton PyTorch distributed group cache. Inspired by the code from fairseq.
 
@@ -96,11 +96,10 @@ def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGr
         get_process_group_cached._global_group_cache = {}  # type: ignore
         # Populate with default process group.
         cache = get_process_group_cached._global_group_cache  # type: ignore
-        assert dist.group.WORLD is not None
-        default_pg = dist.group.WORLD
-        if type(default_pg) == object:
-            # For PyTorch 1.6 and 1.7, dist.group.WORLD is an object, not a world process group, like that in 1.8 and 1.9.
-            default_pg = dist.new_group()
+        default_pg = {
+            "all_gather_group": dist.new_group(ranks=ranks),
+            "reduce_scatter_group": dist.new_group(ranks=ranks),
+        }
         cache[None] = default_pg
         cache[frozenset(list(range(dist.get_world_size())))] = default_pg
 
@@ -111,6 +110,9 @@ def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGr
         # can be used as a cache index.
         ranks = tuple(sorted(list(set(ranks))))
     if ranks not in cache:
-        cache[ranks] = dist.new_group(ranks=ranks)
+        cache[ranks] = {
+            "all_gather_group": dist.new_group(ranks=ranks),
+            "reduce_scatter_group": dist.new_group(ranks=ranks),
+        }
 
     return cache[ranks]

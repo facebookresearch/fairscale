@@ -283,7 +283,7 @@ class FullyShardedDataParallel(nn.Module):
     def __init__(
         self,
         module: nn.Module,
-        process_group: Optional[ProcessGroup] = None,
+        process_group: Optional[Dict[str, ProcessGroup]] = None,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
@@ -305,8 +305,8 @@ class FullyShardedDataParallel(nn.Module):
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
-        self.rank = self.process_group.rank()
-        self.world_size = self.process_group.size()
+        self.rank = self.process_group["reduce_scatter_group"].rank()
+        self.world_size = self.process_group["reduce_scatter_group"].size()
         self.reshard_after_forward = reshard_after_forward
         self.mixed_precision = mixed_precision
         self.fp32_reduce_scatter = fp32_reduce_scatter
@@ -619,10 +619,15 @@ class FullyShardedDataParallel(nn.Module):
         local_norm = calc_grad_norm(params_with_grad, norm_type).cuda()
         if norm_type == inf:
             total_norm = local_norm
-            dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=self.process_group)
+            dist.all_reduce(
+                total_norm,
+                op=torch.distributed.ReduceOp.MAX,
+                group=self.process_group["reduce_scatter_group"],
+                async_op=True,
+            )
         else:
             total_norm = local_norm ** norm_type
-            dist.all_reduce(total_norm, group=self.process_group)
+            dist.all_reduce(total_norm, group=self.process_group["reduce_scatter_group"], async_op=True)
             total_norm = total_norm ** (1.0 / norm_type)
 
         if self.move_grads_to_cpu:
@@ -1607,7 +1612,9 @@ class FullyShardedDataParallel(nn.Module):
                 param.grad = None
                 callback_fn = functools.partial(self._post_reduction_hook, param)
                 grad_chunks = chunk_and_pad(grad, self.world_size)
-                self._reducer.reduce_scatter_async(grad_chunks, group=self.process_group, callback_fn=callback_fn)
+                self._reducer.reduce_scatter_async(
+                    grad_chunks, group=self.process_group["reduce_scatter_group"], callback_fn=callback_fn
+                )
             else:
                 # Currently the only way for _is_sharded to be False is if
                 # world_size == 1. This could be relaxed in the future, in which
@@ -1879,10 +1886,12 @@ class FullyShardedDataParallel(nn.Module):
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
-                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)
+                        dist._all_gather_base(
+                            output_tensor, p_data, group=self.process_group["all_gather_group"], async_op=True
+                        )
                     else:
                         chunks = list(output_tensor.chunk(self.world_size))
-                        dist.all_gather(chunks, p_data, group=self.process_group)
+                        dist.all_gather(chunks, p_data, group=self.process_group["all_gather_group"], async_op=True)
 
                     # Set p.data = output_tensor (with padding trimmed)
                     update_p_data(output_tensor)
@@ -2153,7 +2162,7 @@ class FullyShardedDataParallel(nn.Module):
                 pad_info = my_pad_info
             else:
                 pad_info = [[0]] * len(my_pad_info)
-            dist.broadcast_object_list(pad_info, src=rank, group=self.process_group)
+            dist.broadcast_object_list(pad_info, src=rank, group=self.process_group["all_gather_group"])
             if self.rank == 0:
                 world_pad_info.append(pad_info)
         return world_pad_info
@@ -2184,14 +2193,14 @@ class FullyShardedDataParallel(nn.Module):
                 if ou.is_singleton_tensor(t):
                     if singleton_buffer is None:
                         singleton_buffer = list(t.new_zeros(self.world_size).chunk(self.world_size))
-                    dist.all_gather(singleton_buffer, t, group=self.process_group)
+                    dist.all_gather(singleton_buffer, t, group=self.process_group["all_gather_group"], async_op=True)
                     if self.rank == 0:
                         singleton_state[k][buffer_name] = [x.cpu().squeeze() for x in singleton_buffer]
                         assert ou.is_singleton_tensor(singleton_state[k][buffer_name][0])
                 elif torch.is_tensor(t):
                     if buffer is None:
                         buffer = list(t.new_zeros(*desired_buffer_size).chunk(self.world_size))
-                    dist.all_gather(buffer, t, group=self.process_group)
+                    dist.all_gather(buffer, t, group=self.process_group["all_gather_group"], async_op=True)
                     if self.rank == 0:
                         gathered_state[k][buffer_name] = [x.cpu() for x in buffer]
                 elif self.rank == 0:  # Add non tensor state
@@ -2462,7 +2471,7 @@ def auto_wrap_bn(
     if single_rank_pg:
         # No sharding with this single member group.
         my_rank = dist.get_rank()
-        pg = get_process_group_cached(ranks=[my_rank])
+        pg = get_process_group_cached(ranks=[my_rank])["all_gather_group"]
 
     if fsdp_config is None:
         fsdp_config = {
