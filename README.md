@@ -31,8 +31,8 @@ FairScale was designed with the following values in mind:
 
 ## Installation
 
-To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/main/docs/source/installation_instructions.rst). You should be able to install a pip package or
-build directly from source.
+To install FairScale, please see the following [instructions](https://github.com/facebookresearch/fairscale/blob/main/docs/source/installation_instructions.rst).
+You should be able to install a package with pip or conda, or build directly from source.
 
 ## Getting Started
 The full [documentation](https://fairscale.readthedocs.io/) contains instructions for getting started, deep dives and tutorials about the various FairScale APIs.
