@@ -939,6 +939,8 @@ class FullyShardedDataParallel(nn.Module):
         self._is_root: Optional[bool] = None
         self._streams: Dict[str, torch.cuda.Stream] = {}
         self._reducer: Optional[ReduceScatterBucketer] = None
+        self._fsdp_forward_ordering: List[nn.Module] = []
+        self._my_fsdp_instance_idx: Optional[int] = None
         for p in self.params:
             if hasattr(p, "_fp32_shard"):
                 del p._fp32_shard  # reset _init_param_attributes
@@ -1079,6 +1081,7 @@ class FullyShardedDataParallel(nn.Module):
                 m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
                     (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
                 )
+                m._fsdp_forward_ordering = self._fsdp_forward_ordering
 
     def _setup_streams(self) -> None:
         """Create streams to overlap data transfer and computation."""
@@ -1127,6 +1130,10 @@ class FullyShardedDataParallel(nn.Module):
         # the conversion).
         if self._is_root and self.mixed_precision:
             args, kwargs = cast_floats_to_right_precision(True, True, *args, **kwargs)
+
+        if self not in self._fsdp_forward_ordering:
+            self._my_fsdp_instance_idx = len(self._fsdp_forward_ordering)
+            self._fsdp_forward_ordering.append(self)
 
         # If enabled, convert the input to FP32 if we are in full precision.
         # no_grad is not used because the input might be for a non-root instance,
@@ -1345,6 +1352,13 @@ class FullyShardedDataParallel(nn.Module):
 
         if not self._require_backward_grad_sync:
             return
+
+        if (
+            self.reshard_after_forward
+            and self._fsdp_forward_ordering is not None
+            and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
+        ):
+            self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params()
 
         # Wait for all work in the current stream to finish, then start the
         # reductions in post_backward stream.
