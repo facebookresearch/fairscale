@@ -1,21 +1,26 @@
 Installing FairScale
 ====================
 
-Installing FairScale is extremely simple with pre-built binaries(pip) that we provide. You can also build
+Installing FairScale is extremely simple with pre-built binaries (pip) that we provide. You can also build
 from source using the instructions below.
 
-### Requirements
+
+Requirements
+~~~~~~~~~~~~
 
 * PyTorch>= 1.8.1
 
-### Installing the pip package (stable)
+
+Installing the pip package (stable)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
 	pip install fairscale
 
 
-### Installing from source
+Installing from source
+~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
