@@ -19,6 +19,17 @@ Installing the pip package (stable)
 	pip install fairscale
 
 
+Installing with conda
+~~~~~~~~~~~~~~~~~~~~~
+
+Fairscale is packaged by conda-forge (see `here <https://github.com/conda-forge/fairscale-feedstock>`_)
+for both linux & osx, with GPU-enabled builds available on linux.
+
+.. code-block:: bash
+
+	conda install -c conda-forge fairscale
+
+
 Installing from source
 ~~~~~~~~~~~~~~~~~~~~~~
 
