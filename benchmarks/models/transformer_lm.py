@@ -102,9 +102,7 @@ class TransformerEncoderLayer(nn.Module):
 
         self.is_moe = is_moe
         if is_moe:
-            if not torch.distributed.is_initialized():
-                raise AssertionError('torch.distriubted is not initialized.')
-            world_size = torch.distributed.get_world_size()
+            world_size = 1 if not torch.distributed.is_initialized() else torch.distributed.get_world_size()
             num_global_experts = num_local_experts * world_size
             self.gate = Top2Gate(d_model, num_global_experts)
             experts = nn.ModuleList(

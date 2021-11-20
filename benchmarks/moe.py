@@ -34,7 +34,7 @@ def train(rank, world_size, benchmark_config, model_specs, args):
 
     init_method_pgroup = "tcp://localhost:{}".format(MPI_PORT)
     torch.distributed.init_process_group(
-            backend="gloo", rank=rank, world_size=world_size, init_method=init_method_pgroup)
+            backend="nccl", rank=rank, world_size=world_size, init_method=init_method_pgroup)
     logger.info("train, rank={}".format(rank))
     device = torch.device("cuda", rank) if torch.cuda.is_available() else torch.device("cpu")
 
@@ -87,16 +87,15 @@ def train(rank, world_size, benchmark_config, model_specs, args):
         try:
             output = model(source.to(device))
             loss = criterion(output.view(-1, vocab_size), target.view(-1))
+            total_loss += loss.item()
             loss.backward()
+            torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
+            optimizer.step()
         except Exception as e:
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
 
-        torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
-        optimizer.step()
-
         elapsed = time.time() - start_time
         total_elapsed += elapsed
-        total_loss += loss.item()
         log_interval = 1
         total_tokens_per_log_interval += batch.numel()
         if i % log_interval == 0 and i > 0:
