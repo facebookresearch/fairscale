@@ -86,11 +86,10 @@ def train(rank, world_size, benchmark_config, model_specs, args):
         target = target.to(device)
         try:
             output = model(source.to(device))
+            loss = criterion(output.view(-1, vocab_size), target.view(-1))
+            loss.backward()
         except Exception as e:
             raise RuntimeError(f"training failed on {torch.distributed.get_rank()}") from e
-
-        loss = criterion(output.view(-1, vocab_size), target.view(-1))
-        loss.backward()
 
         torch.nn.utils.clip_grad_value_(model.parameters(), model_specs["clip_value"])
         optimizer.step()

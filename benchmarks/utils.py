@@ -8,7 +8,7 @@ from functools import reduce
 import logging
 import operator
 
-import datasets.wikitext2_data as wt2d
+import datasets.wikitext2_data as wikitext2_data
 from models import transformer_lm
 import numpy as np
 import torch
@@ -146,11 +146,11 @@ def log_number_of_parameters(model):
 def get_dataset_info(args):
     assert args.model_name == "lm"
     if args.use_synthetic_data:
-        return wt2d.get_synthetic_datasets()
+        return wikitext2_data.get_synthetic_datasets()
     else:
-        return wt2d.get_real_datasets()
+        return wikitext2_data.get_real_datasets()
 
 
 def get_data_loader(dataset_info, args, benchmark_config, model_specs, num_replicas=1, rank=0):
-    return wt2d.get_dataloaders(dataset_info, benchmark_config, model_specs, num_replicas, rank)
+    return wikitext2_data.get_dataloaders(dataset_info, benchmark_config, model_specs, num_replicas, rank)
 
