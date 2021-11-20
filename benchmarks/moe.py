@@ -1,17 +1,16 @@
-import argparse
-import utils
 import logging
 import math
 import time
 
+from golden_configs.lm_wikitext2 import MOE as MOEConfig
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-
-from golden_configs.lm_wikitext2 import MOE as MOEConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
+import utils
 
 MPI_PORT = 29500
+
 
 def benchmark_single_process(config_class, args):
     """Benchmark a given model using a single process and multiple devices."""
@@ -21,10 +20,7 @@ def benchmark_single_process(config_class, args):
     benchmark_config = utils.create_benchmark_config(args.model_name, config_class)
     model_specs = utils.get_model_specs(args.model_name, config_class)
 
-    mp.spawn(train,
-        args=(world_size, benchmark_config, model_specs, args),
-        nprocs=world_size,
-        join=True)
+    mp.spawn(train, args=(world_size, benchmark_config, model_specs, args), nprocs=world_size, join=True)
 
 
 def train(rank, world_size, benchmark_config, model_specs, args):
@@ -34,14 +30,16 @@ def train(rank, world_size, benchmark_config, model_specs, args):
 
     init_method_pgroup = "tcp://localhost:{}".format(MPI_PORT)
     torch.distributed.init_process_group(
-            backend="nccl", rank=rank, world_size=world_size, init_method=init_method_pgroup)
+        backend="nccl", rank=rank, world_size=world_size, init_method=init_method_pgroup
+    )
     logger.info("train, rank={}".format(rank))
     device = torch.device("cuda", rank) if torch.cuda.is_available() else torch.device("cpu")
 
     criterion = benchmark_config["criterion"]
 
     model_config = utils.create_model_config(
-            args, benchmark_config=benchmark_config, model_specs=model_specs, device=device)
+        args, benchmark_config=benchmark_config, model_specs=model_specs, device=device
+    )
     # vocab_size may change in create_model_config() due to input data
     vocab_size = model_specs["vocab_size"]
     model = model_config["model"]
@@ -49,7 +47,7 @@ def train(rank, world_size, benchmark_config, model_specs, args):
     optimizer = model_config["optimizer"]
     optimizer = optimizer(model.parameters())
     group = model.group if hasattr(model, "group") else None
-    utils.log_number_of_parameters(model)
+    utils.log_number_of_parameters(model, logger)
 
     total_loss = 0.0
     word_counter = 0
@@ -60,14 +58,15 @@ def train(rank, world_size, benchmark_config, model_specs, args):
     total_elapsed = 0.0
 
     model = DDP(model, device_ids=[rank], output_device=rank, broadcast_buffers=False)
-    lm_dataloader, _, _ = utils.get_data_loader(model_config["dataset_info"], args, benchmark_config, model_specs, num_replicas=world_size, rank=rank)
+    lm_dataloader, _, _ = utils.get_data_loader(
+        model_config["dataset_info"], args, benchmark_config, model_specs, num_replicas=world_size, rank=rank
+    )
 
     def get_batch(source):
         seq_len = len(source) - 1
         data = source[0:seq_len]
         target = source[1 : 1 + seq_len]
         return data, target
-
 
     for i, batch in enumerate(lm_dataloader):
         if i == 1:
@@ -124,4 +123,3 @@ if __name__ == "__main__":
 
     logging.info(f"Running single process benchmark with args: {args}")
     benchmark_single_process(MOEConfig, args)
-

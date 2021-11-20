@@ -27,7 +27,10 @@ def init_args():
     parser.add_argument("--chunks", type=int, default=1, help="number of microbatches per batch")
     parser.add_argument("--batch-size", type=int, default=8, help="size of a batch")
     parser.add_argument(
-        "--checkpoint", default="never", choices=["always", "except_last", "never"], help="Checkpointing strategy for pipe"
+        "--checkpoint",
+        default="never",
+        choices=["always", "except_last", "never"],
+        help="Checkpointing strategy for pipe",
     )
     parser.add_argument(
         "--lazy-construction", action="store_true", default=False, help="Number of decoder layers in the model"
@@ -54,6 +57,7 @@ def create_benchmark_config(model_name, config_class):
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
+
 def get_model_specs(model_name, config_class):
     """Return a dict with configurations required for configuring `model_name` model."""
 
@@ -61,6 +65,7 @@ def get_model_specs(model_name, config_class):
         return config_class.get_model_config()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % model_name)
+
 
 def create_model_config(args, benchmark_config=None, model_specs=None, device=None):
     """Return a dict with the given model, dataset and optimizer."""
@@ -112,35 +117,42 @@ def get_lm_model(args, device, config):
             LazyModule(lambda: transformer_lm.PositionalEncodingLayer(ninp, dropout)),
         ]
         for _ in range(ndecoder):
-            layers.append(LazyModule(
-                lambda: transformer_lm.TransformerDecoderLayer(ninp, nhead, nhid, dropout, is_moe, num_local_experts)))
+            layers.append(
+                LazyModule(
+                    lambda: transformer_lm.TransformerDecoderLayer(
+                        ninp, nhead, nhid, dropout, is_moe, num_local_experts
+                    )
+                )
+            )
 
         layers.append(LazyModule(lambda: transformer_lm.LinearLayer(ninp, vocab_size, initrange)))
         model = layers
     else:
         model = transformer_lm.TransformerLM(
-                vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder, is_moe, num_local_experts).to(device)
+            vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder, is_moe, num_local_experts
+        ).to(device)
 
     return model
 
 
-def log_number_of_parameters(model):
-
+def log_number_of_parameters(model, logger=None):
+    if not logger:
+        logger = logging
     num_params = reduce(operator.add, (reduce(operator.mul, x.size()) for x in model.parameters()))
     if hasattr(model, "group"):
         total = torch.Tensor([num_params])
         if torch.cuda.is_available():
             total = total.cuda()
         torch.distributed.all_reduce(total, group=model.group)
-        logging.debug(
+        logger.debug(
             f"training model, #params = {num_params}, group: {model.group.rank()}, grank:"
             f" {torch.distributed.get_rank()}, sizes {model.group.size()}"
         )
         torch.distributed.barrier()
         if model.group.rank() == 0:
-            logging.debug(f"total #prams = {total.item()}")
+            logger.debug(f"total #prams = {total.item()}")
     else:
-        logging.debug(f"training model, #params = {num_params}")
+        logger.debug(f"training model, #params = {num_params}")
 
 
 def get_dataset_info(args):
@@ -153,4 +165,3 @@ def get_dataset_info(args):
 
 def get_data_loader(dataset_info, args, benchmark_config, model_specs, num_replicas=1, rank=0):
     return wikitext2_data.get_dataloaders(dataset_info, benchmark_config, model_specs, num_replicas, rank)
-
