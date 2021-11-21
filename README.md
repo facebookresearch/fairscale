@@ -23,6 +23,7 @@ FairScale was designed with the following values in mind:
 ## What's New:
 
 * November 2021 [fairscale 0.4.3 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.3).
+* We have experimental support for offloading params to disk when using the FSDP API for evaluation workloads.
 * We have an experimental layer that fuses multiple layers together to support large vocab size trainings.
 * November 2021 [fairscale 0.4.2 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.2).
 * We have a new experimental API called the LayerwiseMemoryTracker to help track, visualize and suggest fixes for memory issues occurring during the forward/backward pass of your models.
