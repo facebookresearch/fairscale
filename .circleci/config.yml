@@ -156,12 +156,6 @@ run_pipe_benchmark: &run_pipe_benchmark
       command: |
         python benchmarks/pipe.py
 
-run_moee_benchmark: &run_moe_benchmark
-  - run:
-      name: Run MOE Benchmark
-      command: |
-        python benchmarks/moe.py
-
 run_oss_benchmark: &run_oss_benchmark
   - run:
       name: Run OSS Benchmark
@@ -486,8 +480,6 @@ jobs:
       - <<: *install_repo
 
       - <<: *run_pipe_benchmark
-
-      - <<: *run_moe_benchmark
 
       - <<: *run_offload_benchmark
 
