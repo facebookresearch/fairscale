@@ -61,7 +61,10 @@ if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
 else:
     enable_nccl_base_collectives = True
 
-
+if os.getenv("DEBUG_DUMMY_ALL_GATHER_CALL", "0") == "1":
+    debug_dummy_all_gather_call = True
+else:
+    debug_dummy_all_gather_call = True
 class TrainingState(Enum):
     """
     Simple enum to indicate what state FSDP is in. Used for asserting
@@ -1625,10 +1628,12 @@ class FullyShardedDataParallel(nn.Module):
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
-                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)
+                        if not debug_dummy_all_gather_call:
+                            dist._all_gather_base(output_tensor, p_data, group=self.process_group)
                     else:
-                        chunks = list(output_tensor.chunk(self.world_size))
-                        dist.all_gather(chunks, p_data, group=self.process_group)
+                        if not debug_dummy_all_gather_call:
+                            chunks = list(output_tensor.chunk(self.world_size))
+                            dist.all_gather(chunks, p_data, group=self.process_group)
 
                     # Set p.data = output_tensor (with padding trimmed)
                     update_p_data(output_tensor)

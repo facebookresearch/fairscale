@@ -18,6 +18,10 @@ if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
 else:
     enable_nccl_base_collectives = True
 
+if os.getenv("DEBUG_DUMMY_REDUCE_SCATTER_CALL", "0") == "1":
+    debug_dummy_reduce_scatter_call = True
+else:
+    debug_dummy_reduce_scatter_call = True
 
 class Bucket:
     def __init__(self, data: Tensor, group: ProcessGroup):
@@ -34,13 +38,15 @@ class Bucket:
             return
         # reduce-scatter bucket
         if hasattr(dist, "_reduce_scatter_base") and enable_nccl_base_collectives:
-            dist._reduce_scatter_base(
-                self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
-            )
+            if not debug_dummy_reduce_scatter_call:
+                dist._reduce_scatter_base(
+                    self.output_shard[: self.offset], self.data[:, : self.offset].contiguous(), group=self.group
+                )
         else:
-            dist.reduce_scatter(
-                self.output_shard[: self.offset], list(self.data[:, : self.offset].unbind(0)), group=self.group
-            )
+            if not debug_dummy_reduce_scatter_call:
+                dist.reduce_scatter(
+                    self.output_shard[: self.offset], list(self.data[:, : self.offset].unbind(0)), group=self.group
+                )
         # execute post-reduction callbacks
         for callback_fn in self.callbacks:
             callback_fn()
@@ -137,12 +143,15 @@ class ReduceScatterBucketer:
             # TODO: investigate how to avoid using torch.cat (because it seems to be slow for CPU tensors)
             # input is too big to fit in the bucket, reduce-scatter directly
             output = torch.zeros_like(input_list[0])
+
             if hasattr(dist, "_reduce_scatter_base") and enable_nccl_base_collectives:
-                input_flattened = torch.cat(input_list)
-                dist._reduce_scatter_base(output, input_flattened, group=group)
+                if not debug_dummy_reduce_scatter_call:
+                    input_flattened = torch.cat(input_list)
+                    dist._reduce_scatter_base(output, input_flattened, group=group)
             else:
-                # fallback
-                dist.reduce_scatter(output, input_list, group=group)
+                if not debug_dummy_reduce_scatter_call:
+                    # fallback
+                    dist.reduce_scatter(output, input_list, group=group)
             if callback_fn is not None:
                 callback_fn(output)
             return
