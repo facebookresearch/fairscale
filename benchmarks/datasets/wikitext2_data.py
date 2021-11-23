@@ -36,7 +36,8 @@ def _batchify(data, batch_size):
 def _get_total_batch_size(benchmark_config, model_specs):
     return model_specs["seq_len"] * benchmark_config["batch_size"]
 
-DatasetsInfo = namedtuple('DataSetsInfo', ['ntokens', 'train_dataset', 'valid_dataset', 'test_dataset'])
+
+DatasetsInfo = namedtuple("DataSetsInfo", ["ntokens", "train_dataset", "valid_dataset", "test_dataset"])
 
 
 def get_real_datasets():
@@ -59,39 +60,39 @@ def get_real_datasets():
 
 def get_dataloaders(datasets_info, benchmark_config, model_specs, num_replicas=1, rank=0):
     ntokens, train_dataset, valid_dataset, test_dataset = datasets_info
+
     def batchify(data):
         batch_size = benchmark_config["batch_size"]
         return _batchify(data, batch_size)
 
     total_batch_size = _get_total_batch_size(benchmark_config, model_specs)
     train_dataloader = DataLoader(
-            train_dataset,
-            sampler=DistributedSampler(train_dataset, num_replicas=num_replicas, rank=rank),
-            batch_size=total_batch_size,
-            collate_fn=batchify)
+        train_dataset,
+        sampler=DistributedSampler(train_dataset, num_replicas=num_replicas, rank=rank),
+        batch_size=total_batch_size,
+        collate_fn=batchify,
+    )
     valid_dataloader = DataLoader(
-            valid_dataset,
-            sampler=DistributedSampler(valid_dataset, num_replicas=num_replicas, rank=rank),
-            batch_size=total_batch_size,
-            collate_fn=batchify)
+        valid_dataset,
+        sampler=DistributedSampler(valid_dataset, num_replicas=num_replicas, rank=rank),
+        batch_size=total_batch_size,
+        collate_fn=batchify,
+    )
     test_dataloader = DataLoader(
-            test_dataset,
-            sampler=DistributedSampler(test_dataset, num_replicas=num_replicas, rank=rank),
-            batch_size=total_batch_size,
-            collate_fn=batchify)
+        test_dataset,
+        sampler=DistributedSampler(test_dataset, num_replicas=num_replicas, rank=rank),
+        batch_size=total_batch_size,
+        collate_fn=batchify,
+    )
     return train_dataloader, valid_dataloader, test_dataloader
-
 
 
 def get_real_dataloaders(args, benchmark_config, model_specs, num_replicas=1, rank=0):
     """Return real dataloaders for training, testing and validation."""
     dataset_info = get_real_datasets()
     train_dataloader, valid_dataloader, test_dataloader = get_dataloaders(
-            dataset_info,
-            benchmark_config,
-            model_specs,
-            num_replicas,
-            rank)
+        dataset_info, benchmark_config, model_specs, num_replicas, rank
+    )
     return dataset_info.ntokens, train_dataloader, valid_dataloder, test_dataloader
 
 
@@ -103,9 +104,4 @@ def get_synthetic_datasets():
 
 def get_synthetic_dataloaders(args, benchmark_config, model_specs, num_replicas=1, rank=0):
     """Return synthetic dataloaders for training, testing and validation."""
-    return get_dataloaders(
-            get_synthetic_datasets(),
-            benchmark_config,
-            model_specs,
-            num_replicas,
-            rank)
+    return get_dataloaders(get_synthetic_datasets(), benchmark_config, model_specs, num_replicas, rank)

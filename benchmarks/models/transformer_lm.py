@@ -7,6 +7,7 @@ import math
 
 import torch
 import torch.nn as nn
+
 from fairscale.nn.moe.moe_layer import MOELayer
 from fairscale.nn.moe.top2gate import Top2Gate
 
@@ -88,11 +89,20 @@ class TransformerEncoderLayer(nn.Module):
         >>> src = torch.rand(10, 32, 512)
         >>> out = encoder_layer(src)
     """
-    __constants__ = ['norm_first']
+    __constants__ = ["norm_first"]
 
-    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation=nn.ReLU(),
-                 layer_norm_eps=1e-5, norm_first=False,
-                 is_moe=False, num_local_experts=1):
+    def __init__(
+        self,
+        d_model,
+        nhead,
+        dim_feedforward=2048,
+        dropout=0.1,
+        activation=nn.ReLU(),
+        layer_norm_eps=1e-5,
+        norm_first=False,
+        is_moe=False,
+        num_local_experts=1,
+    ):
         super(TransformerEncoderLayer, self).__init__()
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         self.norm_first = norm_first
@@ -106,13 +116,13 @@ class TransformerEncoderLayer(nn.Module):
             num_global_experts = num_local_experts * world_size
             self.gate = Top2Gate(d_model, num_global_experts)
             experts = nn.ModuleList(
-                    [FeedForwardLayer(d_model, dim_feedforward, activation, dropout) for _ in range(num_local_experts)])
+                [FeedForwardLayer(d_model, dim_feedforward, activation, dropout) for _ in range(num_local_experts)]
+            )
             self.moe_layer = MOELayer(self.gate, experts)
         else:
             self.ff_block = FeedForwardLayer(d_model, dim_feedforward, activation, dropout)
 
-
-    def forward(self, src, src_mask = None, src_key_padding_mask = None):
+    def forward(self, src, src_mask=None, src_key_padding_mask=None):
         r"""Pass the input through the encoder layer.
 
         Args:
@@ -136,13 +146,9 @@ class TransformerEncoderLayer(nn.Module):
 
         return x
 
-
     # self-attention block
     def _sa_block(self, x, attn_mask, key_padding_mask):
-        x = self.self_attn(x, x, x,
-                           attn_mask=attn_mask,
-                           key_padding_mask=key_padding_mask,
-                           need_weights=False)[0]
+        x = self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=key_padding_mask, need_weights=False)[0]
         return self.dropout(x)
 
     # feed forward block
