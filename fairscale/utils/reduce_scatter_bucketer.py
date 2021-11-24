@@ -21,7 +21,7 @@ else:
 if os.getenv("DEBUG_DUMMY_REDUCE_SCATTER_CALL", "0") == "1":
     debug_dummy_reduce_scatter_call = True
 else:
-    debug_dummy_reduce_scatter_call = True
+    debug_dummy_reduce_scatter_call = False
 
 class Bucket:
     def __init__(self, data: Tensor, group: ProcessGroup):

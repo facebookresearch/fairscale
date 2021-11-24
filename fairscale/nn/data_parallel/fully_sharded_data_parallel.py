@@ -64,7 +64,7 @@ else:
 if os.getenv("DEBUG_DUMMY_ALL_GATHER_CALL", "0") == "1":
     debug_dummy_all_gather_call = True
 else:
-    debug_dummy_all_gather_call = True
+    debug_dummy_all_gather_call = False
 class TrainingState(Enum):
     """
     Simple enum to indicate what state FSDP is in. Used for asserting
