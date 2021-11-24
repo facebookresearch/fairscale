@@ -65,6 +65,7 @@ if os.getenv("DEBUG_DUMMY_ALL_GATHER_CALL", "0") == "1":
     debug_dummy_all_gather_call = True
 else:
     debug_dummy_all_gather_call = False
+
 class TrainingState(Enum):
     """
     Simple enum to indicate what state FSDP is in. Used for asserting
@@ -1362,6 +1363,8 @@ class FullyShardedDataParallel(nn.Module):
             and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
         ):
             self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params()
+            if self._my_fsdp_instance_idx - 1 > 0:
+                self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 2]._rebuild_full_params(wait_for_all_gather_stream=False)
 
         # Wait for all work in the current stream to finish, then start the
         # reductions in post_backward stream.
@@ -1545,7 +1548,7 @@ class FullyShardedDataParallel(nn.Module):
                     self._post_backward_callback_queued = False
 
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(self, force_full_precision: bool = False, wait_for_all_gather_stream: bool = True) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -1595,6 +1598,9 @@ class FullyShardedDataParallel(nn.Module):
 
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
+            if wait_for_all_gather_stream:
+                torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
+
             for p in self.params:
                 update_p_data()
             return output_tensors
@@ -1640,7 +1646,8 @@ class FullyShardedDataParallel(nn.Module):
 
                     if self.mixed_precision and not force_full_precision:
                         self._free_fp16_param_shard([p])
-        torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
+        if wait_for_all_gather_stream:
+            torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
         return output_tensors
 
     @torch.no_grad()
