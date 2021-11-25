@@ -27,4 +27,4 @@ docutils == 0.17
 pynvml == 8.0.4
 
 # For mypy typing
-numpy >= 1.21
+numpy == 1.19.5
