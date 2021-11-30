@@ -115,10 +115,10 @@ class DistributedTest(unittest.TestCase):
         model = model_init_fn(group=group, wrapper_config=None).cuda()
         if ref_ddp_fn is None:
             model = nn.parallel.DistributedDataParallel(
-                model, device_ids=[rank], output_device=rank, process_group=group
+                model, device_ids=[rank], output_device=rank, process_group=group["all_gather_group"]
             )
         else:
-            model = ref_ddp_fn(model, group)
+            model = ref_ddp_fn(model, group["all_gather_group"])
         ref_loss = cls._train_for_several_steps(model, num_steps, autocast, lr=lr, norm_type=norm_type)
         ref_state_dict = model.module.state_dict()
         if config.get("cpu_offload", False):
@@ -466,7 +466,7 @@ class TestSerialization(DistributedTest):
     @classmethod
     def _test_multiprocessing(self, rank, group, config):
         mp = torch.multiprocessing.Pool(1)
-        dummy_group = DummyProcessGroup(rank=group.rank(), size=group.size())
+        dummy_group = DummyProcessGroup(rank=group["all_gather_group"].rank(), size=group["all_gather_group"].size())
         model = mp.apply(self._get_model, (dummy_group, config))
         if not config["cpu_offload"]:
             model = model.cuda()
@@ -615,8 +615,8 @@ class TestModuleProperties(DistributedTest):
 class TransformerWithSharedParams(nn.Module):
     def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=True, **unused_kwargs):
         super().__init__()
-        self.rank = group.rank()
-        self.world_size = group.size()
+        self.rank = group["all_gather_group"].rank()
+        self.world_size = group["all_gather_group"].size()
         torch.manual_seed(0)  # keep everything deterministic
         assert d_vocab >= 12  # we use torch.arange(12) as input
         self.embed_tokens = nn.Embedding(d_vocab, d_model)
@@ -662,8 +662,8 @@ class TransformerWithSharedParams(nn.Module):
 class NestedWrappedModule(nn.Module):
     def __init__(self, group, wrapper_config, wrap_everything=False, checkpoint=False):
         super().__init__()
-        self.rank = group.rank()
-        self.world_size = group.size()
+        self.rank = group["all_gather_group"].rank()
+        self.world_size = group["all_gather_group"].size()
         self.wrapper_config = wrapper_config
 
         def _maybe_wrap(layer):
@@ -735,7 +735,7 @@ class MixtureOfExperts(NestedWrappedModule):
         self.delay_before_free_ms = delay_before_free_ms
 
         # "expert" params are different on each rank
-        torch.manual_seed(42 + group.rank())
+        torch.manual_seed(42 + group["all_gather_group"].rank())
         d_expert = 23
         d_shared = 12
         d_input = 8
@@ -756,7 +756,11 @@ class MixtureOfExperts(NestedWrappedModule):
 
         if wrapper_config is not None:
             # we create a process group of size 1 for the expert params
-            expert_group = torch.distributed.new_group([group.rank()])  # world size 1 means no shard
+            # expert_group = torch.distributed.new_group([group["all_gather_group"].rank()])  # world size 1 means no shard
+            expert_group = group = {
+                "all_gather_group": torch.distributed.new_group([group["all_gather_group"].rank()]),
+                "reduce_scatter_group": torch.distributed.new_group([group["all_gather_group"].rank()]),
+            }
             expert = FullyShardedDataParallel(expert, expert_group, **wrapper_config)
 
             shared = FullyShardedDataParallel(shared, group, **wrapper_config)
@@ -789,7 +793,7 @@ class MixtureOfExperts(NestedWrappedModule):
                     if hasattr(p, "expert"):
                         continue  # these params don't need grad reduction
                     p.grad.data.div_(self.world_size)
-                    torch.distributed.all_reduce(p.grad.data, group=self.group)
+                    torch.distributed.all_reduce(p.grad.data, group=self.group["all_gather_group"])
 
 
 class ModuleWithDelay(nn.Module):
@@ -838,7 +842,7 @@ def spawn_and_init(fn, args=None, **spawn_kwargs):
 
 def init_and_run(fn, args, rank, world_size, filename, filename_rpc):
     dist_init(rank, world_size, filename, filename_rpc)
-    group = torch.distributed.new_group()
+    group = {"all_gather_group": torch.distributed.new_group(), "reduce_scatter_group": torch.distributed.new_group()}
     fn(rank, group, *args)
 
 

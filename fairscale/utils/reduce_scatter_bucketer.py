@@ -38,14 +38,14 @@ class Bucket:
                 self.output_shard[: self.offset],
                 self.data[:, : self.offset].contiguous(),
                 group=self.group,
-                async_op=True,
+                async_op=False,
             )
         else:
             dist.reduce_scatter(
                 self.output_shard[: self.offset],
                 list(self.data[:, : self.offset].unbind(0)),
                 group=self.group,
-                async_op=True,
+                async_op=False,
             )
         # execute post-reduction callbacks
         for callback_fn in self.callbacks:
@@ -148,10 +148,10 @@ class ReduceScatterBucketer:
             output = torch.zeros_like(input_list[0])
             if hasattr(dist, "_reduce_scatter_base") and enable_nccl_base_collectives:
                 input_flattened = torch.cat(input_list)
-                dist._reduce_scatter_base(output, input_flattened, group=group, async_op=True)
+                dist._reduce_scatter_base(output, input_flattened, group=group, async_op=False)
             else:
                 # fallback
-                dist.reduce_scatter(output, input_list, group=group, async_op=True)
+                dist.reduce_scatter(output, input_list, group=group, async_op=False)
             if callback_fn is not None:
                 callback_fn(output)
             return
