@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 ### Changed
+- Fixed a corner case of FSDP init order and losing one of the flags [#880]
 
 ## [0.4.3] - 2021-11-18
 
