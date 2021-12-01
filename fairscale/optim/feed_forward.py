@@ -30,6 +30,7 @@ def blob_label(y, label, loc):  # assign labels
         target[y == l] = label
     return target
 
+
 def load_data():
     torch.manual_seed(11)
     x_train, y_train = make_blobs(n_samples=40, n_features=2, cluster_std=1.5, shuffle=True, random_state=10)
@@ -45,6 +46,7 @@ def load_data():
     all_data = (x_train, y_train, x_test, y_test)
     return all_data
 
+
 def standard_training():
     model = Feedforward(2, 10)
     criterion = torch.nn.BCELoss()
@@ -55,10 +57,10 @@ def standard_training():
     num_epochs = 2
     for _ in range(num_epochs):
         optimizer.zero_grad()
-        
+
         # forward pass
         y_pred = model(x_train)
-        
+
         # compute Loss
         loss = criterion(y_pred.squeeze(), y_train)
 
@@ -67,9 +69,11 @@ def standard_training():
         optimizer.step()
     return model
 
+
 def scale(loss, scaling_factor):
     loss *= scaling_factor
     return loss
+
 
 def unscale(optimizer):
     sgs = ShardedGradScaler()
@@ -84,6 +88,7 @@ def unscale(optimizer):
     inv_scale = torch.Tensor([1.0 / 2 ** 13])
     sgs._foreach_non_finite_check_and_unscale_cpu_(to_unscale, found_inf, inv_scale)
 
+
 def training_with_gradient_scaling():
     model = Feedforward(2, 10)
     criterion = torch.nn.BCELoss()
@@ -94,7 +99,7 @@ def training_with_gradient_scaling():
     num_epochs = 2
     for _ in range(num_epochs):
         optimizer.zero_grad()
-        
+
         # forward pass
         y_pred = model(x_train)
 
@@ -109,13 +114,14 @@ def training_with_gradient_scaling():
 
         # unscale weight gradient before weight update
         unscale(optimizer)
-        optimizer.step() 
+        optimizer.step()
     return model
+
 
 def test_gradient_scaling():
     vanilla_model = standard_training()
     scaled_model = training_with_gradient_scaling()
- 
+
     assert torch.equal(vanilla_model.fc1.bias, scaled_model.fc1.bias)
     assert torch.isclose(vanilla_model.fc2.bias, scaled_model.fc2.bias)
     assert torch.equal(vanilla_model.fc1.bias.grad, scaled_model.fc1.bias.grad)
