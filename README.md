@@ -22,7 +22,9 @@ FairScale was designed with the following values in mind:
 
 ## What's New:
 
+* FairScale is tested with the following PyTorch versions (with CUDA 11.2): 1.8.1, 1.10.0 and 1.11.0.dev20211101+cu111.
 * November 2021 [fairscale 0.4.3 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.3).
+* We have experimental support for offloading params to disk when using the FSDP API for evaluation workloads.
 * We have an experimental layer that fuses multiple layers together to support large vocab size trainings.
 * November 2021 [fairscale 0.4.2 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.2).
 * We have a new experimental API called the LayerwiseMemoryTracker to help track, visualize and suggest fixes for memory issues occurring during the forward/backward pass of your models.
@@ -156,8 +158,8 @@ At a high level, we want ML researchers to:
 ## Testing
 
 We use circleci to test FairScale with the following PyTorch versions (with CUDA 11.2):
-* the latest stable release (1.10)
-* the latest LTS release (1.8)
+* the latest stable release (1.10.0)
+* the latest LTS release (1.8.1)
 * a recent nightly release (1.11.0.dev20211101+cu111)
 
 Please create an [issue](https://github.com/facebookresearch/fairscale/issues) if you are having trouble with installation.

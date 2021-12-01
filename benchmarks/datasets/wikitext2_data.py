@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections import namedtuple
 from distutils.version import LooseVersion
 import io
 import operator
@@ -10,6 +11,7 @@ import tempfile
 
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 import torchtext
 from torchtext.data.utils import get_tokenizer
 from torchtext.utils import download_from_url, extract_archive
@@ -35,9 +37,10 @@ def _get_total_batch_size(benchmark_config, model_specs):
     return model_specs["seq_len"] * benchmark_config["batch_size"]
 
 
-def get_real_dataloaders(args, benchmark_config, model_specs):
-    """Return real dataloaders for training, testing and validation."""
+DatasetsInfo = namedtuple("DataSetsInfo", ["ntokens", "train_dataset", "valid_dataset", "test_dataset"])
 
+
+def get_real_datasets():
     url = "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip"
     tmpdir = tempfile.TemporaryDirectory()
     test_filepath, valid_filepath, train_filepath = extract_archive(download_from_url(url, root=tmpdir.name))
@@ -52,30 +55,53 @@ def get_real_dataloaders(args, benchmark_config, model_specs):
     train_dataset = data_process(iter(io.open(train_filepath, encoding="utf8")))
     valid_dataset = data_process(iter(io.open(valid_filepath, encoding="utf8")))
     test_dataset = data_process(iter(io.open(test_filepath, encoding="utf8")))
+    return DatasetsInfo(len(vocab.stoi), train_dataset, valid_dataset, test_dataset)
+
+
+def get_dataloaders(datasets_info, benchmark_config, model_specs, num_replicas=1, rank=0):
+    ntokens, train_dataset, valid_dataset, test_dataset = datasets_info
 
     def batchify(data):
         batch_size = benchmark_config["batch_size"]
         return _batchify(data, batch_size)
 
     total_batch_size = _get_total_batch_size(benchmark_config, model_specs)
-    train_dataloader = DataLoader(train_dataset, batch_size=total_batch_size, collate_fn=batchify)
-    valid_dataloader = DataLoader(valid_dataset, batch_size=total_batch_size, collate_fn=batchify)
-    test_dataloader = DataLoader(test_dataset, batch_size=total_batch_size, collate_fn=batchify)
-    return len(vocab.stoi), train_dataloader, valid_dataloader, test_dataloader
+    train_dataloader = DataLoader(
+        train_dataset,
+        sampler=DistributedSampler(train_dataset, num_replicas=num_replicas, rank=rank),
+        batch_size=total_batch_size,
+        collate_fn=batchify,
+    )
+    valid_dataloader = DataLoader(
+        valid_dataset,
+        sampler=DistributedSampler(valid_dataset, num_replicas=num_replicas, rank=rank),
+        batch_size=total_batch_size,
+        collate_fn=batchify,
+    )
+    test_dataloader = DataLoader(
+        test_dataset,
+        sampler=DistributedSampler(test_dataset, num_replicas=num_replicas, rank=rank),
+        batch_size=total_batch_size,
+        collate_fn=batchify,
+    )
+    return train_dataloader, valid_dataloader, test_dataloader
 
 
-def get_synthetic_dataloaders(args, benchmark_config, model_specs):
-    """Return synthetic dataloaders for training, testing and validation."""
+def get_real_dataloaders(args, benchmark_config, model_specs, num_replicas=1, rank=0):
+    """Return real dataloaders for training, testing and validation."""
+    dataset_info = get_real_datasets()
+    train_dataloader, valid_dataloader, test_dataloader = get_dataloaders(
+        dataset_info, benchmark_config, model_specs, num_replicas, rank
+    )
+    return dataset_info.ntokens, train_dataloader, valid_dataloder, test_dataloader
 
-    def batchify(data):
-        batch_size = benchmark_config["batch_size"]
-        return _batchify(data, batch_size)
 
-    total_batch_size = total_batch_size = _get_total_batch_size(benchmark_config, model_specs)
+def get_synthetic_datasets():
     # vocab_size is 10000 and length of the real data is 2049990.
     lm_dataset = torch.randint(1, 10000, (2049990,))
+    return DatasetsInfo(10000, lm_dataset, lm_dataset, lm_dataset)
 
-    lm_dataloader = DataLoader(
-        lm_dataset, batch_size=total_batch_size, shuffle=True, num_workers=0, collate_fn=batchify
-    )
-    return lm_dataloader, lm_dataloader, lm_dataloader
+
+def get_synthetic_dataloaders(args, benchmark_config, model_specs, num_replicas=1, rank=0):
+    """Return synthetic dataloaders for training, testing and validation."""
+    return get_dataloaders(get_synthetic_datasets(), benchmark_config, model_specs, num_replicas, rank)
