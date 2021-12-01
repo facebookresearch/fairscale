@@ -1,3 +1,6 @@
+import logging
+from typing import Tuple
+
 import numpy as np
 from sklearn.datasets import make_blobs
 import torch
@@ -6,7 +9,7 @@ from fairscale.optim.grad_scaler import ShardedGradScaler
 
 
 class Feedforward(torch.nn.Module):
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, input_size: int, hidden_size: int):
         torch.manual_seed(7)
         super(Feedforward, self).__init__()
         self.input_size = input_size
@@ -16,22 +19,23 @@ class Feedforward(torch.nn.Module):
         self.fc2 = torch.nn.Linear(self.hidden_size, 1)
         self.sigmoid = torch.nn.Sigmoid()
 
-    def forward(self, x):
-        hidden = self.fc1(x)
-        relu = self.relu(hidden)
-        output = self.fc2(relu)
-        final_output = self.sigmoid(output)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
+        hidden1 = self.fc1(x)
+        output1 = self.relu(hidden1)
+        hidden2 = self.fc2(output1)
+        final_output = self.sigmoid(hidden2)
         return final_output
 
 
-def blob_label(y, label, loc):  # assign labels
+# assign labels
+def blob_label(y: np.ndarray, label: int, loc: list) -> np.ndarray:
     target = np.copy(y)
     for l in loc:
         target[y == l] = label
     return target
 
 
-def load_data():
+def load_data() -> Tuple:
     torch.manual_seed(11)
     x_train, y_train = make_blobs(n_samples=40, n_features=2, cluster_std=1.5, shuffle=True, random_state=10)
     x_train = torch.FloatTensor(x_train)
@@ -47,7 +51,7 @@ def load_data():
     return all_data
 
 
-def standard_training():
+def standard_training() -> Feedforward:
     model = Feedforward(2, 10)
     criterion = torch.nn.BCELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
@@ -70,26 +74,43 @@ def standard_training():
     return model
 
 
-def scale(loss, scaling_factor):
+def scale(loss: torch.Tensor, scaling_factor: int) -> torch.Tensor:
     loss *= scaling_factor
     return loss
 
 
-def unscale(optimizer):
+def unscale(optimizer: torch.optim.SGD, model: Feedforward) -> None:
     sgs = ShardedGradScaler()
 
+    # unscaling using the optimizer
+    # with torch.no_grad():
+    #     to_unscale = list()
+    #     for group in optimizer.param_groups:
+    #         for param in group["params"]:
+    #             to_unscale.append(param.grad)
+
+    #     print(to_unscale)
+
+    # unscaling using the model params
     with torch.no_grad():
-        to_unscale = list()
-        for group in optimizer.param_groups:
-            for param in group["params"]:
-                to_unscale.append(param.grad)
+        to_unscale_fc1 = list()
+        to_unscale_fc2 = list()
+        for name, value in model.named_parameters():
+            if "fc1" in name:
+                to_unscale_fc1.append(value.grad)
+            else:
+                to_unscale_fc2.append(value.grad)
+        logging.info(to_unscale_fc1)
+        logging.info(to_unscale_fc2)
 
     found_inf = torch.Tensor([0.0])
-    inv_scale = torch.Tensor([1.0 / 2 ** 13])
-    sgs._foreach_non_finite_check_and_unscale_cpu_(to_unscale, found_inf, inv_scale)
+    inv_scale1 = torch.Tensor([1.0 / 2 ** 13])
+    inv_scale2 = torch.Tensor([1.0 / 2 ** 13])
+    sgs._foreach_non_finite_check_and_unscale_cpu_(to_unscale_fc1, found_inf, inv_scale1)
+    sgs._foreach_non_finite_check_and_unscale_cpu_(to_unscale_fc2, found_inf, inv_scale2)
 
 
-def training_with_gradient_scaling():
+def training_with_gradient_scaling() -> Feedforward:
     model = Feedforward(2, 10)
     criterion = torch.nn.BCELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
@@ -113,17 +134,17 @@ def training_with_gradient_scaling():
         scaled_loss.backward()
 
         # unscale weight gradient before weight update
-        unscale(optimizer)
+        unscale(optimizer, model)
         optimizer.step()
     return model
 
 
-def test_gradient_scaling():
+def test_gradient_scaling() -> None:
     vanilla_model = standard_training()
     scaled_model = training_with_gradient_scaling()
 
     assert torch.equal(vanilla_model.fc1.bias, scaled_model.fc1.bias)
-    assert torch.isclose(vanilla_model.fc2.bias, scaled_model.fc2.bias)
+    assert torch.equal(vanilla_model.fc2.bias, scaled_model.fc2.bias)
     assert torch.equal(vanilla_model.fc1.bias.grad, scaled_model.fc1.bias.grad)
     assert torch.equal(vanilla_model.fc2.bias.grad, scaled_model.fc2.bias.grad)
 
