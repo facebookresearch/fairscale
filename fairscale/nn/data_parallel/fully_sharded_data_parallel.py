@@ -712,7 +712,6 @@ class FullyShardedDataParallel(nn.Module):
         # Determine number of padding elements.
         num_to_pad = chunks[0].numel() - chunks[self.rank].numel()
         assert num_to_pad >= 0, num_to_pad
-
         shard = chunks[self.rank].clone()
         if num_to_pad > 0:
             shard = F.pad(shard, [0, num_to_pad])
@@ -1031,7 +1030,7 @@ class FullyShardedDataParallel(nn.Module):
             # Set the state so that we assert when trying to go into
             # forward/backward.
             self.training_state = TrainingState.SUMMON_FULL_PARAMS
-            full_tensors = self._rebuild_full_params(force_full_precision=True)
+            full_tensors = self._rebuild_full_params(force_full_precision=False, from_summon_full_params=True)
             assert full_tensors is not None
             with contextlib.ExitStack() as stack:
                 if self.module.is_flattened:
@@ -1141,7 +1140,7 @@ class FullyShardedDataParallel(nn.Module):
                 only materialized (via all-gather) as needed.
         """
         assert hasattr(p, "_is_sharded") and hasattr(p, "_orig_size")
-        if hasattr(p, "_fp32_shard"):
+        if hasattr(p, "_fp32_shard") and hasattr(p, "_full_param_padded"):
             return
 
         # A single shard of the parameters in full precision.
@@ -1316,6 +1315,9 @@ class FullyShardedDataParallel(nn.Module):
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
         self._register_post_backward_hooks()
+        # print(f"p.dtype {[p.dtype for p in self.params]}")
+        # print(f"args {type(args)}")
+        # print(f"args dtype {args} {kwargs}")
 
         outputs = self.module(*args, **kwargs)
 
@@ -1751,7 +1753,7 @@ class FullyShardedDataParallel(nn.Module):
                     self._output_pre_backward_hook_registered.clear()
 
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(self, force_full_precision: bool = False, from_summon_full_params=False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -1852,10 +1854,17 @@ class FullyShardedDataParallel(nn.Module):
                         # mixed precision and full precision rebuild is asked.
                         output_tensor = p_data.new_zeros(p_size)
                     else:
-                        if p._full_param_padded.storage().size() != p_size.numel():
-                            # Allocate based on full size from all shards.
-                            alloc_storage_(p._full_param_padded, size=p_size)
-                        output_tensor = p._full_param_padded
+                        if from_summon_full_params:
+                            output_tensor = p_data.new_zeros(p_size, dtype=torch.float32)
+                            output_tensor.record_stream(torch.cuda.current_stream())
+                            # time.sleep(10)
+                        else:
+                            if p._full_param_padded.storage().size() != p_size.numel():
+                                # Allocate based on full size from all shards.
+                                alloc_storage_(p._full_param_padded, size=p_size)
+                            output_tensor = p._full_param_padded
+
+                    # print(f"p_size.numel() {p_size.numel()} output tensor {output_tensor.storage().size()} output_tensor.dtype {output_tensor.dtype} force_full_precision {force_full_precision}")
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
