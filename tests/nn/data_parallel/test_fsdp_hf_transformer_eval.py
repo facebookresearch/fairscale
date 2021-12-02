@@ -1,5 +1,5 @@
-import unittest
 import tempfile
+import unittest
 
 import torch
 
@@ -8,12 +8,12 @@ from fairscale.nn import auto_wrap, enable_wrap
 from fairscale.utils.testing import dist_init
 
 try:
-    from transformers import GPT2Config, GPT2Tokenizer, GPT2LMHeadModel
+    from transformers import GPT2Config, GPT2LMHeadModel, GPT2Tokenizer
     from transformers.models.gpt2.modeling_gpt2 import GPT2Model
 except ImportError:
-    raise unittest.SkipTest("Test(s) require Huggingface Transformers package installed "
-                            "(pip install transformers), "
-                            "skipping ...")
+    raise unittest.SkipTest(
+        "Test(s) require Huggingface Transformers package installed (pip install transformers), skipping ..."
+    )
 
 
 def wrap_gpt2_block_only(module, recurse, **kwargs):
@@ -53,8 +53,7 @@ class TestHFTransformersAutoWrap(unittest.TestCase):
 
         self.model = FSDP(self.model)
 
-        self.assertTrue(isinstance(self.model.transformer, FSDP),
-                        "GPT2Block's should have been wrapped with FSDP")
+        self.assertTrue(isinstance(self.model.transformer, FSDP), "GPT2Block's should have been wrapped with FSDP")
 
         input_seq = self.tokenizer("Fairscale is great!")["input_ids"]
         input_seq = torch.LongTensor(input_seq)
@@ -66,5 +65,5 @@ class TestHFTransformersAutoWrap(unittest.TestCase):
         self.model(input_seq)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

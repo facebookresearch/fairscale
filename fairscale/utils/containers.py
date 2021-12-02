@@ -20,7 +20,6 @@ def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tu
             return fn(x)
         elif isinstance(x, OrderedDict):
             od = x.__class__()
-
             for key, value in x.items():
                 od[key] = _apply(value)
             return od
