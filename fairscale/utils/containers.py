@@ -19,7 +19,8 @@ def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tu
         if torch.is_tensor(x):
             return fn(x)
         elif isinstance(x, OrderedDict):
-            od = OrderedDict()
+            od = x.__class__()
+
             for key, value in x.items():
                 od[key] = _apply(value)
             return od
