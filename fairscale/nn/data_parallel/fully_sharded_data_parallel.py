@@ -66,6 +66,11 @@ if os.getenv("DEBUG_DUMMY_ALL_GATHER_CALL", "0") == "1":
 else:
     debug_dummy_all_gather_call = False
 
+if os.getenv("DISABLE_DOUBLE_PREFETCH", "0") == "1":
+    disable_double_prefetch = True
+else:
+    disable_double_prefetch = False
+
 class TrainingState(Enum):
     """
     Simple enum to indicate what state FSDP is in. Used for asserting
@@ -1363,7 +1368,7 @@ class FullyShardedDataParallel(nn.Module):
             and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
         ):
             self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params()
-            if self._my_fsdp_instance_idx - 1 > 0:
+            if self._my_fsdp_instance_idx - 1 > 0 and not disable_double_prefetch:
                 self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 2]._rebuild_full_params(wait_for_all_gather_stream=False)
 
         # Wait for all work in the current stream to finish, then start the
