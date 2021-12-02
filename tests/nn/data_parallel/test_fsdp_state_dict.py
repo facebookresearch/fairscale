@@ -143,7 +143,9 @@ class TestSaveLoadStateDict(DistributedTest):
     def _test_nested_wrapped_model(cls, rank, group, config=None):
         # Get reference state dict without any nested FSDP instances.
         model = NestedWrappedModule(group, None).cuda()
-        model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank, process_group=group)
+        model = nn.parallel.DistributedDataParallel(
+            model, device_ids=[rank], output_device=rank, process_group=group["all_gather_group"]
+        )
         cls._train_for_several_steps(model, 2, autocast=config["mixed_precision"])
         ref_state_dict = {k: v.clone() for k, v in model.module.state_dict().items()}
 

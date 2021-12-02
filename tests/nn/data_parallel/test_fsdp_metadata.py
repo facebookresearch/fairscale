@@ -85,7 +85,10 @@ def _worker(gpu_id: int, sync_file: str, world_size: int, embedding_size: int, f
         world_size=world_size,
         rank=gpu_id,
     )
-    process_group = torch.distributed.new_group()
+    process_group = {
+        "all_gather_group": torch.distributed.new_group(),
+        "reduce_scatter_group": torch.distributed.new_group(),
+    }
 
     # Create a dummy model with dummy inputs and targets
     batch_size = 4

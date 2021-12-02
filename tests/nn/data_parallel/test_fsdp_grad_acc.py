@@ -37,7 +37,10 @@ class TestGradAcc(DistributedTest):
         spawn_and_init(fn)
 
     def test_no_sync_before_first_forward(self):
-        group = DummyProcessGroup(rank=0, size=1)
+        group = {
+            "all_gather_group": DummyProcessGroup(rank=0, size=1),
+            "reduce_scatter_group": DummyProcessGroup(rank=0, size=1),
+        }
         model = self.get_wrapped_model(group, config={}, add_bn=False)
         batch = model.module.get_input(torch.device("cuda"))
         with model.no_sync():
@@ -124,7 +127,7 @@ class TestGradAccCommunication(DistributedTest):
 
     @classmethod
     def _test_communication(self, rank, group, config, nested_model=False):
-        if group.size() == 1:
+        if group["all_gather_group"].size() == 1:
             return
 
         # Turn off bucketing to accurately count number of reduce_scatters.

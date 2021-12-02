@@ -182,9 +182,7 @@ def _layer_memory_tracking_fsdp_worker(gpu_id: int, sync_files: Tuple[str, str],
     fake_criterion = nn.MSELoss()
 
     # Create a global group and a tracker around it
-    group = dist.new_group()
-    group = ProcessGroupTracker(group)
-
+    group = {"all_gather_group": ProcessGroupTracker(dist.new_group()), "reduce_scatter_group": dist.new_group()}
     # Create a simple model
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)

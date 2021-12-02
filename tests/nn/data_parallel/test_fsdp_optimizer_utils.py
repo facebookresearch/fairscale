@@ -145,7 +145,7 @@ class TestOptimizerUtils(DistributedTest):
 
     def test_named_params_ordering(self):
         """Test assumption of consolidate_optimizer_state_dict"""
-        group = DummyProcessGroup(0, 1)
+        group = {"all_gather_group": DummyProcessGroup(0, 1), "reduce_scatter_group": DummyProcessGroup(0, 1)}
         model = TransformerWithSharedParams(group)
         named_pars = [p for n, p in model.named_parameters()]
         for i, p in enumerate(model.parameters()):

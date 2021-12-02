@@ -466,7 +466,12 @@ class TestSerialization(DistributedTest):
     @classmethod
     def _test_multiprocessing(self, rank, group, config):
         mp = torch.multiprocessing.Pool(1)
-        dummy_group = DummyProcessGroup(rank=group["all_gather_group"].rank(), size=group["all_gather_group"].size())
+        rank = group["all_gather_group"].rank()
+        size = group["all_gather_group"].size()
+        dummy_group = {
+            "all_gather_group": DummyProcessGroup(rank=rank, size=size),
+            "reduce_scatter_group": DummyProcessGroup(rank=rank, size=size),
+        }
         model = mp.apply(self._get_model, (dummy_group, config))
         if not config["cpu_offload"]:
             model = model.cuda()
@@ -757,7 +762,7 @@ class MixtureOfExperts(NestedWrappedModule):
         if wrapper_config is not None:
             # we create a process group of size 1 for the expert params
             # expert_group = torch.distributed.new_group([group["all_gather_group"].rank()])  # world size 1 means no shard
-            expert_group = group = {
+            expert_group = {
                 "all_gather_group": torch.distributed.new_group([group["all_gather_group"].rank()]),
                 "reduce_scatter_group": torch.distributed.new_group([group["all_gather_group"].rank()]),
             }

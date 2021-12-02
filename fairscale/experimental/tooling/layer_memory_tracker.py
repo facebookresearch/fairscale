@@ -263,8 +263,8 @@ class LayerwiseMemoryTracker:
             h3 = m.register_backward_hook(self._create_backward_hook(name))
             self._hooks.extend([h1, h2, h3])
             if isinstance(m, FullyShardedDataParallel):
-                if isinstance(m.process_group, ProcessGroupTracker):
-                    m.process_group.listener = self._handle_process_group_call
+                if isinstance(m.process_group["all_gather_group"], ProcessGroupTracker):
+                    m.process_group["all_gather_group"].listener = self._handle_process_group_call
         torch.cuda.empty_cache()
 
     def clear_traces(self) -> None:

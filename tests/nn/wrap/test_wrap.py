@@ -26,7 +26,10 @@ class TestAutoWrap(unittest.TestCase):
     def setUp(self) -> None:
         # For all the tests here, we use a fake group and flatten being False since those should
         # not affect how wrapping work.
-        self.process_group = DummyProcessGroup(rank=0, size=1)
+        self.process_group = {
+            "all_gather_group": DummyProcessGroup(rank=0, size=1),
+            "reduce_scatter_group": DummyProcessGroup(rank=0, size=1),
+        }
 
     def test_wrap(self):
         with enable_wrap(wrapper_cls=FSDP, flatten_parameters=False, process_group=self.process_group):
