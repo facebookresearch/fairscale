@@ -104,7 +104,7 @@ class TestHFTransformersAutoWrap(unittest.TestCase):
 
         self.model = FSDP(self.model)
 
-        self.assertTrue(isinstance(self.model.transformer, FSDP), "Decoder should have been wrapped with FSDP")
+        self.assertTrue(isinstance(self.model.transformer, FSDP), "Transformer should have been wrapped with FSDP")
 
         source_seq, target_seq = self.model.generate_random_sequences()
         source_seq = source_seq.to(self.device)
