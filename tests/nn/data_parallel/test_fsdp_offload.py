@@ -404,7 +404,7 @@ def spawn_and_init(fn, args=None, **spawn_kwargs):
 
 def init_and_run(fn, args, rank, world_size, filename, filename_rpc):
     dist_init(rank, world_size, filename, filename_rpc)
-    group = torch.distributed.new_group()
+    group = {"all_gather_group": torch.distributed.new_group(), "reduce_scatter_group": torch.distributed.new_group()}
     fn(rank, group, *args)
 
 
