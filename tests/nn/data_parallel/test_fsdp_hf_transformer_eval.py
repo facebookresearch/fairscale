@@ -84,6 +84,9 @@ class DecoderWithLMHead(nn.Module):
 
 class TestHFTransformersAutoWrap(unittest.TestCase):
     def setUp(self) -> None:
+        if not torch.cuda.is_available():
+            raise unittest.SkipTest("CUDA not available, skipping test")
+
         torch.cuda.set_device(0)
 
         _, filename = tempfile.mkstemp()
