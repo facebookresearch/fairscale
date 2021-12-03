@@ -164,8 +164,8 @@ class TestSsdMemory(DistributedTest):
 class SimpleLinear(nn.Module):
     def __init__(self, group, input_size, output_size, layers=1, **unused_kwargs):
         super().__init__()
-        self.rank = group.rank()
-        self.world_size = group.size()
+        self.rank = group["all_gather_group"].rank()
+        self.world_size = group["all_gather_group"].size()
         self.input_size = input_size
         self.output_size = output_size
         torch.manual_seed(0)  # keep everything deterministic
@@ -290,8 +290,8 @@ class TestSsdLoading(DistributedTest):
 class TransformerWithSharedParams(nn.Module):
     def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=True, **unused_kwargs):
         super().__init__()
-        self.rank = group.rank()
-        self.world_size = group.size()
+        self.rank = group["all_gather_group"].rank()
+        self.world_size = group["all_gather_group"].size()
         torch.manual_seed(0)  # keep everything deterministic
         assert d_vocab >= 12  # we use torch.arange(12) as input
         self.embed_tokens = nn.Embedding(d_vocab, d_model)
@@ -337,8 +337,8 @@ class TransformerWithSharedParams(nn.Module):
 class NestedWrappedModule(nn.Module):
     def __init__(self, group, wrapper_config, wrap_everything=False, checkpoint=False):
         super().__init__()
-        self.rank = group.rank()
-        self.world_size = group.size()
+        self.rank = group["all_gather_group"].rank()
+        self.world_size = group["all_gather_group"].size()
         self.wrapper_config = wrapper_config
 
         def _maybe_wrap(layer):
