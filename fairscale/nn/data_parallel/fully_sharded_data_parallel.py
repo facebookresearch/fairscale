@@ -1854,7 +1854,7 @@ class FullyShardedDataParallel(nn.Module):
                         # mixed precision and full precision rebuild is asked.
                         output_tensor = p_data.new_zeros(p_size)
                     else:
-                        if from_summon_full_params:
+                        if False:
                             output_tensor = p_data.new_zeros(p_size, dtype=torch.float32)
                             output_tensor.record_stream(torch.cuda.current_stream())
                             # time.sleep(10)
@@ -1865,7 +1865,6 @@ class FullyShardedDataParallel(nn.Module):
                             output_tensor = p._full_param_padded
 
                     # print(f"p_size.numel() {p_size.numel()} output tensor {output_tensor.storage().size()} output_tensor.dtype {output_tensor.dtype} force_full_precision {force_full_precision}")
-
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
@@ -1875,7 +1874,11 @@ class FullyShardedDataParallel(nn.Module):
                         dist.all_gather(chunks, p_data, group=self.process_group)
 
                     # Set p.data = output_tensor (with padding trimmed)
-                    update_p_data(output_tensor)
+                    if from_summon_full_params:
+                        output_tensor = output_tensor.half()
+                        update_p_data(output_tensor)
+                    else:
+                        update_p_data(output_tensor)
 
                     if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
                         self._free_fp16_param_shard([p])
