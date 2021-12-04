@@ -4,8 +4,7 @@ from typing import Tuple
 import numpy as np
 from sklearn.datasets import make_blobs
 import torch
-
-from fairscale.optim.grad_scaler import ShardedGradScaler
+import torch.nn as nn
 
 
 class Feedforward(torch.nn.Module):
@@ -14,74 +13,36 @@ class Feedforward(torch.nn.Module):
         super(Feedforward, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.fc1 = torch.nn.Linear(self.input_size, self.hidden_size)
-        self.relu = torch.nn.ReLU()
-        self.fc2 = torch.nn.Linear(self.hidden_size, 1)
-        self.sigmoid = torch.nn.Sigmoid()
+        self.fc1 = nn.Linear(self.input_size, self.hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(self.hidden_size, 1)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
-        hidden1 = self.fc1(x)
-        output1 = self.relu(hidden1)
-        hidden2 = self.fc2(output1)
-        final_output = self.sigmoid(hidden2)
-        return final_output
+        out = self.fc1(x)
+        out = self.relu(out)
+        out = self.fc2(out)
+        out = self.sigmoid(out)
+        return out
 
 
-class Feedforward2(torch.nn.Module):
-    def __init__(self, input_size: int, hidden_size: int):
-        torch.manual_seed(7)
-        super(Feedforward2, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.fc1 = torch.nn.Linear(self.input_size, self.hidden_size)
-        self.relu = torch.nn.ReLU()
-        self.fc2 = torch.nn.Linear(self.hidden_size, 1)
-        self.sigmoid = torch.nn.Sigmoid()
+class LayerwiseGradientScaler:
+    def __init__(self, modules: nn.Module):
+        self.per_layer_scale = [2 ** (1 / 1000) for _ in modules]
+        # print('length of modules %s' % len(modules))
 
-        # self.fc1.register_full_backward_hook(self.scale_up)
-        self.fc1.register_full_backward_hook(self.scale_down)
-        self.fc2.register_full_backward_hook(self.scale_up)
-        self.fc2.register_full_backward_hook(self.scale_down)
-        self.sigmoid.register_full_backward_hook(self.scale_up)
-        self.sigmoid.register_full_backward_hook(self.scale_down)
+    def scale_up(self, m: nn.Module, inputs: torch.Tensor, outputs: torch.Tensor) -> None:
+        if inputs[0] is not None:
+            torch.mul(inputs[0], (2 ** 13))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
-        hidden1 = self.fc1(x)
-        output1 = self.relu(hidden1)
-        hidden2 = self.fc2(output1)
-        final_output = self.sigmoid(hidden2)
-        return final_output
-
-    """
-    multiply the output grads on layer i by S using scale_up_hook
-    compute the derivative
-    multiply the input grads on layer i-1 by 1/S using scale_down_hook
-    """
-
-    def scale_up(self, m, inputs, outputs):
-        torch.mul(inputs[0], (2 ** 13))
-
-    def scale_down(self, m, inputs, outputs):
-        torch.mul(outputs[0], 1 / (2 ** 13))
-
-    # def print_grads(self, m, grad_input, grad_output):
-    #     print('Inside ' + self.__class__.__name__ + ' backward')
-    #     print('Inside class:' + self.__class__.__name__)
-    #     print('Inside module:' + self.__module__)
-    #     print('')
-    #     print('grad_input: ', type(grad_input), len(grad_input))
-    #     print('grad_input[0]: ', type(grad_input[0]))
-    #     print('grad_output: ', type(grad_output), len(grad_output))
-    #     print('grad_output[0]: ', type(grad_output[0]))
-    #     print('')
-    #     print('grad_input size:', grad_input[0].size() if grad_input[0] is not None else None)
-    #     print('grad_output size:', grad_output[0].size() if grad_input[0] is not None else None)
-    #     print('grad_input norm:', grad_input[0].norm() if grad_input[0] is not None else None)
+    def scale_down(self, m: nn.Module, inputs: torch.Tensor, outputs: torch.Tensor) -> None:
+        if outputs[0] is not None:
+            torch.mul(outputs[0], 1 / (2 ** 13))
 
 
 # assign labels
 def blob_label(y: np.ndarray, label: int, loc: list) -> np.ndarray:
-    target = np.copy(y)
+    target = np.copy(y)  # type: ignore
     for l in loc:
         target[y == l] = label
     return target
@@ -103,7 +64,7 @@ def load_data() -> Tuple:
     return all_data
 
 
-def standard_training(model) -> Feedforward:
+def standard_training(model: Feedforward) -> Feedforward:
     criterion = torch.nn.BCELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
 
@@ -117,7 +78,7 @@ def standard_training(model) -> Feedforward:
         y_pred = model(x_train)
         # print(y_pred)
 
-        # compute Loss
+        # compute loss
         loss = criterion(y_pred.squeeze(), y_train)
 
         # backward pass
@@ -128,22 +89,117 @@ def standard_training(model) -> Feedforward:
     return model
 
 
-def test_weight() -> None:
+def test_weights() -> None:
     model1 = Feedforward(2, 10)
-    model2 = Feedforward2(2, 10)
+    model2 = Feedforward(2, 10)
+
+    layers_to_scale = list()
+    for layer in model2.named_children():
+        print(layer)
+        if isinstance(layer[1], nn.Linear):
+            layers_to_scale.append(layer)
+
+    layerwise_grad_scaler = LayerwiseGradientScaler(layers_to_scale)
+    for _, layer in enumerate(layers_to_scale):
+        layer[1].register_full_backward_hook(layerwise_grad_scaler.scale_up)
+        layer[1].register_full_backward_hook(layerwise_grad_scaler.scale_down)
+
     vanilla_model = standard_training(model1)
     scaled_model = standard_training(model2)
 
+    logging.info([item for item in vanilla_model.sigmoid.parameters()])
     assert torch.equal(vanilla_model.fc1.weight.grad, scaled_model.fc1.weight.grad)
     assert torch.equal(vanilla_model.fc2.weight.grad, scaled_model.fc2.weight.grad)
-    # assert torch.equal(vanilla_model.sigmoid.bias.grad, scaled_model.sigmoid.bias.grad)
-
-
-def test_bias() -> None:
-    model1 = Feedforward(2, 10)
-    model2 = Feedforward2(2, 10)
-    vanilla_model = standard_training(model1)
-    scaled_model = standard_training(model2)
-
     assert torch.equal(vanilla_model.fc1.bias.grad, scaled_model.fc1.bias.grad)
     assert torch.equal(vanilla_model.fc2.bias.grad, scaled_model.fc2.bias.grad)
+
+
+# class LayerwiseGradScaler(AbstractLayerwiseGradientScaler):
+#     def __init__(self, model):
+#         self.layers_to_scale = list()
+#         self.scale_up_functions = list()
+#         self.scale_down_functions = list()
+#         self.scaling_factors = [ 2**7, 2**15 ]
+#         self.make_scaling_functions()
+#         self.register_scaling_functions()
+
+#         for layer in model.named_children():
+#             if isinstance(layer[1], nn.Linear):
+#                 self.layers_to_scale.append(layer)
+
+#         assert len(self.scaling_factors) == len(self.layers_to_scale)
+
+# def get_scaled_model(model):
+#     layers_to_scale = list()
+#     scale_up_functions = list()
+#     scale_down_functions = list()
+#     scaling_factors = [ 2**7, 2**15 ]
+
+#     # create a scale down and scale up function for each layer
+#     def make_scaling_functions():
+#         def scale_down(self, m, inputs, outputs):
+#             if outputs[0] is not None:
+#                 return torch.mul(outputs[0], item)
+
+#         def scale_up(self, m, inputs, outputs):
+#             if inputs[0] is not None:
+#                 return torch.mul(inputs[0], item)
+
+#         for item in scaling_factors:
+#             print(item)
+#             scale_up_functions.append(scale_up)
+#             scale_down_functions.append(scale_down)
+#         print(scale_up_functions)
+#         print(scale_down_functions)
+
+#     # register the scale up and scale down functions for each layer
+#     def register_scaling_functions():
+#         for idx, layer in enumerate(layers_to_scale):
+#             print(idx, layer[0], layer[1])
+#             layer[1].register_full_backward_hook(scale_up_functions[idx])
+#             layer[1].register_full_backward_hook(scale_down_functions[idx])
+
+#     for layer in model.named_children():
+#         if isinstance(layer[1], nn.Linear):
+#             layers_to_scale.append(layer)
+#     make_scaling_functions()
+#     print(layers_to_scale)
+#     register_scaling_functions()
+#     # print([item for item in model._get_backward_hooks()])
+#     return model
+
+"""
+Idea:
+Create scale_up[i] and scale_down[i] functions for each layer of the model. 
+Bind a unique constant to each of these functions and then pass them to the
+register_full_backward_hook function.
+
+The class should take a list of scaling factors and return a list of functions
+that can be registered with the register_full_backward_hook function.
+
+Design:
+
+FeedForward class 
+    - implements the network and forward function
+
+LayerwiseGradientScaler 
+    - input:
+        - instance of a model
+        - list of scaling factors
+    - implements a function which returns the list of scaling functions on which we will
+    be passed to the backward hook
+    - output:
+        - list of scaling functions 
+
+Main
+    - create an instance of the model
+    - generate a list of layers on which scaling needs to be applied
+    - specify a list of scaling factors
+    - pass the model instance and list of scaling factors to 
+      ConcreteLayerwiseGradientScaler
+    - loop through the layers and register the backward hook on the model
+
+Test
+    - compare the gradients of fc1 and fc2 of the vanilla model with the 
+      model returned from main
+"""
