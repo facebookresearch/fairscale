@@ -52,7 +52,7 @@ class TransformerWithCustomOutput(nn.Transformer):  # type: ignore[name-defined]
         return TransformerOutput(output=output)
 
 
-class DecoderWithLMHead(nn.Module):
+class TransformerWithLMHead(nn.Module):
     def __init__(self, d_vocab=100, d_model=16):
         super().__init__()
         self.d_vocab = d_vocab
@@ -97,7 +97,7 @@ class TestHFTransformersAutoWrap(unittest.TestCase):
         self.device = torch.device("cuda")
 
         print("Build model ...")
-        self.model = DecoderWithLMHead()
+        self.model = TransformerWithLMHead()
         self.model.to(self.device)
 
     def test_auto_wrap_hf_model(self):
