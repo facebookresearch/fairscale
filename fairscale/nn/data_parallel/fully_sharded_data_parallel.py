@@ -1874,7 +1874,7 @@ class FullyShardedDataParallel(nn.Module):
                         dist.all_gather(chunks, p_data, group=self.process_group)
 
                     # Set p.data = output_tensor (with padding trimmed)
-                    if from_summon_full_params:
+                    if False:
                         output_tensor = output_tensor.half()
                         update_p_data(output_tensor)
                     else:
