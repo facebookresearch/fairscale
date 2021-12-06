@@ -22,3 +22,4 @@ tests/optim/test_oss.py
 tests/optim/test_oss_adascale.py
 tests/optim/test_ddp_adascale.py
 tests/experimental/nn/data_parallel/test_gossip.py
+tests/nn/data_parallel/test_fsdp_hf_transformer_eval.py
