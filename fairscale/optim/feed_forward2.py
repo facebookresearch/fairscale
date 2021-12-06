@@ -195,8 +195,7 @@ Main
     - create an instance of the model
     - generate a list of layers on which scaling needs to be applied
     - specify a list of scaling factors
-    - pass the model instance and list of scaling factors to 
-      ConcreteLayerwiseGradientScaler
+    - pass the list of scaling factors to LayerwiseGradientScaler
     - loop through the layers and register the backward hook on the model
 
 Test
