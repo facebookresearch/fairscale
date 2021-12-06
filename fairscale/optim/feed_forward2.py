@@ -170,7 +170,7 @@ def test_weights() -> None:
 
 """
 Idea:
-Create scale_up[i] and scale_down[i] functions for each layer of the model. 
+Create scale_up[i] and scale_down[i] functions for each layer of the model.
 Bind a unique constant to each of these functions and then pass them to the
 register_full_backward_hook function.
 
@@ -179,17 +179,17 @@ that can be registered with the register_full_backward_hook function.
 
 Design:
 
-FeedForward class 
+FeedForward class
     - implements the network and forward function
 
-LayerwiseGradientScaler 
+LayerwiseGradientScaler
     - input:
         - instance of a model
         - list of scaling factors
     - implements a function which returns the list of scaling functions on which we will
     be passed to the backward hook
     - output:
-        - list of scaling functions 
+        - list of scaling functions
 
 Main
     - create an instance of the model
@@ -199,6 +199,6 @@ Main
     - loop through the layers and register the backward hook on the model
 
 Test
-    - compare the gradients of fc1 and fc2 of the vanilla model with the 
+    - compare the gradients of fc1 and fc2 of the vanilla model with the
       model returned from main
 """
