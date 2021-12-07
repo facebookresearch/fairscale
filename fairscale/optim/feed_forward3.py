@@ -77,7 +77,6 @@ def standard_training(model: Feedforward) -> Feedforward:
 class LayerwiseGradientScaler:
     def __init__(self, scaling_factors: List):
         self.scaling_factors = scaling_factors
-        # self.model = model
         self.scale_up_functions: List = []
         self.scale_down_functions: List = []
 
@@ -101,8 +100,8 @@ class LayerwiseGradientScaler:
 
     def register_scaling_functions(self, layers_to_scale: List) -> None:
         for idx, layer in enumerate(layers_to_scale):
-            layer[1].register_full_backward_hook(self.scale_up_functions[idx])
-            layer[1].register_full_backward_hook(self.scale_down_functions[idx])
+            layer.register_full_backward_hook(self.scale_up_functions[idx])
+            layer.register_full_backward_hook(self.scale_down_functions[idx])
 
 
 def test_parity() -> None:
@@ -110,8 +109,8 @@ def test_parity() -> None:
     model2 = Feedforward(2, 10)
     layers_to_scale = []
 
-    for layer in model2.named_children():
-        if isinstance(layer[1], nn.Linear):
+    for name, layer in model2.named_modules():
+        if isinstance(layer, nn.Linear):
             layers_to_scale.append(layer)
 
     scaling_factors = [2 ** 10, 2 ** 7]
@@ -128,3 +127,7 @@ def test_parity() -> None:
     assert torch.equal(vanilla_model.fc2.weight.grad, scaled_model.fc2.weight.grad)
     assert torch.equal(vanilla_model.fc1.bias.grad, scaled_model.fc1.bias.grad)
     assert torch.equal(vanilla_model.fc2.bias.grad, scaled_model.fc2.bias.grad)
+
+    for name, layer in model2.named_modules():
+        if name != "":
+            print(name, layer)
