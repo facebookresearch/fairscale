@@ -19,14 +19,10 @@ class Feedforward(torch.nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
-        y1 = self.fc1(x)
-        # y1.retain_grad()
-        fc2_input = self.relu(y1)
-        # fc2_input.retain_grad()
-        y2 = self.fc2(fc2_input)
-        # y2.retain_grad()
-        out = self.sigmoid(y2)
-        # out.retain_grad()
+        out = self.fc1(x)
+        out = self.relu(out)
+        out = self.fc2(out)
+        out = self.sigmoid(out)
         return out
 
 
