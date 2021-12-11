@@ -79,53 +79,50 @@ class GradientHelper:
         self.scale_up_factor = scale_up_factor
         self.scale_down_factor = scale_down_factor
 
-    def scale(self, m: nn.Module, inputs: Tuple, outputs: Tuple) -> None:
-        # scale down the outputs
-        for idx in range(len(outputs)):
-            if outputs[idx] is not None:
-                torch.mul(outputs[idx], self.scale_down_factor)
-            else:
-                logging.info("outputs[%d] is None" % idx)
-
+    def scale_gradients(self, m: nn.Module, inputs: Tuple, outputs: Tuple) -> Tuple[torch.Tensor]:
         # scale up the inputs
+        scaled_up_grads = list()
         for idx in range(len(inputs)):
             if inputs[idx] is not None:
-                torch.mul(inputs[idx], self.scale_up_factor)
+                scaled_up_grads.append(inputs[idx].mul(self.scale_up_factor * self.scale_down_factor))
             else:
-                logging.info("inputs[%d] is None" % idx)
+                logging.debug("inputs[%d] is None" % idx)
+                scaled_up_grads.append(None)
+        return tuple(scaled_up_grads)
 
 
 class LayerwiseGradientScaler:
-    def __init__(self, layers_to_scale: List, scaling_factors: List):
-        self.layers_to_scale = layers_to_scale
-        self.scaling_factors = scaling_factors
-        self.scaling_functions: List = []
-
-    def create_functions(self, scale_up_factor: float, scale_down_factor: float):
+    def __init__(self):
+        self.layer_and_scale_down_factor: List = []
+    
+    def register_hooks(self, layer: nn.Module, scale_up_factor: float, scale_down_factor: float):
         helper = GradientHelper(scale_up_factor, scale_down_factor)
-        self.scaling_functions.append(helper.scale)
-        return helper.scale
+        layer.register_full_backward_hook(helper.scale_gradients)
 
-    def register_functions(self, layer, func) -> None:
-        layer.register_full_backward_hook(func)
+    def scale(self, layers_to_scale, scaling_factors) -> None:
+        for idx in range(len(scaling_factors) - 1, -1, -1):
+            scale_up_inputs_multiplier = scaling_factors[idx - 1] if idx >= 1 else 1
+            scale_down_outputs_multiplier = 1.0 / scaling_factors[idx]
 
-    def process_scaling_factors(self) -> None:
-        for idx in range(len(self.scaling_factors) - 1, -1, -1):
-            if idx >= 1:
-                scale_up_inputs_multiplier = self.scaling_factors[idx - 1]
-            else:
-                scale_up_inputs_multiplier = 1
-            scale_down_outputs_multipier = 1.0 / self.scaling_factors[idx]
+            # name and layer tuple
+            _, layer = layers_to_scale[idx][0], layers_to_scale[idx][1]
 
-            func = self.create_functions(scale_up_inputs_multiplier, scale_down_outputs_multipier)
-            _, layer = self.layers_to_scale[idx][0], self.layers_to_scale[idx][1]
-            self.register_functions(layer, func)
+            self.layer_and_scale_down_factor.append((layer, scale_down_outputs_multiplier))
+            self.register_hooks(layer, scale_up_inputs_multiplier, scale_down_outputs_multiplier)
 
-            logging.info(
+            logging.debug(
                 "layer = %s, input multiplier = %s, output multiplier = %s "
-                % (self.layers_to_scale[idx][0], scale_up_inputs_multiplier, scale_down_outputs_multipier)
+                % (layers_to_scale[idx][0], scale_up_inputs_multiplier, scale_down_outputs_multiplier)
             )
 
+    def unscale(self):
+        # scale down the outputs
+        for elt in self.layer_and_scale_down_factor:
+            layer, factor = elt[0], elt[1]
+            if hasattr(layer, 'weight'):
+                layer.weight.grad = torch.mul(layer.weight.grad, factor)
+            if hasattr(layer, 'bias'):
+                layer.bias.grad = torch.mul(layer.bias.grad, factor)
 
 def test_parity() -> None:
     model1 = Feedforward(2, 10)
@@ -148,11 +145,12 @@ def test_parity() -> None:
             layers_to_scale.append([name, layer])
 
     assert len(scaling_factors) == len(layers_to_scale)
-    lgs = LayerwiseGradientScaler(layers_to_scale, scaling_factors)
-    lgs.process_scaling_factors()
+    layerwise_scaler = LayerwiseGradientScaler()
+    layerwise_scaler.scale(layers_to_scale, scaling_factors)
 
     vanilla_model = standard_training(model1)
     scaled_model = standard_training(model2)
+    layerwise_scaler.unscale()
 
     # for name, layer in model2.named_modules():
     #     print(name, layer._get_backward_hooks())
