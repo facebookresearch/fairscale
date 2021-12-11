@@ -87,19 +87,19 @@ class GradientHelper:
                 scaled_up_grads.append(inputs[idx].mul(self.scale_up_factor * self.scale_down_factor))
             else:
                 logging.debug("inputs[%d] is None" % idx)
-                scaled_up_grads.append(None)
+                scaled_up_grads.append(inputs[idx])
         return tuple(scaled_up_grads)
 
 
 class LayerwiseGradientScaler:
     def __init__(self):
         self.layer_and_scale_down_factor: List = []
-    
-    def register_hooks(self, layer: nn.Module, scale_up_factor: float, scale_down_factor: float):
+
+    def register_hooks(self, layer, scale_up_factor: float, scale_down_factor: float) -> None:
         helper = GradientHelper(scale_up_factor, scale_down_factor)
         layer.register_full_backward_hook(helper.scale_gradients)
 
-    def scale(self, layers_to_scale, scaling_factors) -> None:
+    def scale(self, layers_to_scale: List, scaling_factors: List) -> None:
         for idx in range(len(scaling_factors) - 1, -1, -1):
             scale_up_inputs_multiplier = scaling_factors[idx - 1] if idx >= 1 else 1
             scale_down_outputs_multiplier = 1.0 / scaling_factors[idx]
@@ -115,14 +115,15 @@ class LayerwiseGradientScaler:
                 % (layers_to_scale[idx][0], scale_up_inputs_multiplier, scale_down_outputs_multiplier)
             )
 
-    def unscale(self):
+    def unscale(self) -> None:
         # scale down the outputs
         for elt in self.layer_and_scale_down_factor:
             layer, factor = elt[0], elt[1]
-            if hasattr(layer, 'weight'):
+            if hasattr(layer, "weight"):
                 layer.weight.grad = torch.mul(layer.weight.grad, factor)
-            if hasattr(layer, 'bias'):
+            if hasattr(layer, "bias"):
                 layer.bias.grad = torch.mul(layer.bias.grad, factor)
+
 
 def test_parity() -> None:
     model1 = Feedforward(2, 10)
