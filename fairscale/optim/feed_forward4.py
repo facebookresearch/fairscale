@@ -26,54 +26,6 @@ class Feedforward(torch.nn.Module):
         return out
 
 
-# assign labels
-def blob_label(y: np.ndarray, label: int, loc: List) -> np.ndarray:
-    target = np.copy(y)  # type: ignore
-    for l in loc:
-        target[y == l] = label
-    return target
-
-
-def load_data() -> Tuple:
-    torch.manual_seed(11)
-    x_train, y_train = make_blobs(n_samples=40, n_features=2, cluster_std=1.5, shuffle=True, random_state=10)
-    x_train = torch.FloatTensor(x_train)
-    y_train = torch.FloatTensor(blob_label(y_train, 0, [0]))
-    y_train = torch.FloatTensor(blob_label(y_train, 1, [1, 2, 3]))
-
-    x_test, y_test = make_blobs(n_samples=10, n_features=2, cluster_std=1.5, shuffle=True, random_state=10)
-    x_test = torch.FloatTensor(x_test)
-    y_test = torch.FloatTensor(blob_label(y_test, 0, [0]))
-    y_test = torch.FloatTensor(blob_label(y_test, 1, [1, 2, 3]))
-
-    all_data = (x_train, y_train, x_test, y_test)
-    return all_data
-
-
-def standard_training(model: Feedforward) -> Feedforward:
-    criterion = torch.nn.BCELoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
-
-    x_train, y_train, x_test, y_test = load_data()
-    model.train()
-    num_epochs = 1
-    for _ in range(num_epochs):
-        optimizer.zero_grad()
-
-        # forward pass
-        y_pred = model(x_train)
-
-        # compute loss
-        loss = criterion(y_pred.squeeze(), y_train)
-
-        # backward pass
-        loss.backward()
-
-        # update weights
-        optimizer.step()
-    return model
-
-
 class GradientHelper:
     def __init__(self, scale_up_factor: float, scale_down_factor: float):
         self.scale_up_factor = scale_up_factor
@@ -92,7 +44,7 @@ class GradientHelper:
 
 
 class LayerwiseGradientScaler:
-    def __init__(self):
+    def __init__(self) -> None:
         self.layer_and_scale_down_factor: List = []
 
     def register_hooks(self, layer, scale_up_factor: float, scale_down_factor: float) -> None:
@@ -119,13 +71,64 @@ class LayerwiseGradientScaler:
         # scale down the outputs
         for elt in self.layer_and_scale_down_factor:
             layer, factor = elt[0], elt[1]
-            if hasattr(layer, "weight"):
-                layer.weight.grad = torch.mul(layer.weight.grad, factor)
-            if hasattr(layer, "bias"):
-                layer.bias.grad = torch.mul(layer.bias.grad, factor)
+
+            for param in layer.parameters():
+                if hasattr(param, "grad"):
+                    param.grad = torch.mul(param.grad, factor)
 
 
-def test_parity() -> None:
+# assign labels
+def blob_label(y: np.ndarray, label: int, loc: List) -> np.ndarray:
+    target = np.copy(y)  # type: ignore
+    for l in loc:
+        target[y == l] = label
+    return target
+
+
+def load_data() -> Tuple:
+    torch.manual_seed(11)
+    x_train, y_train = make_blobs(n_samples=40, n_features=2, cluster_std=1.5, shuffle=True, random_state=10)
+    x_train = torch.FloatTensor(x_train)
+    y_train = torch.FloatTensor(blob_label(y_train, 0, [0]))
+    y_train = torch.FloatTensor(blob_label(y_train, 1, [1, 2, 3]))
+
+    x_test, y_test = make_blobs(n_samples=10, n_features=2, cluster_std=1.5, shuffle=True, random_state=10)
+    x_test = torch.FloatTensor(x_test)
+    y_test = torch.FloatTensor(blob_label(y_test, 0, [0]))
+    y_test = torch.FloatTensor(blob_label(y_test, 1, [1, 2, 3]))
+
+    all_data = (x_train, y_train, x_test, y_test)
+    return all_data
+
+
+def standard_training(model: Feedforward, scaler: LayerwiseGradientScaler = None) -> Feedforward:
+    criterion = torch.nn.BCELoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
+
+    x_train, y_train, x_test, y_test = load_data()
+    model.train()
+    num_epochs = 2
+    for _ in range(num_epochs):
+        optimizer.zero_grad()
+
+        # forward pass
+        y_pred = model(x_train)
+
+        # compute loss
+        loss = criterion(y_pred.squeeze(), y_train)
+
+        # backward pass
+        loss.backward()
+
+        # unscale the weights if scaler is not None
+        if scaler is not None:
+            scaler.unscale()
+
+        # update weights
+        optimizer.step()
+    return model
+
+def test_feed_forward_network_parity() -> None:
     model1 = Feedforward(2, 10)
     model2 = Feedforward(2, 10)
 
@@ -150,8 +153,7 @@ def test_parity() -> None:
     layerwise_scaler.scale(layers_to_scale, scaling_factors)
 
     vanilla_model = standard_training(model1)
-    scaled_model = standard_training(model2)
-    layerwise_scaler.unscale()
+    scaled_model = standard_training(model2, layerwise_scaler)
 
     # for name, layer in model2.named_modules():
     #     print(name, layer._get_backward_hooks())
