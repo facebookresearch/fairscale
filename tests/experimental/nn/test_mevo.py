@@ -28,6 +28,17 @@ _dense_grad = {}  # type: ignore
 
 
 @skip_if_no_cuda
+def test_mevo_eval():
+    """Test eval mode without target tensor"""
+    weight = torch.nn.Linear(3, 4).cuda().weight
+    input = torch.rand(1, 5, 3).cuda()
+    k = MEVO(weight)
+    k.eval()
+    out = k(input, None)
+    assert out.shape == (1, 5, 4)
+
+
+@skip_if_no_cuda
 def test_mevo():
     """Test the MEVO kernel by itself."""
     torch.random.manual_seed(os.getpid())
