@@ -2381,6 +2381,9 @@ def _post_state_dict_hook(
     # recursively, so we need to make sure that we only clone each tensor at
     # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
     # which keeps track of tensors that are no longer at risk of being freed.
+    if dist.get_rank() != 0:
+        state_dict.clear()
+        return state_dict
     for key in state_dict.keys():
         if not key.startswith(prefix) or getattr(state_dict[key], "_has_been_cloned", False):
             continue
