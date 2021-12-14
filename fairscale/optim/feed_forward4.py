@@ -128,7 +128,8 @@ def standard_training(model: Feedforward, scaler: LayerwiseGradientScaler = None
         optimizer.step()
     return model
 
-def test_feed_forward_network_parity() -> None:
+
+def test_feed_forward_network() -> None:
     model1 = Feedforward(2, 10)
     model2 = Feedforward(2, 10)
 
@@ -158,7 +159,14 @@ def test_feed_forward_network_parity() -> None:
     # for name, layer in model2.named_modules():
     #     print(name, layer._get_backward_hooks())
 
-    assert torch.equal(vanilla_model.fc1.weight.grad, scaled_model.fc1.weight.grad)
-    assert torch.equal(vanilla_model.fc2.weight.grad, scaled_model.fc2.weight.grad)
-    assert torch.equal(vanilla_model.fc1.bias.grad, scaled_model.fc1.bias.grad)
-    assert torch.equal(vanilla_model.fc2.bias.grad, scaled_model.fc2.bias.grad)
+    def get_params_with_grad(trained_model):
+        result = []
+        for name, layer in trained_model.named_modules():
+            if isinstance(layer, nn.Sigmoid) or isinstance(layer, nn.Linear):
+                for param in layer.parameters():
+                    if hasattr(param, "grad"):
+                        result.append(param.grad)
+        return result
+
+    for elt in zip(get_params_with_grad(vanilla_model), get_params_with_grad(scaled_model)):
+        assert torch.equal(elt[0], elt[1])
