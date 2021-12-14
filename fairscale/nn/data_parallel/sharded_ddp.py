@@ -100,6 +100,7 @@ class ShardedDataParallel(nn.Module):
         reduce_buffer_size: int = 2 ** 23,
         auto_refresh_trainable: bool = True,
         reduce_fp16: bool = False,
+        warn_on_trainable_params_changed: bool = True,
     ):
         super().__init__()
 
@@ -115,6 +116,8 @@ class ShardedDataParallel(nn.Module):
             logging.warning(
                 "fp16 gradient reduction is not compatible with reduction buffers, which are requested. fp16 grad reduction is deactivated."
             )
+
+        self._warn_on_trainable_params_changed = warn_on_trainable_params_changed
 
         # Handle a no_sync() context which prevents the gradient synchronization,
         # accumulate in place
@@ -654,9 +657,10 @@ class ShardedDataParallel(nn.Module):
             # - the whole model is not trainable but we still have grad hooks
             trainability_changed |= not self.training and len(self._grad_hooks) > 0
 
-            if trainability_changed:
+            if self._warn_on_trainable_params_changed and trainability_changed:
                 logging.warning(
-                    "ShardedDDP detected that the trainable params changed, either because of eval/train mode or parameter freezing/unfreeze."
+                    "ShardedDDP detected that the trainable params changed, "
+                    "either because of eval/train mode or parameter freezing/unfreeze."
                 )
                 self._reference_trainable_mask = trainable_mask
 
