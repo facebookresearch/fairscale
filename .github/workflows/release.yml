@@ -1,9 +1,9 @@
 name: fairscale-release
 
 on:
-  push:
-    branches:
-      - 'release-automation'
+  # push:
+  #   branches:
+  #     - 'release-automation'
   workflow_dispatch:
     # Inputs the workflow accepts.
     inputs:
