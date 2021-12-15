@@ -1,0 +1,68 @@
+name: Fairscale Release
+
+on:
+  workflow_dispatch:
+    # Inputs the workflow accepts.
+    inputs:
+      release:
+        # Type of release: major/minor/patch
+        description: 'Release Type'
+        # By default the release will be a patch release
+        default: 'patch'
+        # Input has to be provided for the workflow to run
+        required: true
+
+jobs:
+  get_current_version:
+    runs-on: ubuntu-latest
+    outputs:
+      next_version: $${{ steps.step1.outputs.next_version }}
+    steps:
+      - id: step1
+      - uses: actions/setup-python@v2
+        run: |
+          output=$(python3 release_utils.py -r ${{ github.event.inputs.release }})
+          echo "::set-output name=next_version::$output"
+
+  # checkout a new branch release_x.y.z
+  checkout_branch:
+    runs-on: ubuntu-latest
+    needs: get_current_version
+    steps:
+      - uses: peterjgrainger/action-create-branch@v2.0.1
+      - env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - with:
+          branch: release-v${{ needs.get_current_version.outputs.next_version }}
+
+  # update the version file
+  update_version:
+    runs-on: ubuntu-latest
+    needs: checkout_branch
+    steps:
+      - uses: actions/setup-python@v2
+        run : |
+          python3 release_utils.py -r $${{ github.event.inputs.release }} -b
+
+
+  # # commit the code
+  # commit_code:
+
+  # # create a tag for the release
+  # create_tag:
+
+  # # build the PyPI package and upload it
+  # build_package:
+
+  # #
+  # create_release:
+
+
+
+
+
+# uses: peterjgrainger/action-create-branch@v2.0.1
+# env:
+#   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# with:
+#   branch: 'release-notes'

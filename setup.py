@@ -5,8 +5,8 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+import json
 import os
-import re
 
 import setuptools
 
@@ -22,12 +22,12 @@ def fetch_requirements():
 # https://packaging.python.org/guides/single-sourcing-package-version/
 def find_version(version_file_path):
     with open(version_file_path) as version_file:
-        version_match = re.search(r"^__version_tuple__ = (.*)", version_file.read(), re.M)
-        if version_match:
-            ver_tup = eval(version_match.group(1))
-            ver_str = ".".join([str(x) for x in ver_tup])
-            return ver_str
-        raise RuntimeError("Unable to find version tuple.")
+        data = json.load(version_file)
+        assert len(data.keys()) > 0
+        if "version" in data.keys():
+            version_str = data.get("version")
+            return version_str
+        raise KeyError('Key "version" not found in version.json')
 
 
 extensions = []
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     setuptools.setup(
         name="fairscale",
         description="FairScale: A PyTorch library for large-scale and high-performance training.",
-        version=find_version("fairscale/__init__.py"),
+        version=find_version("fairscale/version.json"),
         setup_requires=["ninja"],  # ninja is required to build extensions
         install_requires=fetch_requirements(),
         include_package_data=True,
