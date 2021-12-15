@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - 'release-automation'
-
   workflow_dispatch:
     # Inputs the workflow accepts.
     inputs:
@@ -25,21 +24,21 @@ jobs:
       run: |
         echo "Hello ${{ github.event.inputs.name }}"
 
-  # get_current_version:
-  #   runs-on: ubuntu-latest
-  #   outputs:
-  #     next_version: ${{ steps.step1.outputs.next_version }}
-  #   steps:
-  #     - name: checkout repo content
-  #       uses: actions/checkout@v2
-  #     - name: setup python
-  #       uses: actions/setup-python@v2
-  #       with:
-  #         python-version: 3.9
-  #     - name: execute script
-  #       run: |
-  #         output=$(python3 release_utils.py -r ${{ github.event.inputs.release }})
-  #         echo "::set-output name=next_version::$output"
+  get_current_version:
+    runs-on: ubuntu-latest
+    outputs:
+      next_version: ${{ steps.step1.outputs.next_version }}
+    steps:
+      - name: checkout repo content
+        uses: actions/checkout@v2
+      - name: setup python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
+      - name: execute script
+        run: |
+          output=$(python3 release_utils.py --release_type ${{ github.event.inputs.name }})
+          echo "::set-output name=next_version::$output"
 
   # checkout a new branch release_x.y.z
   # checkout_branch:
