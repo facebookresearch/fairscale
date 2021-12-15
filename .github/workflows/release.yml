@@ -11,9 +11,6 @@ on:
         default: 'patch'
         # Input has to be provided for the workflow to run
         required: true
-  push:
-    branches:
-      - 'release-a*'
 
 jobs:
   greet:
