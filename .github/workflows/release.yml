@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     # Inputs the workflow accepts.
     inputs:
-      release:
+      name:
         # Type of release: major/minor/patch
         description: 'Release Type'
         # By default the release will be a patch release
