@@ -18,8 +18,13 @@ jobs:
     outputs:
       next_version: ${{ steps.step1.outputs.next_version }}
     steps:
-      - id: step1
-        # uses: actions/setup-python@v2
+      - name: checkout repo content
+        uses: actions/checkout@v2
+      - name: setup python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
+      - name: execute script
         run: |
           output=$(python3 release_utils.py -r ${{ github.event.inputs.release }})
           echo "::set-output name=next_version::$output"
