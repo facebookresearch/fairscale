@@ -1,10 +1,14 @@
-name: Fairscale release workflow
+name: fairscale-release
 
 on:
+  push:
+    branches:
+      - 'release-automation'
+
   workflow_dispatch:
     # Inputs the workflow accepts.
     inputs:
-      name:
+      release:
         # Type of release: major/minor/patch
         description: 'Release Type'
         # By default the release will be a patch release
@@ -19,7 +23,7 @@ jobs:
     steps:
     - name: Send greeting
       run: |
-        echo "Hello ${{ github.event.inputs.name }}"
+        echo "Hello ${{ github.event.inputs.release }}"
 
   # get_current_version:
   #   runs-on: ubuntu-latest
