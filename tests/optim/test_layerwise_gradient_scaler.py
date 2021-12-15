@@ -24,12 +24,14 @@ class Feedforward(torch.nn.Module):
         self.fc2 = nn.Linear(self.hidden_size, 1)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
+        self.last_layer = nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
         out = self.fc1(x)
         out = self.relu(out)
         out = self.fc2(out)
         out = self.sigmoid(out)
+        out = self.last_layer(out)
         return out
 
 
@@ -130,26 +132,23 @@ def test_linear_model() -> None:
         assert torch.equal(elt[0], elt[1])
 
 
-###############################################################################
-
 # Test 2: a vision model
-
-
 class SimpleConvNet(nn.Module):
     def __init__(self):
         torch.manual_seed(24)
         super(SimpleConvNet, self).__init__()
         self.conv1 = nn.Conv2d(3, 6, 5)
-        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.relu1 = nn.ReLU()
         self.pool1 = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.relu2 = nn.ReLU()
         self.pool2 = nn.MaxPool2d(2, 2)
         self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-        self.relu1 = nn.ReLU()
-        self.relu2 = nn.ReLU()
         self.relu3 = nn.ReLU()
+        self.fc2 = nn.Linear(120, 84)
         self.relu4 = nn.ReLU()
+        self.fc3 = nn.Linear(84, 10)
+        self.last_layer = nn.Identity()
 
     def forward(self, x):
         out = self.conv1(x)
@@ -164,6 +163,7 @@ class SimpleConvNet(nn.Module):
         out = self.fc2(out)
         out = self.relu4(out)
         out = self.fc3(out)
+        out = self.last_layer(out)
         return out
 
 
@@ -189,14 +189,14 @@ def vision_training(model: SimpleConvNet, scaler: LayerwiseGradientScaler = None
     train_ds_loader = load_data_for_vision()
     num_epochs = 1
 
-    # if torch.cuda.is_available():
-    #     model.cuda()
+    if torch.cuda.is_available():
+        model.cuda()
 
     model.train()
     for _ in range(num_epochs):
         for img, lbl in train_ds_loader:
-            # img = img.cuda()
-            # lbl = lbl.cuda()
+            img = img.cuda()
+            lbl = lbl.cuda()
 
             optimizer.zero_grad()
             predict = model(img)
@@ -257,11 +257,11 @@ def test_vision_model() -> None:
 
     def get_params_with_grad(trained_model):
         result = []
-        for name, layer in trained_model.named_modules():
-            if name != "":
+        for module_name, layer in trained_model.named_modules():
+            if module_name != "":
                 for param_name, param in layer.named_parameters():
                     if hasattr(param, "grad"):
-                        logging.info("testing equality for %s.%s" % (name, param_name))
+                        logging.debug("testing equality for %s.%s" % (module_name, param_name))
                         result.append(param.grad)
         return result
 
@@ -273,4 +273,6 @@ def test_vision_model() -> None:
 
     scaling and unscaling should be done taking the device into account. at present the scaling
     and unscaling functions do not take the device into account.
+
+    Run vision example using GPUs
     """
