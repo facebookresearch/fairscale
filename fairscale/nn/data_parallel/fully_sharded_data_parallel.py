@@ -300,6 +300,7 @@ class FullyShardedDataParallel(nn.Module):
         force_input_to_fp32: bool = False,
         verbose: bool = False,
         cpu_offload: bool = False,
+        state_dict_on_rank_0_only: bool = False,
         offload_config: OffloadConfig = None,
     ):
         init_start = time.time()
@@ -323,6 +324,7 @@ class FullyShardedDataParallel(nn.Module):
         self.clear_autocast_cache = clear_autocast_cache
         self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
+        self.state_dict_on_rank_0_only = state_dict_on_rank_0_only
         # Experimental feature for now. Use at your own risk.
         self.ssd_offload = True if offload_config and offload_config.offload_type == "ssd_offload" else False
 
@@ -414,7 +416,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # Register hook after state_dict() to remove the "_fsdp_wrapped_module."
         # prefix and before load_state_dict() to add it back.
-        self._register_state_dict_hook(_post_state_dict_hook)
+        self._register_state_dict_hook(functools.partial(_post_state_dict_hook, self.state_dict_on_rank_0_only))
         self._register_load_state_dict_pre_hook(_pre_load_state_dict_hook)
 
         # Flag to indicate whether state_dict() should automatically summon the
@@ -2373,7 +2375,11 @@ def alloc_storage_(data: torch.Tensor, size: torch.Size) -> None:
 
 
 def _post_state_dict_hook(
-    module: FullyShardedDataParallel, state_dict: "OrderedDict[str, torch.Tensor]", prefix: str, *args: Any
+    state_dict_on_rank_0_only: bool,
+    module: FullyShardedDataParallel,
+    state_dict: "OrderedDict[str, torch.Tensor]",
+    prefix: str,
+    *args: Any,
 ) -> "OrderedDict[str, torch.Tensor]":
     # Assuming we are in a ``summon_full_params()`` context, we need to clone
     # each tensor so that it does not get freed (in-place) when the context
@@ -2381,7 +2387,7 @@ def _post_state_dict_hook(
     # recursively, so we need to make sure that we only clone each tensor at
     # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
     # which keeps track of tensors that are no longer at risk of being freed.
-    if dist.get_rank() != 0:
+    if state_dict_on_rank_0_only and dist.get_rank() != 0:
         state_dict.clear()
         return state_dict
     for key in state_dict.keys():
