@@ -78,7 +78,3 @@ if __name__ == "__main__":
             "Operating System :: OS Independent",
         ],
     )
-
-
-# Bump this number if you want to force a CI cache invalidation on the pip venv.
-# CI cache version: 8

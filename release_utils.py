@@ -1,10 +1,11 @@
 import argparse
 import json
+from typing import Tuple
 
 from setup import find_version
 
 
-def get_next_version(release_type) -> str:
+def get_next_version(release_type) -> Tuple[str, str]:
     current_ver = find_version("version.json")
     first, second, third = list(map(int, current_ver.split(".")))
     if release_type == "patch":
@@ -20,7 +21,8 @@ def get_next_version(release_type) -> str:
 
     new_version_tuple = (first, second, third)
     new_version_str = ".".join([str(x) for x in new_version_tuple])
-    return new_version_str
+    new_tag_str = "v" + new_version_str
+    return new_version_str, new_tag_str
 
 
 def bump_version(new_version) -> None:
@@ -41,24 +43,24 @@ def bump_version(new_version) -> None:
 
 
 def main(args):
-    next_version = None
     if args.release_type in ["major", "minor", "patch"]:
-        next_version = get_next_version(args.release_type)
+        output = get_next_version(args.release_type)
     else:
         raise ValueError("Incorrect release type specified")
 
     if args.bump_version:
-        bump_version(next_version)
+        bump_version(output[0])
 
-    print(next_version)
+    return output
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Versioning utils")
-    parser.add_argument("-r", "--release_type", type=str, required=True, help="type of release = major/minor/patch")
+    parser.add_argument("--release_type", type=str, required=True, help="type of release = major/minor/patch")
     parser.add_argument(
-        "-b", "--bump_version", action="store_true", required=False, help="updates the version in version.json"
+        "--bump_version", action="store_true", required=False, help="updates the version in version.json"
     )
 
     args = parser.parse_args()
-    main(args)
+    result = main(args)
+    print(result)
