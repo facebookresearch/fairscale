@@ -278,6 +278,11 @@ class FullyShardedDataParallel(nn.Module):
             The `OffloadConfig` object is used to specify the type of offload (i.e SSD, CPU) and
             other required knobs when offloading parameters from GPU. Currently the OffloadConfig
             only supports specifying SSD offload as an option. Note: This is an experimental feature.
+        state_dict_on_rank_0_only (bool):
+            When set to ``True``, ``model.state_dict()`` will only returns full state dict on
+            rank 0 and return empty dict non-rank 0, which allow FullyShardedDataParallel to
+            skip the GPU -> CPU copy on non-rank 0 altogether.
+            Default: False
     """
 
     def __init__(
@@ -300,8 +305,8 @@ class FullyShardedDataParallel(nn.Module):
         force_input_to_fp32: bool = False,
         verbose: bool = False,
         cpu_offload: bool = False,
-        state_dict_on_rank_0_only: bool = False,
         offload_config: OffloadConfig = None,
+        state_dict_on_rank_0_only: bool = False,
     ):
         init_start = time.time()
         super().__init__()
