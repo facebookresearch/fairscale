@@ -20,7 +20,7 @@ def fetch_requirements():
 
 
 # https://packaging.python.org/guides/single-sourcing-package-version/
-def find_version(version_file_path):
+def find_version(version_file_path) -> str:
     with open(version_file_path) as version_file:
         data = json.load(version_file)
         assert len(data.keys()) > 0

@@ -9,6 +9,7 @@
 
 from typing import List
 
-from . import nn
+from setup import find_version
 
+__version__ = find_version("version.json")
 __all__: List[str] = []
