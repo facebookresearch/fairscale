@@ -307,7 +307,7 @@ class FullyShardedDataParallel(nn.Module):
         self.process_group = process_group or get_process_group_cached()
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
-        self.reshard_after_forward = reshard_after_forward
+        self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
         self.mixed_precision = mixed_precision
         self.fp32_reduce_scatter = fp32_reduce_scatter
         self.flatten_parameters = flatten_parameters
@@ -1091,6 +1091,7 @@ class FullyShardedDataParallel(nn.Module):
             if hasattr(p, "_fp32_shard"):
                 del p._fp32_shard  # reset _init_param_attributes
         self._output_pre_backward_hook_registered: Optional[List] = None
+        self.reshard_after_forward = self._orig_reshard_after_forward
 
     def _lazy_init(self) -> None:
         """Initialization steps that should happen lazily, typically right
