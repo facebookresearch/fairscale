@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-## [0.4.4] - 2021-12-22
+## [0.4.4] - 2021-12-21
 
 ### Fixed
 - Inf/nan check on all gradient tensors in ShardedGradScaler [#890]
