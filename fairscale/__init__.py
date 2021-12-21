@@ -9,7 +9,7 @@
 
 from typing import List
 
-from setup import find_version
+from .version import __version_tuple__
 
-__version__ = find_version("version.json")
+__version__ = ".".join([str(x) for x in __version_tuple__])
 __all__: List[str] = []

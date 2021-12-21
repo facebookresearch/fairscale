@@ -23,10 +23,10 @@ jobs:
       - name: get next version and tag
         id: get-next-version-and-tag
         run: |
-          output=$(python3 release_utils.py --release_type ${{ github.event.inputs.name }})
+          output=$(python3 release_utils.py --release-type ${{ github.event.inputs.name }})
           echo $output
-          new_version=$(echo $output | awk -F, '{print $1}' | sed s/\'//g | sed s/\(// )
-          new_tag=$(echo $output | awk -F, '{print $2}' | sed s/\ // | sed s/\'//g | sed s/\)// )
+          new_version=$(echo $output | awk '{print $1}')
+          new_tag=$(echo $output | awk '{print $2}')
           echo "new version is $new_version"
           echo "new tag is $new_tag"
           echo ::set-output name=version::$new_version
@@ -51,16 +51,15 @@ jobs:
         with:
           python-version: 3.9
 
-      # bumps the version number in version.json
-      - name: bump version
-        id: bump-version
+      # update the version number in version.py
+      - name: update version
+        id: update-version
         run : |
           echo "current folder = $PWD"
           echo "current branch = $(git branch --show-current)"
-          output=$(python3 release_utils.py --release_type ${{ github.event.inputs.name }} --bump_version)
-          cat version.json
+          output=$(python3 release_utils.py --release-type ${{ github.event.inputs.name }} --update-version)
 
-      # add and commit the updated version.json to main
+      # add and commit the updated version.py to main
       - name: add and commit to main
         uses: EndBug/add-and-commit@v7.5.0
         with:
