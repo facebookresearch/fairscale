@@ -28,10 +28,6 @@ project = "FairScale"
 copyright = "2020-2021, Facebook/Meta AI Research"
 author = "Facebook/Meta AI Research"
 
-# The full version, including alpha/beta/rc tags
-release = "0.4.3"
-
-
 # -- General configuration ---------------------------------------------------
 
 # Add any Sphinx extension module names here, as strings. They can be

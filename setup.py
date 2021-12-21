@@ -20,7 +20,7 @@ def fetch_requirements():
 
 
 # https://packaging.python.org/guides/single-sourcing-package-version/
-def find_version(version_file_path):
+def find_version(version_file_path) -> str:
     with open(version_file_path) as version_file:
         version_match = re.search(r"^__version_tuple__ = (.*)", version_file.read(), re.M)
         if version_match:
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     setuptools.setup(
         name="fairscale",
         description="FairScale: A PyTorch library for large-scale and high-performance training.",
-        version=find_version("fairscale/__init__.py"),
+        version=find_version("fairscale/version.py"),
         setup_requires=["ninja"],  # ninja is required to build extensions
         install_requires=fetch_requirements(),
         include_package_data=True,
@@ -78,7 +78,3 @@ if __name__ == "__main__":
             "Operating System :: OS Independent",
         ],
     )
-
-
-# Bump this number if you want to force a CI cache invalidation on the pip venv.
-# CI cache version: 8
