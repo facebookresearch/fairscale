@@ -156,7 +156,7 @@ class ShardedGradScaler(TorchGradScaler):
         assert found_inf.numel() == 1, "found_inf must be a 1-element tensor."
 
         expected_device = grads[0].device
-        for tensor in grads:
+        for tensor in grads[0]:
             try:
                 assert tensor.device == expected_device, "grads must be on the same device"
             except AssertionError:
