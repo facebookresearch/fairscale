@@ -524,7 +524,7 @@ class TestHooks(DistributedTest):
         self._train_for_several_steps(model, 2, model.mixed_precision)
         state_1 = model.local_state_dict()
         model.load_local_state_dict(state_1)
-        self._test_output_backward_hooks(rank, group, cuda_first=cuda_first, model=model)
+        self._test_output_backward_hooks(rank, group, group_rs, cuda_first=cuda_first, model=model)
 
     @classmethod
     def _test_output_backward_hooks(self, rank, group, group_rs, cuda_first=False, model=None):

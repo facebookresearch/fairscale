@@ -35,7 +35,7 @@ class TestLocalStateDict(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _load_local_and_train(self, config, rank, group, d_model=16, d_vocab=23):
+    def _load_local_and_train(self, config, rank, group, gourp_rs, d_model=16, d_vocab=23):
         """Check that local_state_dict can be saved and loaded for a given worker, and that training updates it"""
         model = self.get_wrapped_model(
             group, cuda_first=False, config=config, d_vocab=d_vocab, d_model=d_model, add_bn=False
@@ -84,7 +84,7 @@ class TestSaveLoadStateDict(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_calling_state_dict_twice(self, config, rank, group, **model_kwargs):
+    def _test_calling_state_dict_twice(self, config, rank, group, group_rs, **model_kwargs):
         ddp_model = self.get_wrapped_model(group, cuda_first=False, config=config, **model_kwargs)
         autocast = ddp_model.mixed_precision
         self._train_for_several_steps(ddp_model, 1, autocast)
@@ -104,7 +104,7 @@ class TestSaveLoadStateDict(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_state_dict_before_forward(cls, config, rank, group):
+    def _test_state_dict_before_forward(cls, config, rank, group, group_rs):
         ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
         sd = ddp_model.state_dict()
         for param_name in ("embed_tokens.weight", "vocab_bias"):
@@ -113,7 +113,7 @@ class TestSaveLoadStateDict(DistributedTest):
         cls._train_for_several_steps(ddp_model, 1, ddp_model.mixed_precision)
 
     @classmethod
-    def _test_module_state_dict(cls, config, rank, group):
+    def _test_module_state_dict(cls, config, rank, group, group_rs):
         ddp_model = cls.get_wrapped_model(group, cuda_first=False, config=config)
         autocast = ddp_model.mixed_precision
         cls._train_for_several_steps(ddp_model, 2, autocast)
@@ -140,7 +140,7 @@ class TestSaveLoadStateDict(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_nested_wrapped_model(cls, rank, group, config=None):
+    def _test_nested_wrapped_model(cls, rank, group, group_rs, config=None):
         # Get reference state dict without any nested FSDP instances.
         model = NestedWrappedModule(group, None).cuda()
         model = nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank, process_group=group)
@@ -166,7 +166,7 @@ class TestSaveLoadStateDict(DistributedTest):
             ), f"{key}, {ref_state_dict[key]} != {state_dict[key]}"
 
     @classmethod
-    def _test_nested_wrapped_model_local_state_dict(cls, rank, group, config=None, local=None):
+    def _test_nested_wrapped_model_local_state_dict(cls, rank, group, group_rs, config=None, local=None):
         # Create a nested FSDP-wrapped instance.
         model = NestedWrappedModule(group, config)
         model = FSDP(model, group, **config).cuda()
@@ -219,7 +219,7 @@ class TestStateDictDeviceDtype(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_state_dict_device(self, config, rank, group, pure_fp16=False, **model_kwargs):
+    def _test_state_dict_device(self, config, rank, group, group_rs, pure_fp16=False, **model_kwargs):
         model = TransformerWithSharedParams(group, **model_kwargs)
         if pure_fp16:
             assert not config["mixed_precision"]

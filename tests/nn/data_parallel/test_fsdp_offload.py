@@ -138,7 +138,7 @@ class TestSsdMemory(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_memory_benchmark(self, rank, group, config):
+    def _test_memory_benchmark(self, rank, group, group_rs, config):
         time_keeper = TimeKeeper()
 
         SIZE = 8 * 8
@@ -216,7 +216,7 @@ class TestModuleProperties(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_named_params(self, rank, group, config):
+    def _test_named_params(self, rank, group, group_rs, config):
         # Get the named parameters before wrapping.
         before_wrap_model = TransformerWithSharedParams(group)
         before_wrap_params = before_wrap_model.named_parameters()
@@ -261,7 +261,7 @@ class TestSsdLoading(DistributedTest):
         spawn_and_init(functools.partial(self._test_identical_outputs_eval, TransformerWithSharedParams, config))
 
     @classmethod
-    def _test_ssd_offload_eval(self, rank, group, config):
+    def _test_ssd_offload_eval(self, rank, group, group_rs, config):
         model = TransformerWithSharedParams(group)
         state_dict = model.state_dict()
 

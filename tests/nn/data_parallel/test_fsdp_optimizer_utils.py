@@ -50,7 +50,7 @@ class TestOptimizerUtils(DistributedTest):
         spawn_and_init(test_fn, world_sizes=[min(torch.cuda.device_count(), 4)])
 
     @classmethod
-    def _test_consolidated_optimizer(self, config, rank, group, grouprs, optim_fn=torch.optim.SGD, transformer=False):
+    def _test_consolidated_optimizer(self, config, rank, group, group_rs, optim_fn=torch.optim.SGD, transformer=False):
         """FSDP.gather_full_optim_state_dict() should return something very similar to optimizer.state_dict()"""
         # Establish reference behavior.
 

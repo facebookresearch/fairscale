@@ -33,7 +33,7 @@ class TestMemory(DistributedTest):
         spawn_and_init(functools.partial(self._test_memory, config, volatile=True))
 
     @classmethod
-    def _test_memory(self, config, rank, group, volatile=False):
+    def _test_memory(self, config, rank, group, group_rs, volatile=False):
         model = self.get_wrapped_model(group, cuda_first=False, config=config)
         self._train_for_several_steps(model, 1, autocast=model.mixed_precision)
 
@@ -65,7 +65,7 @@ class TestPersistence(DistributedTest):
         spawn_and_init(functools.partial(self._test_persistence, config))
 
     @classmethod
-    def _test_persistence(self, config, rank, group, volatile=False):
+    def _test_persistence(self, config, rank, group, group_rs, volatile=False):
         model = self.get_wrapped_model(group, cuda_first=False, config=config)
 
         with model.summon_full_params(volatile=False):
