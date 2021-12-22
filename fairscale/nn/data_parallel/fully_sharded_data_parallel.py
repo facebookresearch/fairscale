@@ -190,6 +190,14 @@ class FullyShardedDataParallel(nn.Module):
             module to be wrapped with FSDP.
         process_group (Optional):
             process group for sharding
+        process_group_reduce_scatter (Optional):
+            process group for reduce scatter
+        enable_reduce_scatter_overlap (bool):
+            if ``True``, send reduce_scatter to a different stream to enable overlapping
+            of the communication and computing.
+            if ``False``, the reduce_scatter and other communication are at the same
+            stream, and no overlapping among communication
+            it is ``True`` by default
         reshard_after_forward (bool, Optional):
             if ``True``, reshard parameters after the forward pass. This saves
             memory but slows training. This is only relevant when resharding
