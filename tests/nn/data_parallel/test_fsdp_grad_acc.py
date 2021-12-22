@@ -51,13 +51,13 @@ class TestGradAcc(DistributedTest):
         loss.backward()
 
     @classmethod
-    def _test_transformer(self, rank, group, config, use_no_sync_context=True):
+    def _test_transformer(self, rank, group, grouprc, config, use_no_sync_context=True):
         model = self.get_wrapped_model(group, config=config, add_bn=False)
         model.eval()  # turn off dropout for the test
         self._test_grad_acc(model, batch_dim=1, use_no_sync_context=use_no_sync_context)
 
     @classmethod
-    def _test_nested_wrapper(self, rank, group, config):
+    def _test_nested_wrapper(self, rank, group, grouprc, config):
         model = NestedWrappedModule(group, config)
         model = FullyShardedDataParallel(model, group, **config).cuda()
         self._test_grad_acc(model, batch_dim=0)
@@ -125,7 +125,7 @@ class TestGradAccCommunication(DistributedTest):
         spawn_and_init(fn)
 
     @classmethod
-    def _test_communication(self, rank, group, config, nested_model=False):
+    def _test_communication(self, rank, group, grouprc, config, nested_model=False):
         if group.size() == 1:
             return
 

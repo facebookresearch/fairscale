@@ -184,7 +184,7 @@ class TestConsolidatedWeights(DistributedTest):
             spawn_and_init(test_fn, world_sizes=[world_size])
 
     @classmethod
-    def _test_consolidate_weights(self, config, rank, group, paths=None, transformer=False):
+    def _test_consolidate_weights(self, config, rank, group, grouprc, paths=None, transformer=False):
         """FSDP.gather_full_optim_state_dict() should return something very similar to optimizer.state_dict()"""
         # Establish reference behavior.
 
