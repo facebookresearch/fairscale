@@ -1,4 +1,3 @@
-from collections import defaultdict
 from enum import Enum
 import logging
 from typing import List, Tuple
