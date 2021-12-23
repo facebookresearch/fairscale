@@ -783,6 +783,8 @@ class FullyShardedDataParallel(nn.Module):
         state["orig_sizes"] = [p._orig_size for p in self.params]
         if state["process_group"] is not None:
             state["process_group"] = "MISSING"  # process_group isn't pickleable
+        if state["process_group_reduce_scatter"] is not None:
+            state["process_group_reduce_scatter"] = "MISSING"  # process_group_reduce_scatter isn't pickleable
         self._reset_lazy_init()
         return state
 
