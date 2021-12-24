@@ -193,10 +193,10 @@ class FullyShardedDataParallel(nn.Module):
         process_group_reduce_scatter (Optional):
             process group for reduce scatter
         enable_reduce_scatter_overlap (bool):
-            if ``True``, send reduce_scatter to a different stream to enable overlapping
-            of the communication and computing.
-            if ``False``, the reduce_scatter and other communication are at the same
-            stream, and no overlapping among communication
+            if ``True``, the overlap between reduce_scatter operations and other operations are enabled by
+            sending reduce_scatter operations to a different stream
+            if ``False``, the overlap between reduce_scatter operations and other operations are disabled
+            because the reduce_scatter and other communications are at the same stream.
             it is ``True`` by default
         reshard_after_forward (bool, Optional):
             if ``True``, reshard parameters after the forward pass. This saves
