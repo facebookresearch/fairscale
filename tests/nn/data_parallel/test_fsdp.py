@@ -493,8 +493,6 @@ class TestSerialization(DistributedTest):
         # reset the process group (required after unpickling)
         for m in model.modules():
             if isinstance(m, FullyShardedDataParallel):
-                print(m.process_group)
-                print(m.process_group_reduce_scatter)
                 m.process_group = group
                 group_rs = torch.distributed.new_group()
                 m.process_group_reduce_scatter = group_rs
