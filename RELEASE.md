@@ -2,7 +2,7 @@
 
 ### New Approach
 - Go to the [fairscale release workflow](https://github.com/facebookresearch/fairscale/actions/workflows/release.yml) in Github actions.
-- In the __Run Workflow__ dropdown, select the branch from which you wish to release. The default value is **main** and should be used in almost all cases.
+- In the __Run Workflow__ dropdown, select the branch from which you wish to release. The default value is __main__ and should be used in almost all cases.
 - In adherence to [Semantic Versioning]((https://semver.org/spec/v2.0.0.html)) enter one of the following three values for _Release Type_:
   - _patch_
   - _minor_
