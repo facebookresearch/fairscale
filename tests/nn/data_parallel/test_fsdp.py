@@ -95,7 +95,6 @@ class DistributedTest(unittest.TestCase):
         config,
         rank,
         group,
-        group_rs,
         num_steps=2,
         use_cuda=True,
         lr=0.01,
@@ -259,7 +258,6 @@ class TestMixedPrecision(DistributedTest):
         reduce_dtype,
         rank,
         group,
-        group_rs,
         expected_buffer_type=None,
     ):
         # Patch torch.distributed.reduce_scatter to check the dtype of the reduction
@@ -433,7 +431,7 @@ class TestParamInit(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_param_change_after_init(self, rank, group, group_rs, config):
+    def _test_param_change_after_init(self, rank, group, config):
         # Establish reference behavior.
         model = self.get_wrapped_model(group, cuda_first=False, config=config)
         model.eval()  # no dropout for this test
@@ -466,15 +464,15 @@ class TestSerialization(DistributedTest):
         spawn_and_init(test_fn, world_sizes=[2])
 
     @classmethod
-    def _test_pickle(self, rank, group, group_rs, config):
+    def _test_pickle(self, rank, group, config):
         model = self._get_model(group, config)
         model = pickle.loads(pickle.dumps(model))
         if not config["cpu_offload"]:
             model = model.cuda()
-        self._one_step(model, group, group_rs)
+        self._one_step(model, group)
 
     @classmethod
-    def _test_multiprocessing(self, rank, group, group_rs, config):
+    def _test_multiprocessing(self, rank, group, config):
         mp = torch.multiprocessing.Pool(1)
         dummy_group = DummyProcessGroup(rank=group.rank(), size=group.size())
         dummy_group_reduce_scatter = DummyProcessGroup(rank=group.rank(), size=group.size())
@@ -482,7 +480,7 @@ class TestSerialization(DistributedTest):
         model = mp.apply(self._get_model, (dummy_group, config))
         if not config["cpu_offload"]:
             model = model.cuda()
-        self._one_step(model, group, group_rs)
+        self._one_step(model, group)
 
     @classmethod
     def _get_model(self, group, config):
@@ -491,11 +489,14 @@ class TestSerialization(DistributedTest):
             return FullyShardedDataParallel(model, group, **config)
 
     @classmethod
-    def _one_step(self, model, group, group_rs):
+    def _one_step(self, model, group):
         # reset the process group (required after unpickling)
         for m in model.modules():
             if isinstance(m, FullyShardedDataParallel):
+                print(m.process_group)
+                print(m.process_group_reduce_scatter)
                 m.process_group = group
+                group_rs = torch.distributed.new_group()
                 m.process_group_reduce_scatter = group_rs
         optim = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
         input = model.module.get_input(torch.device("cuda"))
@@ -519,15 +520,15 @@ class TestHooks(DistributedTest):
         spawn_and_init(fn)
 
     @classmethod
-    def _test_backward_hooks_after_save(self, rank, group, group_rs, cuda_first=False):
+    def _test_backward_hooks_after_save(self, rank, group, cuda_first=False):
         model = self.get_wrapped_model(group, cuda_first=cuda_first)
         self._train_for_several_steps(model, 2, model.mixed_precision)
         state_1 = model.local_state_dict()
         model.load_local_state_dict(state_1)
-        self._test_output_backward_hooks(rank, group, group_rs, cuda_first=cuda_first, model=model)
+        self._test_output_backward_hooks(rank, group, cuda_first=cuda_first, model=model)
 
     @classmethod
-    def _test_output_backward_hooks(self, rank, group, group_rs, cuda_first=False, model=None):
+    def _test_output_backward_hooks(self, rank, group, cuda_first=False, model=None):
         if model is None:
             model = self.get_wrapped_model(group, cuda_first=cuda_first)
         optim = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
@@ -548,7 +549,7 @@ class TestHooks(DistributedTest):
         spawn_and_init(fn)
 
     @classmethod
-    def _test_register_functions_called(self, rank, group, group_rs, cuda_first=False):
+    def _test_register_functions_called(self, rank, group, cuda_first=False):
         """Tests that _register_{pre|post}_backward_hooks called during forward."""
         model = self.get_wrapped_model(group, cuda_first=cuda_first)
         input = model.module.get_input(torch.device("cuda"))
@@ -569,7 +570,7 @@ class TestNoGrad(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_transformer(self, rank, group, group_rs, config):
+    def _test_transformer(self, rank, group, config):
         autocast = config["mixed_precision"]
 
         # Train model for a step
@@ -597,7 +598,7 @@ class TestModuleProperties(DistributedTest):
         spawn_and_init(test_fn)
 
     @classmethod
-    def _test_named_params(self, rank, group, group_rs, config):
+    def _test_named_params(self, rank, group, config):
         # Get the named parameters before wrapping.
         before_wrap_model = TransformerWithSharedParams(group)
         before_wrap_params = before_wrap_model.named_parameters()
@@ -852,8 +853,7 @@ def spawn_and_init(fn, args=None, **spawn_kwargs):
 def init_and_run(fn, args, rank, world_size, filename, filename_rpc):
     dist_init(rank, world_size, filename, filename_rpc)
     group = torch.distributed.new_group()
-    group_rs = torch.distributed.new_group()
-    fn(rank, group, group_rs, *args)
+    fn(rank, group, *args)
 
 
 if __name__ == "__main__":
