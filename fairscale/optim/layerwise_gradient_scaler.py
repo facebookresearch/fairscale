@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 
-def _refresh_per_optimizer_state():
+def _refresh_per_optimizer_state() -> dict:
     return {"stage": OptState.READY, "found_inf_per_device": {}}
 
 
@@ -32,52 +32,70 @@ class GradientHelper:
             else:
                 logging.debug("inputs[%d] is None" % idx)
                 scaled_up_grads.append(inputs[idx])
-        return tuple(scaled_up_grads)
+        return tuple(scaled_up_grads)  # type: ignore
 
 
 class LayerwiseGradientScaler:
-    def __init__(self, growth_factor=2.0 ** 0.001, backoff_factor=0.5 ** 0.5, growth_interval=125):
-        self.layer_and_scale_down_factor: List = []
+    def __init__(
+        self,
+        layer_info: List,
+        growth_factor: float = 2.0 ** 0.001,
+        backoff_factor: float = 0.5 ** 0.5,
+        growth_interval: int = 125,
+    ) -> None:
+        self.layer_info = layer_info
         self._growth_factor = growth_factor
         self._backoff_factor = backoff_factor
         self._growth_interval = growth_interval
+        self.handles: List = []
 
         assert self._growth_factor > 1.0, "The growth factor must be > 1.0."
         assert self._backoff_factor < 1.0, "The backoff factor must be < 1.0."
-
         # self._per_optimizer_states = defaultdict(_refresh_per_optimizer_state)
 
-    # def _register_hooks(self, layer, scale_up_factor: float, scale_down_factor: float) -> None:
-    #     helper = GradientHelper(scale_up_factor, scale_down_factor)
-    #     layer.register_full_backward_hook(helper.scale_gradients)
+    def scale(self) -> None:
+        for idx in range(len(self.layer_info) - 1, -1, -1):
+            elt = self.layer_info[idx]
+            name = elt.name
+            layer = elt.layer
 
-    def scale(self, layer_info_list):
-        for idx in range(len(layer_info_list) - 1, -1, -1):
-            name = layer_info_list[idx].name
-            layer = layer_info_list[idx].layer
+            scale_down_outputs_multiplier = 1.0 / elt.scale_up
+            scale_up_inputs_multiplier = self.layer_info[idx - 1].scale_up if idx >= 1 else 1
+            elt.scale_down = scale_down_outputs_multiplier
 
-            scale_down_outputs_multiplier = 1.0 / layer_info_list[idx].scaling_factor
-            scale_up_inputs_multiplier = layer_info_list[idx - 1].scaling_factor if idx >= 1 else 1
-
-            self.layer_and_scale_down_factor.append((layer, scale_down_outputs_multiplier))
             helper = GradientHelper(scale_up_inputs_multiplier, scale_down_outputs_multiplier)
             layer_handle = layer.register_full_backward_hook(helper.scale_gradients)
+            self.handles.append(layer_handle)
 
             logging.info(
-                "layer = %s, input multiplier = %s, output multiplier = %s "
-                % (name, scale_up_inputs_multiplier, scale_down_outputs_multiplier)
+                "layer name = %s, scale_up = %s, scale_down = %s, input multiplier = %s, output multiplier = %s "
+                % (name, elt.scale_up, elt.scale_down, scale_up_inputs_multiplier, scale_down_outputs_multiplier)
             )
 
     def unscale(self) -> None:
         """
         If there are no infs/nans in the tensors, then unscale the tensors.
         """
-        for elt in self.layer_and_scale_down_factor:
-            layer, factor = elt[0], elt[1]
-
-            for param in layer.parameters():
+        for elt in reversed(self.layer_info):
+            for param_name, param in elt.layer.named_parameters():
                 if hasattr(param, "grad"):
-                    param.grad = torch.mul(param.grad, factor)
+                    logging.debug("%s scaling down %s by %s" % (elt.name, param_name, elt.scale_down))
+                    param.grad = torch.mul(param.grad, elt.scale_down)
+
+        while len(self.handles) > 0:
+            elt = self.handles.pop()
+            elt.remove()
+
+    def update(self) -> None:
+        # this function should update the scaling factor for each layer
+        # clip the scale to the range [2 ** 7, 2 ** 24]
+        # ensure that scale value is same on all gpus inside the update function
+
+        for elt in self.layer_info:
+            if elt.scale_up != 1.0:
+                elt.scale_up = min(2 * elt.scale_up, 2 ** 24)
+            if elt.scale_down != 1.0:
+                elt.scale_down = max(0.5 * elt.scale_down, 2 ** 7)
 
     # def _unscale_grads_(self):
     #     pass
@@ -123,8 +141,3 @@ class LayerwiseGradientScaler:
     #     retval = self._maybe_optimizer_step(optimizer, optimizer_state)
     #     optimizer_state["stage"] = OptState.STEPPED
     #     return retval
-
-    # # this function should update the scaling factor for each layer
-    # # clip the scale to the range [2 ** 7, 2 ** 24]
-    # def update():
-    #     pass
