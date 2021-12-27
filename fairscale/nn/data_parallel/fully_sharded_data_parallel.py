@@ -377,7 +377,6 @@ class FullyShardedDataParallel(nn.Module):
             non_flatten_params = []
             param_name_groups = [param_names]
         del param_names
-
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=to_be_flatten_params)
         del module  # free original module in case it helps garbage collection
 
@@ -1030,7 +1029,7 @@ class FullyShardedDataParallel(nn.Module):
             # Set the state so that we assert when trying to go into
             # forward/backward.
             self.training_state = TrainingState.SUMMON_FULL_PARAMS
-            full_tensors = self._rebuild_full_params(force_full_precision=False, from_summon_full_params=True)
+            full_tensors = self._rebuild_full_params(force_full_precision=False)
             assert full_tensors is not None
             with contextlib.ExitStack() as stack:
                 if self.module.is_flattened:
@@ -1289,6 +1288,7 @@ class FullyShardedDataParallel(nn.Module):
             self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
+        print("FSDP")
         if self.ssd_offload:
             self._move_params_to_memory()
 
@@ -1315,9 +1315,6 @@ class FullyShardedDataParallel(nn.Module):
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
         self._register_post_backward_hooks()
-        # print(f"p.dtype {[p.dtype for p in self.params]}")
-        # print(f"args {type(args)}")
-        # print(f"args dtype {args} {kwargs}")
 
         outputs = self.module(*args, **kwargs)
 
@@ -1753,7 +1750,7 @@ class FullyShardedDataParallel(nn.Module):
                     self._output_pre_backward_hook_registered.clear()
 
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False, from_summon_full_params=False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -1854,17 +1851,11 @@ class FullyShardedDataParallel(nn.Module):
                         # mixed precision and full precision rebuild is asked.
                         output_tensor = p_data.new_zeros(p_size)
                     else:
-                        if False:
-                            output_tensor = p_data.new_zeros(p_size, dtype=torch.float32)
-                            output_tensor.record_stream(torch.cuda.current_stream())
-                            # time.sleep(10)
-                        else:
-                            if p._full_param_padded.storage().size() != p_size.numel():
-                                # Allocate based on full size from all shards.
-                                alloc_storage_(p._full_param_padded, size=p_size)
-                            output_tensor = p._full_param_padded
+                        if p._full_param_padded.storage().size() != p_size.numel():
+                            # Allocate based on full size from all shards.
+                            alloc_storage_(p._full_param_padded, size=p_size)
+                        output_tensor = p._full_param_padded
 
-                    # print(f"p_size.numel() {p_size.numel()} output tensor {output_tensor.storage().size()} output_tensor.dtype {output_tensor.dtype} force_full_precision {force_full_precision}")
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
@@ -1874,11 +1865,7 @@ class FullyShardedDataParallel(nn.Module):
                         dist.all_gather(chunks, p_data, group=self.process_group)
 
                     # Set p.data = output_tensor (with padding trimmed)
-                    if False:
-                        output_tensor = output_tensor.half()
-                        update_p_data(output_tensor)
-                    else:
-                        update_p_data(output_tensor)
+                    update_p_data(output_tensor)
 
                     if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
                         self._free_fp16_param_shard([p])
