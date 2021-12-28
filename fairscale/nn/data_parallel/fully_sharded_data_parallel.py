@@ -1139,7 +1139,7 @@ class FullyShardedDataParallel(nn.Module):
                 only materialized (via all-gather) as needed.
         """
         assert hasattr(p, "_is_sharded") and hasattr(p, "_orig_size")
-        if hasattr(p, "_fp32_shard") and hasattr(p, "_full_param_padded"):
+        if hasattr(p, "_fp32_shard"):
             return
 
         # A single shard of the parameters in full precision.
@@ -1288,7 +1288,6 @@ class FullyShardedDataParallel(nn.Module):
             self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        print("FSDP")
         if self.ssd_offload:
             self._move_params_to_memory()
 
