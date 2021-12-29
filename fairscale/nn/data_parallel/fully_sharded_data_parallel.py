@@ -112,7 +112,7 @@ class OffloadConfig:
     # Offload type: currently only supports: "ssd_offload"
     offload_type: Optional[str] = None
     # Path to the directory for storing parameters offloaded to disk.
-    ssd_directory: Optional[str] = None
+    dir: Optional[str] = None
 
 
 class FullyShardedDataParallel(nn.Module):
@@ -337,7 +337,7 @@ class FullyShardedDataParallel(nn.Module):
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
 
         if self.ssd_offload and not self.flatten_parameters:
-            raise ValueError("ssd_offload requires flatten_parameters=True")
+            raise ValueError(f"offload type: '{offload_config.offload_type}' requires flatten_parameters=True")
 
         # skip validation if the process group was created above
         if process_group:
@@ -362,14 +362,11 @@ class FullyShardedDataParallel(nn.Module):
         # TODO(anj): Should we conditionally do this only if we have params?
         # TODO(anj): Figure out if we can allocate the buffer during sharding.
         self.buffer_size = sum(p.numel() for p in params)
-        self.ssd_directory = ""
+        self.ssd_directory = tempfile.gettempdir()
         if self.ssd_offload:
             assert import_ssd_offload, "We need to import ssd_offload.py to enable the `ssd_offload` feature."
-            self.ssd_directory = (
-                offload_config.ssd_directory
-                if (offload_config and offload_config.ssd_directory)
-                else tempfile.gettempdir()
-            )
+            if offload_config and offload_config.dir:
+                self.ssd_directory = offload_config.dir
             self.move_grads_to_cpu = True
             self.move_params_to_cpu = True
 
@@ -682,9 +679,7 @@ class FullyShardedDataParallel(nn.Module):
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
-                if self.ssd_offload:
-                    pass
-                else:
+                if not self.ssd_offload:
                     p._is_sharded = False
                     self.numel_padded_per_param.append(0)
                     continue
@@ -1059,7 +1054,6 @@ class FullyShardedDataParallel(nn.Module):
                         for p in self.params:
                             assert isinstance(p, SsdFlatParameter)
                             p.to_file()
-                        # self._use_fp32_param_shard()
                     else:
                         self._use_fp32_param_shard()
                     self.training_state = TrainingState.IDLE
@@ -1135,7 +1129,8 @@ class FullyShardedDataParallel(nn.Module):
             return
 
         # A single shard of the parameters in full precision.
-        # PJ this will cause memory leakage with ssd
+        # TODO: PJ - I believe this will cause memory leakage with ssd
+        #            investigate after PR #887 is merged
         p._fp32_shard = p.data
 
         if self.mixed_precision:
@@ -1143,12 +1138,12 @@ class FullyShardedDataParallel(nn.Module):
         if self.move_params_to_cpu:
             assert p._fp32_shard.device == torch.device("cpu")
 
-            # If we plan to keep the FP32 parameters on CPU, then pinning
-            # memory allows us to later use non-blocking transfers when moving
-            # the FP32 param shard to compute_device.
+            # We don't pin memory when using ssd_offload since that results in OOM when
+            # the memory requirements of a model are larger than host memory.
             if not self.ssd_offload:
-                # We don't pin memory when using ssd_offload since that results in OOM when
-                # the memory requirements of a model are larger than host memory.
+                # If we plan to keep the FP32 parameters on CPU, then pinning
+                # memory allows us to later use non-blocking transfers when moving
+                # the FP32 param shard to compute_device.
                 p._fp32_shard = p._fp32_shard.pin_memory()
                 p.data = p._fp32_shard
 
@@ -1390,8 +1385,6 @@ class FullyShardedDataParallel(nn.Module):
             # Note, both ``self._rebuild_full_params`` and ``self._use_full_params`` are
             # idempotent.  So in case they are called unnecessarily, they don't incur much
             # overhead.
-            # PJ TODO: Revisit if this is still needed for ssd_offload
-            # if self.ssd_offload or self.reshard_after_forward:
             if self.reshard_after_forward:
                 self._rebuild_full_params()
             else:
@@ -1717,7 +1710,6 @@ class FullyShardedDataParallel(nn.Module):
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
                 _finalize_parameters(m)
-                # PJ: I don't understand this, should it be m._free_ssd_offload?
                 m._free_ssd_offload()
                 m._pre_backward_hook_has_run = False
                 if any(p.requires_grad for p in m.parameters()):
