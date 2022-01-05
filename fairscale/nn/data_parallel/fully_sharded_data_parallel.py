@@ -281,7 +281,7 @@ class FullyShardedDataParallel(nn.Module):
         state_dict_on_rank_0_only (bool):
             When set to ``True``, ``model.state_dict()`` will only returns full state dict on
             rank 0 and return empty dict non-rank 0, which allow FullyShardedDataParallel to
-            skip the GPU -> CPU copy on non-rank 0 altogether.
+            skip the GPU -> CPU copy on non-rank 0 altogether and prevent OOM.
             Default: False
     """
 
@@ -2386,15 +2386,18 @@ def _post_state_dict_hook(
     prefix: str,
     *args: Any,
 ) -> "OrderedDict[str, torch.Tensor]":
+    # When set to ``True``, ``model.state_dict()`` will only returns full state dict on
+    # rank 0 and return empty dict non-rank 0, which allow FullyShardedDataParallel to
+    # skip the GPU -> CPU copy on non-rank 0 altogether and prevent OOM.
+    if state_dict_on_rank_0_only and dist.get_rank() != 0:
+        state_dict.clear()
+        return state_dict
     # Assuming we are in a ``summon_full_params()`` context, we need to clone
     # each tensor so that it does not get freed (in-place) when the context
     # exits. At the same time, this hook can be called multiple times
     # recursively, so we need to make sure that we only clone each tensor at
     # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
     # which keeps track of tensors that are no longer at risk of being freed.
-    if state_dict_on_rank_0_only and dist.get_rank() != 0:
-        state_dict.clear()
-        return state_dict
     for key in state_dict.keys():
         if not key.startswith(prefix) or getattr(state_dict[key], "_has_been_cloned", False):
             continue

@@ -371,7 +371,7 @@ class TestComparisonToPyTorchDDP(DistributedTest):
     @parameterized.expand([[True], [False]], name_func=rename_test)
     def test_state_dict_on_rank_0_only(self, state_dict_on_rank_0_only):
         config = {"state_dict_on_rank_0_only": state_dict_on_rank_0_only}
-        model_fn = functools.partial(NestedWrappedModuleWithDelay)
+        model_fn = functools.partial(TransformerWithSharedParams)
         test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
         spawn_and_init(test_fn)
 
