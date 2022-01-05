@@ -1,10 +1,12 @@
 import logging
-from typing import List, Tuple
+import os
+from typing import Any, List, Tuple, Union
 
 import numpy as np
 from sklearn.datasets import make_blobs
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
 import torchvision
 import torchvision.transforms as transforms
 
@@ -50,20 +52,36 @@ def blob_label(y: np.ndarray, label: int, loc: List) -> np.ndarray:
     return target
 
 
-def load_data() -> Tuple:
-    torch.manual_seed(11)
-    x_train, y_train = make_blobs(n_samples=40, n_features=2, cluster_std=1.5, shuffle=True, random_state=10)
-    x_train = torch.FloatTensor(x_train)
-    y_train = torch.FloatTensor(blob_label(y_train, 0, [0]))
-    y_train = torch.FloatTensor(blob_label(y_train, 1, [1, 2, 3]))
+def load_data(model_type: str) -> Union[DataLoader, Tuple[Any, Any]]:
+    data = None
+    if model_type == "linear_model":
+        torch.manual_seed(11)
+        x_train, y_train = make_blobs(n_samples=40, n_features=2, cluster_std=1.5, shuffle=True, random_state=10)
+        x_train = torch.FloatTensor(x_train)
+        y_train = torch.FloatTensor(blob_label(y_train, 0, [0]))
+        y_train = torch.FloatTensor(blob_label(y_train, 1, [1, 2, 3]))
 
-    x_test, y_test = make_blobs(n_samples=10, n_features=2, cluster_std=1.5, shuffle=True, random_state=10)
-    x_test = torch.FloatTensor(x_test)
-    y_test = torch.FloatTensor(blob_label(y_test, 0, [0]))
-    y_test = torch.FloatTensor(blob_label(y_test, 1, [1, 2, 3]))
+        # x_test, y_test = make_blobs(n_samples=10, n_features=2, cluster_std=1.5, shuffle=true, random_state=10)
+        # x_test = torch.FloatTensor(x_test)
+        # y_test = torch.FloatTensor(blob_label(y_test, 0, [0]))
+        # y_test = torch.FloatTensor(blob_label(y_test, 1, [1, 2, 3]))
 
-    all_data = (x_train, y_train, x_test, y_test)
-    return all_data
+        data = (x_train, y_train)
+
+    if model_type == "vision_model":
+        torch.manual_seed(10)
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+        train_ds = torchvision.datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
+        train_ds_loader = torch.utils.data.DataLoader(train_ds, batch_size=128, shuffle=False, num_workers=2)
+
+        # test_ds = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
+        # test_ds_loader = torch.utils.data.DataLoader(test_ds, batch_size=32, shuffle=False, num_workers=2)
+
+        image, _ = train_ds[0]
+        assert image.shape == torch.Size([3, 32, 32])
+        data = train_ds_loader  # type: ignore
+    return data
 
 
 def build_layer_info(model, layers_to_scale):
@@ -76,8 +94,6 @@ def build_layer_info(model, layers_to_scale):
                 layer_info_list.append(LayerInfo(name, layer, 1.0))
             else:
                 layer_info_list.append(LayerInfo(name, layer, default_scaling_factor))
-    for elt in layer_info_list:
-        print(elt.name, elt.scale_up, elt.scale_down)
     return layer_info_list
 
 
@@ -85,20 +101,19 @@ def standard_training(model: Feedforward, per_layer_scaling=False) -> Feedforwar
     criterion = torch.nn.BCELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
 
-    x_train, y_train, x_test, y_test = load_data()
+    x_train, y_train = load_data("linear_model")
 
     num_epochs = 2
     model.train()
 
-    if per_layer_scaling:
-        layers_to_scale = set(["fc1", "fc2"])
-        layer_info = build_layer_info(model, layers_to_scale)
-        layer_scaler = LayerwiseGradientScaler(layer_info)
+    layers_to_scale = set(["fc1", "fc2"]) if per_layer_scaling else set()
+    layer_info = build_layer_info(model, layers_to_scale) if per_layer_scaling else None
+    layer_scaler = LayerwiseGradientScaler(layer_info) if layer_info is not None else None
 
     for _ in range(num_epochs):
         optimizer.zero_grad()
 
-        if per_layer_scaling:
+        if per_layer_scaling and layer_scaler is not None:
             layer_scaler.scale()
 
         # forward pass
@@ -108,14 +123,14 @@ def standard_training(model: Feedforward, per_layer_scaling=False) -> Feedforwar
         loss = criterion(y_pred.squeeze(), y_train)
         loss.backward()
 
-        if per_layer_scaling:
+        if per_layer_scaling and layer_scaler is not None:
             # unscale the gradients
             layer_scaler.unscale()
 
         # update weights
         optimizer.step()
 
-        if per_layer_scaling:
+        if per_layer_scaling and layer_scaler is not None:
             layer_scaler.update()
 
     return model
@@ -181,21 +196,6 @@ class SimpleConvNet(nn.Module):
         return out
 
 
-def load_data_for_vision():
-    torch.manual_seed(10)
-    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
-    train_ds = torchvision.datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
-    train_ds_loader = torch.utils.data.DataLoader(train_ds, batch_size=128, shuffle=False, num_workers=2)
-
-    # test_ds = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
-    # test_ds_loader = torch.utils.data.DataLoader(test_ds, batch_size=32, shuffle=False, num_workers=2)
-
-    image, label = train_ds[0]
-    assert image.shape == torch.Size([3, 32, 32])
-    return train_ds_loader
-
-
 def vision_training(model: SimpleConvNet, per_layer_scaling=False):
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
@@ -203,13 +203,12 @@ def vision_training(model: SimpleConvNet, per_layer_scaling=False):
     if torch.cuda.is_available():
         model.cuda()
 
-    train_ds_loader = load_data_for_vision()
+    train_ds_loader = load_data("vision_model")
     model.train()
 
-    if per_layer_scaling:
-        layers_to_scale = set(["conv1", "fc2", "fc3"])
-        layer_info = build_layer_info(model, layers_to_scale)
-        layer_scaler = LayerwiseGradientScaler(layer_info)
+    layers_to_scale = set(["conv1", "fc2", "fc3"]) if per_layer_scaling else None
+    layer_info = build_layer_info(model, layers_to_scale) if per_layer_scaling else None
+    layer_scaler = LayerwiseGradientScaler(layer_info) if layer_info is not None else None
 
     for _ in range(2):
         for img, lbl in train_ds_loader:
@@ -217,19 +216,19 @@ def vision_training(model: SimpleConvNet, per_layer_scaling=False):
             lbl = lbl.cuda()
 
             optimizer.zero_grad()
-            if per_layer_scaling:
+            if per_layer_scaling and layer_scaler is not None:
                 layer_scaler.scale()
 
             predict = model(img)
             loss = loss_fn(predict, lbl)
             loss.backward()
 
-            if per_layer_scaling:
+            if per_layer_scaling and layer_scaler is not None:
                 layer_scaler.unscale()
 
             optimizer.step()
 
-            if per_layer_scaling:
+            if per_layer_scaling and layer_scaler is not None:
                 layer_scaler.update()
 
     return model
@@ -243,6 +242,9 @@ def test_vision_model() -> None:
     export CUBLAS_WORKSPACE_CONFIG=:4096:8
     """
     torch.use_deterministic_algorithms(True)  # type: ignore
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
+    print("number of gpus is %s" % torch.cuda.device_count())
 
     m1 = SimpleConvNet()
     m2 = SimpleConvNet()
@@ -264,8 +266,6 @@ def test_vision_model() -> None:
         assert torch.equal(elt[0], elt[1])
 
     """
-    IMPORTANT: in the shell, export CUBLAS_WORKSPACE_CONFIG=:4096:8 to get rid of randomness from different sources.
-
     - scaling and unscaling should be done taking the number of gpus into account. at present the scaling
         and unscaling functions do not take the number of gpus into account. In particular, default_scaling_factor
         should be a function of the number of gpus.
@@ -275,7 +275,7 @@ def test_vision_model() -> None:
     - set default growth interval, growth factor, backoff factor for the scale. DONE
     - allow the user to specify the initial value of the scaling factor and make the growth interval, growth factor,
         backoff factor configurable by the user. DONE
-    - ensure that training is happening on gpu instead of cpu
+    - ensure that training is happening on gpu instead of cpu. DONE
     - test code in multi gpu setting. current vision example uses a single gpu
     - will there be multiple optimizers? NO.
     - make sure scale is the same on each gpu before backward is called
