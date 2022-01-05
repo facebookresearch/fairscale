@@ -1,0 +1,94 @@
+name: Fairscale Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: 'Release Type'
+        default: 'patch'
+        required: true
+
+jobs:
+  get_next_version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout-repo-content
+        uses: actions/checkout@v2
+
+      - name: setup-python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
+
+      - name: get next version and tag
+        id: get-next-version-and-tag
+        run: |
+          output=$(python3 release_utils.py --release-type ${{ github.event.inputs.name }})
+          echo $output
+          new_version=$(echo $output | awk '{print $1}')
+          new_tag=$(echo $output | awk '{print $2}')
+          echo "new version is $new_version"
+          echo "new tag is $new_tag"
+          echo ::set-output name=version::$new_version
+          echo ::set-output name=tag::$new_tag
+    outputs:
+      new_version: ${{ steps.get-next-version-and-tag.outputs.version }}
+      new_tag: ${{ steps.get-next-version-and-tag.outputs.tag }}
+
+  # - update the version file
+  # - commit it to main
+  # - build and upload the pypi package
+  # - create release on github
+  pypi_package_build_and_release:
+    runs-on: ubuntu-latest
+    needs: get_next_version
+    steps:
+      - name: checkout-repo-content
+        uses: actions/checkout@v2
+
+      - name: setup-python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
+
+      # update the version number in version.py
+      - name: update version
+        id: update-version
+        run : |
+          echo "current folder = $PWD"
+          echo "current branch = $(git branch --show-current)"
+          output=$(python3 release_utils.py --release-type ${{ github.event.inputs.name }} --update-version)
+
+      # add and commit the updated version.py to main
+      - name: add and commit to main
+        uses: EndBug/add-and-commit@v7.5.0
+        with:
+          author_name: ${{ secrets.AUTHOR_NAME }}
+          author_email: ${{ secrets.AUTHOR_EMAIL }}
+
+          branch: main
+          default_author: github_actor
+          message: '${{ needs.get_next_version.outputs.new_version }} release'
+          pathspec_error_handling: exitAtEnd
+
+          # Arguments for the git pull command. Use NO-PULL to avoid the action pulling at all.
+          # Default: '--no-rebase'
+          pull: 'NO-PULL'
+          tag: '${{ needs.get_next_version.outputs.new_tag }}'
+
+      # build the PyPI package and upload it
+      - name: install dependencies, build and upload
+        env:
+          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install setuptools wheel twine
+          python3 setup.py sdist
+          python3 -m twine upload --repository pypi dist/*
+
+      # create the release on github
+      - name: create release on github
+        uses: ncipollo/release-action@v1
+        with:
+          tag: '${{ needs.get_next_version.outputs.new_tag }}'
