@@ -1129,8 +1129,11 @@ class FullyShardedDataParallel(nn.Module):
             return
 
         # A single shard of the parameters in full precision.
-        # TODO: PJ - I believe this will cause memory leakage with ssd
-        #            investigate after PR #887 is merged
+        # TODO(another-pjohnson) - I believe this will cause memory leakage with ssd
+        #            p.data returns a pointer to a handle, and that handle has it's
+        #            ref count incremented by p._fp32_shard. So this tensor will
+        #            never be freed even if we do p.to_disk(). investigate after
+        #            PR #887 is merged
         p._fp32_shard = p.data
 
         if self.mixed_precision:
