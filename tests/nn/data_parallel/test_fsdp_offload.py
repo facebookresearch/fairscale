@@ -102,6 +102,7 @@ class DistributedTest(unittest.TestCase):
         # Confirm we get the same behavior using FullyShardedDataParallel.
         if config.get("ssd_offload", False):
             config["offload_config"] = OffloadConfig(offload_type="ssd_offload")
+            config["flatten_parameters"] = True 
 
         del config["ssd_offload"]
         model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
@@ -124,7 +125,7 @@ class DistributedTest(unittest.TestCase):
 keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters", "nested_wrapping"]
 CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
 CONFIG_OPTIONS_STATIC = [
-    [{"flatten_parameters": True, "mixed_precision": False, "nested_wrapping": False, "reshard_after_forward": False}]
+    [{"flatten_parameters": True, "mixed_precision": True, "nested_wrapping": False, "reshard_after_forward": False}]
 ]
 
 
@@ -263,8 +264,7 @@ class TestSsdLoading(DistributedTest):
     def test_transformer_parameterized(self, config):
         spawn_and_init(functools.partial(self._test_identical_outputs_eval, TransformerWithSharedParams, config))
 
-    # @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
-    @parameterized.expand(CONFIG_OPTIONS_STATIC, name_func=rename_test)
+    @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_ssd_offloading_train_flatten_params_wrapper(self, config):
         test_fn = functools.partial(self._test_ssd_offloading_train_flatten_params_wrapper, config=config)
         spawn_and_init(test_fn)
@@ -275,8 +275,8 @@ class TestSsdLoading(DistributedTest):
         model = SimpleLinear(group, input_size=SIZE, output_size=SIZE, layers=4)
 
         with tempfile.TemporaryDirectory() as current_tempdir:
-            config["offload_config"] = OffloadConfig(offload_type="ssd_offload", ssd_directory=current_tempdir)
-
+            config["offload_config"] = OffloadConfig(offload_type="ssd_offload", ssd_dir=current_tempdir)
+            config["flatten_parameters"] = True
             nested_wrapping = config["nested_wrapping"]
             del config["nested_wrapping"]
 
@@ -292,9 +292,10 @@ class TestSsdLoading(DistributedTest):
             # Inputs always cuda regardless of move_grads_cpu, or model.device
             for i in range(10):
                 optim.zero_grad()
-                input = model.get_input(torch.device("cuda"))
-                output = model(*input)
-                loss = model.module.get_loss(input, output).to(model_device)
+                with torch.cuda.amp.autocast(enabled=config.get("mixed_precision", False)):
+                    input = model.get_input(torch.device("cuda"))
+                    output = model(*input)
+                    loss = model.module.get_loss(input, output).to(model_device)
                 assert loss.dtype == torch.float32
 
                 model.module.run_backward(loss)
@@ -312,7 +313,8 @@ class TestSsdLoading(DistributedTest):
         del config["nested_wrapping"]
 
         with tempfile.TemporaryDirectory() as current_tempdir:
-            config["offload_config"] = OffloadConfig(offload_type="ssd_offload", ssd_filepath_dir=current_tempdir)
+            config["offload_config"] = OffloadConfig(offload_type="ssd_offload", ssd_dir=current_tempdir)
+            config["flatten_parameters"] = True
             if nested_wrapping:
                 model = FullyShardedDataParallel(
                     NestedWrappedModule(group, wrap_everything=True, wrapper_config=config)

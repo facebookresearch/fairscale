@@ -112,7 +112,7 @@ class OffloadConfig:
     # Offload type: currently only supports: "ssd_offload"
     offload_type: Optional[str] = None
     # Path to the directory for storing parameters offloaded to disk.
-    ssd_directory: Optional[str] = None
+    ssd_dir: Optional[str] = None
 
 
 class FullyShardedDataParallel(nn.Module):
@@ -366,8 +366,8 @@ class FullyShardedDataParallel(nn.Module):
         if self.ssd_offload:
             assert import_ssd_offload, "We need to import ssd_offload.py to enable the `ssd_offload` feature."
             self.ssd_directory = (
-                offload_config.ssd_directory
-                if (offload_config and offload_config.ssd_directory)
+                offload_config.ssd_dir
+                if (offload_config and offload_config.ssd_dir)
                 else tempfile.gettempdir()
             )
             self.move_grads_to_cpu = True
@@ -1140,7 +1140,7 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.mixed_precision:
             assert p._fp32_shard.dtype == torch.float32
-        if self.move_params_to_cpu:
+        if self.move_params_to_cpu and not self.ssd_offload:
             assert p._fp32_shard.device == torch.device("cpu")
 
             # If we plan to keep the FP32 parameters on CPU, then pinning
@@ -1391,8 +1391,8 @@ class FullyShardedDataParallel(nn.Module):
             # idempotent.  So in case they are called unnecessarily, they don't incur much
             # overhead.
             # PJ TODO: Revisit if this is still needed for ssd_offload
-            # if self.ssd_offload or self.reshard_after_forward:
-            if self.reshard_after_forward:
+            if self.ssd_offload or self.reshard_after_forward:
+            # if self.reshard_after_forward:
                 self._rebuild_full_params()
             else:
                 self._use_full_params()
@@ -1799,7 +1799,7 @@ class FullyShardedDataParallel(nn.Module):
             for p in self.params:
                 assert isinstance(p, SsdFlatParameter)
                 p.to_tensor()
-
+                
             self.has_full_params = False
 
         if self._has_shared_params:
@@ -1827,11 +1827,12 @@ class FullyShardedDataParallel(nn.Module):
                 self._cast_fp32_param_shards_to_fp16()
 
             if self.move_params_to_cpu:
+                # print(f"force_full_precision {force_full_precision}")
                 if force_full_precision:
                     # If the compute_dtype and storage dtype are the same,
                     # use pinned memory. Otherwise move p.data to the compute
                     # device.
-                    if self.params[0].dtype == self.compute_dtype:
+                    if self.params and self.params[0].dtype == self.compute_dtype:
                         self._cast_fp32_param_shards_to_fp16()
                     else:
                         for p in self.params:

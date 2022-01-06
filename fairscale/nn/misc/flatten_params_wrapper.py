@@ -316,7 +316,6 @@ class FlattenParamsWrapper(nn.Module):
         for n, flat_param in zip(self.flat_param_names, flat_params):
             self.register_parameter(n, flat_param)
         self.flat_params = flat_params
-
         # deregister the names as parameters
         for _, m, n in self._param_infos:
             delattr(m, n)

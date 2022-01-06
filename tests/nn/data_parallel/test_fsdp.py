@@ -19,7 +19,7 @@ from torch import nn
 import torch.distributed
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
-from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
+from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState, OffloadConfig
 from fairscale.utils import torch_version
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
@@ -32,6 +32,8 @@ from fairscale.utils.testing import (
 
 if torch_version() >= (1, 8, 0):
     from fairscale.optim.grad_scaler import ShardedGradScaler
+
+import tempfile
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
@@ -125,6 +127,18 @@ class DistributedTest(unittest.TestCase):
             for k in ref_state_dict.keys():
                 ref_state_dict[k] = ref_state_dict[k].cpu()
 
+        if config.get("ssd_offload", False):
+            if not config.get("flatten_parameters", False):
+                # pytest.skip("unsupported combination")
+                return
+            config["offload_config"] = OffloadConfig(offload_type="ssd_offload")
+            use_cuda =  False
+            for k in ref_state_dict.keys():
+                ref_state_dict[k] = ref_state_dict[k].cpu()
+        
+        if "ssd_offload" in config:
+            del config["ssd_offload"]
+
         # Confirm we get the same behavior using FullyShardedDataParallel.
         model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
         if use_cuda:
@@ -139,7 +153,7 @@ class DistributedTest(unittest.TestCase):
         shard_state_dict = model.state_dict()
 
         try:
-            torch.testing.assert_allclose(ref_loss, shard_loss)
+            torch.testing.assert_allclose(ref_loss.cpu(), shard_loss.cpu())
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
         except (AssertionError, RuntimeError) as e:
             raise Exception(f"FullyShardedDataParallel didn't match PyTorch DDP using config: {config}\n\n {e}")
@@ -276,7 +290,7 @@ class TestMixedPrecision(DistributedTest):
             loss.backward()
 
 
-keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters"]
+keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters", "ssd_offload"]
 CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
 
 
@@ -552,6 +566,8 @@ class TestHooks(DistributedTest):
 class TestNoGrad(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_transformer_parameterized(self, config):
+        # Skip testing ssd_offload
+        del config["ssd_offload"]
         test_fn = functools.partial(self._test_transformer, config=config)
         spawn_and_init(test_fn)
 

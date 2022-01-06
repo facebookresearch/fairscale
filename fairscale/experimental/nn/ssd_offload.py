@@ -335,7 +335,7 @@ class SsdFlatParameter(torch.nn.Parameter, SsdTensorHandle):
             self._param_numels
         ), f"Incorrect internal state {self.data.numel()} vs. {sum(self._param_numels)}"
         """
-        if external_data:
+        if external_data is not None and all(external_data):
             if external_data.numel() != sum(self._param_numels):
                 raise ValueError(
                     f"Incorrect numel of supplied data: got {external_data.numel()} but expected {sum(self._param_numels)}"
