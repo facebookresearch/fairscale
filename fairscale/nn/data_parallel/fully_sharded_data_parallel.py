@@ -315,7 +315,7 @@ class FullyShardedDataParallel(nn.Module):
         self.process_group = process_group or get_process_group_cached()
         if process_group_reduce_scatter == ProcessGroupName.all_gather:
             self.process_group_reduce_scatter = self.process_group
-        elif process_group_reduce_scatter is None | isinstance(process_group_reduce_scatter, ProcessGroup):
+        elif (process_group_reduce_scatter is None) | isinstance(process_group_reduce_scatter, ProcessGroup):
             self.process_group_reduce_scatter = process_group_reduce_scatter or get_process_group_cached(
                 ProcessGroupName.reduce_scatter
             )
