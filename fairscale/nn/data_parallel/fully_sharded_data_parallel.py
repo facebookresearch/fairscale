@@ -366,9 +366,7 @@ class FullyShardedDataParallel(nn.Module):
         if self.ssd_offload:
             assert import_ssd_offload, "We need to import ssd_offload.py to enable the `ssd_offload` feature."
             self.ssd_directory = (
-                offload_config.ssd_dir
-                if (offload_config and offload_config.ssd_dir)
-                else tempfile.gettempdir()
+                offload_config.ssd_dir if (offload_config and offload_config.ssd_dir) else tempfile.gettempdir()
             )
             self.move_grads_to_cpu = True
             self.move_params_to_cpu = True
@@ -1392,7 +1390,7 @@ class FullyShardedDataParallel(nn.Module):
             # overhead.
             # PJ TODO: Revisit if this is still needed for ssd_offload
             if self.ssd_offload or self.reshard_after_forward:
-            # if self.reshard_after_forward:
+                # if self.reshard_after_forward:
                 self._rebuild_full_params()
             else:
                 self._use_full_params()
@@ -1799,7 +1797,7 @@ class FullyShardedDataParallel(nn.Module):
             for p in self.params:
                 assert isinstance(p, SsdFlatParameter)
                 p.to_tensor()
-                
+
             self.has_full_params = False
 
         if self._has_shared_params:

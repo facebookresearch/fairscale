@@ -19,7 +19,7 @@ from torch import nn
 import torch.distributed
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
-from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState, OffloadConfig
+from fairscale.nn.data_parallel import FullyShardedDataParallel, OffloadConfig, TrainingState
 from fairscale.utils import torch_version
 from fairscale.utils.testing import (
     DeviceAndTypeCheckModule,
@@ -132,10 +132,10 @@ class DistributedTest(unittest.TestCase):
                 # pytest.skip("unsupported combination")
                 return
             config["offload_config"] = OffloadConfig(offload_type="ssd_offload")
-            use_cuda =  False
+            use_cuda = False
             for k in ref_state_dict.keys():
                 ref_state_dict[k] = ref_state_dict[k].cpu()
-        
+
         if "ssd_offload" in config:
             del config["ssd_offload"]
 

@@ -102,7 +102,7 @@ class DistributedTest(unittest.TestCase):
         # Confirm we get the same behavior using FullyShardedDataParallel.
         if config.get("ssd_offload", False):
             config["offload_config"] = OffloadConfig(offload_type="ssd_offload")
-            config["flatten_parameters"] = True 
+            config["flatten_parameters"] = True
 
         del config["ssd_offload"]
         model = FullyShardedDataParallel(model_init_fn(group=group, wrapper_config=config), group, **config)
