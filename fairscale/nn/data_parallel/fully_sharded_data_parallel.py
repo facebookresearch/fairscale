@@ -2366,8 +2366,8 @@ def _post_state_dict_hook(
     prefix: str,
     *args: Any,
 ) -> "OrderedDict[str, torch.Tensor]":
-    # When state_dict_on_rank_0_only is ``True``, ``model.state_dict()`` will only 
-    # returns full state dict on rank 0 and return empty dict non-rank 0, 
+    # When state_dict_on_rank_0_only is ``True``, ``model.state_dict()`` will only
+    # returns full state dict on rank 0 and return empty dict non-rank 0,
     # which allow FullyShardedDataParallel to skip the GPU -> CPU copy on
     # non-rank 0 altogether and prevent OOM.
     if state_dict_on_rank_0_only and dist.get_rank() != 0:
