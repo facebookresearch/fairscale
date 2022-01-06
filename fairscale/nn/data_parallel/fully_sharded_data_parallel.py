@@ -193,10 +193,11 @@ class FullyShardedDataParallel(nn.Module):
             process group for sharding
         process_group_reduce_scatter (Optional):
             process group for reduce scatter
-            if the process group is specified as ProcessGroupName.all_gather, the reduce_scatter
-            uses the same process group with all_gather.
-            it defaults to None. It means the reduce_scatter overlap is enabled and a process group
-            other than the default process group is assigned to the reduce_scatter operation.
+            it defaults to None. A seperate process group is initialized and assigned to the reduce_scatter operation. And the
+            reduce_scatter operation overlaps with other operations in the backward propagation
+            If it is a specific ProcessGroup, the reduce_scatter operates on this ProcessGroup, and the overlap still happens.
+            To disable the overlap feature, set the process group to ProcessGroupName.default. In this case, the reduce_scatter
+            operation uses the same process group with the default group.
         reshard_after_forward (bool, Optional):
             if ``True``, reshard parameters after the forward pass. This saves
             memory but slows training. This is only relevant when resharding
@@ -320,7 +321,7 @@ class FullyShardedDataParallel(nn.Module):
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
-        if process_group_reduce_scatter == ProcessGroupName.all_gather:
+        if process_group_reduce_scatter == ProcessGroupName.default:
             self.process_group_reduce_scatter = self.process_group
         else:
             self.process_group_reduce_scatter = process_group_reduce_scatter or get_process_group_cached(

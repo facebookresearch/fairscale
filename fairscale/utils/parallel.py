@@ -61,7 +61,6 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
 
 
 class ProcessGroupName(str, Enum):
-    all_gather = "all_gather"
     default = "default"
     reduce_scatter = "reduce_scatter"
 
