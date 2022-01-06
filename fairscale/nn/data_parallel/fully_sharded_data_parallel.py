@@ -315,12 +315,10 @@ class FullyShardedDataParallel(nn.Module):
         self.process_group = process_group or get_process_group_cached()
         if process_group_reduce_scatter == ProcessGroupName.all_gather:
             self.process_group_reduce_scatter = self.process_group
-        elif (process_group_reduce_scatter is None) | isinstance(process_group_reduce_scatter, ProcessGroup):
+        else:
             self.process_group_reduce_scatter = process_group_reduce_scatter or get_process_group_cached(
                 ProcessGroupName.reduce_scatter
             )
-        else:
-            raise TypeError("self.process_goup_reduce_scatter need to be a ProcessGroup type")
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
