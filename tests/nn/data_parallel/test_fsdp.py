@@ -489,8 +489,7 @@ class TestSerialization(DistributedTest):
     def _test_multiprocessing(self, rank, group, config):
         mp = torch.multiprocessing.Pool(1)
         dummy_group = DummyProcessGroup(rank=group.rank(), size=group.size())
-        dummy_group_reduce_scatter = DummyProcessGroup(rank=group.rank(), size=group.size())
-        config["process_group_reduce_scatter"] = dummy_group_reduce_scatter
+        config["process_group_reduce_scatter"] = DummyProcessGroup(rank=group.rank(), size=group.size())
         model = mp.apply(self._get_model, (dummy_group, config))
         if not config["cpu_offload"]:
             model = model.cuda()
