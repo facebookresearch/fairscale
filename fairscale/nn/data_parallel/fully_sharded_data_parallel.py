@@ -194,6 +194,8 @@ class FullyShardedDataParallel(nn.Module):
             process group for reduce scatter
             if the process group is specified as ProcessGroupName.all_gather, the reduce_scatter
             uses the same process group with all_gather.
+            it defaults to None. It means the reduce_scatter overlap is enabled and a process group
+            other than the default process group is assigned to the reduce_scatter operation.
         reshard_after_forward (bool, Optional):
             if ``True``, reshard parameters after the forward pass. This saves
             memory but slows training. This is only relevant when resharding
