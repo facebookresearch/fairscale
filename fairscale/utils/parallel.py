@@ -61,12 +61,13 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
 
 
 class ProcessGroupName(str, Enum):
-    main = "main"
+    all_gather = "all_gather"
+    default = "default"
     reduce_scatter = "reduce_scatter"
 
 
 def get_process_group_cached(
-    name: ProcessGroupName = ProcessGroupName.main, ranks: Optional[Sequence[int]] = None
+    name: ProcessGroupName = ProcessGroupName.default, ranks: Optional[Sequence[int]] = None
 ) -> ProcessGroup:
     """
     Singleton PyTorch distributed group cache. Inspired by the code from fairseq.
@@ -90,9 +91,9 @@ def get_process_group_cached(
 
     Args:
         name ProcessGroupName:
-            There are two process groups when reduce_scatter overlap is enabled. The "main" process group is the
+            There are two process groups when reduce_scatter overlap is enabled. The "default" process group is the
             default process group. The other group is "reduce_scatter" group.
-            Default: ProcessGroupName.main
+            Default: ProcessGroupName.default
         ranks (Optional[List[int]]):
             Ranks requested in the target group. None for all ranks.
             Default: None
@@ -114,10 +115,10 @@ def get_process_group_cached(
         # Populate with default process group.
         cache = get_process_group_cached._global_group_cache  # type: ignore
 
-        main_pg = dist.new_group(ranks=ranks)
-        cache[None] = main_pg
-        cache[(ProcessGroupName.main, None)] = main_pg
-        cache[(ProcessGroupName.main, frozenset(list(range(dist.get_world_size()))))] = main_pg
+        default_pg = dist.new_group(ranks=ranks)
+        cache[None] = default_pg
+        cache[(ProcessGroupName.default, None)] = default_pg
+        cache[(ProcessGroupName.default, frozenset(list(range(dist.get_world_size()))))] = default_pg
 
     # Lookup and fill the cache if needed.
     cache = get_process_group_cached._global_group_cache  # type: ignore

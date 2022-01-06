@@ -494,8 +494,7 @@ class TestSerialization(DistributedTest):
         for m in model.modules():
             if isinstance(m, FullyShardedDataParallel):
                 m.process_group = group
-                group_rs = torch.distributed.new_group()
-                m.process_group_reduce_scatter = group_rs
+                m.process_group_reduce_scatter = torch.distributed.new_group()
         optim = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
         input = model.module.get_input(torch.device("cuda"))
         output = model(*input)

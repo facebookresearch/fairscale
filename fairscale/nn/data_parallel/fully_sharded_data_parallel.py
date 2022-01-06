@@ -192,12 +192,8 @@ class FullyShardedDataParallel(nn.Module):
             process group for sharding
         process_group_reduce_scatter (Optional):
             process group for reduce scatter
-        enable_reduce_scatter_overlap (bool):
-            if ``True``, the overlap between reduce_scatter operations and other operations are enabled by
-            sending reduce_scatter operations to a different stream
-            if ``False``, the overlap between reduce_scatter operations and other operations are disabled
-            because the reduce_scatter and other communications are at the same stream.
-            it is ``True`` by default
+            if the process group is specified as ProcessGroupName.all_gather, the reduce_scatter
+            uses the same process group with all_gather.
         reshard_after_forward (bool, Optional):
             if ``True``, reshard parameters after the forward pass. This saves
             memory but slows training. This is only relevant when resharding
@@ -293,8 +289,7 @@ class FullyShardedDataParallel(nn.Module):
         self,
         module: nn.Module,
         process_group: Optional[ProcessGroup] = None,
-        process_group_reduce_scatter: Optional[ProcessGroup] = None,
-        enable_reduce_scatter_overlap: bool = True,
+        process_group_reduce_scatter: Optional[Any] = None,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
@@ -316,12 +311,14 @@ class FullyShardedDataParallel(nn.Module):
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
-        self.enable_reduce_scatter_overlap = enable_reduce_scatter_overlap
-        if enable_reduce_scatter_overlap:
+        if process_group_reduce_scatter == ProcessGroupName.all_gather:
+            self.process_group_reduce_scatter = self.process_group
+        elif process_group_reduce_scatter is None | isinstance(process_group_reduce_scatter, ProcessGroup):
             self.process_group_reduce_scatter = process_group_reduce_scatter or get_process_group_cached(
                 ProcessGroupName.reduce_scatter
             )
-        self.enable_reduce_scatter_overlap = enable_reduce_scatter_overlap
+        else:
+            raise TypeError("self.process_goup_reduce_scatter need to be a ProcessGroup type")
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
@@ -1627,12 +1624,9 @@ class FullyShardedDataParallel(nn.Module):
                 param.grad = None
                 callback_fn = functools.partial(self._post_reduction_hook, param)
                 grad_chunks = chunk_and_pad(grad, self.world_size)
-                if self.enable_reduce_scatter_overlap:
-                    self._reducer.reduce_scatter_async(
-                        grad_chunks, group=self.process_group_reduce_scatter, callback_fn=callback_fn
-                    )
-                else:
-                    self._reducer.reduce_scatter_async(grad_chunks, group=self.process_group, callback_fn=callback_fn)
+                self._reducer.reduce_scatter_async(
+                    grad_chunks, group=self.process_group_reduce_scatter, callback_fn=callback_fn
+                )
             else:
                 # Currently the only way for _is_sharded to be False is if
                 # world_size == 1. This could be relaxed in the future, in which
