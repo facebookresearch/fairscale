@@ -4,11 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.4] - TBD
+## [0.4.5] - TBD
+
 ### Added
+- FSDP: Added state_dict_on_rank_0_only flag allow user choose to return full state dict on rank 0 and return empty dict non-rank 0 to prevent OOM [#844]
+
+### Changed
+
+## [0.4.4] - 2021-12-21
+
+### Fixed
+- Inf/nan check on all gradient tensors in ShardedGradScaler [#890]
+- Allow user to supress warning on trainable_parameter in sharded_ddp.py [#886]
+- KeyError in certain FSDP wrapping scenarios [#881]
+
+### Added
+- Support eval mode in MEVO [#884]
+- A new benchmark for the MOE model [#866]
 
 ### Changed
 - Fixed a corner case of FSDP init order and losing one of the flags [#880]
+- FSDP: Adding basic training support for SSD Offload, it now only supports flattened parameters. Renamed OffloadConfig.ssd_filepath_dir to more generic OffloadConfig.dir. SSD Offload remains an experimental feature. [#887]
 
 ## [0.4.3] - 2021-11-18
 

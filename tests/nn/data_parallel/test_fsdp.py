@@ -138,6 +138,13 @@ class DistributedTest(unittest.TestCase):
             shard_loss = shard_loss.cuda()
         shard_state_dict = model.state_dict()
 
+        if config.get("state_dict_on_rank_0_only", False):
+            if torch.distributed.get_rank() != 0:
+                assert shard_state_dict == {}
+                # rank 0 shard_state_dict test covered in the following test.
+                # return is needed here, because with state_dict_on_rank_0_only=True, the following assert will fail on rank!=0
+                return
+
         try:
             torch.testing.assert_allclose(ref_loss, shard_loss)
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
@@ -366,6 +373,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         # the reductions to finish.
         config = {"mixed_precision": True}
         model_fn = functools.partial(NestedWrappedModuleWithDelay, delay_before_reduction_ms=250)
+        test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
+        spawn_and_init(test_fn)
+
+    @parameterized.expand([[True], [False]], name_func=rename_test)
+    def test_state_dict_on_rank_0_only(self, state_dict_on_rank_0_only):
+        config = {"state_dict_on_rank_0_only": state_dict_on_rank_0_only}
+        model_fn = functools.partial(TransformerWithSharedParams)
         test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
         spawn_and_init(test_fn)
 
