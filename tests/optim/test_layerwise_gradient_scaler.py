@@ -5,21 +5,13 @@ from typing import Any, List, Tuple, Union
 import numpy as np
 from sklearn.datasets import make_blobs
 import torch
+from torch.cuda.amp.autocast_mode import autocast
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torchvision
 import torchvision.transforms as transforms
 
 from fairscale.optim.layerwise_gradient_scaler import LayerwiseGradientScaler
-
-
-class LayerInfo:
-    def __init__(self, name, layer, scale_up=1.0, scale_down=1.0, growth_tracker=0):
-        self.name = name
-        self.layer = layer
-        self.scale_up = scale_up
-        self.scale_down = scale_down
-        self.growth_tracker = growth_tracker
 
 
 # Test 1: a simple feed forward network
@@ -84,19 +76,6 @@ def load_data(model_type: str) -> Union[DataLoader, Tuple[Any, Any]]:
     return data
 
 
-def build_layer_info(model, layers_to_scale):
-    layer_info_list = list()
-    default_scaling_factor = 2 ** 10
-
-    for name, layer in model.named_modules():
-        if name != "":
-            if name not in layers_to_scale:
-                layer_info_list.append(LayerInfo(name, layer, 1.0))
-            else:
-                layer_info_list.append(LayerInfo(name, layer, default_scaling_factor))
-    return layer_info_list
-
-
 def standard_training(model: Feedforward, per_layer_scaling=False) -> Feedforward:
     criterion = torch.nn.BCELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
@@ -106,32 +85,28 @@ def standard_training(model: Feedforward, per_layer_scaling=False) -> Feedforwar
     num_epochs = 2
     model.train()
 
-    layers_to_scale = set(["fc1", "fc2"]) if per_layer_scaling else set()
-    layer_info = build_layer_info(model, layers_to_scale) if per_layer_scaling else None
-    layer_scaler = LayerwiseGradientScaler(layer_info) if layer_info is not None else None
+    layers_to_scale = {"fc1": 1024, "fc2": 1024} if per_layer_scaling else {}
+    layer_scaler = LayerwiseGradientScaler(model, layers_to_scale)
 
     for _ in range(num_epochs):
         optimizer.zero_grad()
 
-        if per_layer_scaling and layer_scaler is not None:
-            layer_scaler.scale()
+        # scale the gradients
+        layer_scaler.scale()
 
-        # forward pass
-        y_pred = model(x_train)
+        with autocast():
+            # forward pass
+            y_pred = model(x_train)
+            # compute loss
+            loss = criterion(y_pred.squeeze(), y_train)
 
-        # compute loss
-        loss = criterion(y_pred.squeeze(), y_train)
         loss.backward()
 
-        if per_layer_scaling and layer_scaler is not None:
-            # unscale the gradients
-            layer_scaler.unscale()
+        # unscale the gradients
+        layer_scaler.unscale()
 
-        # update weights
-        optimizer.step()
-
-        if per_layer_scaling and layer_scaler is not None:
-            layer_scaler.update()
+        # update weights and scaling factor
+        layer_scaler.step(model, optimizer)
 
     return model
 
@@ -158,7 +133,7 @@ def test_linear_model() -> None:
         return result
 
     for elt in zip(get_params_with_grad(vanilla_model), get_params_with_grad(scaled_model)):
-        assert torch.equal(elt[0], elt[1])
+        assert torch.allclose(elt[0], elt[1])
 
 
 # Test 2: a vision model
@@ -206,9 +181,8 @@ def vision_training(model: SimpleConvNet, per_layer_scaling=False):
     train_ds_loader = load_data("vision_model")
     model.train()
 
-    layers_to_scale = set(["conv1", "fc2", "fc3"]) if per_layer_scaling else None
-    layer_info = build_layer_info(model, layers_to_scale) if per_layer_scaling else None
-    layer_scaler = LayerwiseGradientScaler(layer_info) if layer_info is not None else None
+    layer_scale_dict = {"conv1": 1024, "fc2": 1024, "fc3": 1024} if per_layer_scaling else {}
+    layer_scaler = LayerwiseGradientScaler(model, layer_scale_dict)
 
     for _ in range(2):
         for img, lbl in train_ds_loader:
@@ -216,20 +190,15 @@ def vision_training(model: SimpleConvNet, per_layer_scaling=False):
             lbl = lbl.cuda()
 
             optimizer.zero_grad()
-            if per_layer_scaling and layer_scaler is not None:
-                layer_scaler.scale()
+            layer_scaler.scale()
 
             predict = model(img)
             loss = loss_fn(predict, lbl)
+
             loss.backward()
 
-            if per_layer_scaling and layer_scaler is not None:
-                layer_scaler.unscale()
-
-            optimizer.step()
-
-            if per_layer_scaling and layer_scaler is not None:
-                layer_scaler.update()
+            layer_scaler.unscale()
+            layer_scaler.step(model, optimizer)
 
     return model
 
@@ -244,12 +213,10 @@ def test_vision_model() -> None:
     torch.use_deterministic_algorithms(True)  # type: ignore
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
-    print("number of gpus is %s" % torch.cuda.device_count())
-
     m1 = SimpleConvNet()
     m2 = SimpleConvNet()
 
-    vision_model = vision_training(m1)
+    vision_model = vision_training(m1, False)
     scaled_vision_model = vision_training(m2, True)
 
     def get_params_with_grad(trained_model):
@@ -263,27 +230,16 @@ def test_vision_model() -> None:
         return result
 
     for elt in zip(get_params_with_grad(vision_model), get_params_with_grad(scaled_vision_model)):
-        assert torch.equal(elt[0], elt[1])
+        assert torch.allclose(elt[0], elt[1])
 
-    """
-    - scaling and unscaling should be done taking the number of gpus into account. at present the scaling
-        and unscaling functions do not take the number of gpus into account. In particular, default_scaling_factor
-        should be a function of the number of gpus.
-    - run vision example using GPUs DONE
-    - initialize a default scaling factor to 1 for each layer. DONE
-    - for the layers specified by the user, modify the scaling factor to a value larger than 1. DONE
-    - set default growth interval, growth factor, backoff factor for the scale. DONE
-    - allow the user to specify the initial value of the scaling factor and make the growth interval, growth factor,
-        backoff factor configurable by the user. DONE
-    - ensure that training is happening on gpu instead of cpu. DONE
-    - test code in multi gpu setting. current vision example uses a single gpu
-    - will there be multiple optimizers? NO.
-    - make sure scale is the same on each gpu before backward is called
 
-    open questions:
-    - if there is an inf encountered in the gradient of a layer should the weight update be skipped for that layer or all the layers in that step?
-        skip the entire batch of data
+"""
+TODO:
+- leave a comment that the scaling factor should be a multiple of the number of gpus.
+  if there are M gpus then the scaling factor should be M \times scale.
+- implement growth tracker
+- write unit test for fp16, using autocast
 
-    To run the tests execute the following command from the root of the repo:
-    $ pytest -s tests/optim/test_layerwise_gradient_scaler.py --log-cli-level info
-    """
+To run the tests execute the following command from the root of the repo:
+$ pytest -s tests/optim/test_layerwise_gradient_scaler.py --log-cli-level info
+"""
