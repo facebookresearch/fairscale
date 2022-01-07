@@ -44,6 +44,7 @@ from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import (
+    ProcessGroupName,
     chunk_and_pad,
     enable_pytorch_sync_bn,
     get_process_group_cached,
@@ -190,6 +191,13 @@ class FullyShardedDataParallel(nn.Module):
             module to be wrapped with FSDP.
         process_group (Optional):
             process group for sharding
+        process_group_reduce_scatter (Optional):
+            process group for reduce scatter
+            it defaults to ProcessGroupName.reduce_scatter. A seperate process group is initialized and assigned to the reduce_scatter operation. And the
+            reduce_scatter operation overlaps with other operations in the backward propagation
+            If it is a specific ProcessGroup, the reduce_scatter operates on this ProcessGroup, and the overlap still happens.
+            To disable the overlap feature, set the process group to ProcessGroupName.default. In this case, the reduce_scatter
+            operation uses the same process group with the default group.
         reshard_after_forward (bool, Optional):
             if ``True``, reshard parameters after the forward pass. This saves
             memory but slows training. This is only relevant when resharding
@@ -290,6 +298,7 @@ class FullyShardedDataParallel(nn.Module):
         self,
         module: nn.Module,
         process_group: Optional[ProcessGroup] = None,
+        process_group_reduce_scatter: Union[ProcessGroup, ProcessGroupName] = ProcessGroupName.reduce_scatter,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
@@ -312,6 +321,15 @@ class FullyShardedDataParallel(nn.Module):
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
+        # If ProcessGroupName.default is passed in, the reduce_scatter will use the same process group with
+        # the rest of operations. The overlap feature in the backward propagation is disabled.
+        if process_group_reduce_scatter == ProcessGroupName.default:
+            self.process_group_reduce_scatter = self.process_group
+        elif process_group_reduce_scatter == ProcessGroupName.reduce_scatter:
+            self.process_group_reduce_scatter = get_process_group_cached(ProcessGroupName.reduce_scatter)
+        else:
+            self.process_group_reduce_scatter = process_group
+
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
@@ -762,6 +780,8 @@ class FullyShardedDataParallel(nn.Module):
         state["orig_sizes"] = [p._orig_size for p in self.params]
         if state["process_group"] is not None:
             state["process_group"] = "MISSING"  # process_group isn't pickleable
+        if state["process_group_reduce_scatter"] is not None:
+            state["process_group_reduce_scatter"] = "MISSING"  # process_group_reduce_scatter isn't pickleable
         self._reset_lazy_init()
         return state
 
@@ -1598,7 +1618,9 @@ class FullyShardedDataParallel(nn.Module):
                 param.grad = None
                 callback_fn = functools.partial(self._post_reduction_hook, param)
                 grad_chunks = chunk_and_pad(grad, self.world_size)
-                self._reducer.reduce_scatter_async(grad_chunks, group=self.process_group, callback_fn=callback_fn)
+                self._reducer.reduce_scatter_async(
+                    grad_chunks, group=self.process_group_reduce_scatter, callback_fn=callback_fn
+                )
             else:
                 # Currently the only way for _is_sharded to be False is if
                 # world_size == 1. This could be relaxed in the future, in which

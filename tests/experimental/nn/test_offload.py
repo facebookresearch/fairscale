@@ -141,6 +141,7 @@ def _train_offload_model(
 @pytest.mark.parametrize("num_microbatches", [1, 5])
 @pytest.mark.parametrize("use_auto_shard", [True, False])
 def test_correctness(use_fp16, checkpoint_activation, num_microbatches, use_auto_shard):
+    pytest.skip("skip this test until the issue #900 is resolved.")
     if use_auto_shard and torch_version() < (1, 8, 0):
         pytest.skip("auto_shard requires torch version >= 1.8.0")
 

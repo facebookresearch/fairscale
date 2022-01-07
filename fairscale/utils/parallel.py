@@ -5,6 +5,8 @@
 
 """Useful functions for parallel training."""
 
+from enum import Enum
+import sys
 from typing import List, Optional, Sequence
 
 import torch
@@ -58,7 +60,14 @@ def enable_pytorch_sync_bn(module: torch.nn.Module) -> None:
             layer._specify_ddp_gpu_num(1)  # type: ignore
 
 
-def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGroup:
+class ProcessGroupName(str, Enum):
+    default = "default"
+    reduce_scatter = "reduce_scatter"
+
+
+def get_process_group_cached(
+    name: ProcessGroupName = ProcessGroupName.default, ranks: Optional[Sequence[int]] = None
+) -> ProcessGroup:
     """
     Singleton PyTorch distributed group cache. Inspired by the code from fairseq.
 
@@ -80,6 +89,10 @@ def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGr
     Extra process groups can also reduce training speed (observed on VISSL models).
 
     Args:
+        name ProcessGroupName:
+            There are two process groups when reduce_scatter overlap is enabled. The "default" process group is the
+            default process group. The other group is "reduce_scatter" group.
+            Default: ProcessGroupName.default
         ranks (Optional[List[int]]):
             Ranks requested in the target group. None for all ranks.
             Default: None
@@ -89,20 +102,22 @@ def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGr
             Return the requested process group. Throws RuntimeError if torch.distributed module is not yet initialized.
     """
     if not dist.is_initialized():
-        raise RuntimeError("torch.distributed is not yet initialized but process group is requested.")
+        # Likely caused by initiating a dummy pg for unit test, skip checking.
+        if name == ProcessGroupName.reduce_scatter and "pytest" in sys.modules:
+            return None
+        else:
+            raise RuntimeError("torch.distributed is not yet initialized but process group is requested.")
 
     # Init the cache if needed.
     if not hasattr(get_process_group_cached, "_global_group_cache"):
         get_process_group_cached._global_group_cache = {}  # type: ignore
         # Populate with default process group.
         cache = get_process_group_cached._global_group_cache  # type: ignore
-        assert dist.group.WORLD is not None
-        default_pg = dist.group.WORLD
-        if type(default_pg) == object:
-            # For PyTorch 1.6 and 1.7, dist.group.WORLD is an object, not a world process group, like that in 1.8 and 1.9.
-            default_pg = dist.new_group()
+
+        default_pg = dist.new_group(ranks=ranks)
         cache[None] = default_pg
-        cache[frozenset(list(range(dist.get_world_size())))] = default_pg
+        cache[(ProcessGroupName.default, None)] = default_pg
+        cache[(ProcessGroupName.default, frozenset(list(range(dist.get_world_size()))))] = default_pg
 
     # Lookup and fill the cache if needed.
     cache = get_process_group_cached._global_group_cache  # type: ignore
@@ -110,7 +125,7 @@ def get_process_group_cached(ranks: Optional[Sequence[int]] = None) -> ProcessGr
         # take care of ordering and duplicates in the ranks list. use tuple so that ranks
         # can be used as a cache index.
         ranks = tuple(sorted(list(set(ranks))))
-    if ranks not in cache:
-        cache[ranks] = dist.new_group(ranks=ranks)
+    if (name, ranks) not in cache:
+        cache[(name, ranks)] = dist.new_group(ranks=ranks)
 
-    return cache[ranks]
+    return cache[(name, ranks)]

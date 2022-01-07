@@ -257,7 +257,15 @@ class TestMixedPrecision(DistributedTest):
 
     @staticmethod
     def _test_dtypes(
-        cfg: Dict, autocast, in_dtype, p_dtype, loss_dtype, reduce_dtype, rank, group, expected_buffer_type=None
+        cfg: Dict,
+        autocast,
+        in_dtype,
+        p_dtype,
+        loss_dtype,
+        reduce_dtype,
+        rank,
+        group,
+        expected_buffer_type=None,
     ):
         # Patch torch.distributed.reduce_scatter to check the dtype of the reduction
         orig_reduce_scatter = torch.distributed.reduce_scatter
@@ -481,6 +489,7 @@ class TestSerialization(DistributedTest):
     def _test_multiprocessing(self, rank, group, config):
         mp = torch.multiprocessing.Pool(1)
         dummy_group = DummyProcessGroup(rank=group.rank(), size=group.size())
+        config["process_group_reduce_scatter"] = DummyProcessGroup(rank=group.rank(), size=group.size())
         model = mp.apply(self._get_model, (dummy_group, config))
         if not config["cpu_offload"]:
             model = model.cuda()
@@ -498,6 +507,7 @@ class TestSerialization(DistributedTest):
         for m in model.modules():
             if isinstance(m, FullyShardedDataParallel):
                 m.process_group = group
+                m.process_group_reduce_scatter = torch.distributed.new_group()
         optim = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
         input = model.module.get_input(torch.device("cuda"))
         output = model(*input)
