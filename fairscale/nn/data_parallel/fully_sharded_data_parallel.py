@@ -193,7 +193,7 @@ class FullyShardedDataParallel(nn.Module):
             process group for sharding
         process_group_reduce_scatter (Optional):
             process group for reduce scatter
-            it defaults to None. A seperate process group is initialized and assigned to the reduce_scatter operation. And the
+            it defaults to ProcessGroupName.reduce_scatter. A seperate process group is initialized and assigned to the reduce_scatter operation. And the
             reduce_scatter operation overlaps with other operations in the backward propagation
             If it is a specific ProcessGroup, the reduce_scatter operates on this ProcessGroup, and the overlap still happens.
             To disable the overlap feature, set the process group to ProcessGroupName.default. In this case, the reduce_scatter
@@ -298,7 +298,7 @@ class FullyShardedDataParallel(nn.Module):
         self,
         module: nn.Module,
         process_group: Optional[ProcessGroup] = None,
-        process_group_reduce_scatter: Optional[Any] = None,
+        process_group_reduce_scatter: Union[ProcessGroup, ProcessGroupName] = ProcessGroupName.reduce_scatter,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
@@ -325,10 +325,11 @@ class FullyShardedDataParallel(nn.Module):
         # the rest of operations. The overlap feature in the backward propagation is disabled.
         if process_group_reduce_scatter == ProcessGroupName.default:
             self.process_group_reduce_scatter = self.process_group
+        elif process_group_reduce_scatter == ProcessGroupName.reduce_scatter:
+            self.process_group_reduce_scatter = get_process_group_cached(ProcessGroupName.reduce_scatter)
         else:
-            self.process_group_reduce_scatter = process_group_reduce_scatter or get_process_group_cached(
-                ProcessGroupName.reduce_scatter
-            )
+            self.process_group_reduce_scatter = process_group
+
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
