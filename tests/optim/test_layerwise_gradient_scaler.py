@@ -22,15 +22,19 @@ class Feedforward(torch.nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.fc1 = nn.Linear(self.input_size, self.hidden_size)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(self.hidden_size, 1)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(self.hidden_size, 1)
         self.sigmoid = nn.Sigmoid()
         self.identity = nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
         out = self.fc1(x)
-        out = self.relu(out)
+        out = self.relu1(out)
         out = self.fc2(out)
+        out = self.relu2(out)
+        out = self.fc3(out)
         out = self.sigmoid(out)
         out = self.identity(out)
         return out
@@ -85,7 +89,7 @@ def standard_training(model: Feedforward, per_layer_scaling=False) -> Feedforwar
     num_epochs = 2
     model.train()
 
-    layers_to_scale = {"fc1": 1024, "fc2": 1024} if per_layer_scaling else {}
+    layers_to_scale = {"fc1": 1024, "fc2": 512, "fc3": 1024} if per_layer_scaling else {}
     layer_scaler = LayerwiseGradientScaler(model, layers_to_scale)
 
     for _ in range(num_epochs):
@@ -106,7 +110,7 @@ def standard_training(model: Feedforward, per_layer_scaling=False) -> Feedforwar
         layer_scaler.unscale()
 
         # update weights and scaling factor
-        layer_scaler.step(model, optimizer)
+        layer_scaler.step(optimizer, 0)
 
     return model
 
@@ -170,7 +174,6 @@ class SimpleConvNet(nn.Module):
         out = self.identity(out)
         return out
 
-
 def vision_training(model: SimpleConvNet, per_layer_scaling=False):
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
@@ -181,10 +184,11 @@ def vision_training(model: SimpleConvNet, per_layer_scaling=False):
     train_ds_loader = load_data("vision_model")
     model.train()
 
-    layer_scale_dict = {"conv1": 1024, "fc2": 1024, "fc3": 1024} if per_layer_scaling else {}
+    layer_scale_dict = {"conv1": 128, "conv2": 256, "fc1": 512, "fc2": 1024, "fc3": 8192} if per_layer_scaling else {}
     layer_scaler = LayerwiseGradientScaler(model, layer_scale_dict)
 
     for _ in range(2):
+        count = 0
         for img, lbl in train_ds_loader:
             img = img.cuda()
             lbl = lbl.cuda()
@@ -198,17 +202,17 @@ def vision_training(model: SimpleConvNet, per_layer_scaling=False):
             loss.backward()
 
             layer_scaler.unscale()
-            layer_scaler.step(model, optimizer)
-
-    return model
+            layer_scaler.step(optimizer, count)
+            count += 1
+    return model, layer_scaler.layer_info
 
 
 def test_vision_model() -> None:
     """
     to remove randomness from different sources while testing set
-    torch.use_deterministic_algorithms(True) and
+    torch.use_deterministic_algorithms(true) and
     set the following value in the shell
-    export CUBLAS_WORKSPACE_CONFIG=:4096:8
+    export cublas_workspace_config=:4096:8
     """
     torch.use_deterministic_algorithms(True)  # type: ignore
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -216,8 +220,73 @@ def test_vision_model() -> None:
     m1 = SimpleConvNet()
     m2 = SimpleConvNet()
 
-    vision_model = vision_training(m1, False)
-    scaled_vision_model = vision_training(m2, True)
+    vision_model, _ = vision_training(m1, False)
+    scaled_vision_model, layer_info = vision_training(m2, True)
+
+    def get_params_with_grad(trained_model):
+        result = []
+        for module_name, layer in trained_model.named_modules():
+            if module_name != "":
+                for param_name, param in layer.named_parameters():
+                    if hasattr(param, "grad"):
+                        logging.debug("testing equality for %s.%s" % (module_name, param_name))
+                        result.append(param.grad)
+        return result
+    
+    for elt in layer_info:
+        print(elt.name, elt.scale_up)
+    for elt in zip(get_params_with_grad(vision_model), get_params_with_grad(scaled_vision_model)):
+        assert torch.allclose(elt[0], elt[1])
+    
+
+# Test 3: Vision model with autocast
+def vision_training_with_autocast(model: SimpleConvNet, per_layer_scaling=False):
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+
+    if torch.cuda.is_available():
+        model.cuda()
+
+    train_ds_loader = load_data("vision_model")
+    model.train()
+
+    layer_scale_dict = {"conv1": 2**10, "conv2": 2**10, "fc1": 2**10, "fc2": 2**10, "fc3": 2**10} if per_layer_scaling else {}
+    layer_scaler = LayerwiseGradientScaler(model, layer_scale_dict, growth_factor = 4)
+
+    for _ in range(2):
+        count = 0
+        for img, lbl in train_ds_loader:
+            img = img.cuda()
+            lbl = lbl.cuda()
+            count += 1
+            
+            optimizer.zero_grad()
+            layer_scaler.scale()
+            
+            with autocast():
+                predict = model(img)
+                assert predict.dtype is torch.float16
+                
+                loss = loss_fn(predict, lbl)
+                scaled_loss = torch.mul(loss, 500) 
+                assert loss.dtype is torch.float32
+
+            scaled_loss.backward()
+            layer_scaler.unscale()
+            layer_scaler.step(optimizer, count)
+
+    return model, layer_scaler.layer_info
+
+
+def test_vision_model_with_autocast():
+    torch.use_deterministic_algorithms(True)  # type: ignore
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
+    m1 = SimpleConvNet()
+    m2 = SimpleConvNet()
+
+    #vision_model, _ = vision_training_with_autocast(m1, False)
+    scaled_vision_model, layer_info = vision_training_with_autocast(m2, True)
 
     def get_params_with_grad(trained_model):
         result = []
@@ -229,8 +298,13 @@ def test_vision_model() -> None:
                         result.append(param.grad)
         return result
 
-    for elt in zip(get_params_with_grad(vision_model), get_params_with_grad(scaled_vision_model)):
-        assert torch.allclose(elt[0], elt[1])
+    for elt in layer_info:
+        print(elt.name, elt.scale_up)
+    #for elt in zip(get_params_with_grad(vision_model), get_params_with_grad(scaled_vision_model)):
+    #    assert torch.allclose(elt[0], elt[1])
+
+
+
 
 
 """
