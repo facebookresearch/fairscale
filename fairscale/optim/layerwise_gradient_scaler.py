@@ -1,32 +1,55 @@
 import logging
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
 
 
 class LayerInfo:
-    def __init__(
-        self, name: str, layer: nn.Module, scale: float = 1.0) -> None:
-        self.name = name
-        self.layer = layer
-        self.scale_up = scale
+    """
+    A class to record the layer attributes.
+    """
+
+    def __init__(self, name: str, layer: nn.Module, scale: float = 1.0, scale_layer: bool = False) -> None:
+        """
+        layer_name: name of the layer e.g. fc1, conv1, relu1
+        layer_type: type of the layer e.g. Linear, Conv2d, ReLU
+        scaling_factor: user configurable scaling factor for the layer, defaults to 1.0
+        found_inf_or_nan: a boolean indicating if any parameter of layers' gradient contains inf/nan
+        growth_tracker: tracks number of step since last time scale was increased
+        scale_layer: a boolean indicating if the layer should be scaled or not
+        """
+        self.layer_name = name
+        self.layer_type = layer
+        self.scaling_factor = scale
         self.found_inf_or_nan = False
+        self.growth_tracker = 0
+        self.scale_layer = scale_layer
 
 
 class GradientHelper:
-    def __init__(self, name:str, inputs_multiplier: float, outputs_multiplier: float):
-        self.name = name
+    """
+    A helper class to create instances of backward hooks. The hooks are registered in the
+    scale method of LayerwiseGradientScaler.
+    """
+
+    def __init__(self, name: str, inputs_multiplier: float, outputs_multiplier: float):
+        self.layer_name = name
         self.inputs_multiplier = inputs_multiplier
         self.outputs_multiplier = outputs_multiplier
 
     def scale_gradients(self, m: nn.Module, inputs: Tuple, outputs: Tuple) -> Tuple[torch.Tensor]:
-        # scale up the inputs
+        """
+        Backward hook that is attached to the layers to scale the gradients.
+        """
         scaled_up_grads = list()
         for idx in range(len(inputs)):
             if inputs[idx] is not None:
                 if self.inputs_multiplier != 1.0 or self.outputs_multiplier != 1.0:
-                    logging.debug("layer = %s \t scale_up = %s \t scale_down = %s" % (self.name, self.inputs_multiplier, self.outputs_multiplier))
+                    logging.debug(
+                        "layer = %s \t scale = %s \t scale_down = %s"
+                        % (self.layer_name, self.inputs_multiplier, self.outputs_multiplier)
+                    )
                 scaled_up_grads.append(inputs[idx].mul(self.inputs_multiplier * self.outputs_multiplier))
             else:
                 logging.debug("next layer is None")
@@ -35,18 +58,77 @@ class GradientHelper:
 
 
 class LayerwiseGradientScaler:
+    """
+    LayerwiseGradientScaler enables using distinct scaling factors for each layer
+    of the network.
+
+    Example:
+
+    # Create a convolutional network
+        class ConvNet(nn.Module):
+            def __init__(self):
+                ...
+
+            def forward(self, x):
+                ...
+
+        # Create an instance of the model
+        model = ConvNet()
+        optimizer = torch.optim.SGD(model.parameters())
+
+        # specify the layers to scale and their scaling factor
+        layer_scale_dict = {"conv1": 2**10, "conv2": 2**8, "fc1": 2**10, "fc2": 2**9}
+        scaler = LayerwiseGradientScaler(model, layer_scale_dict)
+
+        for epoch in num_epochs:
+            for inputs, targets in batch:
+                optimizer.zero_grad()
+
+                # scale the gradients
+                scaler.scale()
+
+                # enables mixed precision training
+                with autocast():
+                    predictions = model(inputs)
+                    loss = loss_function(predictions, targets)
+
+                loss.backward()
+
+                # unscale the gradients
+                loss.unscale()
+
+                # step is taken if there are no inf/nan in the gradients
+                # scaling factor for each layer are updated
+                loss.step(optimizer)
+
+    Args:
+        model                      : instance of a Model class, such as ConvNet above
+        layer_scale_dict (dict)    : dictionary with key = layer_name and value = scaling_factor
+        growth_factor (float)      : per layer scaling factor multiplier
+        backoff_factor (float)     : per layer scaling factor multiplier when an inf/nan is found
+        growth_interval (int)      : number of steps after which scale is multiplied by growth_factor
+        min_scaling_factor (float) : smallest scaling factor
+        max_scaling_factor (float) : largest scaling factor
+    """
+
     def __init__(  # type: ignore
         self,
         model,
         layer_scale_dict: dict,
-        growth_factor: float = 4.0,
-        backoff_factor: float = 0.5 ** 0.5
+        growth_factor: float = 2.0,
+        backoff_factor: float = 0.5,
+        growth_interval: int = 10000,
+        min_scaling_factor: float = torch.finfo(torch.float32).tiny,  # type: ignore
+        max_scaling_factor: float = torch.finfo(torch.float32).max,  # type: ignore
     ) -> None:
         self._model = model
         self._layer_scale_dict: dict = layer_scale_dict
         self._growth_factor: float = growth_factor
         self._backoff_factor: float = backoff_factor
+        self._growth_interval: int = growth_interval
         self._apply_layerwise_scaling: bool = True if len(layer_scale_dict.keys()) > 0 else False
+        self._min_scaling_factor = min_scaling_factor
+        self._max_scaling_factor = max_scaling_factor
         self._handles: List = []
         self.layer_info: List = []
 
@@ -56,6 +138,9 @@ class LayerwiseGradientScaler:
             self.layer_info = self._build_layer_info()
 
     def _build_layer_info(self) -> List:
+        """
+        Helper function to create a list of LayerInfo instances.
+        """
         layer_info_list = list()
 
         for name, layer in self._model.named_modules():
@@ -67,90 +152,127 @@ class LayerwiseGradientScaler:
                     logging.debug(
                         "name = %s, layer = %s, scaling_factor = %s" % (name, layer, self._layer_scale_dict[name])
                     )
-                    layer_info_list.append(LayerInfo(name, layer, self._layer_scale_dict[name]))
+                    layer_info_list.append(LayerInfo(name, layer, self._layer_scale_dict[name], True))
         return layer_info_list
 
     def scale(self) -> None:
+        """
+        For each layer calculates the scaling factor for preceding layers' grad inputs
+        and current layers' grad outputs. These values are used to register a full backward
+        hook. The handle returned from registering the backward hook is appended to a list
+        of handles. New hooks are created and registered at every step and a new list of
+        handles is created. The handles are flushed out in the unscale function.
+        """
         if self._apply_layerwise_scaling:
             for idx in range(len(self.layer_info)):
                 elt = self.layer_info[idx]
-                name, layer = elt.name, elt.layer
-                
+                layer_name, layer_type = elt.layer_name, elt.layer_type
+
                 inputs_multiplier = 1.0
                 if idx > 0:
-                    inputs_multiplier = self.layer_info[idx-1].scale_up
-                
-                outputs_multiplier = 1.0 / elt.scale_up
-                helper = GradientHelper(name, inputs_multiplier, outputs_multiplier)
-                layer_handle = layer.register_full_backward_hook(helper.scale_gradients)
-                self._handles.append(layer_handle)
-                logging.debug("name = %s \t scale = %s" % (name, elt.scale_up))
+                    inputs_multiplier = self.layer_info[idx - 1].scaling_factor
 
-       # for name, layer in self._model.named_modules():
-       #     if name != "":
-       #         print(name, layer._get_backward_hooks())
+                outputs_multiplier = 1.0 / elt.scaling_factor
+                helper = GradientHelper(layer_name, inputs_multiplier, outputs_multiplier)
+                layer_handle = layer_type.register_full_backward_hook(helper.scale_gradients)
+                self._handles.append(layer_handle)
+                logging.debug("name = %s \t scale = %s" % (layer_name, elt.scaling_factor))
 
     def unscale(self) -> None:
         """
-        If there are no infs/nans in the tensors, then unscale the tensors.
+        For each layer, check if any of the layers' parameters contain an inf/nan.
+        If there are no inf/nan in the gradient, then gradient of that layer is
+        unscaled by the reciprocal of the scaling factor for that layer.
+        Finally, all handles recorded while registering the hooks are deleted.
         """
         if self._apply_layerwise_scaling:
             for elt in self.layer_info:
-                for param_name, param in elt.layer.named_parameters():
-                    if hasattr(param, "grad"):
-                        if torch.isinf(param.grad).any().item():
-                            logging.debug('found inf, skipping unscale')
-                        else:
-                            logging.debug("%s scaling down %s by %s" % (elt.name, param_name, 1.0 / elt.scale_up))
-                            param.grad = torch.mul(param.grad, 1.0 / elt.scale_up)
+                if not elt.found_inf_or_nan:
+                    for param_name, param in elt.layer_type.named_parameters():
+                        if hasattr(param, "grad"):
+                            logging.debug(
+                                "%s scaling down %s by %s" % (elt.layer_name, param_name, 1.0 / elt.scaling_factor)
+                            )
+                            param.grad = torch.mul(param.grad, 1.0 / elt.scaling_factor)
 
             while len(self._handles) > 0:
                 elt = self._handles.pop()
                 elt.remove()
 
-    def _check_for_inf_or_nan(self) -> None:  # type: ignore
+    def _check_for_inf_or_nan(self) -> None:
         """
-        Check for infs/nans in each tensor of the gradient. 
-        If a tensor contains inf/nan then layer.found_inf_or_nan is set to True
+        For each layer, check if any of the parameters with a gradient attribute
+        contain an inf/nan. If any of the parameters' gradient contain an inf/nan,
+        then that layers' found_inf_or_nan attribute is set to True and all
+        remaining parameters for that layer are skipped.
         """
         for elt in self.layer_info:
             elt.found_inf_or_nan = False
-            for _, param in elt.layer.named_parameters():
-                if hasattr(param, "grad"):
-                    for tensor in param.grad:
-                        if torch.isinf(tensor).any().item() is True or torch.isnan(tensor).any().item() is True:  # type: ignore
-                            elt.found_inf_or_nan = True
-                            break # skip all remaining tensors for this named parameter
-                if elt.found_inf_or_nan is True:
-                    break # skip all remaining named parameter of this layer
+            for _, param in elt.layer_type.named_parameters():
+                if hasattr(param, "grad") and param.grad is not None:
+                    if torch.isinf(param.grad).any().item() is True or torch.isnan(param.grad).any().item() is True:  # type: ignore
+                        elt.found_inf_or_nan = True
+                        break  # skip all remaining named parameters
 
-    def step(self, optimizer, count) -> None:  # type: ignore
+    def step(self, optimizer) -> None:  # type: ignore
         """
-        If there are NO infs/nans in the gradient of all layers, then optimizer takes a step.
-        Update the scaling factors for each layer.
+        If there are NO inf/nan in the gradients' of ALL layers, then optimizer
+        takes a step, otherwise not. Update the scaling factor for each layer.
         """
+        # using layerwise gradient scaling
         if self._apply_layerwise_scaling:
             self._check_for_inf_or_nan()
             inf_nan_found = any(elt.found_inf_or_nan for elt in self.layer_info)
-        
+
             if not inf_nan_found:
                 optimizer.step()
-            else:
-                logging.info("inf found at step %s" % count)
             self._update_scale()
+        # not using layerwise gradient scaling
         else:
             optimizer.step()
 
     def _update_scale(self) -> None:
         """
-        Update the scaling factor for each layer and clip the scale to the range [2 ** 7, 2 ** 24]
+        For each layer, if an inf/nan is found, then multiply the scaling factor
+        of that layer by the backoff factor and set the growth tracker of that
+        layer to 0. Else, increment the growth tracker of the layer. If growth
+        tracker equals the growth interval, then multiply the scaling factor of
+        the layer by the growth factor and reset the layers' growth tracker to 0.
+        Finally, clip the scaling factor to the range
+        [self.min_scaling_factor, self.max_scaling_factor]. The min/max scaling
+        factor values are user configurable.
         """
         if self._apply_layerwise_scaling:
-            for elt in self.layer_info:
-                if not elt.found_inf_or_nan:
-                    if elt.scale_up != 1.0:
-                        elt.scale_up = max(2 ** 7, min(self._growth_factor * elt.scale_up, 2 ** 24))
+            for layer in self.layer_info:
+                if not layer.found_inf_or_nan:
+                    layer.growth_tracker += 1
+                    if layer.scale_layer and layer.growth_tracker == self._growth_interval:
+                        layer.scaling_factor = max(
+                            self._min_scaling_factor,
+                            min(self._growth_factor * layer.scaling_factor, self._max_scaling_factor),
+                        )
+                        layer.growth_tracker = 0
                 else:
-                    if elt.scale_up != 1.0:
-                        elt.scale_up = max(2 ** 7, min(self._backoff_factor * elt.scale_up, 2 ** 24))
+                    if layer.scale_layer:
+                        layer.scaling_factor = max(
+                            self._min_scaling_factor,
+                            min(self._backoff_factor * layer.scaling_factor, self._max_scaling_factor),
+                        )
+                        layer.growth_tracker = 0
 
+    def get_layer_info(self) -> List[LayerInfo]:
+        """
+        Returns a list of LayerInfo instances of the model.
+        """
+        return self.layer_info
+
+    def get_backward_hooks(self) -> List:
+        """
+        Returns a list of tuples. Each tuple contains the layer name and the
+        hook attached to it.
+        """
+        layer_name_and_hooks = list()
+        for name, layer in self._model.named_modules():
+            if name != "":
+                layer_name_and_hooks.append((name, layer._get_backward_hooks()))
+        return layer_name_and_hooks

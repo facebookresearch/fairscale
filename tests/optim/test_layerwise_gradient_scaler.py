@@ -14,11 +14,11 @@ import torchvision.transforms as transforms
 from fairscale.optim.layerwise_gradient_scaler import LayerwiseGradientScaler
 
 
-# Test 1: a simple feed forward network
-class Feedforward(torch.nn.Module):
+# Test: feed forward network
+class FeedForward(torch.nn.Module):
     def __init__(self, input_size: int, hidden_size: int):
         torch.manual_seed(7)
-        super(Feedforward, self).__init__()
+        super(FeedForward, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.fc1 = nn.Linear(self.input_size, self.hidden_size)
@@ -57,11 +57,6 @@ def load_data(model_type: str) -> Union[DataLoader, Tuple[Any, Any]]:
         y_train = torch.FloatTensor(blob_label(y_train, 0, [0]))
         y_train = torch.FloatTensor(blob_label(y_train, 1, [1, 2, 3]))
 
-        # x_test, y_test = make_blobs(n_samples=10, n_features=2, cluster_std=1.5, shuffle=true, random_state=10)
-        # x_test = torch.FloatTensor(x_test)
-        # y_test = torch.FloatTensor(blob_label(y_test, 0, [0]))
-        # y_test = torch.FloatTensor(blob_label(y_test, 1, [1, 2, 3]))
-
         data = (x_train, y_train)
 
     if model_type == "vision_model":
@@ -71,21 +66,17 @@ def load_data(model_type: str) -> Union[DataLoader, Tuple[Any, Any]]:
         train_ds = torchvision.datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
         train_ds_loader = torch.utils.data.DataLoader(train_ds, batch_size=128, shuffle=False, num_workers=2)
 
-        # test_ds = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
-        # test_ds_loader = torch.utils.data.DataLoader(test_ds, batch_size=32, shuffle=False, num_workers=2)
-
         image, _ = train_ds[0]
         assert image.shape == torch.Size([3, 32, 32])
         data = train_ds_loader  # type: ignore
     return data
 
 
-def standard_training(model: Feedforward, per_layer_scaling=False) -> Feedforward:
+def train_linear_model(model: FeedForward, per_layer_scaling=False) -> FeedForward:
     criterion = torch.nn.BCELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
 
     x_train, y_train = load_data("linear_model")
-
     num_epochs = 2
     model.train()
 
@@ -110,21 +101,17 @@ def standard_training(model: Feedforward, per_layer_scaling=False) -> Feedforwar
         layer_scaler.unscale()
 
         # update weights and scaling factor
-        layer_scaler.step(optimizer, 0)
+        layer_scaler.step(optimizer)
 
     return model
 
 
 def test_linear_model() -> None:
-    model1 = Feedforward(2, 10)
-    model2 = Feedforward(2, 10)
+    model1 = FeedForward(2, 10)
+    model2 = FeedForward(2, 10)
 
-    vanilla_model = standard_training(model1, False)
-    scaled_model = standard_training(model2, True)
-
-    # to get all the backward hooks for a layer
-    # for name, layer in scaled_model.named_modules():
-    #     print(name, layer._get_backward_hooks())
+    vanilla_model = train_linear_model(model1, False)
+    scaled_model = train_linear_model(model2, True)
 
     def get_params_with_grad(trained_model):
         result = []
@@ -140,7 +127,7 @@ def test_linear_model() -> None:
         assert torch.allclose(elt[0], elt[1])
 
 
-# Test 2: a vision model
+# Test: convolutional network
 class SimpleConvNet(nn.Module):
     def __init__(self):
         torch.manual_seed(24)
@@ -174,7 +161,8 @@ class SimpleConvNet(nn.Module):
         out = self.identity(out)
         return out
 
-def vision_training(model: SimpleConvNet, per_layer_scaling=False):
+
+def train_vision_model(model: SimpleConvNet, per_layer_scaling=False):
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
@@ -188,7 +176,6 @@ def vision_training(model: SimpleConvNet, per_layer_scaling=False):
     layer_scaler = LayerwiseGradientScaler(model, layer_scale_dict)
 
     for _ in range(2):
-        count = 0
         for img, lbl in train_ds_loader:
             img = img.cuda()
             lbl = lbl.cuda()
@@ -202,26 +189,20 @@ def vision_training(model: SimpleConvNet, per_layer_scaling=False):
             loss.backward()
 
             layer_scaler.unscale()
-            layer_scaler.step(optimizer, count)
-            count += 1
-    return model, layer_scaler.layer_info
+            layer_scaler.step(optimizer)
+    return model
 
 
 def test_vision_model() -> None:
-    """
-    to remove randomness from different sources while testing set
-    torch.use_deterministic_algorithms(true) and
-    set the following value in the shell
-    export cublas_workspace_config=:4096:8
-    """
+    # Remove randomness from various sources while testing.
     torch.use_deterministic_algorithms(True)  # type: ignore
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
     m1 = SimpleConvNet()
     m2 = SimpleConvNet()
 
-    vision_model, _ = vision_training(m1, False)
-    scaled_vision_model, layer_info = vision_training(m2, True)
+    vision_model = train_vision_model(m1, False)
+    scaled_vision_model = train_vision_model(m2, True)
 
     def get_params_with_grad(trained_model):
         result = []
@@ -232,88 +213,6 @@ def test_vision_model() -> None:
                         logging.debug("testing equality for %s.%s" % (module_name, param_name))
                         result.append(param.grad)
         return result
-    
-    for elt in layer_info:
-        print(elt.name, elt.scale_up)
+
     for elt in zip(get_params_with_grad(vision_model), get_params_with_grad(scaled_vision_model)):
         assert torch.allclose(elt[0], elt[1])
-    
-
-# Test 3: Vision model with autocast
-def vision_training_with_autocast(model: SimpleConvNet, per_layer_scaling=False):
-    loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-
-    if torch.cuda.is_available():
-        model.cuda()
-
-    train_ds_loader = load_data("vision_model")
-    model.train()
-
-    layer_scale_dict = {"conv1": 2**10, "conv2": 2**10, "fc1": 2**10, "fc2": 2**10, "fc3": 2**10} if per_layer_scaling else {}
-    layer_scaler = LayerwiseGradientScaler(model, layer_scale_dict, growth_factor = 4)
-
-    for _ in range(2):
-        count = 0
-        for img, lbl in train_ds_loader:
-            img = img.cuda()
-            lbl = lbl.cuda()
-            count += 1
-            
-            optimizer.zero_grad()
-            layer_scaler.scale()
-            
-            with autocast():
-                predict = model(img)
-                assert predict.dtype is torch.float16
-                
-                loss = loss_fn(predict, lbl)
-                scaled_loss = torch.mul(loss, 500) 
-                assert loss.dtype is torch.float32
-
-            scaled_loss.backward()
-            layer_scaler.unscale()
-            layer_scaler.step(optimizer, count)
-
-    return model, layer_scaler.layer_info
-
-
-def test_vision_model_with_autocast():
-    torch.use_deterministic_algorithms(True)  # type: ignore
-    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-
-    m1 = SimpleConvNet()
-    m2 = SimpleConvNet()
-
-    #vision_model, _ = vision_training_with_autocast(m1, False)
-    scaled_vision_model, layer_info = vision_training_with_autocast(m2, True)
-
-    def get_params_with_grad(trained_model):
-        result = []
-        for module_name, layer in trained_model.named_modules():
-            if module_name != "":
-                for param_name, param in layer.named_parameters():
-                    if hasattr(param, "grad"):
-                        logging.debug("testing equality for %s.%s" % (module_name, param_name))
-                        result.append(param.grad)
-        return result
-
-    for elt in layer_info:
-        print(elt.name, elt.scale_up)
-    #for elt in zip(get_params_with_grad(vision_model), get_params_with_grad(scaled_vision_model)):
-    #    assert torch.allclose(elt[0], elt[1])
-
-
-
-
-
-"""
-TODO:
-- leave a comment that the scaling factor should be a multiple of the number of gpus.
-  if there are M gpus then the scaling factor should be M \times scale.
-- implement growth tracker
-- write unit test for fp16, using autocast
-
-To run the tests execute the following command from the root of the repo:
-$ pytest -s tests/optim/test_layerwise_gradient_scaler.py --log-cli-level info
-"""
