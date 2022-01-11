@@ -1,5 +1,4 @@
 import logging
-import os
 from typing import Any, List, Tuple, Union
 
 import numpy as np
@@ -74,7 +73,7 @@ def load_data(model_type: str) -> Union[DataLoader, Tuple[Any, Any]]:
 
 
 def train_linear_model(model: FeedForward, per_layer_scaling=False) -> FeedForward:
-    criterion = torch.nn.BCELoss()
+    criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
 
     x_train, y_train = load_data("linear_model")
@@ -199,7 +198,7 @@ def train_vision_model(model: SimpleConvNet, per_layer_scaling=False):
 def test_vision_model() -> None:
     # Remove randomness from various sources while testing.
     torch.use_deterministic_algorithms(True)  # type: ignore
-    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    # set environment variable in CircleCI for test to pass: CUBLAS_WORKSPACE_CONFIG = :4096:8
 
     m1 = SimpleConvNet()
     m2 = SimpleConvNet()

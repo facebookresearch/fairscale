@@ -15,7 +15,7 @@ class LayerInfo:
         layer_name: name of the layer e.g. fc1, conv1, relu1
         layer_type: type of the layer e.g. Linear, Conv2d, ReLU
         scaling_factor: user configurable scaling factor for the layer, defaults to 1.0
-        found_inf_or_nan: a boolean indicating if any parameter of layers' gradient contains inf/nan
+        found_inf_or_nan: a boolean indicating if any parameter of layer's gradient contains inf/nan
         growth_tracker: tracks number of step since last time scale was increased
         scale_layer: a boolean indicating if the layer should be scaled or not
         """
