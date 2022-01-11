@@ -3,6 +3,7 @@ import os
 from typing import Any, List, Tuple, Union
 
 import numpy as np
+import pytest
 from sklearn.datasets import make_blobs
 import torch
 from torch.cuda.amp.autocast_mode import autocast
@@ -194,6 +195,7 @@ def train_vision_model(model: SimpleConvNet, per_layer_scaling=False):
     return model
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 def test_vision_model() -> None:
     # Remove randomness from various sources while testing.
     torch.use_deterministic_algorithms(True)  # type: ignore
