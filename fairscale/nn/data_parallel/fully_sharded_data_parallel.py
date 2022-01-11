@@ -323,12 +323,18 @@ class FullyShardedDataParallel(nn.Module):
         self.process_group = process_group or get_process_group_cached()
         # If ProcessGroupName.default is passed in, the reduce_scatter will use the same process group with
         # the rest of operations. The overlap feature in the backward propagation is disabled.
+        # If ProcessGroupName.reduce_scatter is passed in, the reduce_scatter use a seperate process group
+        # so that the overlap feature in the backward propagagion is enabled.
+        # If a specific process group is passed in, the reduce_scatter will use the passed in process group.
         if process_group_reduce_scatter == ProcessGroupName.default:
             self.process_group_reduce_scatter = self.process_group
         elif process_group_reduce_scatter == ProcessGroupName.reduce_scatter:
             self.process_group_reduce_scatter = get_process_group_cached(ProcessGroupName.reduce_scatter)
         else:
-            self.process_group_reduce_scatter = process_group
+            if isinstance(process_group_reduce_scatter, ProcessGroup):
+                self.process_group_reduce_scatter = process_group_reduce_scatter
+            else:
+                raise TypeError("upsupported type")
 
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
@@ -1617,7 +1623,7 @@ class FullyShardedDataParallel(nn.Module):
                 # unsharded gradients allocated; one for a pending reduction, and one for gradient computation.
                 param.grad = None
                 callback_fn = functools.partial(self._post_reduction_hook, param)
-                grad_chunks = chunk_and_pad(grad, self.world_size)
+                grad_chunks = chunk_and_pad(grad, self.process_group_reduce_scatter.size())
                 self._reducer.reduce_scatter_async(
                     grad_chunks, group=self.process_group_reduce_scatter, callback_fn=callback_fn
                 )
