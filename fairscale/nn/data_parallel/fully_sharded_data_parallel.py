@@ -44,6 +44,7 @@ from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import (
+    ProcessGroupName,
     chunk_and_pad,
     enable_pytorch_sync_bn,
     get_process_group_cached,
@@ -65,6 +66,7 @@ else:
 
 try:
     import fairscale.experimental.nn.ssd_offload as ssd_offload
+    from fairscale.experimental.nn.ssd_offload import SsdFlatParameter
 
     import_ssd_offload = True
 except ImportError:
@@ -109,9 +111,9 @@ class OffloadConfig:
     """Class for specifying all arguments related to offloading parameters."""
 
     # Offload type: currently only supports: "ssd_offload"
-    offload_type: str = None
+    offload_type: Optional[str] = None
     # Path to the directory for storing parameters offloaded to disk.
-    ssd_filepath_dir: str = None
+    dir: Optional[str] = None
 
 
 class FullyShardedDataParallel(nn.Module):
@@ -189,6 +191,13 @@ class FullyShardedDataParallel(nn.Module):
             module to be wrapped with FSDP.
         process_group (Optional):
             process group for sharding
+        process_group_reduce_scatter (Optional):
+            process group for reduce scatter
+            it defaults to ProcessGroupName.reduce_scatter. A seperate process group is initialized and assigned to the reduce_scatter operation. And the
+            reduce_scatter operation overlaps with other operations in the backward propagation
+            If it is a specific ProcessGroup, the reduce_scatter operates on this ProcessGroup, and the overlap still happens.
+            To disable the overlap feature, set the process group to ProcessGroupName.default. In this case, the reduce_scatter
+            operation uses the same process group with the default group.
         reshard_after_forward (bool, Optional):
             if ``True``, reshard parameters after the forward pass. This saves
             memory but slows training. This is only relevant when resharding
@@ -278,12 +287,18 @@ class FullyShardedDataParallel(nn.Module):
             The `OffloadConfig` object is used to specify the type of offload (i.e SSD, CPU) and
             other required knobs when offloading parameters from GPU. Currently the OffloadConfig
             only supports specifying SSD offload as an option. Note: This is an experimental feature.
+        state_dict_on_rank_0_only (bool):
+            When set to ``True``, ``model.state_dict()`` will only returns full state dict on
+            rank 0 and return empty dict non-rank 0, which allow FullyShardedDataParallel to
+            skip the GPU -> CPU copy on non-rank 0 altogether and prevent OOM.
+            Default: False
     """
 
     def __init__(
         self,
         module: nn.Module,
         process_group: Optional[ProcessGroup] = None,
+        process_group_reduce_scatter: Union[ProcessGroup, ProcessGroupName] = ProcessGroupName.reduce_scatter,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
@@ -300,11 +315,21 @@ class FullyShardedDataParallel(nn.Module):
         force_input_to_fp32: bool = False,
         verbose: bool = False,
         cpu_offload: bool = False,
-        offload_config: OffloadConfig = None,
+        offload_config: Optional[OffloadConfig] = None,
+        state_dict_on_rank_0_only: bool = False,
     ):
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
+        # If ProcessGroupName.default is passed in, the reduce_scatter will use the same process group with
+        # the rest of operations. The overlap feature in the backward propagation is disabled.
+        if process_group_reduce_scatter == ProcessGroupName.default:
+            self.process_group_reduce_scatter = self.process_group
+        elif process_group_reduce_scatter == ProcessGroupName.reduce_scatter:
+            self.process_group_reduce_scatter = get_process_group_cached(ProcessGroupName.reduce_scatter)
+        else:
+            self.process_group_reduce_scatter = process_group
+
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
@@ -323,6 +348,7 @@ class FullyShardedDataParallel(nn.Module):
         self.clear_autocast_cache = clear_autocast_cache
         self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
+        self.state_dict_on_rank_0_only = state_dict_on_rank_0_only
         # Experimental feature for now. Use at your own risk.
         self.ssd_offload = True if offload_config and offload_config.offload_type == "ssd_offload" else False
 
@@ -334,6 +360,9 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.fp32_reduce_scatter and not self.mixed_precision:
             raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
+
+        if self.ssd_offload and not self.flatten_parameters:
+            raise ValueError(f"offload type: '{offload_config.offload_type}' requires flatten_parameters=True")
 
         # skip validation if the process group was created above
         if process_group:
@@ -358,13 +387,11 @@ class FullyShardedDataParallel(nn.Module):
         # TODO(anj): Should we conditionally do this only if we have params?
         # TODO(anj): Figure out if we can allocate the buffer during sharding.
         self.buffer_size = sum(p.numel() for p in params)
+        self.ssd_directory = tempfile.gettempdir()
         if self.ssd_offload:
             assert import_ssd_offload, "We need to import ssd_offload.py to enable the `ssd_offload` feature."
-            self.ssd_buffer_filepath_dir = (
-                offload_config.ssd_filepath_dir if offload_config.ssd_filepath_dir else tempfile.gettempdir()
-            )
-            self.ssd_buffer_filename = tempfile.mkstemp(dir=self.ssd_buffer_filepath_dir)
-            self.ssd_buffer = ssd_offload.SsdBuffer(self.buffer_size, self.ssd_buffer_filename[1])
+            if offload_config and offload_config.dir:
+                self.ssd_directory = offload_config.dir
             self.move_grads_to_cpu = True
             self.move_params_to_cpu = True
 
@@ -379,7 +406,9 @@ class FullyShardedDataParallel(nn.Module):
             param_name_groups = [param_names]
         del param_names
 
-        self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(module, param_list=to_be_flatten_params)
+        self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
+            module, param_list=to_be_flatten_params, ssd_offload=self.ssd_offload, ssd_directory=self.ssd_directory
+        )
         del module  # free original module in case it helps garbage collection
 
         # Now, in this FSDP wrapper class, we keep a list of to-be-flatten and not-to-be-flatten
@@ -414,7 +443,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # Register hook after state_dict() to remove the "_fsdp_wrapped_module."
         # prefix and before load_state_dict() to add it back.
-        self._register_state_dict_hook(_post_state_dict_hook)
+        self._register_state_dict_hook(functools.partial(_post_state_dict_hook, self.state_dict_on_rank_0_only))
         self._register_load_state_dict_pre_hook(_pre_load_state_dict_hook)
 
         # Flag to indicate whether state_dict() should automatically summon the
@@ -675,15 +704,7 @@ class FullyShardedDataParallel(nn.Module):
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
-                if self.ssd_offload:
-                    # Insert tensor into the SSD buffer and free parameter storage.
-                    p._is_sharded = False
-                    self.numel_padded_per_param.append(0)
-                    p._shard_size = p.data.size()  # type: ignore
-                    p._handle = self.ssd_buffer.insert(p.data)  # type: ignore
-                    free_storage_(p.data)
-                    continue
-                else:
+                if not self.ssd_offload:
                     p._is_sharded = False
                     self.numel_padded_per_param.append(0)
                     continue
@@ -691,14 +712,11 @@ class FullyShardedDataParallel(nn.Module):
 
             # Replace p.data with the relevant shard.
             if self.ssd_offload:
-                orig_data = p.data
-                p.data, num_padded = self._get_shard(p.data)
-                p._shard_size = p.data.size()  # type: ignore
-                # Insert tensor into the SSD buffer and free parameter storage.
-                p._handle = self.ssd_buffer.insert(p.data)  # type: ignore
-                del orig_data
+                assert isinstance(p, SsdFlatParameter)
+                sharded_tensor, num_padded = self._get_shard(p.data)
+                p.point_to_resized_tensor(sharded_tensor)
                 self.numel_padded_per_param.append(num_padded)
-                free_storage_(p.data)
+                p.to_file()
             else:
                 orig_data = p.data
                 p.data, num_padded = self._get_shard(p.data)
@@ -706,10 +724,6 @@ class FullyShardedDataParallel(nn.Module):
                 free_storage_(orig_data)
 
         assert len(self.numel_padded_per_param) == len(self.params)
-
-        # Move SSD buffer to disk.
-        if self.ssd_offload:
-            self.ssd_buffer.to_disk()
 
     def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
         """Return the local shard of a full tensor."""
@@ -766,6 +780,8 @@ class FullyShardedDataParallel(nn.Module):
         state["orig_sizes"] = [p._orig_size for p in self.params]
         if state["process_group"] is not None:
             state["process_group"] = "MISSING"  # process_group isn't pickleable
+        if state["process_group_reduce_scatter"] is not None:
+            state["process_group_reduce_scatter"] = "MISSING"  # process_group_reduce_scatter isn't pickleable
         self._reset_lazy_init()
         return state
 
@@ -791,11 +807,6 @@ class FullyShardedDataParallel(nn.Module):
         """Returns an iterator over the module parameters, yielding all the parameters
         part of the model.
         """
-        # TODO(anj): Use `copy_into_tensor` in order to provide a copy of the
-        # parameters and not the actual parameters. Ideally we don't users to operate on
-        # actual params.
-        if self.ssd_offload:
-            self.ssd_buffer.from_disk(self.buffer_size)
 
         return super().parameters(recurse=recurse)
 
@@ -810,12 +821,6 @@ class FullyShardedDataParallel(nn.Module):
         If you want the full param to be returned, you should call this function
         under a `summon_full_params` context when using flattened or original params.
         """
-        # TODO(anj): Use `copy_into_tensor` in order to provide a copy of the
-        # parameters and not the actual parameters. Ideally we don't users to operate on
-        # actual params.
-        if self.ssd_offload:
-            self.ssd_buffer.from_disk(self.buffer_size)
-
         named_param = super().named_parameters(*args, **kwargs)
         for name, param in named_param:
             if (
@@ -923,10 +928,9 @@ class FullyShardedDataParallel(nn.Module):
 
     def _move_params_to_memory(self) -> None:
         """Move params from disk to CPU."""
-        self.ssd_buffer.from_disk(self.buffer_size)
-
-        for p, handle in zip(self.params, self.ssd_buffer.get_tensors()):
-            p.data = handle.get_tensor().view(p._shard_size)  # type: ignore
+        for p in self.params:
+            assert isinstance(p, SsdFlatParameter)
+            p.to_tensor()
 
     def _load_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
@@ -1072,14 +1076,13 @@ class FullyShardedDataParallel(nn.Module):
                         if safe_to_free:
                             free_storage_(full_tensor)
                     self.has_full_params = False
-                    self._use_fp32_param_shard()
                     if self.ssd_offload:
                         # Store tensors in the SSD buffer and free param storage.
                         for p in self.params:
-                            p._shard_size = p.data.size()  # type: ignore
-                            p._handle = self.ssd_buffer.insert(p.data)  # type: ignore
-                            free_storage_(p.data)
-                        self.ssd_buffer.to_disk()
+                            assert isinstance(p, SsdFlatParameter)
+                            p.to_file()
+                    else:
+                        self._use_fp32_param_shard()
                     self.training_state = TrainingState.IDLE
 
     def _reset_lazy_init(self) -> None:
@@ -1153,6 +1156,11 @@ class FullyShardedDataParallel(nn.Module):
             return
 
         # A single shard of the parameters in full precision.
+        # TODO(another-pjohnson) - I believe this will cause memory leakage with ssd
+        #            p.data returns a pointer to a handle, and that handle has it's
+        #            ref count incremented by p._fp32_shard. So this tensor will
+        #            never be freed even if we do p.to_disk(). investigate after
+        #            PR #887 is merged
         p._fp32_shard = p.data
 
         if self.mixed_precision:
@@ -1160,14 +1168,14 @@ class FullyShardedDataParallel(nn.Module):
         if self.move_params_to_cpu:
             assert p._fp32_shard.device == torch.device("cpu")
 
-            # If we plan to keep the FP32 parameters on CPU, then pinning
-            # memory allows us to later use non-blocking transfers when moving
-            # the FP32 param shard to compute_device.
+            # We don't pin memory when using ssd_offload since that results in OOM when
+            # the memory requirements of a model are larger than host memory.
             if not self.ssd_offload:
-                # We don't pin memory when using ssd_offload since that results in OOM when
-                # the memory requirements of a model are larger than host memory.
+                # If we plan to keep the FP32 parameters on CPU, then pinning
+                # memory allows us to later use non-blocking transfers when moving
+                # the FP32 param shard to compute_device.
                 p._fp32_shard = p._fp32_shard.pin_memory()
-            p.data = p._fp32_shard
+                p.data = p._fp32_shard
 
         if self.move_params_to_cpu or self.mixed_precision:
 
@@ -1206,9 +1214,12 @@ class FullyShardedDataParallel(nn.Module):
             # shard in pinned memory so that we can do a non-blocking transfer.
             # This is only needed during training and not evaluation.
             if self.ssd_offload:
-                # We don't pin memory when using ssd_offload since that results in OOM when
-                # the memory requirements of a model are larger than host memory.
-                p._cpu_grad = torch.zeros_like(p.data, device="cpu")
+                assert isinstance(p, SsdFlatParameter)
+                # Gradients also need to be offloaded to SSD otherwise it can result in
+                # OOMs when the memory requirements of a model are larger than host memory.
+                p._cpu_grad = ssd_offload.SsdTensorHandle.from_tensor(torch.zeros_like(p.data, device="cpu"))
+                p._cpu_grad.set_file_params(p.filename + "_grad", 0)
+                p._cpu_grad.to_file()
             else:
                 p._cpu_grad = torch.zeros_like(p.data, device="cpu").pin_memory()
 
@@ -1298,9 +1309,6 @@ class FullyShardedDataParallel(nn.Module):
             self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        if self.ssd_offload:
-            self._move_params_to_memory()
-
         self._lazy_init()
 
         # Start of a forward pass.
@@ -1365,7 +1373,9 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _free_ssd_offload(self) -> None:
         if self.ssd_offload:
-            self.ssd_buffer.to_disk()
+            for p in self.params:
+                assert isinstance(p, SsdFlatParameter)
+                p.to_file(permit_when_tensor_none=True)
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
         """Register pre-backward hook to run before the wrapped module's
@@ -1405,7 +1415,7 @@ class FullyShardedDataParallel(nn.Module):
             # Note, both ``self._rebuild_full_params`` and ``self._use_full_params`` are
             # idempotent.  So in case they are called unnecessarily, they don't incur much
             # overhead.
-            if self.ssd_offload or self.reshard_after_forward:
+            if self.reshard_after_forward:
                 self._rebuild_full_params()
             else:
                 self._use_full_params()
@@ -1608,7 +1618,9 @@ class FullyShardedDataParallel(nn.Module):
                 param.grad = None
                 callback_fn = functools.partial(self._post_reduction_hook, param)
                 grad_chunks = chunk_and_pad(grad, self.world_size)
-                self._reducer.reduce_scatter_async(grad_chunks, group=self.process_group, callback_fn=callback_fn)
+                self._reducer.reduce_scatter_async(
+                    grad_chunks, group=self.process_group_reduce_scatter, callback_fn=callback_fn
+                )
             else:
                 # Currently the only way for _is_sharded to be False is if
                 # world_size == 1. This could be relaxed in the future, in which
@@ -1730,7 +1742,7 @@ class FullyShardedDataParallel(nn.Module):
         for m in self.modules():  # includes self
             if isinstance(m, FullyShardedDataParallel):
                 _finalize_parameters(m)
-                self._free_ssd_offload()
+                m._free_ssd_offload()
                 m._pre_backward_hook_has_run = False
                 if any(p.requires_grad for p in m.parameters()):
                     # Check if the module has params and if any of them has
@@ -1808,12 +1820,9 @@ class FullyShardedDataParallel(nn.Module):
             p.data = p.data[: p._orig_size.numel()].view(p._orig_size)
 
         if self.ssd_offload:
-            self.ssd_buffer.from_disk(self.buffer_size)
-
-            # The params are on disk and need to be moved to the CPU.
-            for p, handle in zip(self.params, self.ssd_buffer.get_tensors()):
-                p._fp32_shard = handle.get_tensor().view(p._shard_size)  # type: ignore
-                p.data = p._fp32_shard
+            for p in self.params:
+                assert isinstance(p, SsdFlatParameter)
+                p.to_tensor()
 
             self.has_full_params = False
 
@@ -2373,8 +2382,19 @@ def alloc_storage_(data: torch.Tensor, size: torch.Size) -> None:
 
 
 def _post_state_dict_hook(
-    module: FullyShardedDataParallel, state_dict: "OrderedDict[str, torch.Tensor]", prefix: str, *args: Any
+    state_dict_on_rank_0_only: bool,
+    module: FullyShardedDataParallel,
+    state_dict: "OrderedDict[str, torch.Tensor]",
+    prefix: str,
+    *args: Any,
 ) -> "OrderedDict[str, torch.Tensor]":
+    # When state_dict_on_rank_0_only is ``True``, ``model.state_dict()`` will only
+    # returns full state dict on rank 0 and return empty dict non-rank 0,
+    # which allow FullyShardedDataParallel to skip the GPU -> CPU copy on
+    # non-rank 0 altogether and prevent OOM.
+    if state_dict_on_rank_0_only and dist.get_rank() != 0:
+        state_dict.clear()
+        return state_dict
     # Assuming we are in a ``summon_full_params()`` context, we need to clone
     # each tensor so that it does not get freed (in-place) when the context
     # exits. At the same time, this hook can be called multiple times

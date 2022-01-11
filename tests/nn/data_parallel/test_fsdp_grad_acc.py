@@ -38,7 +38,9 @@ class TestGradAcc(DistributedTest):
 
     def test_no_sync_before_first_forward(self):
         group = DummyProcessGroup(rank=0, size=1)
-        model = self.get_wrapped_model(group, config={}, add_bn=False)
+        dummy_group_reduce_scatter = DummyProcessGroup(rank=group.rank(), size=group.size())
+        config = {"process_group_reduce_scatter", dummy_group_reduce_scatter}
+        model = self.get_wrapped_model(group, config, add_bn=False)
         batch = model.module.get_input(torch.device("cuda"))
         with model.no_sync():
             output = model(*batch)

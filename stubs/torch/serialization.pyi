@@ -1,5 +1,10 @@
-from typing import Any, BinaryIO, Union
+import os
+import pickle
+from typing import Any, BinaryIO, Callable, IO, Union
 
-def save(obj, f: Union[str, BinaryIO]) -> None: ...
+DEFAULT_PROTOCOL: int = 2
+
+def save(obj, f: Union[str, os.PathLike, BinaryIO, IO[bytes]],
+         pickle_module: Any=pickle, pickle_protocol: int=DEFAULT_PROTOCOL, _use_new_zipfile_serialization: bool=True) -> None: ...
 
 def load(f: Union[str, BinaryIO], map_location) -> Any: ...
