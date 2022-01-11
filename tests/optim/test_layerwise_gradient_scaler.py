@@ -177,8 +177,9 @@ def train_vision_model(model: SimpleConvNet, per_layer_scaling=False):
 
     for _ in range(2):
         for img, lbl in train_ds_loader:
-            img = img.cuda()
-            lbl = lbl.cuda()
+            if torch.cuda.is_available():
+                img = img.cuda()
+                lbl = lbl.cuda()
 
             optimizer.zero_grad()
             layer_scaler.scale()
