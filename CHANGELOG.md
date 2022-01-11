@@ -7,11 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.5] - TBD
 
 ### Added
-- FSDP: Added process_group_reduce_scatter parameter to allow users to pass in the process group that is used for reduce scatter operation.
+- FSDP: Added process_group_reduce_scatter parameter to allow users to pass in the process group that is used for reduce scatter operation. [#897]
 - FSDP: Added state_dict_on_rank_0_only flag allow user choose to return full state dict on rank 0 and return empty dict non-rank 0 to prevent OOM [#844]
 
 ### Changed
 - FSDP: Enabled reduce_scatter operation to overlap with all_gather stream and computation stream in backward propagation.
+This change increases FSDP's throughput. To roll back this change, please pass ProcessGroupName.default to the process_group_reduce_scatter API parameter in FSDP [#897]
 
 ## [0.4.4] - 2021-12-21
 
