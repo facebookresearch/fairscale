@@ -13,14 +13,14 @@ class LayerInfo:
     def __init__(self, name: str, layer: nn.Module, scale: float = 1.0, scale_layer: bool = False) -> None:
         """
         layer_name: name of the layer e.g. fc1, conv1, relu1
-        layer_type: type of the layer e.g. Linear, Conv2d, ReLU
+        layer: type of the layer e.g. Linear, Conv2d, ReLU
         scaling_factor: user configurable scaling factor for the layer, defaults to 1.0
         found_inf_or_nan: a boolean indicating if any parameter of layer's gradient contains inf/nan
         growth_tracker: tracks number of step since last time scale was increased
         scale_layer: a boolean indicating if the layer should be scaled or not
         """
         self.layer_name = name
-        self.layer_type = layer
+        self.layer = layer
         self.scaling_factor = scale
         self.found_inf_or_nan = False
         self.growth_tracker = 0
@@ -118,8 +118,8 @@ class LayerwiseGradientScaler:
         growth_factor: float = 2.0,
         backoff_factor: float = 0.5,
         growth_interval: int = 10000,
-        min_scaling_factor: float = torch.finfo(torch.float32).tiny,  # type: ignore
-        max_scaling_factor: float = torch.finfo(torch.float32).max,  # type: ignore
+        min_scale: float = torch.finfo(torch.float32).tiny,  # type: ignore
+        max_scale: float = torch.finfo(torch.float32).max,  # type: ignore
     ) -> None:
         self._model = model
         self._layer_scale_dict: dict = layer_scale_dict
@@ -127,8 +127,8 @@ class LayerwiseGradientScaler:
         self._backoff_factor: float = backoff_factor
         self._growth_interval: int = growth_interval
         self._apply_layerwise_scaling: bool = True if len(layer_scale_dict.keys()) > 0 else False
-        self._min_scaling_factor = min_scaling_factor
-        self._max_scaling_factor = max_scaling_factor
+        self._min_scale = min_scale
+        self._max_scale = max_scale
         self._handles: List = []
         self.layer_info: List = []
 
@@ -168,7 +168,7 @@ class LayerwiseGradientScaler:
 
         for idx in range(len(self.layer_info)):
             elt = self.layer_info[idx]
-            layer_name, layer_type = elt.layer_name, elt.layer_type
+            layer_name, layer = elt.layer_name, elt.layer
 
             inputs_multiplier = 1.0
             if idx > 0:
@@ -176,7 +176,7 @@ class LayerwiseGradientScaler:
 
             outputs_multiplier = 1.0 / elt.scaling_factor
             helper = GradientHelper(layer_name, inputs_multiplier, outputs_multiplier)
-            layer_handle = layer_type.register_full_backward_hook(helper.scale_gradients)
+            layer_handle = layer.register_full_backward_hook(helper.scale_gradients)
             self._handles.append(layer_handle)
             logging.debug("name = %s \t scale = %s" % (layer_name, elt.scaling_factor))
 
@@ -199,7 +199,7 @@ class LayerwiseGradientScaler:
 
         layers_with_finite_values = self._get_layers_with_finite_values()
         for item in layers_with_finite_values:
-            for param_name, param in item.layer_type.named_parameters():
+            for param_name, param in item.layer.named_parameters():
                 if hasattr(param, "grad"):
                     logging.debug("%s scaling down %s by %s" % (item.layer_name, param_name, 1.0 / item.scaling_factor))
                     param.grad.mul_(1.0 / item.scaling_factor)
@@ -217,9 +217,9 @@ class LayerwiseGradientScaler:
         """
         for elt in self.layer_info:
             elt.found_inf_or_nan = False
-            for _, param in elt.layer_type.named_parameters():
+            for _, param in elt.layer.named_parameters():
                 if hasattr(param, "grad") and param.grad is not None:
-                    if torch.isinf(param.grad).any().item() is True or torch.isnan(param.grad).any().item() is True:  # type: ignore
+                    if torch.isinf(param.grad).any().item() or torch.isnan(param.grad).any().item():  # type: ignore
                         elt.found_inf_or_nan = True
                         break  # skip all remaining named parameters
 
@@ -251,23 +251,25 @@ class LayerwiseGradientScaler:
         [self.min_scaling_factor, self.max_scaling_factor]. The min/max scaling
         factor values are user configurable.
         """
-        if self._apply_layerwise_scaling:
-            for layer in self.layer_info:
-                if layer.found_inf_or_nan:
-                    if layer.scale_layer:
-                        layer.scaling_factor = max(
-                            self._min_scaling_factor,
-                            min(self._backoff_factor * layer.scaling_factor, self._max_scaling_factor),
-                        )
-                        layer.growth_tracker = 0
-                else:
-                    layer.growth_tracker += 1
-                    if layer.scale_layer and layer.growth_tracker == self._growth_interval:
-                        layer.scaling_factor = max(
-                            self._min_scaling_factor,
-                            min(self._growth_factor * layer.scaling_factor, self._max_scaling_factor),
-                        )
-                        layer.growth_tracker = 0
+        if not self._apply_layerwise_scaling:
+            return
+
+        for layer in self.layer_info:
+            if layer.found_inf_or_nan:
+                if layer.scale_layer:
+                    layer.scaling_factor = max(
+                        self._min_scale,
+                        min(self._backoff_factor * layer.scaling_factor, self._max_scale),
+                    )
+                    layer.growth_tracker = 0
+            else:
+                layer.growth_tracker += 1
+                if layer.scale_layer and layer.growth_tracker == self._growth_interval:
+                    layer.scaling_factor = max(
+                        self._min_scale,
+                        min(self._growth_factor * layer.scaling_factor, self._max_scale),
+                    )
+                    layer.growth_tracker = 0
 
     def get_layer_info(self) -> List[LayerInfo]:
         """
