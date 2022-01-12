@@ -198,8 +198,6 @@ class FullyShardedDataParallel(nn.Module):
             If it is a specific ProcessGroup, the reduce_scatter operates on this ProcessGroup, and the overlap still happens.
             To disable the overlap feature, set the process group to ProcessGroupName.default. In this case, the reduce_scatter
             operation uses the same process group with the default group.
-            If reduce scatter process group size is differnt with the default process group size, the reduce_scatter
-            operation rolls back to use the same process group with the default process group.
         reshard_after_forward (bool, Optional):
             if ``True``, reshard parameters after the forward pass. This saves
             memory but slows training. This is only relevant when resharding
@@ -347,14 +345,13 @@ class FullyShardedDataParallel(nn.Module):
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         reduce_scatter_group_size = self.process_group_reduce_scatter.size()
-        # Roll back to use the default process group for reduce scatter operation when the world size and reduce scatter process group size are differnt.
-        if self.world_size != reduce_scatter_group_size:
-            self.process_group_reduce_scatter = self.process_group
-            logging.warn(
-                "Rolled back to use the default process group for the reduce scatter operation because the reduce_scatter process group"
-                "size is {reduce_scatter_group_size}, which is different with the world size {self.world_size}. Please make sure the process_group"
-                "parameter uses all the available ranks for the optimized performance."
-            )
+        # ensure that reduce_scatter group size is same with world_size.
+        assert self.world_size == reduce_scatter_group_size, (
+            "the reduce_scatter process group"
+            "size is {reduce_scatter_group_size}, which is different with the world size {self.world_size}. Please either make sure the process_group"
+            "parameter uses all the available ranks for the optimized performance, or pass process_group_reduce_scatter as ProcessGroupName.default"
+            "to roll back to using default process group."
+        )
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
         self.mixed_precision = mixed_precision
         self.fp32_reduce_scatter = fp32_reduce_scatter
