@@ -340,7 +340,7 @@ class FullyShardedDataParallel(nn.Module):
                     # Likely a dummy pg for unit test
                     self.process_group_reduce_scatter = process_group_reduce_scatter
                 else:
-                    raise TypeError("upsupported type")
+                    raise TypeError("unsupported type for reduce_scatter process group")
 
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
