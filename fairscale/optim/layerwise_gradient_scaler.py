@@ -163,20 +163,29 @@ class LayerwiseGradientScaler:
         of handles. New hooks are created and registered at every step and a new list of
         handles is created. The handles are flushed out in the unscale function.
         """
-        if self._apply_layerwise_scaling:
-            for idx in range(len(self.layer_info)):
-                elt = self.layer_info[idx]
-                layer_name, layer_type = elt.layer_name, elt.layer_type
+        if not self._apply_layerwise_scaling:
+            return
 
-                inputs_multiplier = 1.0
-                if idx > 0:
-                    inputs_multiplier = self.layer_info[idx - 1].scaling_factor
+        for idx in range(len(self.layer_info)):
+            elt = self.layer_info[idx]
+            layer_name, layer_type = elt.layer_name, elt.layer_type
 
-                outputs_multiplier = 1.0 / elt.scaling_factor
-                helper = GradientHelper(layer_name, inputs_multiplier, outputs_multiplier)
-                layer_handle = layer_type.register_full_backward_hook(helper.scale_gradients)
-                self._handles.append(layer_handle)
-                logging.debug("name = %s \t scale = %s" % (layer_name, elt.scaling_factor))
+            inputs_multiplier = 1.0
+            if idx > 0:
+                inputs_multiplier = self.layer_info[idx - 1].scaling_factor
+
+            outputs_multiplier = 1.0 / elt.scaling_factor
+            helper = GradientHelper(layer_name, inputs_multiplier, outputs_multiplier)
+            layer_handle = layer_type.register_full_backward_hook(helper.scale_gradients)
+            self._handles.append(layer_handle)
+            logging.debug("name = %s \t scale = %s" % (layer_name, elt.scaling_factor))
+
+    def _get_layers_with_finite_values(self) -> List[LayerInfo]:
+        layers_with_finite_values: List = []
+        for item in self.layer_info:
+            if not item.found_inf_or_nan:
+                layers_with_finite_values.append(item)
+        return layers_with_finite_values
 
     def unscale(self) -> None:
         """
@@ -185,19 +194,19 @@ class LayerwiseGradientScaler:
         unscaled by the reciprocal of the scaling factor for that layer.
         Finally, all handles recorded while registering the hooks are deleted.
         """
-        if self._apply_layerwise_scaling:
-            for elt in self.layer_info:
-                if not elt.found_inf_or_nan:
-                    for param_name, param in elt.layer_type.named_parameters():
-                        if hasattr(param, "grad"):
-                            logging.debug(
-                                "%s scaling down %s by %s" % (elt.layer_name, param_name, 1.0 / elt.scaling_factor)
-                            )
-                            param.grad = torch.mul(param.grad, 1.0 / elt.scaling_factor)
+        if not self._apply_layerwise_scaling:
+            return
 
-            while len(self._handles) > 0:
-                elt = self._handles.pop()
-                elt.remove()
+        layers_with_finite_values = self._get_layers_with_finite_values()
+        for item in layers_with_finite_values:
+            for param_name, param in item.layer_type.named_parameters():
+                if hasattr(param, "grad"):
+                    logging.debug("%s scaling down %s by %s" % (item.layer_name, param_name, 1.0 / item.scaling_factor))
+                    param.grad = torch.mul(param.grad, 1.0 / item.scaling_factor)
+
+        while len(self._handles) > 0:
+            elt = self._handles.pop()
+            elt.remove()
 
     def _check_for_inf_or_nan(self) -> None:
         """
@@ -216,7 +225,7 @@ class LayerwiseGradientScaler:
 
     def step(self, optimizer) -> None:  # type: ignore
         """
-        If there are NO inf/nan in the gradients' of ALL layers, then optimizer
+        If there are no inf/nan in the gradients' of all layers, then optimizer
         takes a step, otherwise not. Update the scaling factor for each layer.
         """
         # using layerwise gradient scaling
@@ -244,19 +253,19 @@ class LayerwiseGradientScaler:
         """
         if self._apply_layerwise_scaling:
             for layer in self.layer_info:
-                if not layer.found_inf_or_nan:
+                if layer.found_inf_or_nan:
+                    if layer.scale_layer:
+                        layer.scaling_factor = max(
+                            self._min_scaling_factor,
+                            min(self._backoff_factor * layer.scaling_factor, self._max_scaling_factor),
+                        )
+                        layer.growth_tracker = 0
+                else:
                     layer.growth_tracker += 1
                     if layer.scale_layer and layer.growth_tracker == self._growth_interval:
                         layer.scaling_factor = max(
                             self._min_scaling_factor,
                             min(self._growth_factor * layer.scaling_factor, self._max_scaling_factor),
-                        )
-                        layer.growth_tracker = 0
-                else:
-                    if layer.scale_layer:
-                        layer.scaling_factor = max(
-                            self._min_scaling_factor,
-                            min(self._backoff_factor * layer.scaling_factor, self._max_scaling_factor),
                         )
                         layer.growth_tracker = 0
 

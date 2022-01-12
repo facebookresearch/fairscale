@@ -72,6 +72,17 @@ def load_data(model_type: str) -> Union[DataLoader, Tuple[Any, Any]]:
     return data
 
 
+def get_params_with_grad(trained_model):
+    result = []
+    for module_name, layer in trained_model.named_modules():
+        if module_name != "":
+            for param_name, param in layer.named_parameters():
+                if hasattr(param, "grad"):
+                    logging.debug("testing equality for %s.%s" % (module_name, param_name))
+                    result.append(param.grad)
+    return result
+
+
 def train_linear_model(model: FeedForward, per_layer_scaling=False) -> FeedForward:
     criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
@@ -112,16 +123,6 @@ def test_linear_model() -> None:
 
     vanilla_model = train_linear_model(model1, False)
     scaled_model = train_linear_model(model2, True)
-
-    def get_params_with_grad(trained_model):
-        result = []
-        for module_name, layer in trained_model.named_modules():
-            if module_name != "":
-                for param_name, param in layer.named_parameters():
-                    if hasattr(param, "grad"):
-                        logging.debug("testing equality for %s.%s" % (module_name, param_name))
-                        result.append(param.grad)
-        return result
 
     for elt in zip(get_params_with_grad(vanilla_model), get_params_with_grad(scaled_model)):
         assert torch.allclose(elt[0], elt[1])
@@ -205,16 +206,6 @@ def test_vision_model() -> None:
 
     vision_model = train_vision_model(m1, False)
     scaled_vision_model = train_vision_model(m2, True)
-
-    def get_params_with_grad(trained_model):
-        result = []
-        for module_name, layer in trained_model.named_modules():
-            if module_name != "":
-                for param_name, param in layer.named_parameters():
-                    if hasattr(param, "grad"):
-                        logging.debug("testing equality for %s.%s" % (module_name, param_name))
-                        result.append(param.grad)
-        return result
 
     for elt in zip(get_params_with_grad(vision_model), get_params_with_grad(scaled_vision_model)):
         assert torch.allclose(elt[0], elt[1])
