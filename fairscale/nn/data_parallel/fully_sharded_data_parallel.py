@@ -298,6 +298,7 @@ class FullyShardedDataParallel(nn.Module):
         self,
         module: nn.Module,
         process_group: Optional[ProcessGroup] = None,
+        # The type for the process_group_reduce_scatter only can be either ProcessGroup or ProcessGroupName
         process_group_reduce_scatter: Any = ProcessGroupName.reduce_scatter,
         reshard_after_forward: bool = True,
         mixed_precision: bool = False,
@@ -323,14 +324,14 @@ class FullyShardedDataParallel(nn.Module):
         self.process_group = process_group or get_process_group_cached()
         # If ProcessGroupName.default is passed in, the reduce_scatter will use the same process group with
         # the rest of operations. The overlap feature in the backward propagation is disabled.
-        # If ProcessGroupName.reduce_scatter is passed in, the reduce_scatter use a seperate process group
-        # so that the overlap feature in the backward propagagion is enabled.
-        # If a specific process group is passed in, the reduce_scatter will use the passed in process group.
         if process_group_reduce_scatter == ProcessGroupName.default:
             self.process_group_reduce_scatter = self.process_group
+        # If ProcessGroupName.reduce_scatter is passed in, the reduce_scatter use a seperate process group
+        # so that the overlap feature in the backward propagagion is enabled.
         elif process_group_reduce_scatter == ProcessGroupName.reduce_scatter:
             self.process_group_reduce_scatter = get_process_group_cached(ProcessGroupName.reduce_scatter)
         else:
+            # If a specific process group is passed in, the reduce_scatter will use the passed in process group.
             if isinstance(process_group_reduce_scatter, ProcessGroup):
                 self.process_group_reduce_scatter = process_group_reduce_scatter
             else:
