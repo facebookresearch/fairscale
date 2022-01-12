@@ -202,7 +202,7 @@ class LayerwiseGradientScaler:
             for param_name, param in item.layer_type.named_parameters():
                 if hasattr(param, "grad"):
                     logging.debug("%s scaling down %s by %s" % (item.layer_name, param_name, 1.0 / item.scaling_factor))
-                    param.grad = torch.mul(param.grad, 1.0 / item.scaling_factor)
+                    param.grad.mul_(1.0 / item.scaling_factor)
 
         while len(self._handles) > 0:
             elt = self._handles.pop()

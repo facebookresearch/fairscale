@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.5] - TBD
 
 ### Added
-- [New Feature] Implemented layer-wise gradient scaling. Layer-wise gradient
+- Layer-wise Gradient Scaling [new feature][experimental] Layer-wise gradient
 scaling helps overcomes gradient overflow issues. When used in conjunction with
 mixed precision, it enables training larger models and makes the training
 process more stable, especially in deep networks [#879]
