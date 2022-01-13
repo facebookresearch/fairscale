@@ -347,7 +347,7 @@ class FullyShardedDataParallel(nn.Module):
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
         # In a unit test dummy enviromnent, the process_group_reduce_scatter can be None.
-        if process_group_reduce_scatter is not None:
+        if self.process_group_reduce_scatter is not None:
             reduce_scatter_group_size = self.process_group_reduce_scatter.size()
             # Roll back to use the default process group for reduce scatter operation when the world size and reduce scatter process group size are differnt.
             if self.world_size != reduce_scatter_group_size:
