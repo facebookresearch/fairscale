@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.5] - TBD
 
 ### Added
+- Layer-wise Gradient Scaling [new feature][experimental] Layer-wise gradient
+scaling helps overcomes gradient overflow issues. When used in conjunction with
+mixed precision, it enables training larger models and makes the training
+process more stable, especially in deep networks [#879]
+- FSDP: Added state_dict_on_rank_0_only flag allow user choose to return full
+state dict on rank 0 and return empty dict non-rank 0 to prevent OOM [#844]
 - FSDP: Added process_group_reduce_scatter parameter to allow users to pass in the process group that is used for reduce scatter operation. [#897]
 - FSDP: Added state_dict_on_rank_0_only flag allow user choose to return full state dict on rank 0 and return empty dict non-rank 0 to prevent OOM [#844]
 
