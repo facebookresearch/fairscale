@@ -462,6 +462,24 @@ class TestParamInit(DistributedTest):
         assert not objects_are_equal(ref_output, new_output), "new_output did not reflect change to param after init"
 
 
+class TestReduceScatterProcessGroup(DistributedTest):
+    def test_reduce_scatter_process_group_size(self):
+        """Ensure that reduce_scatter_process_group same size with the world size."""
+        test_fn = functools.partial(self._test_reduce_scatter_process_group_size, config={})
+        spawn_and_init(test_fn, world_sizes=[2])
+
+    @classmethod
+    def _test_reduce_scatter_process_group_size(self, rank, group, config):
+        model = self._get_model(group, config)
+        assert model.process_group_reduce_scatter.size() == model.world_size
+
+    @classmethod
+    def _get_model(self, group, config):
+        with torch.no_grad():  # required for multiprocessing
+            model = NestedWrappedModule(group, wrapper_config=config)
+            return FullyShardedDataParallel(model, group, **config)
+
+
 class TestSerialization(DistributedTest):
     @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_pickle(self, mixed_precision, cpu_offload):

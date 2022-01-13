@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FSDP: Enabled reduce_scatter operation to overlap with all_gather stream and computation stream in backward propagation.
 This change increases FSDP's throughput. To roll back this change, please pass ProcessGroupName.default to the process_group_reduce_scatter API parameter in FSDP [#897]
 
+### Fixed
+- FSDP: Fixed the issue that the padding size of the input tensor of the reduce scatter is not equal to the reduce scatter process group size # [#907]
+
 ## [0.4.4] - 2021-12-21
 
 ### Fixed
