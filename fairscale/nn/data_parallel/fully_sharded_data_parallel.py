@@ -346,15 +346,17 @@ class FullyShardedDataParallel(nn.Module):
                     raise TypeError("unsupported type for reduce_scatter process group")
         self.rank = self.process_group.rank()
         self.world_size = self.process_group.size()
-        reduce_scatter_group_size = self.process_group_reduce_scatter.size()
-        # Roll back to use the default process group for reduce scatter operation when the world size and reduce scatter process group size are differnt.
-        if self.world_size != reduce_scatter_group_size:
-            self.process_group_reduce_scatter = self.process_group
-            logging.warn(
-                "Rolled back to use the default process group for the reduce scatter operation because the reduce_scatter process group"
-                "size is {reduce_scatter_group_size}, which is different with the world size {self.world_size}. Please make sure the process_group"
-                "parameter uses all the available ranks for the optimized performance."
-            )
+        # In a unit test dummy enviromnent, the process_group_reduce_scatter can be None.
+        if process_group_reduce_scatter is not None:
+            reduce_scatter_group_size = self.process_group_reduce_scatter.size()
+            # Roll back to use the default process group for reduce scatter operation when the world size and reduce scatter process group size are differnt.
+            if self.world_size != reduce_scatter_group_size:
+                self.process_group_reduce_scatter = self.process_group
+                logging.warn(
+                    "Rolled back to use the default process group for the reduce scatter operation because the reduce_scatter process group"
+                    f"size is {reduce_scatter_group_size}, which is different with the world size {self.world_size}. Please make sure the process_group"
+                    "parameter uses all the available ranks for the optimized performance."
+                )
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
         self.mixed_precision = mixed_precision
         self.fp32_reduce_scatter = fp32_reduce_scatter
