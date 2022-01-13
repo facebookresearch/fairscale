@@ -157,8 +157,8 @@ class LayerwiseGradientScaler:
 
     def scale(self) -> None:
         """
-        For each layer calculates the scaling factor for preceding layers' grad inputs
-        and current layers' grad outputs. These values are used to register a full backward
+        For each layer calculates the scaling factor for preceding layer's grad inputs
+        and current layer's grad outputs. These values are used to register a full backward
         hook. The handle returned from registering the backward hook is appended to a list
         of handles. New hooks are created and registered at every step and a new list of
         handles is created. The handles are flushed out in the unscale function.
@@ -189,7 +189,7 @@ class LayerwiseGradientScaler:
 
     def unscale(self) -> None:
         """
-        For each layer, check if any of the layers' parameters contain an inf/nan.
+        For each layer, check if any of the layer's parameters contain an inf/nan.
         If there are no inf/nan in the gradient, then gradient of that layer is
         unscaled by the reciprocal of the scaling factor for that layer.
         Finally, all handles recorded while registering the hooks are deleted.
@@ -212,7 +212,7 @@ class LayerwiseGradientScaler:
         """
         For each layer, check if any of the parameters with a gradient attribute
         contain an inf/nan. If any of the parameters' gradient contain an inf/nan,
-        then that layers' found_inf_or_nan attribute is set to True and all
+        then that layer's found_inf_or_nan attribute is set to True and all
         remaining parameters for that layer are skipped.
         """
         for elt in self.layer_info:
@@ -246,7 +246,7 @@ class LayerwiseGradientScaler:
         of that layer by the backoff factor and set the growth tracker of that
         layer to 0. Else, increment the growth tracker of the layer. If growth
         tracker equals the growth interval, then multiply the scaling factor of
-        the layer by the growth factor and reset the layers' growth tracker to 0.
+        the layer by the growth factor and reset the layer's growth tracker to 0.
         Finally, clip the scaling factor to the range
         [self.min_scaling_factor, self.max_scaling_factor]. The min/max scaling
         factor values are user configurable.
