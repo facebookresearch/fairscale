@@ -22,6 +22,9 @@ FairScale was designed with the following values in mind:
 
 ## What's New:
 
+* January 2022 [fairscale 0.4.5 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.5).
+* We have experimental support for layer wise gradient scaling.
+* We enabled reduce_scatter operation overlapping in FSDP backward propagation.
 * December 2021 [fairscale 0.4.4 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.4).
 * FairScale is tested with the following PyTorch versions (with CUDA 11.2): 1.8.1, 1.10.0 and 1.11.0.dev20211101+cu111.
 * November 2021 [fairscale 0.4.3 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.3).
