@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Any, List, Tuple, Union
 
 import numpy as np
@@ -200,6 +201,7 @@ def test_vision_model() -> None:
     # Remove randomness from various sources while testing.
     torch.use_deterministic_algorithms(True)  # type: ignore
     # set environment variable in CircleCI for test to pass: CUBLAS_WORKSPACE_CONFIG = :4096:8
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
     m1 = SimpleConvNet()
     m2 = SimpleConvNet()
