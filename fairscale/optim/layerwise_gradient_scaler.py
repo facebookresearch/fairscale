@@ -200,7 +200,7 @@ class LayerwiseGradientScaler:
         layers_with_finite_values = self._get_layers_with_finite_values()
         for item in layers_with_finite_values:
             for param_name, param in item.layer.named_parameters():
-                if hasattr(param, "grad"):
+                if hasattr(param, "grad") and param.grad is not None:
                     logging.debug("%s scaling down %s by %s" % (item.layer_name, param_name, 1.0 / item.scaling_factor))
                     param.grad.mul_(1.0 / item.scaling_factor)
 
