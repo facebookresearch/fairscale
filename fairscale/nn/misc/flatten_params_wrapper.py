@@ -296,7 +296,6 @@ class FlattenParamsWrapper(nn.Module):
                         param_infos.append((module_name, m, n))
                         params.append(p)
         del shared_param_memo
-        #assert not failures, f'fp32: {",".join(failures)}'
         fp16_msg, fp32_msg = ','.join(fp16), ','.join(fp32)
         assert len(set(p.dtype for p in params)) == 1, f"expects all parameters to have same dtype. fp32: {fp32_msg}, fp16: {fp16_msg} "
         assert len(set(p.requires_grad for p in params)) == 1, "expects all parameters to have same requires_grad"
