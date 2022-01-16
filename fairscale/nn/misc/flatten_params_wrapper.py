@@ -296,8 +296,10 @@ class FlattenParamsWrapper(nn.Module):
                         param_infos.append((module_name, m, n))
                         params.append(p)
         del shared_param_memo
-        fp16_msg, fp32_msg = ','.join(fp16), ','.join(fp32)
-        assert len(set(p.dtype for p in params)) == 1, f"expects all parameters to have same dtype. fp32: {fp32_msg}, fp16: {fp16_msg} "
+        fp16_msg, fp32_msg = ",".join(fp16), ",".join(fp32)
+        assert (
+            len(set(p.dtype for p in params)) == 1
+        ), f"expects all parameters to have same dtype: fp32: {fp32_msg} \n fp16: {fp16_msg} "
         assert len(set(p.requires_grad for p in params)) == 1, "expects all parameters to have same requires_grad"
         assert len(params) == len(set(params)), "params list should not have dups"
         return params, param_infos, shared_param_infos
