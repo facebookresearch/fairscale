@@ -74,7 +74,6 @@ except ImportError:
     pass
 
 
-
 class TrainingState(Enum):
     """
     Simple enum to indicate what state FSDP is in. Used for asserting
