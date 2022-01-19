@@ -323,6 +323,7 @@ class FullyShardedDataParallel(nn.Module):
     ):
         try:
             import torch._C
+
             torch._C._log_api_usage_once("fairscale.fsdp")
         except ImportError:
             pass
