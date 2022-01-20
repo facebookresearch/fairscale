@@ -9,12 +9,10 @@ from enum import Enum, auto
 from functools import reduce
 import io
 import os
-import pickle
-from typing import IO, Any, BinaryIO, Callable, Iterator, List, Optional, Sequence, Tuple, Type, Union
+from typing import Any, Iterator, List, Optional, Sequence, Tuple, Type
 
 import numpy as np
 import torch
-from torch.serialization import DEFAULT_PROTOCOL as DEFAULT_PROTOCOL
 
 try:
     from torch.utils._pytree import tree_map
@@ -209,7 +207,7 @@ class SsdTensorHandle(torch.Tensor):
         else:
             read(tensor, self.filename, self.offset * tensor.element_size())
 
-    __torch_function__ = torch._C._disabled_torch_function_impl
+    __torch_function__ = torch._C._disabled_torch_function_impl  # type: ignore
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
@@ -238,38 +236,6 @@ class SsdTensorHandle(torch.Tensor):
             if inplace_is_this_tensor or out_is_this_tensor:
                 e.to_file()
         return r
-
-
-# Classes supporting torch.save/load
-class TorchSaver:
-    def __init__(self) -> None:
-        self.pickle_module = DisableMemoizationPicklerModule
-
-    def save(
-        self, obj: Any, f: Union[str, os.PathLike, BinaryIO, IO[bytes]], pickle_protocol: int = DEFAULT_PROTOCOL
-    ) -> None:
-        torch.serialization.save(
-            obj, f, self.pickle_module, pickle_protocol=pickle_protocol, _use_new_zipfile_serialization=False
-        )
-
-
-class SsdParameter(torch.nn.Parameter, SsdTensorHandle):
-    @classmethod
-    def from_tensor(cls: Type[SsdParameter], tensor: SsdTensorHandle) -> SsdParameter:  # type: ignore
-        r = cls(tensor.shape, tensor.dtype, tensor.requires_grad)
-        r.tensor = tensor
-        return r
-
-    @staticmethod
-    def __new__(
-        cls: SsdParameter, shape: Tuple[int, ...], dtype: torch.dtype, requires_grad: bool = True
-    ) -> SsdParameter:
-        r = SsdTensorHandle._make_wrapper_subclass(cls, shape, dtype=dtype, requires_grad=requires_grad)  # type: ignore
-
-        return r
-
-    def __init__(self, shape: Tuple[int, ...], dtype: torch.dtype, requires_grad: bool = True) -> None:
-        super(SsdParameter, self).__init__(shape, dtype, requires_grad)  # type: ignore
 
 
 class SsdFlatParameter(torch.nn.Parameter, SsdTensorHandle):
@@ -365,90 +331,3 @@ class SsdFlatParameter(torch.nn.Parameter, SsdTensorHandle):
             # Args to __setstate__
             (self._param_numels, self._param_shapes, self._param_infos, self._shared_param_infos),
         )
-
-
-class DisableMemoizationPicklerModule:
-    @classmethod
-    def Pickler(cls, data_buf: io.BytesIO, protocol: int) -> pickle.Pickler:
-        p = pickle.Pickler(data_buf, protocol)
-        p.fast = True
-        return p
-
-    @classmethod
-    def dump(cls, obj: Any, f: io.BytesIO, protocol: int) -> None:
-        pickle.dump(obj, f, protocol)
-
-
-class FileChunkingIterator:
-    """
-    chunk_size_bytes determines how large each chunk that we break the file
-    into. It is important to consider limiting the size because by when
-    python unpickles an object, by default it will read up to 1000 list
-    elements at a time. So memory usage while unpickling will be on the
-    order of O(min(file_size, 1000 * chunk_size_bytes)).
-    """
-
-    def __init__(self, filename: str, chunk_size_bytes: int = DEFAULT_CHUNK_SIZE) -> None:
-        self.filename = filename
-        self.file: Optional[Union[BinaryIO, IO[bytes]]] = None
-        self.chunk_size_bytes = chunk_size_bytes
-        self.num_chunks_read = 0
-
-    def __iter__(self) -> Iterator[bytes]:
-        self.file = io.open(self.filename, "rb", buffering=0)
-        self.num_chunks_read = 0
-        return self
-
-    def __next__(self) -> bytes:
-        assert self.file
-        next_chunk = self.file.read(self.chunk_size_bytes)
-
-        if len(next_chunk) == 0:
-            raise StopIteration
-        self.num_chunks_read += 1
-
-        return next_chunk
-
-
-class SsdTensor:
-    def __init__(self, shape: Tuple[int, ...], filename: str, dtype: torch.dtype = torch.float) -> None:
-        self.filename = filename
-        self.f: Optional[Union[BinaryIO, IO[bytes]]] = None
-        self.shape = shape
-        self.dtype = dtype
-
-    @classmethod
-    def __unpickle__(cls, shape: Tuple[int, ...], filename: str, dtype: torch.dtype) -> SsdTensor:
-        result = cls(shape, filename, dtype)
-        result.f = io.open(result.filename, "wb")
-        return result
-
-    @classmethod
-    def fromtensor(cls, tensor: torch.Tensor, filename: str) -> SsdTensor:
-        result = cls(tensor.shape, filename, tensor.dtype)
-        write(tensor, result.filename)
-        return result
-
-    def __reduce_ex__(self, protocol: int) -> Tuple[Callable, Any, Any, Any]:
-        # adding _2 to the filename is just a hack to prevent overwriting the original SsdTensor data
-        return (
-            type(self).__unpickle__,
-            (
-                self.shape,
-                self.filename + "_2",
-                self.dtype,
-            ),
-            None,
-            iter(FileChunkingIterator(self.filename)),
-        )
-
-    def append(self, item: bytes) -> None:
-        assert self.f
-        self.f.write(item)
-
-    def extend(self, items: List[bytes]) -> None:
-        for i in items:
-            self.append(i)
-
-
-torch_saver = TorchSaver()

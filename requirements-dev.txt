@@ -28,3 +28,6 @@ pynvml == 8.0.4
 
 # For mypy typing
 numpy >= 1.21
+
+# For layerwise gradient scaler
+sklearn >= 0.0

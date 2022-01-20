@@ -10,6 +10,7 @@ import torch
 from torch.optim import SGD, Adadelta, Adam  # type: ignore
 
 from fairscale.nn import FullyShardedDataParallel
+from fairscale.nn.data_parallel import OffloadConfig
 from fairscale.nn.data_parallel.fsdp_optim_utils import is_singleton_tensor
 from fairscale.utils.params import recursive_copy_to_device
 from fairscale.utils.testing import objects_are_equal
@@ -43,6 +44,7 @@ class TestOptimizerUtils(DistributedTest):
     def test_consolidate_optimizer(self, optim_fn, transformer):
         config = {"mixed_precision": True, "flatten_parameters": True}
         config["compute_dtype"] = torch.float32
+        config["offload_config"] = OffloadConfig(offload_type="ssd_offload")
         test_fn = functools.partial(
             self._test_consolidated_optimizer, config, optim_fn=optim_fn, transformer=transformer
         )
@@ -55,11 +57,19 @@ class TestOptimizerUtils(DistributedTest):
         # Establish reference behavior.
 
         if transformer:
-            unwrapped_model = TransformerWithSharedParams(group, wrapper_config=config).cuda()
-            fsdp = self.get_wrapped_model(group, config=config).cuda()
+            if "offload_config" in config and config["offload_config"]:
+                unwrapped_model = TransformerWithSharedParams(group, wrapper_config=config).cuda()
+                fsdp = self.get_wrapped_model(group, config=config)
+            else:
+                unwrapped_model = TransformerWithSharedParams(group, wrapper_config=config).cuda()
+                fsdp = self.get_wrapped_model(group, config=config).cuda()
         else:
-            unwrapped_model = MixtureOfExperts(group, wrapper_config=None).cuda()
-            fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config)).cuda()
+            if "offload_config" in config and config["offload_config"]:
+                unwrapped_model = MixtureOfExperts(group, wrapper_config=None).cuda()
+                fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config))
+            else:
+                unwrapped_model = MixtureOfExperts(group, wrapper_config=None).cuda()
+                fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config)).cuda()
 
         try:
             fsdp_optim = optim_fn(
