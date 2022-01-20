@@ -15,35 +15,22 @@ import torch.multiprocessing as mp
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.nn.data_parallel import OffloadConfig
 from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
 
 
 @skip_if_single_gpu
-# @pytest.mark.parametrize("flatten", ["flat", "nonflat"])
-@pytest.mark.parametrize("flatten", ["flat"])
-@pytest.mark.parametrize("mixed_precision", ["fp16"])
-@pytest.mark.parametrize("amp_context", ["autocast"])
-@pytest.mark.parametrize("half_input", ["halfin"])
-@pytest.mark.parametrize("fsdp_wrap_ckpt", ["F->C"])
-# @pytest.mark.parametrize("ssd_offload", ["with_offload", "without_offload"])
-@pytest.mark.parametrize("ssd_offload", ["with_offload"])
-def test_train_and_eval_with_checkpointing(
-    flatten, mixed_precision, amp_context, half_input, fsdp_wrap_ckpt, ssd_offload
-):
+@pytest.mark.parametrize("flatten", ["flat", "nonflat"])
+@pytest.mark.parametrize("mixed_precision", ["fp16", "fp32"])
+@pytest.mark.parametrize("amp_context", ["autocast", "noautocast"])
+@pytest.mark.parametrize("half_input", ["halfin", "fullin"])
+@pytest.mark.parametrize("fsdp_wrap_ckpt", ["F->C", "C->F"])
+def test_train_and_eval_with_checkpointing(flatten, mixed_precision, amp_context, half_input, fsdp_wrap_ckpt):
 
     flatten = flatten == "flat"
-    # mixed_precision = mixed_precision == "fp16"
-    mixed_precision = False
-    # amp_context = amp_context == "autocast"
-    amp_context = False
-    # half_input = half_input == "halfin"
-    half_input = False
-    # fsdp_wrap_ckpt = fsdp_wrap_ckpt == "F->C"
-    fsdp_wrap_ckpt = False
-    ssd_offload = ssd_offload == "with_offload"
-    if ssd_offload and not flatten:
-        pytest.skip("ssd_offload only support flattened params.")
+    mixed_precision = mixed_precision == "fp16"
+    amp_context = amp_context == "autocast"
+    half_input = half_input == "halfin"
+    fsdp_wrap_ckpt = fsdp_wrap_ckpt == "F->C"
 
     # Expecting an known bug in 4 out of 32 cases.
     if fsdp_wrap_ckpt and mixed_precision and not flatten:
@@ -63,7 +50,6 @@ def test_train_and_eval_with_checkpointing(
                 amp_context,
                 half_input,
                 fsdp_wrap_ckpt,
-                ssd_offload,
             ),
             nprocs=world_size,
             join=True,
@@ -71,43 +57,19 @@ def test_train_and_eval_with_checkpointing(
 
 
 def _test_func(
-    rank,
-    world_size,
-    tempfile_name,
-    unused,
-    flatten,
-    mixed_precision,
-    amp_context,
-    half_input,
-    fsdp_wrap_ckpt,
-    ssd_offload,
+    rank, world_size, tempfile_name, unused, flatten, mixed_precision, amp_context, half_input, fsdp_wrap_ckpt
 ):
     result = dist_init(rank, world_size, tempfile_name, unused)
     assert result, "Dist init failed"
 
     # Keep initialization deterministic.
     torch.manual_seed(0)
-    if ssd_offload:
-        offload_config = OffloadConfig(offload_type="ssd_offload")
-    else:
-        offload_config = None
 
-    simple_module = SimpleModuleWithCheckpointing(flatten, mixed_precision, fsdp_wrap_ckpt, offload_config)
-
-    if not ssd_offload:
-        simple_module = simple_module.cuda()
     model = FSDP(
-        simple_module,
+        SimpleModuleWithCheckpointing(flatten, mixed_precision, fsdp_wrap_ckpt).cuda(),
         flatten_parameters=flatten,
         mixed_precision=mixed_precision,
-        offload_config=offload_config,
     )
-    params = [p.shape for p in simple_module.parameters()]
-    print(f"params {params}")
-    expected_param_shapes = {name: tuple(param.shape) for name, param in model.named_parameters()}
-    print(f"named_params {expected_param_shapes}")
-    return
-
     optim = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
     # Collect parameter sizes to ensure these stay consistent through the steps below.
@@ -199,23 +161,15 @@ def _check_params(model, expected_param_shapes):
 
 
 class SimpleModuleWithCheckpointing(nn.Module):
-    def __init__(self, flatten, mixed_precision, fsdp_wrap_ckpt, offload_config):
+    def __init__(self, flatten, mixed_precision, fsdp_wrap_ckpt):
         super().__init__()
         if fsdp_wrap_ckpt:
             middle_module = FSDP(
-                checkpoint_wrapper(nn.Linear(3, 3)),
-                flatten_parameters=flatten,
-                mixed_precision=mixed_precision,
-                offload_config=offload_config,
+                checkpoint_wrapper(nn.Linear(3, 3)), flatten_parameters=flatten, mixed_precision=mixed_precision
             )
         else:
             middle_module = checkpoint_wrapper(
-                FSDP(
-                    nn.Linear(3, 3),
-                    flatten_parameters=flatten,
-                    mixed_precision=mixed_precision,
-                    offload_config=offload_config,
-                )
+                FSDP(nn.Linear(3, 3), flatten_parameters=flatten, mixed_precision=mixed_precision)
             )
 
         self.ffn = nn.Sequential(nn.Linear(3, 3), middle_module, nn.Linear(3, 3))
