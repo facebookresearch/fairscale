@@ -321,6 +321,13 @@ class FullyShardedDataParallel(nn.Module):
         offload_config: Optional[OffloadConfig] = None,
         state_dict_on_rank_0_only: bool = False,
     ):
+        try:
+            import torch._C
+
+            torch._C._log_api_usage_once("fairscale.fsdp")
+        except ImportError:
+            pass
+
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
