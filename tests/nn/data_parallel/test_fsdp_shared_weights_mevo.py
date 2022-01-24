@@ -30,7 +30,9 @@ TILE = 2
 _large = True
 
 if _large:
-    VOCAB = 1024 * 50
+    # We used to have 50K VOCAB in this test, but it seems to be flaky on CI's GPU machines and
+    # it does consume significant GPU memory. Reducing to 10K might help here.
+    VOCAB = 1024 * 10
     D_MODEL = 1024
     BS = 2
     SEQ = 16
