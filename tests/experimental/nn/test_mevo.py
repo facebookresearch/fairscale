@@ -38,10 +38,15 @@ def test_mevo_eval():
     assert out.shape == (1, 5, 4)
 
 
+# Note for the lmcl_scale, overly large value, like 64 for small shape input
+# will cause inf/nan in mevo. Larger scale value is only needed for large shape inputs.
 @skip_if_no_cuda
-def test_mevo():
-    """Test the MEVO kernel by itself."""
+@pytest.mark.parametrize("lmcl_scale", [None, 8])
+def test_mevo(lmcl_scale):
+    """Test the MEVO kernel in a single process (no DDP/FSDP)."""
+    # Set seed and reset peak mem so that peak measure below is correct.
     torch.random.manual_seed(os.getpid())
+    torch.cuda.reset_peak_memory_stats()
     shape = ((5, 3), (3, 7))
     # Turn on large data for local testing.
     large = False
@@ -50,11 +55,11 @@ def test_mevo():
     print("\nshapes are", shape)
 
     input, weight, target = get_data(shape, dtype=torch.float16)
-    k = MEVO(weight, tile_factor=16)
+    k = MEVO(weight, tile_factor=16, scale=lmcl_scale)
 
     o = k(input, target)
     o.backward()
-    print(o, o.shape)
+    print("MEVO loss", o, o.shape)
     del o
 
     cur_mem = round(torch.cuda.memory_allocated() / 1024 / 1024)
@@ -70,22 +75,22 @@ def test_mevo():
     mem = round(torch.cuda.max_memory_allocated() / 1024 / 1024)
     print("after moving input and its grad, cur and peak mem for tiled fwd+bwd =", cur_mem, mem)
 
-    print(weight.grad.norm(), weight.grad)
+    print("MEVO grad norm and grad", weight.grad.norm(), weight.grad)
     g1 = weight.grad.clone()
     weight.grad = None
 
     input = input_data.cuda().requires_grad_(True)
-    refk = BaselineSoftmaxNllLoss(weight)
+    refk = BaselineSoftmaxNllLoss(weight, scale=lmcl_scale)
     o = refk(input, target)
     o.backward()
-    print(o, o.shape)
+    print("Reference loss", o, o.shape)
     del o
-    print(weight.grad.norm(), weight.grad)
+    print("Reference grad norm and grad", weight.grad.norm(), weight.grad)
     g2 = weight.grad.clone()
     input_grad2 = input.grad.cpu()
 
-    # Print the diff. We use .cuda() since in 1.7 and 1.8, min() and max() are not
-    # implemented for cpu float16.
+    # Print the diff. We use .cuda() since in torch 1.7 and 1.8, min() and max() are not
+    # implemented for cpu float16. The diff should in general be below 0.01 in magnitude.
     diff = g1 - g2
     print("weight grad diff", diff.cuda().min(), diff.cuda().max())
     diff = input_grad1 - input_grad2
