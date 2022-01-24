@@ -35,8 +35,9 @@ BS = 2
 SEQ = 3
 TILE = 2
 
+# Set seed in CI, which seems to be flaky. Not on my local machine or cluster's V100 though.
 if in_circle_ci():
-    set_random_seed(0)
+    set_random_seed(0, model_parallel=False)
 
 _large = True
 

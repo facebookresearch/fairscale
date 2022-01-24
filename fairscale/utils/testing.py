@@ -98,12 +98,13 @@ class IdentityLayer(Base):
         return self.weight
 
 
-def set_random_seed(seed: int) -> None:
+def set_random_seed(seed: int, model_parallel: bool = True) -> None:
     """Set random seed for reproducibility."""
     random.seed(seed)
     numpy.random.seed(seed)
     torch.manual_seed(seed)
-    model_parallel_cuda_manual_seed(seed)
+    if model_parallel:
+        model_parallel_cuda_manual_seed(seed)
 
 
 def in_circle_ci() -> bool:
