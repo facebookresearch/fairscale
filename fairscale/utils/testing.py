@@ -106,6 +106,10 @@ def set_random_seed(seed: int) -> None:
     model_parallel_cuda_manual_seed(seed)
 
 
+def in_circle_ci() -> bool:
+    return os.path.exists("/home/circleci")
+
+
 # Global variable to cache the results from the first nvidia-smi execution.
 _smi_ver: Optional[str] = None
 

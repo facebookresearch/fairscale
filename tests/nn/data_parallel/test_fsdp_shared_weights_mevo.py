@@ -19,13 +19,24 @@ from torch.optim import SGD
 
 from fairscale.experimental.nn import MEVO
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.utils.testing import dist_init, objects_are_equal, skip_if_single_gpu, teardown, temp_files_ctx
+from fairscale.utils.testing import (
+    dist_init,
+    in_circle_ci,
+    objects_are_equal,
+    set_random_seed,
+    skip_if_single_gpu,
+    teardown,
+    temp_files_ctx,
+)
 
 VOCAB = 4
 D_MODEL = 2
 BS = 2
 SEQ = 3
 TILE = 2
+
+if in_circle_ci():
+    set_random_seed(0)
 
 _large = True
 
