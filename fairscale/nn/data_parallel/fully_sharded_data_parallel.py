@@ -1731,6 +1731,7 @@ class FullyShardedDataParallel(nn.Module):
             # Flush any unreduced buckets in the post_backward stream.
             with torch.cuda.stream(self._streams["post_backward"]):
                 p_assert(self._reducer is not None, "WFPB: reducer is None")
+                assert self._reducer is not None  # make mypy happy
                 self._reducer.flush()
             torch.cuda.current_stream().wait_stream(self._streams["post_backward"])
             if self.move_grads_to_cpu:
@@ -1807,6 +1808,7 @@ class FullyShardedDataParallel(nn.Module):
                         self._output_pre_backward_hook_registered is not None,
                         "WFPB: self._output_pre_backward_hook_registered should not be None",
                     )
+                    assert self._output_pre_backward_hook_registered is not None  # make mypy happy
                     self._output_pre_backward_hook_registered.clear()
 
     @torch.no_grad()
@@ -2362,7 +2364,7 @@ class FullyShardedDataParallel(nn.Module):
         return self.move_params_to_cpu
 
 
-def p_assert(cond, s):
+def p_assert(cond: Any, s: Any) -> None:
     """Used in backward context to make sure error is printed."""
     if not cond:
         print(s)
