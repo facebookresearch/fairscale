@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output projection + cross-entropy loss. MEVO supported this with its
   memory saving techniques so that peak GPU memory is much reduced. [#916]
 
+### Fixed
+- FSDP: fixing handling of internal states with state_dict and load_state_dict. [#922]
+
 ## [0.4.5] - 2022-01-14
 
 ### Added
