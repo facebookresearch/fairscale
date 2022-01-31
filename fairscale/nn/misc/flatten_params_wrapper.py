@@ -300,7 +300,9 @@ class FlattenParamsWrapper(nn.Module):
         assert (
             len(set(p.dtype for p in params)) == 1
         ), f"expects all parameters to have same dtype: fp32: {fp32_msg} \n fp16: {fp16_msg} "
-        assert len(set(p.requires_grad for p in params)) == 1, "expects all parameters to have same requires_grad"
+        assert (
+            len(set(p.requires_grad for p in params)) == 1
+        ), f"expects all parameters to have same requires_grad {p_set}"
         assert len(params) == len(set(params)), "params list should not have dups"
         return params, param_infos, shared_param_infos
 
