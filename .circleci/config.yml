@@ -214,7 +214,7 @@ commands:
            name: Run Unit Tests
            command: |
              if [ ! -f <<parameters.test_list_file>> ]; then exit 1; fi
-             pytest --junitxml=test-results/junit.xml --verbose --timeout 90 --cov-report=xml --cov=./ `cat <<parameters.test_list_file>>`
+             pytest --junitxml=test-results/junit.xml --verbose --timeout 70 --cov-report=xml --cov=./ `cat <<parameters.test_list_file>>`
 
    setup_pyenv:
      parameters:
