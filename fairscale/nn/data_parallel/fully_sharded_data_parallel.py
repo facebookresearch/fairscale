@@ -206,8 +206,13 @@ class FullyShardedDataParallel(nn.Module):
             individual layers.
         disable_reshard_on_root (bool, Optional):
             If ``True``, ``reshard_after_forward`` will be set to ``False`` if the module is a
-            FSDP root module to improve performance.
-            If ``False``, the performance will be lower, but it is needed because ....
+            FSDP root module to improve performance. For some cases, we do not reshard the full
+            parameters of an FSDP root module since those parameters are needed immediately for the
+            backward pass.
+            If ``False``, the performance will be lower, but it is needed because it helps to
+            save memory. Consider a case that an FSDP root module is a submodule of a model.
+            Backward pass may not start immediate after the FSDP root module finishes its forward.
+            So, reshard the parameters for the FSDP root modules can help to save memory in this case.
             Default: True.
         mixed_precision (bool, Optional):
             if ``True``, inputs, activations and gradients will be kept in FP16;
