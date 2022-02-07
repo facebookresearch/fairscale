@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 import torch
 from torch import nn
@@ -378,7 +378,7 @@ class BackwardTrigger(nn.Module):
     def __init__(self, linked_param: torch.Tensor):
         super().__init__()
         assert isinstance(linked_param, nn.Parameter)
-        self.trigger = nn.Parameter(torch.rand(1, dtype=linked_param.dtype))
+        self.trigger = nn.Parameter(torch.rand(1, dtype=linked_param.dtype, device=linked_param.device))
         self.trigger._linked_param = linked_param
 
     def forward(self) -> torch.Tensor:  # type: ignore
@@ -430,14 +430,22 @@ class MemoryEfficientVocabOutput(nn.Module):  # AKA. MEVO
         # nlprob, then sum over all tokens.
         return -prob.sum()
 
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:  # type: ignore
+    def eval_forward(self, input: torch.Tensor) -> torch.Tensor:
+        """Eval time forward that doesn't fuse the softmax and NLL Loss kernels."""
+        return torch.matmul(input, self.proj_weight.T)
+
+    def forward(self, input: torch.Tensor, target: Optional[torch.Tensor]) -> torch.Tensor:  # type: ignore
+        if not self.training and target is None:
+            return self.eval_forward(input)
+
         if DEBUG and dist.is_initialized() and dist.get_rank() == 0:
             cur_mem = round(torch.cuda.memory_allocated() / 1024 / 1024)
             mem = round(torch.cuda.max_memory_allocated() / 1024 / 1024)
             print("DEBUG cur, peak", cur_mem, mem)
         assert isinstance(input, torch.Tensor)
         assert isinstance(target, torch.Tensor)
-        assert input.requires_grad
+        if torch.is_grad_enabled():
+            assert input.requires_grad
         input, target = _reshape_inputs(input, target)
 
         tokens, d_model = input.shape

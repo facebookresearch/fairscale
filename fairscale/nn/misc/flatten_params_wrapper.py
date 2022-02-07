@@ -8,6 +8,7 @@
 
 from contextlib import contextmanager
 from itertools import chain
+import tempfile
 import typing
 from typing import (
     TYPE_CHECKING,
@@ -30,6 +31,7 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 
+from fairscale.experimental.nn.ssd_offload import SsdFlatParameter
 from fairscale.utils.state_dict import replace_by_prefix_
 
 if TYPE_CHECKING:
@@ -114,6 +116,7 @@ class FlatParameter(nn.Parameter):
 
 
 # Static types.
+FlatTypes = Union[FlatParameter, SsdFlatParameter]
 ParamGroups = Optional[Union[List[List[nn.Parameter]], List[nn.Parameter]]]
 
 
@@ -147,7 +150,14 @@ class FlattenParamsWrapper(nn.Module):
             prefix will be added to those names.
     """
 
-    def __init__(self, module: nn.Module, param_list: ParamGroups = None, flat_param_names: Optional[List[str]] = None):
+    def __init__(
+        self,
+        module: nn.Module,
+        param_list: ParamGroups = None,
+        flat_param_names: Optional[List[str]] = None,
+        ssd_offload: bool = False,
+        ssd_directory: str = "",
+    ):
         super().__init__()
         self._fpw_module = module
         self.is_flattened = False
@@ -195,7 +205,7 @@ class FlattenParamsWrapper(nn.Module):
             # support.
             raise ValueError(f"Incorrect param groups {len(overall_param_set)} vs {self.num_param_managed}")
 
-        self.flat_params: List[FlatParameter] = []
+        self.flat_params: List[FlatTypes] = []
 
         # Prepare flat param names.
         if flat_param_names is None:
@@ -205,11 +215,17 @@ class FlattenParamsWrapper(nn.Module):
         if len(flat_param_names) != len(set(flat_param_names)):
             raise ValueError("Each flat param must be given a unique name")
         self.flat_param_names = [f"flat_param_{n}" for n in flat_param_names]
+        flat_param: Optional[FlatTypes] = None
 
         # Init all flat_params.
         for new_p_set in self._param_sets:
             params, param_infos, shared_param_infos = self._init_flatten_params(new_p_set)
-            flat_param = FlatParameter(params, params[0].requires_grad)
+            if ssd_offload:
+                assert ssd_directory != ""
+                (handle, fname) = tempfile.mkstemp(dir=ssd_directory, suffix="ssd_buf_param")
+                flat_param = SsdFlatParameter(params=params, filename=fname, requires_grad=params[0].requires_grad)
+            else:
+                flat_param = FlatParameter(params, params[0].requires_grad)
             flat_param._param_infos = param_infos
             flat_param._shared_param_infos = shared_param_infos
             self.flat_params.append(flat_param)
@@ -238,7 +254,9 @@ class FlattenParamsWrapper(nn.Module):
         """We used to support only a single flat_param. This allows us to
         be backward compatible.
         """
-        assert len(self.flat_params) == 1, "Incorrect access to flat_param"
+        assert (
+            len(self.flat_params) == 1
+        ), f"Incorrect access to flat_param: len(self.flat_params)={len(self.flat_params)}"
         return self.flat_params[0]
 
     def _init_flatten_params(
@@ -261,8 +279,14 @@ class FlattenParamsWrapper(nn.Module):
         shared_param_memo: Dict[nn.Parameter, Tuple[str, nn.Module, str]] = {}
         shared_param_infos = []
         params = []
+        fp32 = []
+        fp16 = []
         for module_name, m in self.named_modules():
             for n, p in m.named_parameters(recurse=False):
+                if p.dtype != torch.float16:
+                    fp32.append(module_name)
+                else:
+                    fp16.append(module_name)
                 if p is not None and (m, n) in p_set:
                     if p in shared_param_memo:
                         mname, shared_m, shared_n = shared_param_memo[p]
@@ -272,8 +296,10 @@ class FlattenParamsWrapper(nn.Module):
                         param_infos.append((module_name, m, n))
                         params.append(p)
         del shared_param_memo
-
-        assert len(set(p.dtype for p in params)) == 1, "expects all parameters to have same dtype"
+        fp16_msg, fp32_msg = ",".join(fp16), ",".join(fp32)
+        assert (
+            len(set(p.dtype for p in params)) == 1
+        ), f"expects all parameters to have same dtype: fp32: {fp32_msg} \n fp16: {fp16_msg} "
         assert len(set(p.requires_grad for p in params)) == 1, "expects all parameters to have same requires_grad"
         assert len(params) == len(set(params)), "params list should not have dups"
         return params, param_infos, shared_param_infos
@@ -286,7 +312,7 @@ class FlattenParamsWrapper(nn.Module):
     def _shared_param_infos(self) -> Iterator[Tuple[str, str, nn.Module, str, nn.Module, str]]:
         return chain(*[p._shared_param_infos for p in self.flat_params])
 
-    def _flatten_params(self, flat_params: List[FlatParameter]) -> None:
+    def _flatten_params(self, flat_params: List[FlatTypes]) -> None:
         """Flatten the managed parameters and replaced the original
         attributes with views to the flat params.
         """

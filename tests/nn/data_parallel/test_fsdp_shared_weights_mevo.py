@@ -50,7 +50,7 @@ class Model(nn.Module):
         self.ln2 = nn.LayerNorm(D_MODEL).cuda().half()
 
         if with_fsdp:
-            # Shared layers much be un-flatten.
+            # Shared layers must be un-flatten.
             self.l0 = FSDP(self.l0, flatten_parameters=False, mixed_precision=False, compute_dtype=torch.float16)
             self.l1 = FSDP(self.l1, flatten_parameters=False, mixed_precision=False, compute_dtype=torch.float16)
             self.l1.append_shared_param(self.l0.module.weight)
@@ -89,38 +89,46 @@ def temp_files():
 
 @skip_if_single_gpu
 @pytest.mark.parametrize("wrap_middle", ["none", "flat", "nonflat"])
-def test_shared_weight_mevo(temp_files, wrap_middle):
+@pytest.mark.parametrize("test_fn", ["train", "eval", "optim_state"])
+def test_shared_weight_mevo(temp_files, wrap_middle, test_fn):
     """Test FSDP with a model with shared weights."""
+    if test_fn == "optim_state":
+        if wrap_middle != "flat":
+            pytest.skip("only support optim_state when root and middle part is flat")
+
     world_size = 2
 
     # Get ref.
     model = Model()
     sd_before = deepcopy(model.state_dict())
     in_data = (torch.rand(BS, SEQ) * (VOCAB - 1)).cuda().long()
-    _train(model, in_data, world_size)
-    sd_after = deepcopy(model.state_dict())
-    # Before and after state should not be equal.
-    assert not objects_are_equal(sd_before, sd_after)
+    if test_fn == "train":
+        _train(model, in_data, world_size)
+        sd_after = deepcopy(model.state_dict())
+        # Before and after state should not be equal.
+        assert not objects_are_equal(sd_before, sd_after)
 
     # Save data
     torch.save(sd_before, temp_files[2])
-    torch.save(sd_after, temp_files[3])
+    if test_fn == "train":
+        torch.save(sd_after, temp_files[3])
     torch.save(in_data, temp_files[4])
 
     # Run FSDP
     mp.spawn(
         _dist_worker,
-        (world_size, temp_files, wrap_middle),
+        (world_size, temp_files, wrap_middle, test_fn),
         nprocs=world_size,
     )
 
 
-def _dist_worker(rank, world_size, files, wrap_middle):
+def _dist_worker(rank, world_size, files, wrap_middle, test_fn):
 
     # Get data from files.
     file1, file2, sd_before, sd_after, in_data = files
     sd_before = torch.load(sd_before, map_location=lambda storage, loc: storage.cuda(rank))
-    sd_after = torch.load(sd_after, map_location=lambda storage, loc: storage.cuda(rank))
+    if test_fn == "train":
+        sd_after = torch.load(sd_after, map_location=lambda storage, loc: storage.cuda(rank))
     in_data = torch.load(in_data, map_location=lambda storage, loc: storage.cuda(rank))
 
     result = dist_init(rank=rank, world_size=world_size, filename=file1, filename_rpc=file2)
@@ -130,17 +138,44 @@ def _dist_worker(rank, world_size, files, wrap_middle):
         # To debug: first make with_fsdp=False (no inner wrapping) work, then enable inner wrapping
         # and make that work.
         Model(with_fsdp=True, wrap_middle=wrap_middle),
-        flatten_parameters=False,
+        flatten_parameters=test_fn == "optim_state",
         mixed_precision=False,
         compute_dtype=torch.float16,
     )
     fsdp_model.load_state_dict(sd_before)
 
-    _train(fsdp_model, in_data)
-
-    objects_are_equal(sd_after, fsdp_model.state_dict(), raise_exception=True)
+    if test_fn == "train":
+        _train(fsdp_model, in_data)
+        objects_are_equal(sd_after, fsdp_model.state_dict(), raise_exception=True)
+    elif test_fn == "eval":
+        _eval(fsdp_model, in_data)
+    elif test_fn == "optim_state":
+        optim = SGD(fsdp_model.parameters(), lr=0.1)
+        for _ in range(3):
+            out = fsdp_model(in_data)
+            out.backward()
+            optim.step()
+        sd = fsdp_model.gather_full_optim_state_dict(optim)
+        if rank == 0:
+            # There should 8 momentum buffers in the state.
+            assert len(sd["state"].keys()) == 8
+        else:
+            assert sd is None, "only rank 0 should have the optim state"
+    else:
+        assert 0, f"invalid test_fn {test_fn}"
 
     teardown()
+
+
+def _eval(model, in_data):
+    # run in eval mode
+    model.eval()
+    for _ in range(5):
+        out = model(in_data)
+    # adding torch.no_grad()
+    for _ in range(5):
+        with torch.no_grad():
+            out = model(in_data)
 
 
 def _train(model, in_data, steps_per_iter=1):

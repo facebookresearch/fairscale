@@ -138,6 +138,13 @@ class DistributedTest(unittest.TestCase):
             shard_loss = shard_loss.cuda()
         shard_state_dict = model.state_dict()
 
+        if config.get("state_dict_on_rank_0_only", False):
+            if torch.distributed.get_rank() != 0:
+                assert shard_state_dict == {}
+                # rank 0 shard_state_dict test covered in the following test.
+                # return is needed here, because with state_dict_on_rank_0_only=True, the following assert will fail on rank!=0
+                return
+
         try:
             torch.testing.assert_allclose(ref_loss, shard_loss)
             assert objects_are_equal(ref_state_dict, shard_state_dict, raise_exception=True)
@@ -250,7 +257,15 @@ class TestMixedPrecision(DistributedTest):
 
     @staticmethod
     def _test_dtypes(
-        cfg: Dict, autocast, in_dtype, p_dtype, loss_dtype, reduce_dtype, rank, group, expected_buffer_type=None
+        cfg: Dict,
+        autocast,
+        in_dtype,
+        p_dtype,
+        loss_dtype,
+        reduce_dtype,
+        rank,
+        group,
+        expected_buffer_type=None,
     ):
         # Patch torch.distributed.reduce_scatter to check the dtype of the reduction
         orig_reduce_scatter = torch.distributed.reduce_scatter
@@ -361,6 +376,13 @@ class TestComparisonToPyTorchDDP(DistributedTest):
         test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
         spawn_and_init(test_fn)
 
+    @parameterized.expand([[True], [False]], name_func=rename_test)
+    def test_state_dict_on_rank_0_only(self, state_dict_on_rank_0_only):
+        config = {"state_dict_on_rank_0_only": state_dict_on_rank_0_only}
+        model_fn = functools.partial(TransformerWithSharedParams)
+        test_fn = functools.partial(self._test_identical_outputs, model_fn, config)
+        spawn_and_init(test_fn)
+
     @parameterized.expand([[{"checkpoint_act": False}], [{"checkpoint_act": True}]], name_func=rename_test)
     def test_mixture_of_experts(self, moe_config):
         fsdp_config = {"mixed_precision": True}
@@ -440,6 +462,24 @@ class TestParamInit(DistributedTest):
         assert not objects_are_equal(ref_output, new_output), "new_output did not reflect change to param after init"
 
 
+class TestReduceScatterProcessGroup(DistributedTest):
+    def test_reduce_scatter_process_group_size(self):
+        """Ensure that reduce_scatter_process_group same size with the world size."""
+        test_fn = functools.partial(self._test_reduce_scatter_process_group_size, config={})
+        spawn_and_init(test_fn, world_sizes=[2])
+
+    @classmethod
+    def _test_reduce_scatter_process_group_size(self, rank, group, config):
+        model = self._get_model(group, config)
+        assert model.process_group_reduce_scatter.size() == model.world_size
+
+    @classmethod
+    def _get_model(self, group, config):
+        with torch.no_grad():  # required for multiprocessing
+            model = NestedWrappedModule(group, wrapper_config=config)
+            return FullyShardedDataParallel(model, group, **config)
+
+
 class TestSerialization(DistributedTest):
     @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_pickle(self, mixed_precision, cpu_offload):
@@ -467,6 +507,7 @@ class TestSerialization(DistributedTest):
     def _test_multiprocessing(self, rank, group, config):
         mp = torch.multiprocessing.Pool(1)
         dummy_group = DummyProcessGroup(rank=group.rank(), size=group.size())
+        config["process_group_reduce_scatter"] = DummyProcessGroup(rank=group.rank(), size=group.size())
         model = mp.apply(self._get_model, (dummy_group, config))
         if not config["cpu_offload"]:
             model = model.cuda()
@@ -484,6 +525,7 @@ class TestSerialization(DistributedTest):
         for m in model.modules():
             if isinstance(m, FullyShardedDataParallel):
                 m.process_group = group
+                m.process_group_reduce_scatter = torch.distributed.new_group()
         optim = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
         input = model.module.get_input(torch.device("cuda"))
         output = model(*input)

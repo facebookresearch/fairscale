@@ -1,3 +1,5 @@
+tests/nn/checkpoint/test_checkpoint_activations.py
+tests/nn/checkpoint/test_checkpoint_activations_norm.py
 tests/nn/data_parallel/test_fsdp_multiple_forward_checkpoint.py
 tests/nn/misc/test_grad_bucket.py
 tests/nn/misc/test_param_bucket.py
@@ -20,3 +22,4 @@ tests/optim/test_oss.py
 tests/optim/test_oss_adascale.py
 tests/optim/test_ddp_adascale.py
 tests/experimental/nn/data_parallel/test_gossip.py
+tests/nn/data_parallel/test_fsdp_hf_transformer_eval.py
