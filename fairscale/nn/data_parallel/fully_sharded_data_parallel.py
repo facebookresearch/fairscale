@@ -204,6 +204,16 @@ class FullyShardedDataParallel(nn.Module):
             if ``True``, reshard parameters after the forward pass. This saves
             memory but slows training. This is only relevant when resharding
             individual layers.
+        disable_reshard_on_root (bool, Optional):
+            If ``True``, ``reshard_after_forward`` will be set to ``False`` if the module is a
+            FSDP root module to improve performance. For some cases, we do not reshard the full
+            parameters of an FSDP root module since those parameters are needed immediately for the
+            backward pass.
+            If ``False``, the performance will be lower, but it is needed because it helps to
+            save memory. Consider a case that an FSDP root module is a submodule of a model.
+            Backward pass may not start immediate after the FSDP root module finishes its forward.
+            So, reshard the parameters for the FSDP root modules can help to save memory in this case.
+            Default: True.
         mixed_precision (bool, Optional):
             if ``True``, inputs, activations and gradients will be kept in FP16;
             computation and communication will occur in FP16; and a (sharded)
@@ -303,6 +313,7 @@ class FullyShardedDataParallel(nn.Module):
         # The type for the process_group_reduce_scatter only can be either ProcessGroup or ProcessGroupName
         process_group_reduce_scatter: Any = ProcessGroupName.reduce_scatter,
         reshard_after_forward: bool = True,
+        disable_reshard_on_root: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
         flatten_parameters: bool = True,
@@ -365,6 +376,7 @@ class FullyShardedDataParallel(nn.Module):
                     "parameter uses all the available ranks for the optimized performance."
                 )
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
+        self.disable_reshard_on_root = disable_reshard_on_root
         self.mixed_precision = mixed_precision
         self.fp32_reduce_scatter = fp32_reduce_scatter
         self.flatten_parameters = flatten_parameters
@@ -1150,10 +1162,11 @@ class FullyShardedDataParallel(nn.Module):
             # applies recursively, we only call this from the root instance.
             self._cast_buffers()
 
-            # Don't free the full params for the outer-most (root) instance,
-            # since those params will be needed immediately after for the
-            # backward pass.
-            self.reshard_after_forward = False
+            if self.disable_reshard_on_root:
+                # Don't free the full params for the outer-most (root) instance,
+                # since those params will be needed immediately after for the
+                # backward pass.
+                self.reshard_after_forward = False
 
             # Due to the use of streams, we need to make sure the previous
             # ``optim.step()`` is done before we all-gather parameters.
