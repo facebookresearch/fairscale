@@ -18,6 +18,8 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
+import torchtext
+from torchtext.data.utils import get_tokenizer
 
 from fairscale.experimental.nn.ampnet_pipe import pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
@@ -25,8 +27,6 @@ from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import LazyModule
 from fairscale.optim import GradScaler
 from fairscale.utils.testing import dist_init, get_worker_map
-import torchtext
-from torchtext.data.utils import get_tokenizer
 
 try:
     from fairscale.optim import Adam  # type: ignore
