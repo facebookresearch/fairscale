@@ -7,6 +7,7 @@ from time import time
 
 from parameterized import parameterized
 import torch
+from torch import nn
 from torch.optim import SGD, Adadelta, Adam  # type: ignore
 
 from fairscale.nn import FullyShardedDataParallel
@@ -143,6 +144,29 @@ class TestOptimizerUtils(DistributedTest):
         assert objects_are_equal(shard_sd["state"], original_shard_sd["state"])
         assert objects_are_equal({k: shard_sd[k] for k in original_shard_sd}, original_shard_sd)
 
+    def test_model_with_unused_params(self):
+        """Test handling of model with unused params by gather_full_optim_state_dict()"""
+        spawn_and_init(self._test_model_with_unused_params, world_sizes=[2])
+
+    @classmethod
+    def _test_model_with_unused_params(self, rank, pg):
+        model = ModelWithUnusedParams().cuda()
+        if rank == 0:
+            print(model)
+        data = torch.rand(4).cuda().requires_grad_(True)
+        model = FullyShardedDataParallel(model)
+        for p in model.parameters():
+            print(p.shape, p.grad)
+        optim = SGD(model.parameters(), momentum=0.9, lr=0.1)
+        out = model(data).sum()
+        out.backward()
+        optim.step()
+        for p in model.parameters():
+            print(p.shape, p.grad.shape if p.grad is not None else p.grad)
+        model.zero_grad(set_to_none=True)
+        sd = model.gather_full_optim_state_dict(optim)
+        print(sd)
+
     def test_named_params_ordering(self):
         """Test assumption of consolidate_optimizer_state_dict"""
         group = DummyProcessGroup(0, 1)
@@ -152,8 +176,26 @@ class TestOptimizerUtils(DistributedTest):
             assert objects_are_equal(p, named_pars[i])
 
     def test_is_singleton_tensor(self):
+        """Test is_singleton_tensor function"""
         assert is_singleton_tensor(torch.tensor(4.0))
         assert not is_singleton_tensor(torch.tensor([4.0]))
         assert not is_singleton_tensor(torch.tensor([4.0, 5.0]))
         assert not is_singleton_tensor([4.0])
         assert not is_singleton_tensor(4.0)
+
+
+class ModelWithUnusedParams(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l = nn.Linear(4, 4)
+        if False:
+            # this will be fine
+            self.not_trained = self.l
+        else:
+            # this will fail
+            self.not_trained = FullyShardedDataParallel(nn.Linear(4, 4)).requires_grad_(False)
+
+    def forward(self, x):
+        with torch.no_grad():
+            y = self.not_trained(x)
+        return self.l(x) - y
