@@ -13,18 +13,20 @@ def default_auto_wrap_policy(
     module: nn.Module,
     recurse: bool,
     unwrapped_params: int,
+    module_is_root: bool,
     # These are customizable for this default policy function.
     min_num_params: int = int(1e8),
     force_leaf_modules: Optional[Set[Type[nn.Module]]] = None,
     exclude_wrap_modules: Optional[Set[Type[nn.Module]]] = None,
+    skip_params_check_for_root: bool = True,
 ) -> bool:
     """Default policy function for :func:`auto_wrap`.
 
        Return if a module should be wrapped during :func:`auto_wrap`.
 
-       The first three parameters are used by :func:`auto_wrap`. If
+       The first four parameters are used by :func:`auto_wrap`. If
        you write a custom version of this policy function, your version
-       needs to at least accept the first three parameters and free
+       needs to at least accept the first four parameters and free
        to do whatever you want in the function.
 
     Args:
@@ -37,6 +39,8 @@ def default_auto_wrap_policy(
            on whether we should wrap the said module.
        unwrapped_params (int):
            The number of parameters yet to be wrapped in this module.
+       module_is_root (bool):
+           Indicates if current module is the root.
 
        min_num_params (int):
            Customizable policy input. It controls the size threshold
@@ -45,6 +49,9 @@ def default_auto_wrap_policy(
            keep as leaves, i.e., their children will never be wrapped.
        exclude_wrap_modules (Set[Type[nn.Module]]):
            Customizable set of module types to be excluded in wrapping.
+       skip_params_check_for_root (bool):
+           If module_is_root is True, then this includes the root in
+           wrapping regardless of their number of unwrapped params.
     """
     force_leaf_modules = (
         default_auto_wrap_policy.FORCE_LEAF_MODULES  # type: ignore
@@ -63,7 +70,9 @@ def default_auto_wrap_policy(
         return is_large and not isinstance(module, tuple(force_leaf_modules))
     else:
         # If we are not recursing, determine if we should wrap.
-        return is_large and not isinstance(module, tuple(exclude_wrap_modules))
+        return ((module_is_root and skip_params_check_for_root) or is_large) and not isinstance(
+            module, tuple(exclude_wrap_modules)
+        )
 
 
 # Set those defaults to the default_auto_wrap_policy function. Make them easy to be imported.
@@ -75,6 +84,7 @@ def config_auto_wrap_policy(
     module: nn.Module,
     recurse: bool,
     unwrapped_params: int,
+    module_is_root: bool,
 ) -> bool:
     """Config based policy function for :func:`auto_wrap`.
 
@@ -91,6 +101,9 @@ def config_auto_wrap_policy(
            on whether we should wrap the said module.
        unwrapped_params (int):
            The number of parameters yet to be wrapped in this module.
+           Unused by this function.
+       module_is_root (bool):
+           Indicates if current module is the root.
            Unused by this function.
     """
     if recurse:
@@ -181,8 +194,6 @@ def auto_wrap(module: nn.Module, auto_wrap_policy: Optional[Callable] = None, **
     :func:`enable_wrap` context (if the context exists) and recursively wrap
     children modules that meet the criteria given by :func:`auto_wrap_policy`. This
     is useful for wrapping large complex layers.
-    The root module is not wrapped by default. This can be enabled by setting
-    *wrap_root_module* to True in the enable_wrap context.
 
     .. note:: auto_wrap can only be applied to a module once because it
         assumes none of the sub-modules is already wrapped and uses that
@@ -211,9 +222,9 @@ def auto_wrap(module: nn.Module, auto_wrap_policy: Optional[Callable] = None, **
             (default: wrap if > 100M parameters)
     """
     if ConfigAutoWrap.in_autowrap_context:
-        wrapped_module, remainder = ConfigAutoWrap.recursive_wrap(module, auto_wrap_policy=auto_wrap_policy, **kwargs)
-        if ConfigAutoWrap.wrap_root_module:
-            wrapped_module = wrap(module, **kwargs)
+        wrapped_module, remainder = ConfigAutoWrap.recursive_wrap(
+            module, auto_wrap_policy=auto_wrap_policy, module_is_root=True, **kwargs
+        )
         return wrapped_module
     return module
 
@@ -228,7 +239,6 @@ class ConfigAutoWrap:
     wrapper_cls: Optional[Callable] = None  # The wrapper class
     kwargs: Dict[str, Any] = {}  # Wrapper's args
     auto_wrap_policy: Optional[Callable] = None  # Used only in auto_wrap
-    wrap_root_module: bool = False  # Used only in auto_wrap
 
     def __init__(self, auto_wrap_policy: Optional[Callable] = None, **kwargs: Dict[str, Any]):
         self.auto_wrap_policy = auto_wrap_policy
@@ -245,10 +255,6 @@ class ConfigAutoWrap:
         assert "wrapper_cls" in kwargs.keys()
         ConfigAutoWrap.wrapper_cls = cast(Callable, kwargs["wrapper_cls"])
         del kwargs["wrapper_cls"]
-        # If available, override value for wrap_root_module param.
-        if "wrap_root_module" in kwargs.keys():
-            ConfigAutoWrap.wrap_root_module = cast(bool, kwargs["wrap_root_module"])
-            del kwargs["wrap_root_module"]
         # Save the rest.
         ConfigAutoWrap.auto_wrap_policy = default_auto_wrap_policy if auto_wrap_policy is None else auto_wrap_policy
         ConfigAutoWrap.kwargs = kwargs
@@ -259,7 +265,6 @@ class ConfigAutoWrap:
         ConfigAutoWrap.wrapper_cls = None
         ConfigAutoWrap.kwargs = {}
         ConfigAutoWrap.auto_wrap_policy = None
-        ConfigAutoWrap.wrap_root_module = False
 
     def __enter__(self) -> None:
         self.enable_autowrap_context(self.auto_wrap_policy, self.kwargs)
@@ -268,7 +273,9 @@ class ConfigAutoWrap:
         self.disable_autowrap_context()
 
     @staticmethod
-    def recursive_wrap(module: nn.Module, auto_wrap_policy: Optional[Callable], **kwargs: Any) -> Tuple[nn.Module, int]:
+    def recursive_wrap(
+        module: nn.Module, auto_wrap_policy: Optional[Callable], module_is_root: bool, **kwargs: Any
+    ) -> Tuple[nn.Module, int]:
         """
         Automatically wrap child modules of *module* that meet the given
         criteria with :func:`auto_wrap`.
@@ -294,12 +301,12 @@ class ConfigAutoWrap:
         num_params = sum([p.numel() for p in module.parameters()])
 
         assert auto_wrap_policy is not None
-        if auto_wrap_policy(module=module, recurse=True, unwrapped_params=num_params):
+        if auto_wrap_policy(module=module, recurse=True, unwrapped_params=num_params, module_is_root=module_is_root):
             total_wrapped_params = 0
             # Iterate through the children, recursively wrap if necessary
             for name, child in module.named_children():
                 wrapped_child, num_wrapped_params = ConfigAutoWrap.recursive_wrap(
-                    module=child, auto_wrap_policy=auto_wrap_policy, **kwargs
+                    module=child, auto_wrap_policy=auto_wrap_policy, module_is_root=False, **kwargs
                 )
                 setattr(module, name, wrapped_child)
                 # Keep track of how many parameters have been wrapped
@@ -307,7 +314,9 @@ class ConfigAutoWrap:
             # decide if we need to wrap the current module,
             # since the left over parameters exceed the number of params to wrap
             remainder = num_params - total_wrapped_params
-            if auto_wrap_policy(module=module, recurse=False, unwrapped_params=remainder):
+            if auto_wrap_policy(
+                module=module, recurse=False, unwrapped_params=remainder, module_is_root=module_is_root
+            ):
                 # Leaf node or final wrapping of the remainder both happen here.
                 return wrap(module, **kwargs), num_params
             else:

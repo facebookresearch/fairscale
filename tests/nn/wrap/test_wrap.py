@@ -48,56 +48,36 @@ class TestAutoWrap(unittest.TestCase):
         """
         Test to ensure with auto wrap, we wrap child modules correctly based on the min_num_params.
         ``nn.Linear(5, 5)`` does not exceed the bucket size, but combined they do.
+        Root is also wrapped regardless of number of unwrapped params due to default_auto_wrap_policy
+        behavior.
         """
         with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
-            sequential = nn.Sequential(
-                nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
-            )
-            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
+            sequential = nn.Sequential(nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5)))
+            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=60)
             model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
         assert isinstance(model, FSDP)
         assert isinstance(model.module[0], nn.Linear)
-        assert isinstance(model.module[1], nn.Linear)
-        assert isinstance(model.module[2], FSDP)
-        assert isinstance(model.module[2].module[0], nn.Linear)
-        assert isinstance(model.module[2].module[1], nn.Linear)
+        assert isinstance(model.module[1], FSDP)
+        assert isinstance(model.module[1].module[0], nn.Linear)
+        assert isinstance(model.module[1].module[1], nn.Linear)
 
-    def test_auto_wrap_all_modules(self):
+    def test_auto_wrap_without_skip_root_checks(self):
         """
-        Setting a low min_num_params so that all modules are wrapped.
+        Similar test as before but this time we set skip_params_check_for_root=False in the wrap policy.
+        Given the root doesn't have enough remaining params after some of the children are wrapped,
+        it doesn't get wrapped.
         """
         with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
-            sequential = nn.Sequential(
-                nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
+            sequential = nn.Sequential(nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5)))
+            my_auto_wrap_policy = functools.partial(
+                default_auto_wrap_policy, min_num_params=60, skip_params_check_for_root=False
             )
-            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=5)
             model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
         assert isinstance(model, nn.Sequential)
-        assert isinstance(model[0], FSDP)
+        assert isinstance(model[0], nn.Linear)
         assert isinstance(model[1], FSDP)
-        assert isinstance(model[2], nn.Sequential)
-        assert isinstance(model[2][0], FSDP)
-        assert isinstance(model[2][1], FSDP)
-
-    def test_auto_wrap_all_modules_including_root(self):
-        """
-        Setting a low min_num_params so that all modules are wrapped.
-        Root module is also wrapped given wrap_root_module is explicitly set to True.
-        """
-        with enable_wrap(
-            wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False, wrap_root_module=True
-        ):
-            sequential = nn.Sequential(
-                nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
-            )
-            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=5)
-            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
-        assert isinstance(model, FSDP)
-        assert isinstance(model.module[0], FSDP)
-        assert isinstance(model.module[1], FSDP)
-        assert isinstance(model.module[2], nn.Sequential)
-        assert isinstance(model.module[2][0], FSDP)
-        assert isinstance(model.module[2][1], FSDP)
+        assert isinstance(model[1].module[0], nn.Linear)
+        assert isinstance(model[1].module[1], nn.Linear)
 
     def test_auto_wrap_preset_exclude_wrap(self):
         """
@@ -109,21 +89,6 @@ class TestAutoWrap(unittest.TestCase):
             my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
             model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
         assert isinstance(model, nn.ModuleList)
-        assert isinstance(model[0], nn.Linear)
-        assert isinstance(model[1], nn.Linear)
-
-    def test_auto_wrap_preset_exclude_wrap_include_root(self):
-        """
-        Test to ensure excluded modules are not wrapped while root is still wrapped given wrap_root_module
-        is set explicitly.
-        """
-        with enable_wrap(
-            wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False, wrap_root_module=True
-        ):
-            sequential = nn.ModuleList([nn.Linear(5, 5), nn.Linear(5, 5)])
-            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
-            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
-        assert isinstance(model, FSDP)
         assert isinstance(model[0], nn.Linear)
         assert isinstance(model[1], nn.Linear)
 
