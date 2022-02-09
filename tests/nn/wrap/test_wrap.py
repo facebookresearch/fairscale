@@ -62,6 +62,43 @@ class TestAutoWrap(unittest.TestCase):
         assert isinstance(model.module[2].module[0], nn.Linear)
         assert isinstance(model.module[2].module[1], nn.Linear)
 
+    def test_auto_wrap_all_modules(self):
+        """
+        Setting a low min_num_params so that all modules are wrapped.
+        """
+        with enable_wrap(wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False):
+            sequential = nn.Sequential(
+                nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
+            )
+            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=5)
+            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
+        assert isinstance(model, nn.Sequential)
+        assert isinstance(model[0], FSDP)
+        assert isinstance(model[1], FSDP)
+        assert isinstance(model[2], nn.Sequential)
+        assert isinstance(model[2][0], FSDP)
+        assert isinstance(model[2][1], FSDP)
+
+    def test_auto_wrap_all_modules_including_root(self):
+        """
+        Setting a low min_num_params so that all modules are wrapped.
+        Root module is also wrapped given wrap_root_module is explicitly set to True.
+        """
+        with enable_wrap(
+            wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False, wrap_root_module=True
+        ):
+            sequential = nn.Sequential(
+                nn.Linear(5, 5), nn.Linear(5, 5), nn.Sequential(nn.Linear(5, 5), nn.Linear(5, 5))
+            )
+            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=5)
+            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
+        assert isinstance(model, FSDP)
+        assert isinstance(model.module[0], FSDP)
+        assert isinstance(model.module[1], FSDP)
+        assert isinstance(model.module[2], nn.Sequential)
+        assert isinstance(model.module[2][0], FSDP)
+        assert isinstance(model.module[2][1], FSDP)
+
     def test_auto_wrap_preset_exclude_wrap(self):
         """
         Test to ensure excluded modules are not wrapped, regardless if the total param size is greater than the
