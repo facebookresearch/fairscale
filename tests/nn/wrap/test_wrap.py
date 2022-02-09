@@ -77,8 +77,8 @@ class TestAutoWrap(unittest.TestCase):
 
     def test_auto_wrap_preset_exclude_wrap_include_root(self):
         """
-        Test to ensure excluded modules are not wrapped, regardless if the total param size is greater than the
-        min_num_params.
+        Test to ensure excluded modules are not wrapped while root is still wrapped given wrap_root_module
+        is set explicitly.
         """
         with enable_wrap(
             wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False, wrap_root_module=True
