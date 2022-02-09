@@ -181,6 +181,8 @@ def auto_wrap(module: nn.Module, auto_wrap_policy: Optional[Callable] = None, **
     :func:`enable_wrap` context (if the context exists) and recursively wrap
     children modules that meet the criteria given by :func:`auto_wrap_policy`. This
     is useful for wrapping large complex layers.
+    The root module is not wrapped by default. This can be enabled by setting
+    *wrap_root_module* to True in the enable_wrap context.
 
     .. note:: auto_wrap can only be applied to a module once because it
         assumes none of the sub-modules is already wrapped and uses that
@@ -210,6 +212,8 @@ def auto_wrap(module: nn.Module, auto_wrap_policy: Optional[Callable] = None, **
     """
     if ConfigAutoWrap.in_autowrap_context:
         wrapped_module, remainder = ConfigAutoWrap.recursive_wrap(module, auto_wrap_policy=auto_wrap_policy, **kwargs)
+        if ConfigAutoWrap.wrap_root_module:
+            wrapped_module = wrap(module, **kwargs)
         return wrapped_module
     return module
 
@@ -224,6 +228,7 @@ class ConfigAutoWrap:
     wrapper_cls: Optional[Callable] = None  # The wrapper class
     kwargs: Dict[str, Any] = {}  # Wrapper's args
     auto_wrap_policy: Optional[Callable] = None  # Used only in auto_wrap
+    wrap_root_module: bool = False  # Used only in auto_wrap
 
     def __init__(self, auto_wrap_policy: Optional[Callable] = None, **kwargs: Dict[str, Any]):
         self.auto_wrap_policy = auto_wrap_policy
@@ -240,6 +245,10 @@ class ConfigAutoWrap:
         assert "wrapper_cls" in kwargs.keys()
         ConfigAutoWrap.wrapper_cls = cast(Callable, kwargs["wrapper_cls"])
         del kwargs["wrapper_cls"]
+        # If available, override value for wrap_root_module param.
+        if "wrap_root_module" in kwargs.keys():
+            ConfigAutoWrap.wrap_root_module = cast(bool, kwargs["wrap_root_module"])
+            del kwargs["wrap_root_module"]
         # Save the rest.
         ConfigAutoWrap.auto_wrap_policy = default_auto_wrap_policy if auto_wrap_policy is None else auto_wrap_policy
         ConfigAutoWrap.kwargs = kwargs
@@ -250,6 +259,7 @@ class ConfigAutoWrap:
         ConfigAutoWrap.wrapper_cls = None
         ConfigAutoWrap.kwargs = {}
         ConfigAutoWrap.auto_wrap_policy = None
+        ConfigAutoWrap.wrap_root_module = False
 
     def __enter__(self) -> None:
         self.enable_autowrap_context(self.auto_wrap_policy, self.kwargs)

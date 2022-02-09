@@ -75,6 +75,21 @@ class TestAutoWrap(unittest.TestCase):
         assert isinstance(model[0], nn.Linear)
         assert isinstance(model[1], nn.Linear)
 
+    def test_auto_wrap_preset_exclude_wrap_include_root(self):
+        """
+        Test to ensure excluded modules are not wrapped, regardless if the total param size is greater than the
+        min_num_params.
+        """
+        with enable_wrap(
+            wrapper_cls=FSDP, process_group=self.process_group, flatten_parameters=False, wrap_root_module=True
+        ):
+            sequential = nn.ModuleList([nn.Linear(5, 5), nn.Linear(5, 5)])
+            my_auto_wrap_policy = functools.partial(default_auto_wrap_policy, min_num_params=40)
+            model = auto_wrap(sequential, auto_wrap_policy=my_auto_wrap_policy)
+        assert isinstance(model, FSDP)
+        assert isinstance(model[0], nn.Linear)
+        assert isinstance(model[1], nn.Linear)
+
     def test_auto_wrap_preset_exclude_wrap_include_children(self):
         """
         Test to ensure excluded modules are not wrapped, but children are if param size is greater than
