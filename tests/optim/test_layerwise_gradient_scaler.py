@@ -1,3 +1,8 @@
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
+
 import logging
 import os
 from typing import Any, List, Tuple, Union
@@ -13,7 +18,7 @@ import torchvision
 import torchvision.transforms as transforms
 
 from fairscale.optim.layerwise_gradient_scaler import LayerwiseGradientScaler
-from fairscale.util.testing import skip_a_test_if_in_CI
+from fairscale.utils.testing import skip_a_test_if_in_CI
 
 
 # Test: feed forward network
