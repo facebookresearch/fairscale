@@ -27,8 +27,8 @@ from fairscale.utils.testing import (
     dist_init,
     get_cycles_per_ms,
     objects_are_equal,
-    spawn_for_all_world_sizes,
     skip_a_test_if_in_CI,
+    spawn_for_all_world_sizes,
 )
 
 if torch_version() >= (1, 8, 0):
