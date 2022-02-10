@@ -13,6 +13,7 @@ import torchvision
 import torchvision.transforms as transforms
 
 from fairscale.optim.layerwise_gradient_scaler import LayerwiseGradientScaler
+from fairscale.util.testing import skip_a_test_if_in_CI
 
 
 # Test: feed forward network
@@ -198,6 +199,7 @@ def train_vision_model(model: SimpleConvNet, per_layer_scaling=False):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 def test_vision_model() -> None:
+    skip_a_test_if_in_CI()
     # Remove randomness from various sources while testing.
     torch.use_deterministic_algorithms(True)  # type: ignore
     # set environment variable in CircleCI for test to pass: CUBLAS_WORKSPACE_CONFIG = :4096:8
