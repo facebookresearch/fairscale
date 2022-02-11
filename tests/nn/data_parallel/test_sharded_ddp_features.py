@@ -207,6 +207,7 @@ def run_test_two_inputs(rank, world_size, backend, device, temp_file_name, reduc
 @pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
 @pytest.mark.parametrize("backend", ["gloo", "nccl"])
 @pytest.mark.parametrize("device", available_devices)
+@skip_if_single_gpu
 def test_inputs(reduce_buffer_size, backend, device):
     # Check that the ShardedDDP wrapper accepts tuple(tensors) as inputs
     world_size = 2
