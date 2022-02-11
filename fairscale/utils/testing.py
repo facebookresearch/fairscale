@@ -745,3 +745,9 @@ def get_smi_memory() -> float:
             return float(toks[3])
     # If the process is not in the list, we are not using the GPU.
     return 0.0
+
+
+def skip_a_test_if_in_CI() -> None:
+    """Skip a test in circle CI"""
+    if os.path.exists("/home/circleci"):
+        pytest.skip("Sometimes a CI test failure is not reproducible locally, we skip them")
