@@ -205,7 +205,7 @@ def train_vision_model(model: SimpleConvNet, per_layer_scaling=False):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 def test_vision_model() -> None:
-    # The os.environ below doesn't seem to be enough if the test is run on CI with many other tests 
+    # The os.environ below doesn't seem to be enough if the test is run on CI with many other tests
     # together.
     # see: https://app.circleci.com/pipelines/github/facebookresearch/fairscale/4086/workflows/72b1470a-55f8-4a45-afe5-04641b093bef/jobs/45179/tests#failed-test-0
     # Skipping for now.
