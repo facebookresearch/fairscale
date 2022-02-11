@@ -367,13 +367,16 @@ class FullyShardedDataParallel(nn.Module):
         # In a unit test dummy enviromnent, the process_group_reduce_scatter can be None.
         if self.process_group_reduce_scatter is not None:
             reduce_scatter_group_size = self.process_group_reduce_scatter.size()
-            # Roll back to use the default process group for reduce scatter operation when the world size and reduce scatter process group size are differnt.
+            # Roll back to use the default process group for reduce scatter operation when
+            # the world size and reduce scatter process group size are differnt.
             if self.world_size != reduce_scatter_group_size:
                 self.process_group_reduce_scatter = self.process_group
                 logging.warn(
-                    "Rolled back to use the default process group for the reduce scatter operation because the reduce_scatter process group"
-                    f"size is {reduce_scatter_group_size}, which is different with the world size {self.world_size}. Please make sure the process_group"
-                    "parameter uses all the available ranks for the optimized performance."
+                    "Rolled back to use the default process group for the reduce scatter "
+                    "operation because the reduce_scatter process group"
+                    f"size is {reduce_scatter_group_size}, which is different with the "
+                    f"world size {self.world_size}. Please make sure the process_group"
+                    "parameter uses all the available ranks for the optimal performance."
                 )
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
         self.disable_reshard_on_root = disable_reshard_on_root
