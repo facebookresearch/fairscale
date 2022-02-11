@@ -1,3 +1,8 @@
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
+
 import logging
 import os
 from typing import Any, List, Tuple, Union
@@ -13,6 +18,7 @@ import torchvision
 import torchvision.transforms as transforms
 
 from fairscale.optim.layerwise_gradient_scaler import LayerwiseGradientScaler
+from fairscale.utils.testing import skip_a_test_if_in_CI
 
 
 # Test: feed forward network
@@ -199,8 +205,12 @@ def train_vision_model(model: SimpleConvNet, per_layer_scaling=False):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 def test_vision_model() -> None:
-    # TODO: improving downloading before re-enable this.
-    pytest.skip("skip flaky and downloading test")
+    # The os.environ below doesn't seem to be enough if the test is run on CI with many other tests 
+    # together.
+    # see: https://app.circleci.com/pipelines/github/facebookresearch/fairscale/4086/workflows/72b1470a-55f8-4a45-afe5-04641b093bef/jobs/45179/tests#failed-test-0
+    # Skipping for now.
+    # Also, TODO (Min): improving downloading code above before re-enable this.
+    skip_a_test_if_in_CI()
     # Remove randomness from various sources while testing.
     torch.use_deterministic_algorithms(True)  # type: ignore
     # set environment variable in CircleCI for test to pass: CUBLAS_WORKSPACE_CONFIG = :4096:8
