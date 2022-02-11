@@ -64,6 +64,7 @@ def load_data(model_type: str) -> Union[DataLoader, Tuple[Any, Any]]:
         torch.manual_seed(10)
         transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
+        # TODO: we should NOT do this download over and over again during test.
         train_ds = torchvision.datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
         train_ds_loader = torch.utils.data.DataLoader(train_ds, batch_size=128, shuffle=False, num_workers=2)
 
@@ -198,6 +199,8 @@ def train_vision_model(model: SimpleConvNet, per_layer_scaling=False):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 def test_vision_model() -> None:
+    # TODO: improving downloading before re-enable this.
+    pytest.skip("skip flaky and downloading test")
     # Remove randomness from various sources while testing.
     torch.use_deterministic_algorithms(True)  # type: ignore
     # set environment variable in CircleCI for test to pass: CUBLAS_WORKSPACE_CONFIG = :4096:8

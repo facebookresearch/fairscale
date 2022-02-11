@@ -27,7 +27,7 @@ def do_test_forward(device):
     gate = Top2Gate(4, 6).to(device)
     capacity = 2 * 12 // 6
     l_aux, combine_weights, dispatch_mask = gate(input)
-    assert pytest.approx(l_aux.item(), 0.0283)
+    assert pytest.approx(l_aux.item(), rel=0.01) == 0.0267, l_aux
     assert combine_weights.shape == (12, 6, 4)
     assert dispatch_mask.shape == (12, 6, 4)
     assert torch.equal(combine_weights.bool(), dispatch_mask)
@@ -35,9 +35,9 @@ def do_test_forward(device):
     assert torch.all(combine_weights >= 0.0)
     assert torch.all(combine_weights <= 1.0)
     weights_sum = torch.sum(combine_weights).item()
-    assert round(weights_sum) == pytest.approx(weights_sum)
+    assert round(weights_sum) == pytest.approx(weights_sum), weights_sum
     # For this random seed, we get 12 slots filled.
-    assert weights_sum == pytest.approx(12.0)
+    assert weights_sum == pytest.approx(12.0), weights_sum
 
 
 def test_forward_cpu():

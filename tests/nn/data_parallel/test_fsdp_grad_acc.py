@@ -13,7 +13,7 @@ from parameterized import parameterized
 import torch
 
 from fairscale.nn.data_parallel import FullyShardedDataParallel
-from fairscale.utils.testing import DummyProcessGroup, objects_are_equal
+from fairscale.utils.testing import DummyProcessGroup, make_cudnn_deterministic, objects_are_equal
 
 from .test_fsdp import DistributedTest, NestedWrappedModule, rename_test, spawn_and_init
 
@@ -64,6 +64,7 @@ class TestGradAcc(DistributedTest):
 
     @classmethod
     def _test_grad_acc(self, model, batch_dim, use_no_sync_context=True):
+        make_cudnn_deterministic()
         # Generate two input batches. We'll test that we get the same grads if
         # we train on them sequentially while accumulating grads (with no_sync
         # or without no_sync) vs. concatenating the batches and training in one go.

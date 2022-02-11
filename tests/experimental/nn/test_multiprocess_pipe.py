@@ -22,6 +22,7 @@ import torch.nn as nn
 
 from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
 from fairscale.utils import torch_version
+from fairscale.utils.testing import skip_if_single_gpu
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch_version() < (1, 9, 0),
@@ -103,6 +104,7 @@ def create(devices):
 
 
 @rpc_test()
+@skip_if_single_gpu
 def create_multiple_layers():
     model = [RemoteModuleParams(nn.Linear, (4, 4), {}), RemoteModuleParams(nn.ReLU, (), {})]
     pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=1, devices=["worker0/cpu", "worker0/cpu"])
@@ -110,6 +112,7 @@ def create_multiple_layers():
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
+@skip_if_single_gpu
 def create_multiple_workers(devices):
     model = [RemoteModuleParams(nn.Linear, (4, 4), {}), RemoteModuleParams(nn.ReLU, (), {})]
     pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=1, devices=devices[:2])
@@ -117,6 +120,7 @@ def create_multiple_workers(devices):
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
+@skip_if_single_gpu
 def parameter_rrefs(devices):
     model = [RemoteModuleParams(nn.Linear, (4, 4), {}), RemoteModuleParams(nn.ReLU, (), {})]
     pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=1, devices=devices[:2])
@@ -149,6 +153,7 @@ def forward_chunks(devices):
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 @pytest.mark.parametrize("checkpoint", ["never", "always", "except_last"])
+@skip_if_single_gpu
 def forward_multi(devices, checkpoint):
     device = devices[0].split("/")[1]
     torch.random.manual_seed(3)
@@ -166,6 +171,7 @@ def forward_multi(devices, checkpoint):
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
+@skip_if_single_gpu
 def backward(devices):
     device = devices[0].split("/")[1]
     torch.random.manual_seed(3)
@@ -183,6 +189,7 @@ def backward(devices):
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
+@skip_if_single_gpu
 def update(devices):
     device = devices[0].split("/")[1]
     torch.random.manual_seed(3)
@@ -223,6 +230,7 @@ def extract_partitions(graph: PipelineModulesGraph, pipeline: DistributedPipelin
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
+@skip_if_single_gpu
 def multi_input_multi_output_layers(devices):
     device = devices[0].split("/")[1]
     torch.random.manual_seed(3)
@@ -289,6 +297,7 @@ class ShardedLinearLayer(nn.Module):
 
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
+@skip_if_single_gpu
 def auto_graph_extract(devices):
     from fairscale.experimental.nn.distributed_pipeline.trace import make_graph
 
