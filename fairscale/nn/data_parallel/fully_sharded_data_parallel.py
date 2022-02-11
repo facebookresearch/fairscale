@@ -373,9 +373,9 @@ class FullyShardedDataParallel(nn.Module):
                 self.process_group_reduce_scatter = self.process_group
                 logging.warn(
                     "Rolled back to use the default process group for the reduce scatter "
-                    "operation because the reduce_scatter process group"
+                    "operation because the reduce_scatter process group "
                     f"size is {reduce_scatter_group_size}, which is different with the "
-                    f"world size {self.world_size}. Please make sure the process_group"
+                    f"world size {self.world_size}. Please make sure the process_group "
                     "parameter uses all the available ranks for the optimal performance."
                 )
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
