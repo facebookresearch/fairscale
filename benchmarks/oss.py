@@ -109,7 +109,8 @@ def validate_benchmark(measurements, final_loss, args, check_regression):
         assert max_memory < 1.05 * golden_data["reference_memory"], (
             f"Memory use regression detected: " f"{max_memory} vs. {1.05* golden_data['reference_memory']}"
         )
-        assert abs(cast(float, final_loss) - golden_data["reference_loss"]) < 1e-2, (
+        # any min_loss < than golden + epsilon is OK.
+        assert cast(float, final_loss) - golden_data["reference_loss"] < 1e-2, (
             f"Loss regression detected: " f"{final_loss} vs. {golden_data['reference_loss']}"
         )
         logging.info("[Regression Test] VALID")
