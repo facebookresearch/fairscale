@@ -2317,7 +2317,7 @@ class FullyShardedDataParallel(nn.Module):
 
         We also make rooms for the optimizer state on rank 0.
         """
-        # In PyTorch version 1.12, Adam's `step` state changed from an into to a singleton
+        # In PyTorch version 1.12, Adam's `step` state changed from an int to a singleton
         # tensor. We convert it back here. Otherwise, the step counter will be treated
         # like a singleton tensor and comparison with original state dict would fail.
         for _, bufs in osd["state"].items():
