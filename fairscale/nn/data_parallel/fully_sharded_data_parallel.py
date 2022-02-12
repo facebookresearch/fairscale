@@ -2312,6 +2312,20 @@ class FullyShardedDataParallel(nn.Module):
         return [m for m in self.modules() if isinstance(m, FullyShardedDataParallel)]
 
     def _remove_uncollectable_params_from_optim_state_dict(self, osd: Dict) -> Dict:
+        """Return a new state dict filtering out the ones like MoE layers, which has
+        ``no_broadcast_optim_state`` flag set.
+
+        We also make rooms for the optimizer state on rank 0.
+        """
+        # In PyTorch version 1.12, Adam's `step` state changed from an into to a singleton
+        # tensor. We convert it back here. Otherwise, the step counter will be treated
+        # like a singleton tensor and comparison with original state dict would fail.
+        for _, bufs in osd["state"].items():
+            if "step" in bufs.keys():
+                assert type(bufs["step"]) is int or ou.is_singleton_tensor(bufs["step"])
+                if ou.is_singleton_tensor(bufs["step"]):
+                    bufs["step"] = bufs["step"].item()
+        # Get uncollected_ids.
         uncollected_ids = [i for i, m in enumerate(self._fsdp_instances) if m.no_broadcast_optim_state]
         new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
         if self.rank == 0:

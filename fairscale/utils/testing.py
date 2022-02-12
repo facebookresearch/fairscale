@@ -141,8 +141,8 @@ def make_cudnn_deterministic() -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     # TF32 also make things nondeterministic. Disable it.
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False  # type: ignore
+    torch.backends.cudnn.allow_tf32 = False  # type: ignore
 
 
 def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "") -> bool:
