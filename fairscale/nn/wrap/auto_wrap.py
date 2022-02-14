@@ -18,7 +18,7 @@ def default_auto_wrap_policy(
     min_num_params: int = int(1e8),
     force_leaf_modules: Optional[Set[Type[nn.Module]]] = None,
     exclude_wrap_modules: Optional[Set[Type[nn.Module]]] = None,
-    skip_params_check_for_root: bool = True,
+    skip_params_check_for_root: bool = False,
 ) -> bool:
     """Default policy function for :func:`auto_wrap`.
 
