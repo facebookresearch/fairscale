@@ -801,8 +801,11 @@ class MixtureOfExperts(NestedWrappedModule):
 
         if wrapper_config is not None:
             # we create a process group of size 1 for the expert params
-            expert_group = torch.distributed.new_group([group.rank()])  # world size 1 means no shard
-            expert = FullyShardedDataParallel(expert, expert_group, **wrapper_config)
+            # we also need to pass that group as the reduce_scatter group.
+            expert_group = torch.distributed.new_group([group.rank()])
+            expert = FullyShardedDataParallel(
+                expert, process_group=expert_group, process_group_reduce_scatter=expert_group, **wrapper_config
+            )
 
             shared = FullyShardedDataParallel(shared, group, **wrapper_config)
 

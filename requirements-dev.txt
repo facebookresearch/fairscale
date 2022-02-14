@@ -14,9 +14,9 @@ mypy == 0.910
 pre-commit >= 2.15.0
 
 # Tools for unit tests & coverage.
-pytest == 5.4.1
-pytest-cov == 2.10.0
-pytest-timeout == 1.4.2
+pytest == 7.0.0
+pytest-cov == 3.0.0
+pytest-timeout == 2.1.0
 remote-pdb >= 2.1.0
 parameterized >= 0.8.1
 

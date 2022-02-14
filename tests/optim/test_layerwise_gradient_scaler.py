@@ -70,6 +70,7 @@ def load_data(model_type: str) -> Union[DataLoader, Tuple[Any, Any]]:
         torch.manual_seed(10)
         transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
+        # TODO: we should NOT do this download over and over again during test.
         train_ds = torchvision.datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
         train_ds_loader = torch.utils.data.DataLoader(train_ds, batch_size=128, shuffle=False, num_workers=2)
 
@@ -204,9 +205,11 @@ def train_vision_model(model: SimpleConvNet, per_layer_scaling=False):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda required")
 def test_vision_model() -> None:
-    # The os.environ below doesn't seem to be enough if the test is run on CI with many other tests together.
+    # The os.environ below doesn't seem to be enough if the test is run on CI with many other tests
+    # together.
     # see: https://app.circleci.com/pipelines/github/facebookresearch/fairscale/4086/workflows/72b1470a-55f8-4a45-afe5-04641b093bef/jobs/45179/tests#failed-test-0
     # Skipping for now.
+    # Also, TODO (Min): improving downloading code above before re-enable this.
     skip_a_test_if_in_CI()
     # Remove randomness from various sources while testing.
     torch.use_deterministic_algorithms(True)  # type: ignore

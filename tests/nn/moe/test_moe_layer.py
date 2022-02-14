@@ -13,6 +13,7 @@ import torch.multiprocessing as mp
 
 from fairscale.nn import MOELayer, Top2Gate
 from fairscale.utils import torch_version
+from fairscale.utils.testing import make_cudnn_deterministic
 
 pytestmark = pytest.mark.skipif(
     not (torch.cuda.is_available() and torch_version() >= (1, 8, 0)), reason="cuda and torch>=1.8.0 required"
@@ -68,6 +69,7 @@ def expert_params(device):
 @pg_test()
 @pytest.mark.parametrize("device", devices)
 def forward(device):
+    make_cudnn_deterministic()
     model_dim = 8
     num_experts = dist.get_world_size(dist.group.WORLD)
     input = torch.randn(4, 16, model_dim).to(device)
@@ -85,6 +87,7 @@ def forward(device):
 @pg_test()
 @pytest.mark.parametrize("device", devices)
 def forward_multi(device):
+    make_cudnn_deterministic()
     torch.set_printoptions(threshold=5000)
     num_local_experts = 4
     model_dim = 4
@@ -128,6 +131,7 @@ class RoundRobinGate(torch.nn.Module):
 @pg_test()
 @pytest.mark.parametrize("device", devices)
 def forward_routing(device):
+    make_cudnn_deterministic()
     model_dim = 8
     num_experts = dist.get_world_size()
     input = torch.randn(4, 16, model_dim).to(device)
@@ -149,6 +153,7 @@ def forward_routing(device):
 @pg_test()
 @pytest.mark.parametrize("device", devices)
 def forward_routing_multi(device):
+    make_cudnn_deterministic()
     model_dim = 8
     num_local_experts = 4
     num_experts = dist.get_world_size(dist.group.WORLD) * num_local_experts
@@ -174,6 +179,7 @@ def forward_routing_multi(device):
 @pg_test()
 @pytest.mark.parametrize("device", devices)
 def backward(device):
+    make_cudnn_deterministic()
     loss = torch.nn.MSELoss()
     model_dim = 8
     num_experts = dist.get_world_size(dist.group.WORLD)
