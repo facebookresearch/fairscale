@@ -91,16 +91,14 @@ class FSDP:
         }
 
     def get_golden_real_stats():
-        return {
-            "avg_wps": 703.778,
-            "std_dev_wps": 5.732,
-            "peak_mem_usage": [2320996352, 1396742144, 1396742144, 2340010496],
-        }
-
-    def get_golden_synthetic_stats():
-        # TODO(anj-s): Add support for synthetic regression benchmarks
         raise NotImplementedError("Synthetic data benchmarks are not supported.")
 
+    def get_golden_synthetic_stats():
+        return {
+            "avg_wps": 486.303,
+            "std_dev_wps": 71.307,
+            "peak_mem_usage": [5.5055*2**30, 5.5055*2**30, 5.5055*2**30, 5.5055*2**30],
+        }
 
 class Pipe:
     def get_model_config():

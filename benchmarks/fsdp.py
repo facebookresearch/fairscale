@@ -30,6 +30,37 @@ from fairscale.nn.data_parallel import OffloadConfig
 RPC_PORT = 29501
 
 
+def verify_peak_memory(rank, golden_config, std_dev):
+    logging.debug(
+        "Peak allocated bytes on cuda:0: {:1d}".format(torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"])
+    )
+    current_device_usage = torch.cuda.memory_stats(rank)["allocated_bytes.all.peak"]
+    golden_ref = golden_config["peak_mem_usage"][rank]
+    if not current_device_usage < golden_ref * std_dev:
+        raise RuntimeError(
+            "Peak memory usage for cuda device {:d} is {:d} which"
+            "is less than golden reference value of {:d}".format(rank, current_device_usage, golden_ref)
+        )
+
+
+def verify_lm_run(wps, golden_config, args):
+    """Verify that words per second for a given benchmark run matches the golden data."""
+
+    if torch.distributed.get_rank() == 0:
+        # Assert that words per second is within 3 standard deviations of the average
+        # of five golden runs
+        logging.info("Throughput(wps) is {:.2f}.".format(wps))
+        if not wps > (golden_config["avg_wps"] - (3 * golden_config["std_dev_wps"])):
+            raise RuntimeError(
+                "Throughput(wps):{:.2f} is below the golden threshold of an "
+                "average value of {:.2f} and standard dev of {:.2f}.".format(
+                    wps, golden_config["avg_wps"], golden_config["std_dev_wps"]
+                )
+            )
+
+    for i in range(4):
+        verify_peak_memory(i, golden_config, 1.1)
+
 def init_random_seed(seed: int):
 
     torch.manual_seed(seed)
@@ -222,7 +253,7 @@ def get_number_of_words(data):
 
 def benchmark_language_model(model_config, model, benchmark_config, model_specs, args):
     # TODO(anj): Uncomment and add a check for regression once we have a couple of runs.
-    # golden_config = get_golden_config(args.model_name, args)
+    golden_config = get_golden_config(args.model_name, args)
     epoch = benchmark_config["epochs"]
     start_time = time.time()
     if dist.get_rank() == dist.get_world_size() - 1:
@@ -241,6 +272,8 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
             dist.get_rank(), torch.cuda.memory_stats(dist.get_rank())["allocated_bytes.all.peak"] / 2 ** 30
         )
     )
+
+    verify_lm_run(wps, golden_config, args)
 
 
 def get_synthetic_dataloaders(args, device, benchmark_config, model_specs):
