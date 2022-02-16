@@ -774,7 +774,8 @@ class DummyDDP(nn.Module):
 
 
 class MixtureOfExperts(NestedWrappedModule):
-    def __init__(self, group, wrapper_config, checkpoint_act=False, delay_before_free_ms=0):
+    def __init__(self, group, wrapper_config, checkpoint_act=False, delay_before_free_ms=0,
+                 expert_group=None):
         super().__init__(group, wrapper_config)
         self.group = group
         self.delay_before_free_ms = delay_before_free_ms
@@ -800,9 +801,9 @@ class MixtureOfExperts(NestedWrappedModule):
             shared = checkpoint_wrapper(shared)
 
         if wrapper_config is not None:
-            # we create a process group of size 1 for the expert params
+            # we create a process group of size >= 1 for the expert params
             # we also need to pass that group as the reduce_scatter group.
-            expert_group = torch.distributed.new_group([group.rank()])
+            expert_group = expert_group or torch.distributed.new_group([group.rank()])
             expert = FullyShardedDataParallel(
                 expert, process_group=expert_group, process_group_reduce_scatter=expert_group, **wrapper_config
             )

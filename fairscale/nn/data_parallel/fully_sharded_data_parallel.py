@@ -2238,27 +2238,39 @@ class FullyShardedDataParallel(nn.Module):
             # param that has the optimizer state. So we handle it with the correct
             # parameter list.
             non_shared_params = cast(FullyShardedDataParallel, self._fsdp_instances[k]).non_shared_params()
+            non_shared_world_size = self._fsdp_instances[k].world_size
+            non_shared_process_group = self._fsdp_instances[k].process_group
+            if non_shared_world_size != self.world_size:
+                world_size = non_shared_world_size
+                process_group = non_shared_process_group
+            else:
+                world_size = self.world_size
+                process_group = self.process_group
+
             assert (
                 len(non_shared_params) == 1
             ), f"Only flatten param or a single non-shared param is supported: len={len(non_shared_params)}"
             desired_buffer_size = non_shared_params[0]._full_param_padded.size()
+            print(f"desired_buffer_size {desired_buffer_size}")
             buffer = None  # for sharded tensors
             singleton_buffer = None  # for singleton tensors
             for buffer_name, t in v.items():
+               
                 if torch.is_tensor(t):
                     t = t.to(self.compute_device)
 
                 if ou.is_singleton_tensor(t):
                     if singleton_buffer is None:
-                        singleton_buffer = list(t.new_zeros(self.world_size).chunk(self.world_size))
-                    dist.all_gather(singleton_buffer, t, group=self.process_group)
+                        singleton_buffer = list(t.new_zeros(world_size).chunk(world_size))
+                    dist.all_gather(singleton_buffer, t, group=process_group)
                     if self.rank == 0:
                         singleton_state[k][buffer_name] = [x.cpu().squeeze() for x in singleton_buffer]
                         assert ou.is_singleton_tensor(singleton_state[k][buffer_name][0])
                 elif torch.is_tensor(t):
                     if buffer is None:
-                        buffer = list(t.new_zeros(*desired_buffer_size).chunk(self.world_size))
-                    dist.all_gather(buffer, t, group=self.process_group)
+                        buffer = list(t.new_zeros(*desired_buffer_size).chunk(world_size))
+                    dist.all_gather(buffer, t, group=process_group)
+                    # print(f"desired_buffer_size {desired_buffer_size} buffer size {buffer[0].size()}")
                     if self.rank == 0:
                         gathered_state[k][buffer_name] = [x.cpu() for x in buffer]
                 elif self.rank == 0:  # Add non tensor state
@@ -2288,13 +2300,22 @@ class FullyShardedDataParallel(nn.Module):
         """
         if not self.flatten_parameters:
             raise NotImplementedError("optim state dict requires flatten_parameters=True")
-
         self._lazy_init()
         sd = self._remove_uncollectable_params_from_optim_state_dict(optim.state_dict())
         assert set(sd.keys()) == {"param_groups", "state"}, f'{set(sd.keys())} != {"param_groups", "state"}'
         assert len(sd["param_groups"]) == 1, "Param groups are not supported"
         # We use all_gather to consolidate OSD['state'] and broadcast to consolidate the other keys (like param_groups)
         state, singleton_state = self._gather_optim_state(sd.pop("state"))
+        for k, v in state.items():
+            for v1, v2 in v.items():
+                try:
+                    print(f"k {k} v {v1} {v2.size()}")
+                except AttributeError:
+                    try:
+                        print(f"k {k} v {v1} {v2[0].size()}")
+                    except AttributeError:
+                        print(f"k {k} v {v1} v2:{v2}")
+
         pad_info = self._broadcast_pad_info_to_r0()
         if self.rank != 0:
             return None
@@ -2362,12 +2383,17 @@ class FullyShardedDataParallel(nn.Module):
                 0,
                 len(instance_list),
             ), f'{len(full_optim_state_dict["state"])}, {len(instance_list)}'
-
+        if torch.distributed.get_rank() == 0:
+            keys = full_optim_state_dict["state"][2]["exp_avg"]
+            print(f"FSDP {keys.size()}")
+            
+            
         # get the portion of dict associated with the shard, in place
         for id, s in full_optim_state_dict["state"].items():
             for k, v in s.items():
                 if torch.is_tensor(v) and id not in ids_not_to_shard:
                     v_shard, _ = self._get_shard(v)
+                    print(f"v {v.size()} v_shard {v_shard.size()} {self.world_size}")
                 elif isinstance(v, list) and ou.is_singleton_tensor(v[0]):
                     # if we are resuming on larger world size, take first entry
                     v_shard = v[0] if self.rank >= len(v) else v[self.rank]
