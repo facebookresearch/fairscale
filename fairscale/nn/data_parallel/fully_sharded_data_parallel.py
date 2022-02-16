@@ -2255,7 +2255,7 @@ class FullyShardedDataParallel(nn.Module):
             buffer = None  # for sharded tensors
             singleton_buffer = None  # for singleton tensors
             for buffer_name, t in v.items():
-               
+
                 if torch.is_tensor(t):
                     t = t.to(self.compute_device)
 
@@ -2386,8 +2386,7 @@ class FullyShardedDataParallel(nn.Module):
         if torch.distributed.get_rank() == 0:
             keys = full_optim_state_dict["state"][2]["exp_avg"]
             print(f"FSDP {keys.size()}")
-            
-            
+
         # get the portion of dict associated with the shard, in place
         for id, s in full_optim_state_dict["state"].items():
             for k, v in s.items():

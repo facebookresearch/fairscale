@@ -774,8 +774,7 @@ class DummyDDP(nn.Module):
 
 
 class MixtureOfExperts(NestedWrappedModule):
-    def __init__(self, group, wrapper_config, checkpoint_act=False, delay_before_free_ms=0,
-                 expert_group=None):
+    def __init__(self, group, wrapper_config, checkpoint_act=False, delay_before_free_ms=0, expert_group=None):
         super().__init__(group, wrapper_config)
         self.group = group
         self.delay_before_free_ms = delay_before_free_ms

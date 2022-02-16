@@ -5,6 +5,7 @@
 import functools
 from time import time
 import unittest
+
 from parameterized import parameterized
 import torch
 from torch.optim import SGD, Adadelta, Adam  # type: ignore
@@ -12,7 +13,7 @@ from torch.optim import SGD, Adadelta, Adam  # type: ignore
 from fairscale.nn import FullyShardedDataParallel
 from fairscale.nn.data_parallel.fsdp_optim_utils import is_singleton_tensor
 from fairscale.utils.params import recursive_copy_to_device
-from fairscale.utils.testing import objects_are_equal, spawn_for_all_world_sizes, dist_init
+from fairscale.utils.testing import dist_init, objects_are_equal, spawn_for_all_world_sizes
 
 from .test_fsdp import (
     DistributedTest,
@@ -40,9 +41,10 @@ def assert_equal(a, b):
 def spawn_and_init_multiple_groups(fn, args=None, **spawn_kwargs):
     if args is None:
         args = ()
-    
+
     run_fn = functools.partial(init_and_run, fn, args)
     spawn_for_all_world_sizes(run_fn, **spawn_kwargs)
+
 
 def _find_my_group_index(grouped_ranks):
     my_rank = torch.distributed.get_rank()
@@ -51,9 +53,10 @@ def _find_my_group_index(grouped_ranks):
             return i
     raise RuntimeError
 
+
 def get_moe_group(moe_expert_count=2):
     if torch.distributed.is_initialized():
-        
+
         world_size = torch.distributed.get_world_size()
 
         # more experts than world size
@@ -65,10 +68,7 @@ def get_moe_group(moe_expert_count=2):
         else:
             assert world_size % moe_expert_count == 0
             ranks_per_group = world_size // moe_expert_count
-            moe_groups = [
-                [i + j * moe_expert_count for j in range(ranks_per_group)]
-                for i in range(moe_expert_count)
-            ]
+            moe_groups = [[i + j * moe_expert_count for j in range(ranks_per_group)] for i in range(moe_expert_count)]
 
         moe_pgs = [torch.distributed.new_group(g) for g in moe_groups]
 
@@ -98,7 +98,7 @@ class TestOptimizerUtils(DistributedTest):
         )
 
         spawn_and_init(test_fn, world_sizes=[min(torch.cuda.device_count(), 4)])
-    
+
     @parameterized.expand(
         [[SGD, False], [Adam, False]],
         name_func=rename_test,
@@ -108,14 +108,14 @@ class TestOptimizerUtils(DistributedTest):
             raise unittest.SkipTest("This test requires at least 4 GPUs.")
         config = {"mixed_precision": True, "flatten_parameters": True}
         config["compute_dtype"] = torch.float32
-        test_fn = functools.partial(
-            self._test_consolidated_optimizer, config, optim_fn=Adam, transformer=transformer
-        )
-        
+        test_fn = functools.partial(self._test_consolidated_optimizer, config, optim_fn=Adam, transformer=transformer)
+
         spawn_and_init_multiple_groups(test_fn, world_sizes=[min(torch.cuda.device_count(), 4)])
 
     @classmethod
-    def _test_consolidated_optimizer(self, config, rank, group, optim_fn=torch.optim.SGD, transformer=False, expert_group=None):
+    def _test_consolidated_optimizer(
+        self, config, rank, group, optim_fn=torch.optim.SGD, transformer=False, expert_group=None
+    ):
         """FSDP.gather_full_optim_state_dict() should return something very similar to optimizer.state_dict()"""
         # Establish reference behavior.
         if transformer:
@@ -123,8 +123,9 @@ class TestOptimizerUtils(DistributedTest):
             fsdp = self.get_wrapped_model(group, config=config).cuda()
         else:
             unwrapped_model = MixtureOfExperts(group, wrapper_config=None, expert_group=expert_group).cuda()
-            fsdp = FullyShardedDataParallel(MixtureOfExperts(group, wrapper_config=config,
-                                                             expert_group=expert_group)).cuda()
+            fsdp = FullyShardedDataParallel(
+                MixtureOfExperts(group, wrapper_config=config, expert_group=expert_group)
+            ).cuda()
 
         try:
             fsdp_optim = optim_fn(
