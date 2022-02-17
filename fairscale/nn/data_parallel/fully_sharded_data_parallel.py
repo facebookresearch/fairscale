@@ -1876,7 +1876,6 @@ class FullyShardedDataParallel(nn.Module):
                 self._cast_fp32_param_shards_to_fp16()
 
             if self.move_params_to_cpu:
-                # print(f"force_full_precision {force_full_precision}")
                 if force_full_precision:
                     # If the compute_dtype and storage dtype are the same,
                     # use pinned memory. Otherwise move p.data to the compute
