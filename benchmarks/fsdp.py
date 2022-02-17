@@ -338,7 +338,7 @@ def get_golden_config(model_name, args):
     """Return a dict with the golden data for throughput and memory usage."""
 
     if model_name == "lm":
-        return lm_wikitext2.get_golden_synthetic_stat()
+        return lm_wikitext2.get_golden_synthetic_stats()
     else:
         raise RuntimeError("Unrecognized args.model_mame " % args.model_name)
 
