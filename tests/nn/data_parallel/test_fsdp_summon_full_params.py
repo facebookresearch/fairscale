@@ -5,6 +5,7 @@
 
 import functools
 import gc
+import itertools
 import unittest
 
 from parameterized import parameterized
@@ -13,13 +14,17 @@ import torch
 
 from fairscale.utils.version import torch_version
 
-from .test_fsdp import CONFIG_OPTIONS, DistributedTest, rename_test, spawn_and_init
+from .test_fsdp import DistributedTest, rename_test, spawn_and_init
 
 
 def get_cuda_mem():
     torch.cuda.synchronize()
     gc.collect()
     return torch.cuda.memory_allocated()
+
+
+keys = ["reshard_after_forward", "mixed_precision", "flatten_parameters"]
+CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
 
 
 @pytest.mark.skipif(torch_version() < (1, 8, 0), reason="pytorch version >= 1.8.0 required")

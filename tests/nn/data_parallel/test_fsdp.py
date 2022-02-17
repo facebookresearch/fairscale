@@ -82,7 +82,7 @@ class DistributedTest(unittest.TestCase):
 
     @staticmethod
     def get_wrapped_model(group, cuda_first=False, config={}, **model_kwargs) -> FullyShardedDataParallel:
-        if config["offload_config"]:
+        if config.get("offload_config", False):
             return FullyShardedDataParallel(TransformerWithSharedParams(group, **model_kwargs), group, **config)
 
         if cuda_first:
