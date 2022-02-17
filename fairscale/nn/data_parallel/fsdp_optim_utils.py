@@ -119,7 +119,7 @@ def _unflatten_optim_state(
     if not combined_state:
         return {}, global_to_local_id
 
-    # copy non tensor state to all global entries
+    # copy non tensor state (like the "step" count) to all global entries
     unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_global_params))}
 
     if non_tensor_state[0].keys() == combined_state[0].keys():

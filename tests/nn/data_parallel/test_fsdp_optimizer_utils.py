@@ -25,11 +25,13 @@ from .test_fsdp import (
 )
 
 
-def first_tensor_numel(dct):
+def all_tensors_numel_except_for_step(dct):
+    """Compute the sum of numel from all tensors from a dict, except when the key is `step`."""
+    ret = 0
     for k, v in dct.items():
-        if torch.is_tensor(v):
-            return v.numel()
-    return 0
+        if k != "step" and torch.is_tensor(v):
+            ret += v.numel()
+    return ret
 
 
 def assert_equal(a, b):
@@ -124,8 +126,8 @@ class TestOptimizerUtils(DistributedTest):
         assert_equal(len(sd["state"]), len(unwrapped_sd["state"]))
         assert_equal(len(sd["param_groups"][0]["params"]), len(unwrapped_sd["param_groups"][0]["params"]))
         assert_equal(
-            sum([first_tensor_numel(v) for k, v in sd["state"].items()]),
-            sum([first_tensor_numel(v) for k, v in unwrapped_sd["state"].items()]),
+            sum([all_tensors_numel_except_for_step(v) for k, v in sd["state"].items()]),
+            sum([all_tensors_numel_except_for_step(v) for k, v in unwrapped_sd["state"].items()]),
         )
 
         original_shard_sd = fsdp_optim.state_dict()
@@ -134,8 +136,8 @@ class TestOptimizerUtils(DistributedTest):
         original_shard_sd = recursive_copy_to_device(original_shard_sd, non_blocking=False, device="cpu")
         # Before asserting that the dicts are equal, we check keys individually to allow nice tracebacks.
         assert_equal(
-            [first_tensor_numel(v) for k, v in shard_sd["state"].items()],
-            [first_tensor_numel(v) for k, v in original_shard_sd["state"].items()],
+            [all_tensors_numel_except_for_step(v) for k, v in shard_sd["state"].items()],
+            [all_tensors_numel_except_for_step(v) for k, v in original_shard_sd["state"].items()],
         )
         assert_equal(
             [v for k, v in shard_sd["param_groups"][0].items()],

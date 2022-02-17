@@ -819,7 +819,7 @@ def run_state_dict_distributed(rank, world_size, tempfile_name):
     dist.destroy_process_group()
 
 
-@skip_if_no_cuda
+@skip_if_single_gpu
 def test_state_dict_distributed():
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]

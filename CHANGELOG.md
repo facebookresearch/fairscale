@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   class separation margins and feature vector scaling to the standard
   output projection + cross-entropy loss. MEVO supported this with its
   memory saving techniques so that peak GPU memory is much reduced. [#916]
+- FSDP: Added skip_params_check_for_root flag to default_auto_wrap_policy which,
+  if set, wraps the root module regardless of how many unwrapped params there were
+  left after children were wrapped. [#930]
 
 ### Fixed
 - FSDP: fixing handling of internal states with state_dict and load_state_dict. [#922]

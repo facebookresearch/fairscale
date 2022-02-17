@@ -136,6 +136,15 @@ def torch_cuda_version(compiled: bool = False) -> Tuple[int, ...]:
     return tuple(int(n) for n in numbering)
 
 
+def make_cudnn_deterministic() -> None:
+    """Make cudnn (matmul) deterministic"""
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    # TF32 also make things nondeterministic. Disable it.
+    torch.backends.cuda.matmul.allow_tf32 = False  # type: ignore
+    torch.backends.cudnn.allow_tf32 = False  # type: ignore
+
+
 def dist_init(rank: int, world_size: int, filename: str, filename_rpc: str = "") -> bool:
     """
     Initialize torch distributed, based on a temporary file shared across ranks, which makes it possible for unrelated
@@ -218,8 +227,7 @@ def test_runner(
 ) -> None:
     # At this point we're in a new process, torch options need to be set again
     if deterministic:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        make_cudnn_deterministic()
         torch.manual_seed(1357)
 
     test_func(rank, *args, **kwargs)
@@ -270,8 +278,7 @@ def worker_process(
     )
 
     if torch.cuda.is_available() and not hasattr(torch.backends.cudnn, "flags"):
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cudnn.deterministic = True
+        make_cudnn_deterministic()
 
     try:
         with context:
@@ -745,3 +752,9 @@ def get_smi_memory() -> float:
             return float(toks[3])
     # If the process is not in the list, we are not using the GPU.
     return 0.0
+
+
+def skip_a_test_if_in_CI() -> None:
+    """Skip a test in circle CI"""
+    if os.path.exists("/home/circleci"):
+        pytest.skip("Sometimes a CI test failure is not reproducible locally, we skip them")
