@@ -242,10 +242,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
         raise RuntimeError(
             "Unable to benchmark on a single batch. Increase the size " " of the dataset and rerun the benchmark."
         )
-    if dist.get_rank() == dist.get_world_size() - 1:
-        return wps, loss.item()
-    else:
-        return 0.0, 0.0
+    return wps, loss.item()
 
 
 def get_number_of_words(data):
@@ -257,13 +254,13 @@ def benchmark_language_model(model_config, model, benchmark_config, model_specs,
     golden_config = get_golden_config(args.model_name, args)
     epoch = benchmark_config["epochs"]
     start_time = time.time()
-    if dist.get_rank() == dist.get_world_size() - 1:
+    if dist.get_rank() == 0:
         print("-" * 110)
         print("| start of epoch {:1d}".format(epoch))
         print("-" * 110)
     wps, loss = train(model_config, model, benchmark_config, model_specs, args)
     elapsed_time = time.time() - start_time
-    if dist.get_rank() == dist.get_world_size() - 1:
+    if dist.get_rank() == 0:
         print("-" * 110)
         print("| end of epoch {:1d} | time: {:5.2f}s | train loss {:5.2f} ".format(epoch, elapsed_time, loss))
         print("-" * 110)
