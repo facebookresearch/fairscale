@@ -58,8 +58,9 @@ def verify_lm_run(wps, golden_config, args):
                 )
             )
 
-    for i in range(4):
+    for i in range(torch.cuda.device_count()):
         verify_peak_memory(i, golden_config, 1.1)
+
 
 def init_random_seed(seed: int):
 

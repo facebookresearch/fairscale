@@ -563,15 +563,6 @@ class FullyShardedDataParallel(nn.Module):
         else:
             return self.params
 
-    def _apply(self, fn):  # type: ignore
-        if self.ssd_offload:
-            self.ssd_buffer.from_disk(self.buffer_size)
-
-            # The params are on disk and need to be moved to the CPU.
-            for p, handle in zip(self.params, self.ssd_buffer.get_tensors()):
-                p.data = handle.get_tensor().view(p._shard_size)  # type: ignore
-        return super()._apply(fn)  # type: ignore
-
     def apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":
         """
         Applies ``fn`` recursively to every submodule (as returned by
