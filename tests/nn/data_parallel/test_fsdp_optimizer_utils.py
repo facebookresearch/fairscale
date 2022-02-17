@@ -184,10 +184,10 @@ class TestOptimizerUtils(DistributedTest):
             orig_state = recursive_copy_to_device(unwrapped_sd["state"], non_blocking=False, device="cpu")
 
             assert_equal(len(sd_state.keys()), len(orig_state.keys()))
-            
+
             assert_equal(
-            sum([all_tensors_numel_except_for_step(v) for k, v in sd_state.items()]),
-            sum([all_tensors_numel_except_for_step(v) for k, v in orig_state.items()]),
+                sum([all_tensors_numel_except_for_step(v) for k, v in sd_state.items()]),
+                sum([all_tensors_numel_except_for_step(v) for k, v in orig_state.items()]),
             )
             return
 
