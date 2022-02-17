@@ -635,21 +635,9 @@ class TestNoGrad(DistributedTest):
         assert objects_are_equal(ref_output, no_grad_output, raise_exception=True)
 
 
-keys = ["flatten_parameters", "ssd_offload"]
-MODULE_CONFIG_OPTIONS = [[dict(zip(keys, config))] for config in itertools.product([True, False], repeat=len(keys))]
-
-
 class TestModuleProperties(DistributedTest):
-    @parameterized.expand(MODULE_CONFIG_OPTIONS, name_func=rename_test)
+    @parameterized.expand([[{"flatten_parameters": False}], [{"flatten_parameters": True}]], name_func=rename_test)
     def test_named_parameters(self, config):
-        if config["ssd_offload"] and not config["flatten_parameters"]:
-            pytest.skip("SSD offload does not support non flattened parameters.")
-        if config["ssd_offload"]:
-            offload_config = OffloadConfig(offload_type="ssd_offload")
-        else:
-            offload_config = None
-        del config["ssd_offload"]
-        config["offload_config"] = offload_config
         test_fn = functools.partial(self._test_named_params, config=config)
         spawn_and_init(test_fn)
 
@@ -665,12 +653,11 @@ class TestModuleProperties(DistributedTest):
 
         # Get the named parameters after wrapping to compare.
         after_wrap_params = model.named_parameters()
-
         if not config["flatten_parameters"]:
             for before_nm, after_nm in zip(before_wrap_params, after_wrap_params):
                 assert before_nm[0] == after_nm[0]
         else:
-            named_params_flat = [p for p in after_wrap_params][0][1]
+            named_params_flat = [p for p in after_wrap_params][0][0]
             assert "flat_param_0" in named_params_flat
 
         # Compare name and size under the `summon_full_params` context.
