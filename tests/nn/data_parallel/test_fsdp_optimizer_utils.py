@@ -179,6 +179,18 @@ class TestOptimizerUtils(DistributedTest):
                     msg = f"got device {t.device} for {k}: {buffer_name}. expected CPU"
                     assert t.device == torch.device("cpu"), msg
 
+        if expert_group:
+            sd_state = recursive_copy_to_device(sd["state"], non_blocking=False, device="cpu")
+            orig_state = recursive_copy_to_device(unwrapped_sd["state"], non_blocking=False, device="cpu")
+
+            assert_equal(len(sd_state.keys()), len(orig_state.keys()))
+            
+            assert_equal(
+            sum([all_tensors_numel_except_for_step(v) for k, v in sd_state.items()]),
+            sum([all_tensors_numel_except_for_step(v) for k, v in orig_state.items()]),
+            )
+            return
+
         unflat_state = sd["state"]
         assert "uncollected_local_ids" in sd
         shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
@@ -198,33 +210,16 @@ class TestOptimizerUtils(DistributedTest):
         assert_equal(shard_sd.keys(), original_shard_sd.keys())
         original_shard_sd = recursive_copy_to_device(original_shard_sd, non_blocking=False, device="cpu")
         # Before asserting that the dicts are equal, we check keys individually to allow nice tracebacks.
-        # assert_equal(
-        #     [all_tensors_numel_except_for_step(v) for k, v in shard_sd["state"].items()],
-        #     [all_tensors_numel_except_for_step(v) for k, v in original_shard_sd["state"].items()],
-        # )
+        assert_equal(
+            [all_tensors_numel_except_for_step(v) for k, v in shard_sd["state"].items()],
+            [all_tensors_numel_except_for_step(v) for k, v in original_shard_sd["state"].items()],
+        )
         assert_equal(
             [v for k, v in shard_sd["param_groups"][0].items()],
             [v for k, v in original_shard_sd["param_groups"][0].items()],
         )
         shard_state = shard_sd["state"]
         orig_state = original_shard_sd["state"]
-        # if torch.distributed.get_rank() == 0:
-        #     for k, v in shard_state.items():
-        #         for v1, v2 in v.items():
-        #             try:
-        #                 print(f"k {k} vk {v1} vv {v2.size()}")
-        #             except AttributeError:
-        #                 print(f"k {k} vk {v1} vv {v2}")
-        #                 continue
-        #     print("Original")
-        #     for k, v in orig_state.items():
-        #         for v1, v2 in v.items():
-        #             try:
-        #                 print(f"k {k} vk {v1} vv {v2.size()}")
-        #             except AttributeError:
-        #                 print(f"k {k} vk {v1} vv {v2}")
-        #                 continue
-        # print(f"shard {shard_state} orig_state {orig_state}")
         assert objects_are_equal(shard_sd["state"], original_shard_sd["state"])
         assert objects_are_equal({k: shard_sd[k] for k in original_shard_sd}, original_shard_sd)
 
