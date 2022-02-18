@@ -218,8 +218,6 @@ class TestOptimizerUtils(DistributedTest):
             [v for k, v in shard_sd["param_groups"][0].items()],
             [v for k, v in original_shard_sd["param_groups"][0].items()],
         )
-        shard_state = shard_sd["state"]
-        orig_state = original_shard_sd["state"]
         assert objects_are_equal(shard_sd["state"], original_shard_sd["state"])
         assert objects_are_equal({k: shard_sd[k] for k in original_shard_sd}, original_shard_sd)
 
