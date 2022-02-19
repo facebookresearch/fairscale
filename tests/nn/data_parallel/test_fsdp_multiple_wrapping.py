@@ -66,7 +66,7 @@ def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):
 # We use strings for precision and flatten instead of bool to
 # make the pytest output more readable.
 @skip_if_no_cuda
-@pytest.mark.parametrize("world_size", [1, 2])
+@pytest.mark.parametrize("world_size", [1, 2] if torch.cuda.device_count() > 1 else [1])
 @pytest.mark.parametrize("precision", ["full", "mixed"])
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])
 def test(world_size, precision, flatten):
