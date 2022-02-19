@@ -2240,6 +2240,8 @@ class FullyShardedDataParallel(nn.Module):
             non_shared_params = cast(FullyShardedDataParallel, self._fsdp_instances[k]).non_shared_params()
             non_shared_world_size = self._fsdp_instances[k].world_size
             non_shared_process_group = self._fsdp_instances[k].process_group
+            # This is the world size and process group of the FSDP submodule which can be
+            # different than the parent module.
             if non_shared_world_size != self.world_size:
                 world_size = non_shared_world_size
                 process_group = non_shared_process_group
