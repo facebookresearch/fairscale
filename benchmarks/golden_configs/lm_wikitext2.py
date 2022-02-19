@@ -97,8 +97,9 @@ class FSDP:
         return {
             "avg_wps": 486.303,
             "std_dev_wps": 71.307,
-            "peak_mem_usage": [5.5055*2**30, 5.5055*2**30, 5.5055*2**30, 5.5055*2**30],
+            "peak_mem_usage": [5.5055 * 2 ** 30, 5.5055 * 2 ** 30, 5.5055 * 2 ** 30, 5.5055 * 2 ** 30],
         }
+
 
 class Pipe:
     def get_model_config():
