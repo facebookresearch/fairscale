@@ -2304,7 +2304,6 @@ class FullyShardedDataParallel(nn.Module):
         assert len(sd["param_groups"]) == 1, "Param groups are not supported"
         # We use all_gather to consolidate OSD['state'] and broadcast to consolidate the other keys (like param_groups)
         state, singleton_state = self._gather_optim_state(sd.pop("state"))
-
         pad_info = self._broadcast_pad_info_to_r0()
         if self.rank != 0:
             return None

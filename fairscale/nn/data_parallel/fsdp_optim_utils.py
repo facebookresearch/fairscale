@@ -97,6 +97,7 @@ def _unflatten_optim_state(
     next_global_id = 0  # gets incremented
     pad_info = {id: [s[id][0] for s in world_pad_info] for id in combined_state}
     local_ids = [id for id in sorted(combined_state.keys())]
+
     # non_tensor_state refers to entries in sd[state][param_id] that are not tensors, like "step".
     # we check that these are identical across workers and then take the first
     non_tensor_state = [_extract_non_tensor_state(combined_state, id) for id in combined_state]
@@ -152,6 +153,7 @@ def _unflatten_optim_state(
                 global_id = local_to_global[local_id][0]
                 unflat_state[global_id][k] = flat_buffer
             unflat_state[global_id].update(singleton_state[local_id])
+
     return unflat_state, global_to_local_id
 
 
