@@ -150,6 +150,12 @@ run_offload_benchmark: &run_offload_benchmark
       command: |
         python benchmarks/experimental/offload.py --checkpoint_activation
 
+run_fsdp_benchmark: &run_fsdp_benchmark
+  - run:
+      name: Run FSDP Benchmark
+      command: |
+        python benchmarks/fsdp.py --use_synthetic_data
+
 run_pipe_benchmark: &run_pipe_benchmark
   - run:
       name: Run Pipe Benchmark
@@ -488,6 +494,8 @@ jobs:
       - <<: *run_oss_for_each
 
       - <<: *run_oss_gloo
+
+      - <<: *run_fsdp_benchmark
 
       - save_cache:
           paths:
