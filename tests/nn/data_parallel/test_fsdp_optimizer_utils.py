@@ -47,24 +47,25 @@ def spawn_and_init_multiple_groups(fn, args=None, **spawn_kwargs):
 
 
 def _find_my_group_index(grouped_ranks):
+    """Return the index corresponding to the MoE group of the current process."""
     my_rank = torch.distributed.get_rank()
     for i, group in enumerate(grouped_ranks):
         if my_rank in group:
             return i
-    raise RuntimeError
+    raise RuntimeError(f"Unable to find process rank {my_rank} in the set of grouped ranks {grouped_ranks}.")
 
 
 def get_moe_group(moe_expert_count=2):
+    """Return a process group for initializing a MoE layer."""
     if torch.distributed.is_initialized():
-
         world_size = torch.distributed.get_world_size()
 
-        # more experts than world size
+        # If you have more experts than the world size.
         if world_size <= moe_expert_count:
             assert moe_expert_count % world_size == 0
             moe_groups = [[i] for i in range(world_size)]
 
-        # larger world than num experts
+        # If you have a larger world size than experts.
         else:
             assert world_size % moe_expert_count == 0
             ranks_per_group = world_size // moe_expert_count
@@ -72,6 +73,7 @@ def get_moe_group(moe_expert_count=2):
 
         moe_pgs = [torch.distributed.new_group(g) for g in moe_groups]
 
+        # Find the index in the set of moe_groups which contains the current rank.
         my_group_idx = _find_my_group_index(moe_groups)
         return moe_pgs[my_group_idx]
     else:
@@ -79,9 +81,11 @@ def get_moe_group(moe_expert_count=2):
 
 
 def init_and_run(fn, args, rank, world_size, filename, filename_rpc):
+    """Initialize and run the unit test for testing replicated MoE groups."""
     dist_init(rank, world_size, filename, filename_rpc)
     torch.cuda.set_device(rank)
     group = torch.distributed.new_group()
+    # Specify the moe_group used to initialize the MoE layers with.
     fn(rank, group, *args, expert_group=get_moe_group())
 
 

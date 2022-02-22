@@ -2238,16 +2238,10 @@ class FullyShardedDataParallel(nn.Module):
             # param that has the optimizer state. So we handle it with the correct
             # parameter list.
             non_shared_params = cast(FullyShardedDataParallel, self._fsdp_instances[k]).non_shared_params()
+            # This is the world size and process group of the FSDP submodule which can be
+            # different than the parent module. For example, when FSDP is used with MoE.
             non_shared_world_size = self._fsdp_instances[k].world_size
             non_shared_process_group = self._fsdp_instances[k].process_group
-            # This is the world size and process group of the FSDP submodule which can be
-            # different than the parent module.
-            if non_shared_world_size != self.world_size:
-                world_size = non_shared_world_size
-                process_group = non_shared_process_group
-            else:
-                world_size = self.world_size
-                process_group = self.process_group
 
             assert (
                 len(non_shared_params) == 1
@@ -2256,21 +2250,20 @@ class FullyShardedDataParallel(nn.Module):
             buffer = None  # for sharded tensors
             singleton_buffer = None  # for singleton tensors
             for buffer_name, t in v.items():
-
                 if torch.is_tensor(t):
                     t = t.to(self.compute_device)
 
                 if ou.is_singleton_tensor(t):
                     if singleton_buffer is None:
-                        singleton_buffer = list(t.new_zeros(world_size).chunk(world_size))
-                    dist.all_gather(singleton_buffer, t, group=process_group)
+                        singleton_buffer = list(t.new_zeros(non_shared_world_size).chunk(non_shared_world_size))
+                    dist.all_gather(singleton_buffer, t, group=non_shared_process_group)
                     if self.rank == 0:
                         singleton_state[k][buffer_name] = [x.cpu().squeeze() for x in singleton_buffer]
                         assert ou.is_singleton_tensor(singleton_state[k][buffer_name][0])
                 elif torch.is_tensor(t):
                     if buffer is None:
-                        buffer = list(t.new_zeros(*desired_buffer_size).chunk(world_size))
-                    dist.all_gather(buffer, t, group=process_group)
+                        buffer = list(t.new_zeros(*desired_buffer_size).chunk(non_shared_world_size))
+                    dist.all_gather(buffer, t, group=non_shared_process_group)
                     if self.rank == 0:
                         gathered_state[k][buffer_name] = [x.cpu() for x in buffer]
                 elif self.rank == 0:  # Add non tensor state
@@ -2300,6 +2293,7 @@ class FullyShardedDataParallel(nn.Module):
         """
         if not self.flatten_parameters:
             raise NotImplementedError("optim state dict requires flatten_parameters=True")
+
         self._lazy_init()
         sd = self._remove_uncollectable_params_from_optim_state_dict(optim.state_dict())
         assert set(sd.keys()) == {"param_groups", "state"}, f'{set(sd.keys())} != {"param_groups", "state"}'
