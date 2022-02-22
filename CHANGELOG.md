@@ -17,7 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   if set, wraps the root module regardless of how many unwrapped params there were
   left after children were wrapped. [#930]
 - FSDP: Add support for saving optimizer state when using expert replicas with FSDP.
-  
 
 ## [0.4.5] - 2022-01-14
 
