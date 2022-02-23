@@ -481,7 +481,7 @@ class TestReduceScatterProcessGroup(DistributedTest):
             return FullyShardedDataParallel(model, group, **config)
 
 
-@pytest.mark.skip(reasone="Recently flaky and not reproducible locally.")
+@pytest.mark.skip(reason="Recently flaky and not reproducible locally.")
 class TestSerialization(DistributedTest):
     @parameterized.expand([[False, False], [True, False], [True, True], [False, True]], name_func=rename_test)
     def test_pickle(self, mixed_precision, cpu_offload):
