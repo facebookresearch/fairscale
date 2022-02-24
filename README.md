@@ -20,6 +20,10 @@ FairScale was designed with the following values in mind:
 
 * **Performance** - FairScale APIs provide the best performance in terms of scaling and efficiency.
 
+## Watch Introductory Video
+
+[![Explain Like I’m 5: FairScale](https://img.youtube.com/vi/oDt7ebOwWIc/0.jpg)](https://www.youtube.com/watch?v=oDt7ebOwWIc)
+
 ## What's New:
 
 * January 2022 [fairscale 0.4.5 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.5).
