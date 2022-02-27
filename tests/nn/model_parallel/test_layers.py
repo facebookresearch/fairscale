@@ -1,5 +1,3 @@
-# coding=utf-8
-
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 #
 # This source code is licensed under the BSD license found in the
@@ -136,7 +134,7 @@ def run_test_initialize_affine_weight(rank, model_parallel_size, filename, filen
             torch.distributed.get_rank(), error
         )
     )
-    assert error < 1.0e-6
+    assert error < 1.0e-6, error
 
     # ------------
     # Row parallel
@@ -157,7 +155,7 @@ def run_test_initialize_affine_weight(rank, model_parallel_size, filename, filen
     print(
         "   row parallel max error (should be zero) on global rank {}: {}".format(torch.distributed.get_rank(), error)
     )
-    assert error < 1.0e-6
+    assert error < 1.0e-6, error
 
     # Reset groups
     mpu.destroy_model_parallel()
@@ -217,18 +215,18 @@ def run_test_column_parallel_linear(rank, model_parallel_size, filename, filenam
     error = my_dLdA.sub(linear_layer.weight.grad).abs().max()
     torch.distributed.barrier()
     print("   error in dLdA on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 1.0e-6
+    assert error < 1.0e-6, error
 
     my_dLdb = torch.split(dLdb, output_size_coeff, dim=0)[rank].contiguous().clone()
     error = my_dLdb.sub(linear_layer.bias.grad).abs().max()
     torch.distributed.barrier()
     print("   error in dLdb on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 1.0e-6
+    assert error < 1.0e-6, error
 
     error = dLdX.sub(identity_layer.weight.grad).abs().max()
     torch.distributed.barrier()
     print("   error in dLdX on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 1.0e-6
+    assert error < 1.0e-6, error
 
     # Reset groups
     mpu.destroy_model_parallel()
@@ -278,17 +276,17 @@ def run_test_row_parallel_linear(rank, model_parallel_size, filename, filename_r
     error = my_dLdA.sub(linear_layer.weight.grad).abs().max()
     torch.distributed.barrier()
     print("   error in dLdA on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 1.0e-6
+    assert error < 1.0e-6, error
 
     error = dLdb.sub(linear_layer.bias.grad).abs().max()
     torch.distributed.barrier()
     print("   error in dLdb on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 1.0e-6
+    assert error < 1.0e-6, error
 
     error = dLdX.sub(identity_layer.weight.grad).abs().max()
     torch.distributed.barrier()
     print("   error in dLdX on global rank {}: {}".format(torch.distributed.get_rank(), error))
-    assert error < 1.0e-6
+    assert error < 1.0e-6, error
 
     # Reset groups
     mpu.destroy_model_parallel()

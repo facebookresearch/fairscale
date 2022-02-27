@@ -21,7 +21,7 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from fairscale.optim import AdaScale
 from fairscale.utils.golden_testing_data import adascale_test_data
-from fairscale.utils.testing import skip_if_no_cuda
+from fairscale.utils.testing import make_cudnn_deterministic, skip_if_no_cuda
 from fairscale.utils.testing_memory import find_tensor_by_shape
 
 
@@ -63,6 +63,7 @@ def test_loss_accum_cpu():
 @pytest.mark.parametrize("test_case", adascale_test_data)
 def test_grad_accum(test_case, cpu):
     """Test the basic functionality on CPU/GPU with gradient accumulation without DDP"""
+    make_cudnn_deterministic()
     model = Linear(2, 2, bias=True)
     if not cpu:
         if torch.cuda.device_count() < 1:
