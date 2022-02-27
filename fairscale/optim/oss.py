@@ -109,7 +109,7 @@ class OSS(Optimizer):
             degradation in terms of accuracy.
         force_broadcast_object (bool):
             If True, '_broadcast_object' will be used for rebuilding the sharded optimizer.
-            If False, whether to use '_broadcast_object' or 'dist.broadcast_object_list' will be determined by GPU capabilities. 
+            If False, whether to use '_broadcast_object' or 'dist.broadcast_object_list' will be determined by GPU capabilities.
             This feature is needed since some newer GPUs still get some memory issues when applying dist.broadcast_object_list.
 
     .. warning: the communication patterns that OSS use depend on the "trainability" graph,
@@ -132,7 +132,7 @@ class OSS(Optimizer):
         group: Optional[Any] = None,
         broadcast_buffer_size: int = -1,
         broadcast_fp16: bool = False,
-        force_broadcast_object: bool = False, 
+        force_broadcast_object: bool = False,
         **default: Any,
     ):
 
