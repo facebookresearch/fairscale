@@ -2070,7 +2070,8 @@ class FullyShardedDataParallel(nn.Module):
                 param_metadata.append(metadata)
 
         buffer_names = [_clean_path(buffer_name) for buffer_name, _ in self.named_buffers(recurse=True)]
-        return dict(param_metadata=param_metadata, buffer_names=buffer_names)
+        global_pad_info = self._broadcast_pad_info_to_r0()
+        return dict(param_metadata=param_metadata, buffer_names=buffer_names, global_pad_info=global_pad_info)
 
     @staticmethod
     def consolidate_shard_weights(
