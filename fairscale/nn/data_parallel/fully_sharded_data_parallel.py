@@ -2379,9 +2379,8 @@ class FullyShardedDataParallel(nn.Module):
         ids_not_to_shard = copy.deepcopy(full_optim_state_dict["uncollected_local_ids"])
         if self.flatten_parameters:
             full_optim_state_dict = ou.flatten_optim_state_dict(full_optim_state_dict)
-            assert len(full_optim_state_dict["state"]) in (
-                0,
-                len(instance_list),
+            assert len(full_optim_state_dict["state"]) < len(
+                instance_list
             ), f'{len(full_optim_state_dict["state"])}, {len(instance_list)}'
 
         # get the portion of dict associated with the shard, in place

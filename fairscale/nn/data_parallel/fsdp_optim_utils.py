@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 """These functions are used by FullyShardedDataParallel to help consolidate and shard optimizer states."""
 import copy
+from itertools import groupby
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Tuple, cast
 
 import torch
@@ -20,9 +21,11 @@ UNFLAT_RETURN_KEYS = {"state", "param_groups", "uncollected_local_ids", "param_i
 def flatten_optim_state_dict(sd: Dict) -> Dict:
     """Shard a full optimizer state dict (called by FSDP.get_shard_from_optim_state_dict)"""
     param_id_map = sd["param_id_map"]
-    num_local_params = len(set(param_id_map.values()))
+    local_ids = set(param_id_map.values())
+    if None in local_ids:
+        local_ids.remove(None)
     if sd["state"]:
-        new_state: Dict = {local_id: {} for local_id in range(num_local_params)}
+        new_state: Dict = {local_id: {} for local_id in local_ids}
         singleton_state: Dict = copy.deepcopy(new_state)
     else:
         new_state = {}
@@ -55,7 +58,10 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
 
     # add pointers from the `params` dict.
     for pg_id, _ in enumerate(sd["param_groups"]):
-        # TODO: this list could be huge. Can we avoid materializing?
+        # The values() list may look like [0,0,None,None,2,2]. We use
+        # groupby to remove the duplicates and then count the length of
+        # resulting iter.
+        num_local_params = sum(1 for _ in groupby(param_id_map.values()))
         new_sd["param_groups"][pg_id]["params"] = list(range(num_local_params))
 
     return new_sd
@@ -111,7 +117,7 @@ def _unflatten_optim_state(
 
     # non_tensor_state refers to entries in sd[state][param_id] that are not tensors, like "step".
     # we check that these are identical across workers and then take the first
-    non_tensor_state = [_extract_non_tensor_state(combined_state, id) for id in combined_state]
+    non_tensor_state = {id: _extract_non_tensor_state(combined_state, id) for id in combined_state}
 
     # Local corresponds to flattened, global corresponds to unflattened.
     # Casting needed only for mypy.
@@ -135,9 +141,8 @@ def _unflatten_optim_state(
             #    1         0        FC1's bias, first flat buffer
             #    2         None     FC2's weight, no flat state
             #    3         None     FC2's bias, no flat state
-            #
-            # Note, this assumes the unused params in at the end of
-            # the param list. Otherwise, this won't work.
+            #    4         2        FC3's weight, second flat buffer (but with id 2)
+            #    5         2        FC3's bias, second flat buffer (but with id 2)
             global_to_local_id[next_global_id] = local_id if local_id in local_ids else None
             next_global_id += 1
     if not combined_state:
@@ -145,6 +150,11 @@ def _unflatten_optim_state(
 
     # copy non tensor state (like the "step" count) to all global entries
     unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_global_params))}
+
+    # remove the global entries that don't have optim state.
+    for g, l in global_to_local_id.items():
+        if l is None:
+            del unflat_state[g]
 
     if non_tensor_state[0].keys() == combined_state[0].keys():
         # Early return if there is no tensors in the state dict.
