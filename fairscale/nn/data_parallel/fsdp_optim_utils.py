@@ -91,7 +91,18 @@ def _unflatten_optim_state(
     world_pad_info: List[List[List[int]]],
     singleton_state: Dict[int, Dict],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
-    """Convert optimizer state for flattened parameters into original, unflatten ones."""
+    """ Convert optimizer state for flattened parameters into original, unflatten ones.
+
+        Args:
+            combined_state: all-gathered state with tensors
+            instance_list: list of FSDP wrapper object instances
+            world_pad_info: [rank][fsdp_instance_id][bytes_padded_per_param]
+            singleton_state: all-gathered dimension-less tensors
+
+        Returns:
+            state: unflatten state dict
+            idx_mapping: a mapping from global ID to local ID
+    """
     # local ids are the keys in the current state (combined_state), (usually fewer)
     # global ids will be the keys in the unflattened state
     next_global_id = 0  # gets incremented
@@ -114,7 +125,20 @@ def _unflatten_optim_state(
     global_to_local_id = {}
     for local_id, num_unflat in enumerate(num_global_params):
         for _ in range(num_unflat):
-            global_to_local_id[next_global_id] = local_id
+            # Some params could be unused, which means the optimizer
+            # hasn't created their state. Therefore, `local_id` obtained
+            # by enumerating the params above could be out of the range
+            # of keys in `combined_state` above. Here is an example:
+            #
+            #    global    local    notes
+            #    0         0        FC1's weight, first flat buffer
+            #    1         0        FC1's bias, first flat buffer
+            #    2         None     FC2's weight, no flat state
+            #    3         None     FC2's bias, no flat state
+            #
+            # Note, this assumes the unused params in at the end of
+            # the param list. Otherwise, this won't work.
+            global_to_local_id[next_global_id] = local_id if local_id in local_ids else None
             next_global_id += 1
     if not combined_state:
         return {}, global_to_local_id
@@ -123,11 +147,13 @@ def _unflatten_optim_state(
     unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_global_params))}
 
     if non_tensor_state[0].keys() == combined_state[0].keys():
+        # Early return if there is no tensors in the state dict.
         return unflat_state, global_to_local_id
 
     local_to_global: Dict[int, List] = {i: [] for i in local_ids}
     for g, l in global_to_local_id.items():
-        local_to_global[l].append(g)
+        if l is not None:
+            local_to_global[l].append(g)
     # loop over parameters in state.
     # Tensor state will be padded, concatenated, and restored to original shape with FlattenParamsWrapper.get_views
     # get_views returns multiple tensors, each of which is a new parameter with a new "global" id.
@@ -165,7 +191,17 @@ def build_unflat_state_dict(
     uncollected_opt_state: Dict[int, Dict],
     param_groups: List[Dict],
 ) -> Dict:
-    """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts from each rank."""
+    """ Build an unflattened optimizer state dict given a list of flattened optimizer state dicts
+        from each rank. This is only called on rank 0.
+
+        Args:
+            instance_list: list of FSDP wrapper objects
+            world_pad_info: [rank][fsdp_instance_id][bytes_padded_per_param]
+            state: all-gathered state_dict
+            singleton_state: all-gathered singleton_state (dimensionless tensors)
+            uncollected_opt_state: non-tensor and not-gathered state
+            param_groups: the original rank 0's sd["param_groups"]
+    """
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)
 
