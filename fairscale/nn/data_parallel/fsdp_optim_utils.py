@@ -91,17 +91,17 @@ def _unflatten_optim_state(
     world_pad_info: List[List[List[int]]],
     singleton_state: Dict[int, Dict],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
-    """ Convert optimizer state for flattened parameters into original, unflatten ones.
+    """Convert optimizer state for flattened parameters into original, unflatten ones.
 
-        Args:
-            combined_state: all-gathered state with tensors
-            instance_list: list of FSDP wrapper object instances
-            world_pad_info: [rank][fsdp_instance_id][bytes_padded_per_param]
-            singleton_state: all-gathered dimension-less tensors
+    Args:
+        combined_state: all-gathered state with tensors
+        instance_list: list of FSDP wrapper object instances
+        world_pad_info: [rank][fsdp_instance_id][bytes_padded_per_param]
+        singleton_state: all-gathered dimension-less tensors
 
-        Returns:
-            state: unflatten state dict
-            idx_mapping: a mapping from global ID to local ID
+    Returns:
+        state: unflatten state dict
+        idx_mapping: a mapping from global ID to local ID
     """
     # local ids are the keys in the current state (combined_state), (usually fewer)
     # global ids will be the keys in the unflattened state
@@ -191,16 +191,16 @@ def build_unflat_state_dict(
     uncollected_opt_state: Dict[int, Dict],
     param_groups: List[Dict],
 ) -> Dict:
-    """ Build an unflattened optimizer state dict given a list of flattened optimizer state dicts
-        from each rank. This is only called on rank 0.
+    """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts
+    from each rank. This is only called on rank 0.
 
-        Args:
-            instance_list: list of FSDP wrapper objects
-            world_pad_info: [rank][fsdp_instance_id][bytes_padded_per_param]
-            state: all-gathered state_dict
-            singleton_state: all-gathered singleton_state (dimensionless tensors)
-            uncollected_opt_state: non-tensor and not-gathered state
-            param_groups: the original rank 0's sd["param_groups"]
+    Args:
+        instance_list: list of FSDP wrapper objects
+        world_pad_info: [rank][fsdp_instance_id][bytes_padded_per_param]
+        state: all-gathered state_dict
+        singleton_state: all-gathered singleton_state (dimensionless tensors)
+        uncollected_opt_state: non-tensor and not-gathered state
+        param_groups: the original rank 0's sd["param_groups"]
     """
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)
