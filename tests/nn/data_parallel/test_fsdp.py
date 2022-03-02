@@ -466,7 +466,6 @@ class TestParamInit(DistributedTest):
 class TestReduceScatterProcessGroup(DistributedTest):
     def test_reduce_scatter_process_group_size(self):
         """Ensure that reduce_scatter_process_group same size with the world size."""
-        return
         test_fn = functools.partial(self._test_reduce_scatter_process_group_size, config={})
         spawn_and_init(test_fn, world_sizes=[2])
 
