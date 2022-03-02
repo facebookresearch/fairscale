@@ -2071,6 +2071,7 @@ class FullyShardedDataParallel(nn.Module):
 
         buffer_names = [_clean_path(buffer_name) for buffer_name, _ in self.named_buffers(recurse=True)]
         global_pad_info = self._broadcast_pad_info_to_r0()
+
         return dict(param_metadata=param_metadata, buffer_names=buffer_names, global_pad_info=global_pad_info)
 
     @staticmethod
@@ -2222,8 +2223,7 @@ class FullyShardedDataParallel(nn.Module):
             else:
                 pad_info = [[0]] * len(my_pad_info)
             dist.broadcast_object_list(pad_info, src=rank, group=self.process_group)
-            if self.rank == 0:
-                world_pad_info.append(pad_info)
+            world_pad_info.append(pad_info)
         return world_pad_info
 
     def _gather_optim_state(
