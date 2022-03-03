@@ -21,6 +21,7 @@ UNFLAT_RETURN_KEYS = {"state", "param_groups", "uncollected_local_ids", "param_i
 def flatten_optim_state_dict(sd: Dict) -> Dict:
     """Shard a full optimizer state dict (called by FSDP.get_shard_from_optim_state_dict)"""
     param_id_map = sd["param_id_map"]
+    # Get a set of local ids, like {0, None, 2}, then we remove None from it.
     local_ids = set(param_id_map.values())
     if None in local_ids:
         local_ids.remove(None)
@@ -102,7 +103,7 @@ def _unflatten_optim_state(
     Args:
         combined_state: all-gathered state with tensors
         instance_list: list of FSDP wrapper object instances
-        world_pad_info: [rank][fsdp_instance_id][bytes_padded_per_param]
+        world_pad_info: [param_id][fsdp_instance_id][bytes_padded_per_rank]
         singleton_state: all-gathered dimension-less tensors
 
     Returns:
@@ -151,7 +152,9 @@ def _unflatten_optim_state(
     # copy non tensor state (like the "step" count) to all global entries
     unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_global_params))}
 
-    # remove the global entries that don't have optim state.
+    # remove the global entries that don't have optim state because pytorch
+    # optimizer's state_dict() function returns a state_dict without the missing
+    # param, so we shouldn't have things like "1:{}" for missing params.
     for g, l in global_to_local_id.items():
         if l is None:
             del unflat_state[g]
@@ -206,11 +209,14 @@ def build_unflat_state_dict(
 
     Args:
         instance_list: list of FSDP wrapper objects
-        world_pad_info: [rank][fsdp_instance_id][bytes_padded_per_param]
-        state: all-gathered state_dict
+        world_pad_info: [param_id][fsdp_instance_id][bytes_padded_per_rank]
+        state: all-gathered combined/local/flatten state_dict
         singleton_state: all-gathered singleton_state (dimensionless tensors)
         uncollected_opt_state: non-tensor and not-gathered state
         param_groups: the original rank 0's sd["param_groups"]
+
+    Returns:
+        dict: an unflattened, nonsharded optimizer state, as if FSDP was not there.
     """
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)

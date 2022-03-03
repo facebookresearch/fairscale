@@ -908,7 +908,7 @@ class FullyShardedDataParallel(nn.Module):
         """
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        is_uninitialized = self._is_root is None
+        is_uninitialized = self._is_root is None  # See comment below on why we use this.
         self._lazy_init()
 
         def maybe_cast_buffers(dtype: Optional[torch.dtype] = None) -> None:
@@ -1007,7 +1007,7 @@ class FullyShardedDataParallel(nn.Module):
     def load_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
-        is_uninitialized = self._is_root is None
+        is_uninitialized = self._is_root is None  # See comment below on why we use this.
         sd = self._load_state_dict(state_dict, strict)
         # We shouldn't change the init state in case this was an inner module and
         # users simply wanted to load_state_dict before training.
@@ -2379,6 +2379,8 @@ class FullyShardedDataParallel(nn.Module):
         ids_not_to_shard = copy.deepcopy(full_optim_state_dict["uncollected_local_ids"])
         if self.flatten_parameters:
             full_optim_state_dict = ou.flatten_optim_state_dict(full_optim_state_dict)
+            # Due to unused params, the length of the state can be anywhere between
+            # 0 and number of params/fsdp_instance.
             assert len(full_optim_state_dict["state"]) <= len(
                 instance_list
             ), f'{len(full_optim_state_dict["state"])}, {len(instance_list)}'

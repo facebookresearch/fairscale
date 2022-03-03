@@ -239,17 +239,11 @@ class TestOptimizerUtils(DistributedTest):
     def _test_model_with_unused_params(self, rank, pg, wrap_l2):
         model = ModelWithUnusedParams(wrap_l2).cuda()
         data = torch.rand(4).cuda().requires_grad_(True)
-        if rank == 0:
-            print(model)
         model = FullyShardedDataParallel(model)
-        for p in model.parameters():
-            print(p.shape, p.grad)
         optim = SGD(model.parameters(), momentum=0.9, lr=0.1)
         out = model(data).sum()
         out.backward()
         optim.step()
-        for p in model.parameters():
-            print(p.shape, p.grad.shape if p.grad is not None else p.grad)
         model.zero_grad(set_to_none=True)
         sd = model.gather_full_optim_state_dict(optim)
         if rank == 0:
@@ -289,6 +283,10 @@ class ModelWithUnusedParams(nn.Module):
         # wrapping it.
         self.l2 = nn.Linear(4, 4)
         if wrap_l2:
+            # When wrapping happens, the unused param will be in the middle
+            # of the param list (for optimizer state dict), not at the
+            # end. This way, we can test the handling code in more corner
+            # cases.
             self.l2 = FullyShardedDataParallel(self.l2)
 
     def forward(self, x):
