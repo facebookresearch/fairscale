@@ -106,7 +106,7 @@ def _unflatten_optim_state(
         singleton_state: all-gathered dimensionless tensors
 
     Returns:
-        state: unflatten state dict
+        state: unflattened state dict
         idx_mapping: a mapping from global ID to local ID
     """
     # local ids are the keys in the current state (combined_state), (usually fewer)
