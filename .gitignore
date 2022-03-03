@@ -19,6 +19,7 @@ test-results/
 # Coverage reports
 .coverage
 .coverage.*
+./coverage.xml
 
 # Environments
 .env

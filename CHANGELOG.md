@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left after children were wrapped. [#930]
 - FSDP: Add support for saving optimizer state when using expert replicas with FSDP.
 
+### Fixed
+- FSDP: fixed handling of internal states with state_dict and load_state_dict
+  function so that they don't change lazy init state if training hasn't started. [#922]
+- FSDP: added support of optimizer state handling when some of the parameters are
+  not used. An example is that in a model with a EMA copy that doesn't get trained
+  but still wants to be sharded. [#922]
+
 ## [0.4.5] - 2022-01-14
 
 ### Added
