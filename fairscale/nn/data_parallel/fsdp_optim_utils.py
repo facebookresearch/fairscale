@@ -103,7 +103,7 @@ def _unflatten_optim_state(
         combined_state: all-gathered state with tensors
         instance_list: list of FSDP wrapper object instances
         world_pad_info: [rank][fsdp_instance_id][bytes_padded_per_param]
-        singleton_state: all-gathered dimension-less tensors
+        singleton_state: all-gathered dimensionless tensors
 
     Returns:
         state: unflatten state dict
