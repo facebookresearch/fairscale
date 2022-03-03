@@ -97,7 +97,7 @@ def _unflatten_optim_state(
     world_pad_info: List[List[List[int]]],
     singleton_state: Dict[int, Dict],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
-    """Convert optimizer state for flattened parameters into original, unflatten ones.
+    """Convert optimizer state for flattened parameters into original, unflattened ones.
 
     Args:
         combined_state: all-gathered state with tensors
