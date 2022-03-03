@@ -98,16 +98,16 @@ def _unflatten_optim_state(
     world_pad_info: List[List[List[int]]],
     singleton_state: Dict[int, Dict],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
-    """Convert optimizer state for flattened parameters into original, unflatten ones.
+    """Convert optimizer state for flattened parameters into original, unflattened ones.
 
     Args:
         combined_state: all-gathered state with tensors
         instance_list: list of FSDP wrapper object instances
         world_pad_info: [param_id][fsdp_instance_id][bytes_padded_per_rank]
-        singleton_state: all-gathered dimension-less tensors
+        singleton_state: all-gathered dimensionless tensors
 
     Returns:
-        state: unflatten state dict
+        state: unflattened state dict
         idx_mapping: a mapping from global ID to local ID
     """
     # local ids are the keys in the current state (combined_state), (usually fewer)
