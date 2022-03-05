@@ -8,6 +8,7 @@ import unittest
 
 from parameterized import parameterized
 import torch
+from torch import nn
 from torch.optim import SGD, Adadelta, Adam  # type: ignore
 
 from fairscale.nn import FullyShardedDataParallel
@@ -225,6 +226,34 @@ class TestOptimizerUtils(DistributedTest):
         assert objects_are_equal(shard_sd["state"], original_shard_sd["state"])
         assert objects_are_equal({k: shard_sd[k] for k in original_shard_sd}, original_shard_sd)
 
+    @parameterized.expand(
+        [(True,), (False,)],
+        name_func=rename_test,
+    )
+    def test_model_with_unused_params(self, wrap_l2):
+        """Test handling of model with unused params by gather_full_optim_state_dict()"""
+        test_fn = functools.partial(self._test_model_with_unused_params, wrap_l2=wrap_l2)
+        spawn_and_init(test_fn, world_sizes=[2])
+
+    @classmethod
+    def _test_model_with_unused_params(self, rank, pg, wrap_l2):
+        model = ModelWithUnusedParams(wrap_l2).cuda()
+        data = torch.rand(4).cuda().requires_grad_(True)
+        model = FullyShardedDataParallel(model)
+        optim = SGD(model.parameters(), momentum=0.9, lr=0.1)
+        out = model(data).sum()
+        out.backward()
+        optim.step()
+        model.zero_grad(set_to_none=True)
+        sd = model.gather_full_optim_state_dict(optim)
+        if rank == 0:
+            shard_sd = model.get_shard_from_optim_state_dict(sd)
+            orig_sd = optim.state_dict()
+            orig_sd = recursive_copy_to_device(orig_sd, non_blocking=False, device="cpu")
+            objects_are_equal(shard_sd, orig_sd, raise_exception=True)
+        else:
+            assert sd is None, sd
+
     def test_named_params_ordering(self):
         """Test assumption of consolidate_optimizer_state_dict"""
         group = DummyProcessGroup(0, 1)
@@ -234,8 +263,33 @@ class TestOptimizerUtils(DistributedTest):
             assert objects_are_equal(p, named_pars[i])
 
     def test_is_singleton_tensor(self):
+        """Test is_singleton_tensor function"""
         assert is_singleton_tensor(torch.tensor(4.0))
         assert not is_singleton_tensor(torch.tensor([4.0]))
         assert not is_singleton_tensor(torch.tensor([4.0, 5.0]))
         assert not is_singleton_tensor([4.0])
         assert not is_singleton_tensor(4.0)
+
+
+class ModelWithUnusedParams(nn.Module):
+    def __init__(self, wrap_l2):
+        super().__init__()
+        self.l = nn.Linear(4, 4)
+        # unused param must be wrapped, otherwise, due to flatten, it
+        # is always used.
+        self.not_trained = nn.Linear(4, 4).requires_grad_(False)
+        self.not_trained = FullyShardedDataParallel(self.not_trained)
+        # optionally testing a used param after the unused one by
+        # wrapping it.
+        self.l2 = nn.Linear(4, 4)
+        if wrap_l2:
+            # When wrapping happens, the unused param will be in the middle
+            # of the param list (for optimizer state dict), not at the
+            # end. This way, we can test the handling code in more corner
+            # cases.
+            self.l2 = FullyShardedDataParallel(self.l2)
+
+    def forward(self, x):
+        with torch.no_grad():
+            y = self.not_trained(x)
+        return self.l2(self.l(x)) - y

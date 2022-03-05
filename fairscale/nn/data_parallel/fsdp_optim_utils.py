@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 """These functions are used by FullyShardedDataParallel to help consolidate and shard optimizer states."""
 import copy
+from itertools import groupby
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Tuple, cast
 
 import torch
@@ -20,9 +21,12 @@ UNFLAT_RETURN_KEYS = {"state", "param_groups", "uncollected_local_ids", "param_i
 def flatten_optim_state_dict(sd: Dict) -> Dict:
     """Shard a full optimizer state dict (called by FSDP.get_shard_from_optim_state_dict)"""
     param_id_map = sd["param_id_map"]
-    num_local_params = len(set(param_id_map.values()))
+    # Get a set of local ids, like {0, None, 2}, then we remove None from it.
+    local_ids = set(param_id_map.values())
+    if None in local_ids:
+        local_ids.remove(None)
     if sd["state"]:
-        new_state: Dict = {local_id: {} for local_id in range(num_local_params)}
+        new_state: Dict = {local_id: {} for local_id in local_ids}
         singleton_state: Dict = copy.deepcopy(new_state)
     else:
         new_state = {}
@@ -55,7 +59,10 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
 
     # add pointers from the `params` dict.
     for pg_id, _ in enumerate(sd["param_groups"]):
-        # TODO: this list could be huge. Can we avoid materializing?
+        # The values() list may look like [0,0,None,None,2,2]. We use
+        # groupby to remove the duplicates and then count the length of
+        # resulting iter.
+        num_local_params = sum(1 for _ in groupby(param_id_map.values()))
         new_sd["param_groups"][pg_id]["params"] = list(range(num_local_params))
 
     return new_sd
@@ -91,7 +98,18 @@ def _unflatten_optim_state(
     world_pad_info: List[List[List[int]]],
     singleton_state: Dict[int, Dict],
 ) -> Tuple[Dict[int, Dict], Dict[int, int]]:
-    """Convert optimizer state for flattened parameters into original, unflatten ones."""
+    """Convert optimizer state for flattened parameters into original, unflattened ones.
+
+    Args:
+        combined_state: all-gathered state with tensors
+        instance_list: list of FSDP wrapper object instances
+        world_pad_info: [param_id][fsdp_instance_id][bytes_padded_per_rank]
+        singleton_state: all-gathered dimensionless tensors
+
+    Returns:
+        state: unflattened state dict
+        idx_mapping: a mapping from global ID to local ID
+    """
     # local ids are the keys in the current state (combined_state), (usually fewer)
     # global ids will be the keys in the unflattened state
     next_global_id = 0  # gets incremented
@@ -100,7 +118,7 @@ def _unflatten_optim_state(
 
     # non_tensor_state refers to entries in sd[state][param_id] that are not tensors, like "step".
     # we check that these are identical across workers and then take the first
-    non_tensor_state = [_extract_non_tensor_state(combined_state, id) for id in combined_state]
+    non_tensor_state = {id: _extract_non_tensor_state(combined_state, id) for id in combined_state}
 
     # Local corresponds to flattened, global corresponds to unflattened.
     # Casting needed only for mypy.
@@ -114,7 +132,19 @@ def _unflatten_optim_state(
     global_to_local_id = {}
     for local_id, num_unflat in enumerate(num_global_params):
         for _ in range(num_unflat):
-            global_to_local_id[next_global_id] = local_id
+            # Some params could be unused, which means the optimizer
+            # hasn't created their state. Therefore, `local_id` obtained
+            # by enumerating the params above could be out of the range
+            # of keys in `combined_state` above. Here is an example:
+            #
+            #    global    local    notes
+            #    0         0        FC1's weight, first flat buffer
+            #    1         0        FC1's bias, first flat buffer
+            #    2         None     FC2's weight, no flat state
+            #    3         None     FC2's bias, no flat state
+            #    4         2        FC3's weight, second flat buffer (but with id 2)
+            #    5         2        FC3's bias, second flat buffer (but with id 2)
+            global_to_local_id[next_global_id] = local_id if local_id in local_ids else None
             next_global_id += 1
     if not combined_state:
         return {}, global_to_local_id
@@ -122,12 +152,21 @@ def _unflatten_optim_state(
     # copy non tensor state (like the "step" count) to all global entries
     unflat_state = {i: copy.deepcopy(non_tensor_state[0]) for i in range(sum(num_global_params))}
 
+    # remove the global entries that don't have optim state because pytorch
+    # optimizer's state_dict() function returns a state_dict without the missing
+    # param, so we shouldn't have things like "1:{}" for missing params.
+    for g, l in global_to_local_id.items():
+        if l is None:
+            del unflat_state[g]
+
     if non_tensor_state[0].keys() == combined_state[0].keys():
+        # Early return if there is no tensors in the state dict.
         return unflat_state, global_to_local_id
 
     local_to_global: Dict[int, List] = {i: [] for i in local_ids}
     for g, l in global_to_local_id.items():
-        local_to_global[l].append(g)
+        if l is not None:
+            local_to_global[l].append(g)
     # loop over parameters in state.
     # Tensor state will be padded, concatenated, and restored to original shape with FlattenParamsWrapper.get_views
     # get_views returns multiple tensors, each of which is a new parameter with a new "global" id.
@@ -165,7 +204,20 @@ def build_unflat_state_dict(
     uncollected_opt_state: Dict[int, Dict],
     param_groups: List[Dict],
 ) -> Dict:
-    """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts from each rank."""
+    """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts
+    from each rank. This is only called on rank 0.
+
+    Args:
+        instance_list: list of FSDP wrapper objects
+        world_pad_info: [param_id][fsdp_instance_id][bytes_padded_per_rank]
+        state: all-gathered combined/local/flatten state_dict
+        singleton_state: all-gathered singleton_state (dimensionless tensors)
+        uncollected_opt_state: non-tensor and not-gathered state
+        param_groups: the original rank 0's sd["param_groups"]
+
+    Returns:
+        dict: an unflattened, nonsharded optimizer state, as if FSDP was not there.
+    """
     assert all(len(s) == len(instance_list) for s in world_pad_info)
     assert all(len(s[0]) == 1 for s in world_pad_info)
 

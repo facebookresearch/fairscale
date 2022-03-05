@@ -796,6 +796,7 @@ class FullyShardedDataParallel(nn.Module):
         )
         if self.verbose:
             repr = (
+                f"self={id(self)} is_root={self._is_root}, "
                 f"rank={self.rank}, " + repr + f"reshard_after_forward={self.reshard_after_forward}, "
                 f"compute_dtype={self.compute_dtype}, "
                 f"buffer_dtype={self.buffer_dtype}, "
@@ -907,6 +908,7 @@ class FullyShardedDataParallel(nn.Module):
         """
         if torch.cuda.is_available():
             torch.cuda.synchronize()
+        is_uninitialized = self._is_root is None  # See comment below on why we use this.
         self._lazy_init()
 
         def maybe_cast_buffers(dtype: Optional[torch.dtype] = None) -> None:
@@ -931,6 +933,12 @@ class FullyShardedDataParallel(nn.Module):
 
         # In case we are in mixed precision, restore buffers back to buffer_dtype.
         maybe_cast_buffers()
+        # We shouldn't change the init state in case this was an inner module and
+        # users simply wanted to get state_dict before training.
+        if is_uninitialized and self._is_root:
+            for module in self.modules():
+                if isinstance(module, FullyShardedDataParallel):
+                    module._reset_lazy_init()
         return state_dict
 
     @typing.overload
@@ -999,7 +1007,15 @@ class FullyShardedDataParallel(nn.Module):
     def load_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
-        return self._load_state_dict(state_dict, strict)
+        is_uninitialized = self._is_root is None  # See comment below on why we use this.
+        sd = self._load_state_dict(state_dict, strict)
+        # We shouldn't change the init state in case this was an inner module and
+        # users simply wanted to load_state_dict before training.
+        if is_uninitialized and self._is_root:
+            for module in self.modules():
+                if isinstance(module, FullyShardedDataParallel):
+                    module._reset_lazy_init()
+        return sd
 
     def load_local_state_dict(
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
@@ -1297,7 +1313,7 @@ class FullyShardedDataParallel(nn.Module):
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 # We relax the assert for non-root instance, when the nested inialized module is wrapped
                 # again in FSDP later, for example after training to run inference.
-                assert m._is_root is None or not m._is_root
+                assert m._is_root is None or not m._is_root, f"offending FSDP instance is {id(m)}, {m}"
                 if m._is_root is None:
                     m._is_root = False
                 if m.process_group != self.process_group:
@@ -2363,9 +2379,10 @@ class FullyShardedDataParallel(nn.Module):
         ids_not_to_shard = copy.deepcopy(full_optim_state_dict["uncollected_local_ids"])
         if self.flatten_parameters:
             full_optim_state_dict = ou.flatten_optim_state_dict(full_optim_state_dict)
-            assert len(full_optim_state_dict["state"]) in (
-                0,
-                len(instance_list),
+            # Due to unused params, the length of the state can be anywhere between
+            # 0 and number of params/fsdp_instance.
+            assert len(full_optim_state_dict["state"]) <= len(
+                instance_list
             ), f'{len(full_optim_state_dict["state"])}, {len(instance_list)}'
 
         # get the portion of dict associated with the shard, in place
