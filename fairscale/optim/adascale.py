@@ -535,7 +535,7 @@ class AdaScale(Optimizer):
                 continue
             # must be a np array, extend it with the right value and check the shape.
             val = 1 if name == "grad_sqr_avg" else 0
-            self._state[name] = np.append(self._state[name], val)  # type: ignore
+            self._state[name] = np.append(self._state[name], val)
             assert self._state[name].shape == (len(self._optimizer.param_groups),)
 
     def zero_grad(self) -> None:

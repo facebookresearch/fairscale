@@ -10,6 +10,7 @@ black == 21.10b0
 flake8 == 4.0.1
 flake8-annotations == 2.7.0
 isort == 5.10.1
+seed-isort-config == 2.2.0
 mypy == 0.910
 pre-commit >= 2.15.0
 
