@@ -50,4 +50,5 @@ repos:
     hooks:
     -   id: mypy
         args: [--no-strict-optional, --ignore-missing-imports, --scripts-are-modules, --pretty]
-        additional_dependencies: [numpy==1.22.1]
+        # See requirements-dev.txt for the reason for a fixed version of numpy here.
+        additional_dependencies: [numpy==1.21.5]

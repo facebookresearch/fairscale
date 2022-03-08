@@ -32,7 +32,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import functools
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 import numpy as np
 import torch
@@ -535,7 +535,7 @@ class AdaScale(Optimizer):
                 continue
             # must be a np array, extend it with the right value and check the shape.
             val = 1 if name == "grad_sqr_avg" else 0
-            self._state[name] = cast(np.ndarray, np.append(self._state[name], val))
+            self._state[name] = np.append(self._state[name], val)  # type: ignore
             assert self._state[name].shape == (len(self._optimizer.param_groups),)
 
     def zero_grad(self) -> None:
