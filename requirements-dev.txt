@@ -10,6 +10,7 @@ black == 21.10b0
 flake8 == 4.0.1
 flake8-annotations == 2.7.0
 isort == 5.10.1
+seed-isort-config == 2.2.0
 mypy == 0.910
 pre-commit >= 2.15.0
 
@@ -26,8 +27,10 @@ docutils == 0.17
 # For torch.cuda.list_gpu_processes()
 pynvml == 8.0.4
 
-# For mypy typing
-numpy >= 1.21
+# For mypy typing. It is important to have a fixed version. Otherwise, you
+# may run into mypy errors out differently for different versions.
+# Using 1.21.5 for now because py3.7 only has up to 1.21.5, not 1.22.x.
+numpy == 1.21.5
 
 # For layerwise gradient scaler
 sklearn >= 0.0

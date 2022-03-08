@@ -1,3 +1,8 @@
+# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+#
+# This source code is licensed under the BSD license found in the
+# LICENSE file in the root directory of this source tree.
+
 # If you change the versions below, please make sure they are in-sync
 # with requirements-dev.txt
 
@@ -45,4 +50,5 @@ repos:
     hooks:
     -   id: mypy
         args: [--no-strict-optional, --ignore-missing-imports, --scripts-are-modules, --pretty]
-        additional_dependencies: [numpy]
+        # See requirements-dev.txt for the reason for a fixed version of numpy here.
+        additional_dependencies: [numpy==1.21.5]
