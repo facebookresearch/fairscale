@@ -50,4 +50,4 @@ repos:
     hooks:
     -   id: mypy
         args: [--no-strict-optional, --ignore-missing-imports, --scripts-are-modules, --pretty]
-        additional_dependencies: [numpy]
+        additional_dependencies: [numpy==1.22.1]
