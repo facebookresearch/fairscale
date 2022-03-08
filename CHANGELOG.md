@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.6] - TBD
 
+
 ### Added
 - CosFace's LMCL is added to MEVO. This is a loss function that is suitable
   for large number of prediction target classes. It added normalization,
