@@ -27,6 +27,8 @@ FairScale was designed with the following values in mind:
 
 ## What's New:
 
+* March 2022 [fairscale 0.4.6 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.6).
+* We have support for CosFace's LMCL in MEVO. This is a loss function that is suitable for large number of prediction target classes.
 * January 2022 [fairscale 0.4.5 was released](https://github.com/facebookresearch/fairscale/releases/tag/v0.4.5).
 * We have experimental support for layer wise gradient scaling.
 * We enabled reduce_scatter operation overlapping in FSDP backward propagation.
