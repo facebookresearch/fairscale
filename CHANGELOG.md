@@ -5,8 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [0.4.6] - TBD
+## [0.4.7] - TBD
 
+### Added
+
+### Fixed
+
+
+[0.4.6] - 2022-03-08
 
 ### Added
 - CosFace's LMCL is added to MEVO. This is a loss function that is suitable
@@ -18,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   if set, wraps the root module regardless of how many unwrapped params there were
   left after children were wrapped. [#930]
 - FSDP: Add support for saving optimizer state when using expert replicas with FSDP.
+- OSS: Add a new arg "forced_broadcast_object" to OSS __init__ to apply "_broadcast_object"
+  for rebuilding the sharded optimizer. [#937]
+- FSDP: Add an arg disable_reshard_on_root for FSDP __init__ [#878]
 
 ### Fixed
 - FSDP: fixed handling of internal states with state_dict and load_state_dict
