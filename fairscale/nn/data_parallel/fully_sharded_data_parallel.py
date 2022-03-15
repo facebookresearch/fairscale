@@ -400,7 +400,9 @@ class FullyShardedDataParallel(nn.Module):
         # Experimental feature for now. Use at your own risk.
         self.ssd_offload = True if offload_config and offload_config.offload_type == "ssd_offload" else False
 
-        self.gradient_predivide_factor: float = gradient_predivide_factor or self._get_gradient_predivide_factor(self.world_size)
+        self.gradient_predivide_factor: float = gradient_predivide_factor or self._get_gradient_predivide_factor(
+            self.world_size
+        )
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
 
         self.numel_padded_per_param: List[int] = []
