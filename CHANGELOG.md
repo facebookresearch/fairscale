@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- FSDP: Add pickle/unpickle support for SsdTensorHandle (and derived classes),
+  verified that FSDP models w/ ssd_offload enabled can correctly call model.state_dict()
+  and model.load_state_dict(...) and thus successfully checkpoint and recover parameters
+  stored as SsdFlatParameters.
+
 ### Fixed
 
 
