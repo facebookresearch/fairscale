@@ -146,7 +146,7 @@ def run_test(backend, device, world_size, broadcast_buffers, grad_accumulation, 
 @skip_if_single_gpu
 @pytest.mark.parametrize("broadcast_buffers", [True, False])
 @pytest.mark.parametrize("grad_accumulation", [True, False])
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
+@pytest.mark.parametrize("reduce_buffer_size", [0, 2**20])
 @pytest.mark.parametrize("optimizer_type", [torch.optim.SGD, SGDWithPausingCompute])
 @pytest.mark.parametrize("reduce_fp16", [False, True])
 @pytest.mark.parametrize(
@@ -204,7 +204,7 @@ def run_test_two_inputs(rank, world_size, backend, device, temp_file_name, reduc
     dist.destroy_process_group()
 
 
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
+@pytest.mark.parametrize("reduce_buffer_size", [0, 2**20])
 @pytest.mark.parametrize("backend", ["gloo", "nccl"])
 @pytest.mark.parametrize("device", available_devices)
 @skip_if_single_gpu
@@ -354,7 +354,7 @@ def run_test_device_change(rank, world_size, backend, device, temp_file_name, re
 
 @skip_if_no_cuda
 @skip_if_single_gpu
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
+@pytest.mark.parametrize("reduce_buffer_size", [0, 2**20])
 def test_device_change(reduce_buffer_size):
     # Check that ShardedDDP handles a device change properly
     world_size = 2
@@ -392,7 +392,7 @@ def run_test_training_change(rank, world_size, backend, device, temp_file_name, 
 
 @skip_if_no_cuda
 @skip_if_single_gpu
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
+@pytest.mark.parametrize("reduce_buffer_size", [0, 2**20])
 def test_training_change(reduce_buffer_size):
     world_size = 2
     backend = "nccl"
@@ -528,7 +528,7 @@ def run_test_gpt2(rank, world_size, backend, device, temp_file_name, reduce_buff
 @skip_if_no_cuda
 @skip_if_single_gpu
 @pytest.mark.parametrize("world_size", [1, 2])
-@pytest.mark.parametrize("reduce_buffer", [2 ** 23, 2 ** 40])
+@pytest.mark.parametrize("reduce_buffer", [2**23, 2**40])
 def test_gpt2(world_size, reduce_buffer):
     # Check that having trainable unused params is fine
     backend = "gloo"
@@ -598,7 +598,7 @@ def run_test_multiple_groups(rank, world_size, tempfile_name, backend, reduce_bu
 
 
 @skip_if_less_than_four_gpu
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
+@pytest.mark.parametrize("reduce_buffer_size", [0, 2**20])
 @pytest.mark.parametrize("backend", ["gloo", "nccl"])
 def test_multiple_groups(reduce_buffer_size, backend):
     world_size = 4

@@ -700,7 +700,7 @@ class FullyShardedDataParallel(nn.Module):
             total_norm = local_norm
             dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=self.process_group)
         else:
-            total_norm = local_norm ** norm_type
+            total_norm = local_norm**norm_type
             dist.all_reduce(total_norm, group=self.process_group)
             total_norm = total_norm ** (1.0 / norm_type)
 
@@ -2408,7 +2408,7 @@ class FullyShardedDataParallel(nn.Module):
         if restart:
             self._tstart = time.time()
         if self.rank == 0:
-            gb_denom = 1024 ** 3
+            gb_denom = 1024**3
             logging.info(
                 f"{msg} cur={torch.cuda.memory_allocated()/gb_denom: .4f} GB, max={torch.cuda.max_memory_allocated()/gb_denom: .4f} GB, t={time.time()-self._tstart: .1f}"
             )

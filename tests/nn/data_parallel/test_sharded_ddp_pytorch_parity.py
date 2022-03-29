@@ -233,7 +233,7 @@ def run_ddp_parity(
 
 @skip_if_no_cuda
 @skip_if_single_gpu
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
+@pytest.mark.parametrize("reduce_buffer_size", [0, 2**20])
 @pytest.mark.parametrize("grad_accumulation", [True, False])
 @pytest.mark.parametrize("change_train_graph", [True, False])
 @pytest.mark.parametrize("fp16_reduction", _test_fp16_reduction)
@@ -347,7 +347,7 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_b
 
 @skip_if_no_cuda
 @skip_if_single_gpu
-@pytest.mark.parametrize("reduce_buffer_size", [0, 2 ** 20])
+@pytest.mark.parametrize("reduce_buffer_size", [0, 2**20])
 def test_ddp_parity_two_optim(reduce_buffer_size):
     world_size = 2
     backend = dist.Backend.NCCL

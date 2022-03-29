@@ -135,11 +135,11 @@ def train_seq(model_config, benchmark_config, model_specs, args):
                         loss.backward()
                     optimizer.step()
             logging.info(
-                "Memory stats are {:.2f}GB".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] / 2 ** 30)
+                "Memory stats are {:.2f}GB".format(torch.cuda.memory_stats(0)["allocated_bytes.all.peak"] / 2**30)
             )
             logging.info(
                 "Loss {:.2f} - throughput {:.2f}fps".format(
-                    loss.item(), benchmark_config["batch_size"] / (time.time_ns() - start) * 10 ** 9
+                    loss.item(), benchmark_config["batch_size"] / (time.time_ns() - start) * 10**9
                 )
             )
             num_iters -= 1

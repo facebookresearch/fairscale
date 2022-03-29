@@ -175,7 +175,7 @@ def test_lr_scheduler():
     model = Linear(2, 2, bias=False)
     optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=3)
     # We use 1, not 0.1 here since scheduler.step() is called here first.
-    scheduler = LambdaLR(optim, lr_lambda=lambda epoch: 1 / 10 ** epoch)
+    scheduler = LambdaLR(optim, lr_lambda=lambda epoch: 1 / 10**epoch)
     for epoch in range(3):
         for data_idx in range(10):
             for accumulation in range(3):
@@ -186,7 +186,7 @@ def test_lr_scheduler():
             optim.step()
             optim.zero_grad()
             # asserting LR is right
-            assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10 ** epoch), optim.param_groups[0]["lr"]
+            assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10**epoch), optim.param_groups[0]["lr"]
         scheduler.step()
         # asserting LR is right
         assert np.allclose(optim.param_groups[0]["lr"], 0.1 / 10 ** (epoch + 1)), optim.param_groups[0]["lr"]

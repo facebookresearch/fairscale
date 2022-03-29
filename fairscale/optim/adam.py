@@ -98,7 +98,7 @@ try:
                 assert parameters[0].dtype == torch.float16
 
             self.optim_type = torch.float16 if precision is Precision.PURE_FP16 else torch.float32
-            self._optim_scale = float(2 ** 16) if precision is Precision.PURE_FP16 else 1.0
+            self._optim_scale = float(2**16) if precision is Precision.PURE_FP16 else 1.0
             self._steps_since_optim_scale_change = 0
             self._optim_scale_update_freq = 2000  # This is the value that GradScaler uses by default
             self._overflow_buf = torch.cuda.IntTensor([0])  # type: ignore
@@ -291,11 +291,10 @@ try:
 
                 if self._steps_since_optim_scale_change == self._optim_scale_update_freq:
                     self._steps_since_optim_scale_change = 0
-                    if self._optim_scale < 2 ** 16:
+                    if self._optim_scale < 2**16:
                         self._optim_scale *= 2
 
             return loss
-
 
 except ImportError:
     pass

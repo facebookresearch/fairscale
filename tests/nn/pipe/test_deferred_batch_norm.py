@@ -38,7 +38,7 @@ def tilt_dist(input):
 
     # Tilt mean by single batch.
     for i, single in enumerate(input):
-        single += 2 ** i
+        single += 2**i
 
     return input
 
@@ -150,7 +150,7 @@ def test_optimize():
         dbn.eval()
 
         with torch.no_grad():
-            assert torch.allclose(bn(input), dbn(input), atol=1e-1 * (10 ** i))
+            assert torch.allclose(bn(input), dbn(input), atol=1e-1 * (10**i))
 
 
 def test_conv_bn():

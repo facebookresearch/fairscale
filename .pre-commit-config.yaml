@@ -23,7 +23,7 @@ repos:
     -   id: end-of-file-fixer
 
 -   repo: https://github.com/ambv/black
-    rev: 21.10b0
+    rev: 22.3.0
     hooks:
     - id: black
 
@@ -32,11 +32,6 @@ repos:
     hooks:
     -   id: flake8
         args: [--show-source, --statistics]
-
--   repo: https://github.com/asottile/seed-isort-config
-    rev: v2.2.0
-    hooks:
-    -   id: seed-isort-config
 
 -   repo: https://github.com/pycqa/isort
     rev: 5.10.1

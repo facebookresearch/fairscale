@@ -453,7 +453,7 @@ class AdaScale(Optimizer):
         # accumulation.
         if self._num_grads_to_accum > 1:
             # np array doesn't support /=.
-            total_grad_sqr = total_grad_sqr / (self._num_grads_to_accum ** 2)
+            total_grad_sqr = total_grad_sqr / (self._num_grads_to_accum**2)
 
         # Wait for all_reduce to be done and move it to cpu & np.
         if work:

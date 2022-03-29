@@ -89,7 +89,7 @@ def validate_benchmark(measurements, final_loss, args, check_regression):
     if not args.cpu:
         # TODO(anj-s): Check if we need to synchronize before we caculate total training time.
         torch.cuda.synchronize(rank)
-        max_memory = torch.cuda.max_memory_allocated(rank) / 2 ** 20
+        max_memory = torch.cuda.max_memory_allocated(rank) / 2**20
         logging.info(f"[{rank}] : Peak memory {max_memory:.1f}MiB")
 
     measurements.sort()
