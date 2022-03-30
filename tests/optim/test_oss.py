@@ -602,7 +602,7 @@ def run_test_multiple_groups(rank, world_size, tempfile_name):
 
         # With SGD, Momentum is required to get a state to shard
         optimizer = optim.OSS(
-            model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=2 ** 20
+            model.parameters(), lr=0.1, momentum=0.99, group=process_group, broadcast_buffer_size=2**20
         )
         check(optimizer)
 
@@ -875,7 +875,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph
             params=oss_trainable_params,
             optim=optimizer,
             group=None,
-            broadcast_buffer_size=2 ** 10,
+            broadcast_buffer_size=2**10,
             **optimizer_settings,
         )
 

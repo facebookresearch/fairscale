@@ -14,7 +14,7 @@ from typing import ClassVar, Deque, Dict, Optional
 
 import torch
 
-MAX_LEN_DEQUEUE = 10 ** 4
+MAX_LEN_DEQUEUE = 10**4
 deque_with_max_len_fixed = partial(deque, maxlen=MAX_LEN_DEQUEUE)
 
 

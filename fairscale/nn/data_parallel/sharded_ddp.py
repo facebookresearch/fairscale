@@ -100,7 +100,7 @@ class ShardedDataParallel(nn.Module):
         process_group: Any = None,
         broadcast_buffers: bool = True,
         sync_models_at_startup: bool = True,
-        reduce_buffer_size: int = 2 ** 23,
+        reduce_buffer_size: int = 2**23,
         auto_refresh_trainable: bool = True,
         reduce_fp16: bool = False,
         warn_on_trainable_params_changed: bool = True,
@@ -178,7 +178,7 @@ class ShardedDataParallel(nn.Module):
 
         logging.info(
             "ShardedDDP bucket size: {:.2f}M parameters, model size {:.2f}M parameters".format(
-                self._buffer_max_size / 2 ** 20, model_size / 2 ** 20
+                self._buffer_max_size / 2**20, model_size / 2**20
             )
         )
         self._use_buckets = self._buffer_max_size > 0

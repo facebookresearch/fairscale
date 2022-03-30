@@ -162,13 +162,13 @@ class TestOptimizerUtils(DistributedTest):
             assert len(no_broadcast_children) == 1, f"Length of non shared params {len(no_broadcast_children)}"
             assert fsdp._fsdp_instances[-1].no_broadcast_optim_state
         torch.cuda.empty_cache()
-        cuda_gb_before = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024 ** 3
+        cuda_gb_before = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024**3
         tstart = time()
         sd = fsdp.gather_full_optim_state_dict(fsdp_optim, recipient_rank=0)
         duration = time() - tstart
         assert duration < fsdp.world_size, f"gather optim state took {duration} seconds, suspect change in _consolidate"
 
-        cuda_gb_after = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024 ** 3
+        cuda_gb_after = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024**3
         mem_usg_gb = cuda_gb_after - cuda_gb_before
         assert mem_usg_gb == 0, f"gather_full_optim_state_dict used {mem_usg_gb:.2f} CUDA GB, max allowed is 0"
         assert cuda_gb_after > 0, "got 0 memory usage, logging is broken"

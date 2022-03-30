@@ -311,14 +311,14 @@ def test_update_optim_scale():
     weight, bias, input = make_half_precision_params()
     optimizer = Adam([weight, bias], lr=1e-3, precision=Precision.PURE_FP16)
     optimizer._optim_scale_update_freq = 1
-    optimizer._optim_scale = 2 ** 15
+    optimizer._optim_scale = 2**15
 
     optimizer.zero_grad()
     loss = (weight.mv(input) + bias).pow(2).sum()
     loss.backward()
     optimizer.step()
 
-    assert optimizer._optim_scale == 2 ** 16
+    assert optimizer._optim_scale == 2**16
 
 
 @skip_if_no_cuda
