@@ -223,7 +223,8 @@ class FlattenParamsWrapper(nn.Module):
             if ssd_offload:
                 assert ssd_directory != ""
                 (handle, fname) = tempfile.mkstemp(dir=ssd_directory, suffix="ssd_buf_param")
-                flat_param = SsdFlatParameter(params=params, filename=fname, requires_grad=params[0].requires_grad)
+                flat_param = SsdFlatParameter.from_tensors(tensors=params)
+                flat_param.set_file_params(fname, 0)
             else:
                 flat_param = FlatParameter(params, params[0].requires_grad)
             flat_param._param_infos = param_infos
@@ -501,7 +502,7 @@ class FlattenParamsWrapper(nn.Module):
 
         return chain(*gens)
 
-    def metadata(self, flat_param_idx: int) -> Tuple[List[str], List[torch.Size], List[int]]:
+    def metadata(self, flat_param_idx: int) -> Tuple[List[str], Sequence[torch.Size], List[int]]:
         """Return metadata for a flat param given its index in the flat_params list."""
         return self.flat_params[flat_param_idx].metadata()
 

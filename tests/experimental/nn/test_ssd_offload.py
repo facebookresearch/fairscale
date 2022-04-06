@@ -7,6 +7,8 @@
 Testing SsdFlatParameter and SsdTensorHandle modules.
 """
 
+import filecmp
+import os
 import tempfile
 
 import numpy as np
@@ -109,7 +111,61 @@ def test_ssd_handle_train_simple():
         assert torch.equal(ssd_handle.to_tensor(), orig_copy)
 
 
-def test_ssd_flat_param_train_simple():
+def test_torch_save_load_ssd_flat_param_on_disk():
+    _init()
+    orig_file = tempfile.NamedTemporaryFile(prefix="tensor")
+    checkpoint_file = tempfile.NamedTemporaryFile(prefix="checkpoint", suffix=".pt")
+    checkpoint_load_directory = tempfile.TemporaryDirectory(prefix="checkpoint_dir")
+
+    # TENSOR_SHAPE = (1024, 1024, 2048)
+    # use smaller shape for unit tests
+    TENSOR_SHAPE = (1024, 321)
+    ref_tensors = [torch.rand(TENSOR_SHAPE, dtype=torch.float32) for i in range(4)]
+    ssd_handle = so.SsdFlatParameter.from_tensors(ref_tensors, False)
+    ssd_handle.set_file_params(orig_file.name, 0)
+    ssd_handle.to_file()
+    ref_tensors = []
+
+    # after deleting ref_tensor, memory usage should be very low
+    # For save it shouldn't be more than 10x so.DEFAULT_CHUNK_SIZE
+    with so.CheckpointPathContextManager(override_path=checkpoint_load_directory.name):
+        so.torch_saver.save(ssd_handle, checkpoint_file.name)
+    # below line saves file to checkpoint_load_directory/orig_file.name
+    # Memory usage here should be O(1000 * so.DEFAULT_CHUNK_SIZE)
+    # 1000x because that's how many elements the python unpickler
+    # will buffer before passing to the SsdTensor
+    test_ssd_handle = torch.load(checkpoint_file)
+    head, tail = os.path.split(orig_file.name)
+    assert filecmp.cmp(orig_file.name, os.path.join(checkpoint_load_directory.name, tail), shallow=False)
+
+
+def test_torch_save_load_ssd_flat_param_on_mem():
+    _init()
+    orig_file = tempfile.NamedTemporaryFile(prefix="tensor")
+    checkpoint_file = tempfile.NamedTemporaryFile(prefix="checkpoint", suffix=".pt")
+    checkpoint_load_directory = tempfile.TemporaryDirectory(prefix="checkpoint_dir")
+
+    # TENSOR_SHAPE = (1024, 1024, 2048)
+    # use smaller shape for unit tests
+    TENSOR_SHAPE = (1024, 321)
+    ref_tensors = [torch.rand(TENSOR_SHAPE, dtype=torch.float32) for i in range(4)]
+    ssd_handle = so.SsdFlatParameter.from_tensors(ref_tensors, False)
+    ssd_handle.set_file_params(orig_file.name, 0)
+    ref_tensors = []
+
+    # after deleting ref_tensor, memory usage should be very low
+    # For save it shouldn't be more than 10x so.DEFAULT_CHUNK_SIZE
+    with so.CheckpointPathContextManager(override_path=checkpoint_load_directory.name):
+        so.torch_saver.save(ssd_handle, checkpoint_file.name)
+    # below line saves file to checkpoint_load_directory/orig_file.name
+    # Memory usage here should be O(1000 * so.DEFAULT_CHUNK_SIZE)
+    # 1000x because that's how many elements the python unpickler
+    # will buffer before passing to the SsdTensor
+    test_ssd_handle = torch.load(checkpoint_file)
+    assert torch.equal(ssd_handle, test_ssd_handle)
+
+
+def test_ssd_param_train_simple():
     _init()
     with tempfile.NamedTemporaryFile() as f:
         orig_tensor = torch.randn((4, 4))
@@ -117,15 +173,18 @@ def test_ssd_flat_param_train_simple():
         with torch.no_grad():
             orig_copy = torch.empty_like(orig_tensor)
             orig_copy.copy_(orig_tensor)
-        param = torch.nn.Parameter(orig_copy)
+            param = torch.nn.Parameter(orig_copy)
 
-        ssd_flat_param = so.SsdFlatParameter([param], f.name, True)
+        ssd_param = so.SsdParameter(orig_tensor.shape, orig_tensor.dtype)
+        ssd_param.point_to_tensor(orig_copy)
+        ssd_param.set_file_params(f.name, 0)
+        ssd_param.to_file(release_tensor_after_write=True)
 
-        assert torch.equal(list(ssd_flat_param.get_param_views())[0], orig_tensor)
-        optimizer_ssd = torch.optim.SGD([ssd_flat_param], lr=0.1)
+        assert torch.equal(ssd_param.to_tensor(), orig_tensor)
+        optimizer_ssd = torch.optim.SGD([ssd_param], lr=0.1)
         optimizer_orig = torch.optim.SGD([param], lr=0.1)
 
-        y1 = ssd_flat_param + 1
+        y1 = ssd_param + 1
         optimizer_ssd.zero_grad()
         y1.sum().backward()
         optimizer_ssd.step()
@@ -136,8 +195,8 @@ def test_ssd_flat_param_train_simple():
         optimizer_orig.step()
 
         # make sure we are using the file version not the cached tensor
-        ssd_flat_param.point_to_file(f.name, 0)
-        assert torch.equal(list(ssd_flat_param.get_param_views())[0], param)
+        ssd_param.point_to_file(f.name, 0)
+        assert torch.equal(ssd_param.to_tensor(), param)
 
 
 def test_ssd_flat_parameter_basic():
@@ -146,7 +205,8 @@ def test_ssd_flat_parameter_basic():
         refa_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
         refb_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
         refc_param = torch.nn.Parameter(torch.rand((128), dtype=torch.float32))
-        ssd_flat_param = so.SsdFlatParameter([refa_param, refb_param, refc_param], f.name, False)
+        ssd_flat_param = so.SsdFlatParameter.from_tensors([refa_param, refb_param, refc_param], False)
+        ssd_flat_param.set_file_params(f.name, 0)
 
         param_views = list(ssd_flat_param.get_param_views())
 
