@@ -1156,6 +1156,8 @@ class FullyShardedDataParallel(nn.Module):
         self._is_root: Optional[bool] = None
         self._streams: Dict[str, torch.cuda.Stream] = {}
         self._reducer: Optional[ReduceScatterBucketer] = None
+        self._fsdp_forward_ordering: List[nn.Module] = []
+        self._my_fsdp_instance_idx: Optional[int] = None
         for p in self.params:
             if hasattr(p, "_fp32_shard"):
                 del p._fp32_shard  # reset _init_param_attributes
@@ -1327,6 +1329,7 @@ class FullyShardedDataParallel(nn.Module):
                 m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
                     (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
                 )
+                m._fsdp_forward_ordering = self._fsdp_forward_ordering
 
     def _setup_streams(self) -> None:
         """Create streams to overlap data transfer and computation."""
@@ -1386,6 +1389,10 @@ class FullyShardedDataParallel(nn.Module):
         if self._is_root and self.mixed_precision:
             args, kwargs = cast_floats_to_right_precision(True, True, *args, **kwargs)
 
+        if self not in self._fsdp_forward_ordering:
+            self._my_fsdp_instance_idx = len(self._fsdp_forward_ordering)
+            self._fsdp_forward_ordering.append(self)
+
         # If enabled, convert the input to FP32 if we are in full precision.
         # no_grad is not used because the input might be for a non-root instance,
         # which mean autograd needs to go through the conversion.
@@ -1395,6 +1402,14 @@ class FullyShardedDataParallel(nn.Module):
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
         self._rebuild_full_params()
+
+        if (
+            self._fsdp_forward_ordering is not None
+            and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx < len(self._fsdp_forward_ordering) - 1
+        ):
+            self._fsdp_forward_ordering[self._my_fsdp_instance_idx + 1]._rebuild_full_params(
+                wait_for_all_gather=False
+            )
 
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
@@ -1484,6 +1499,12 @@ class FullyShardedDataParallel(nn.Module):
             # overhead.
             if self.reshard_after_forward:
                 self._rebuild_full_params()
+                if (
+                    self.reshard_after_forward
+                    and self._fsdp_forward_ordering is not None
+                    and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
+                ):
+                    self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params(wait_for_all_gather=False)
             else:
                 self._use_full_params()
 
@@ -1847,7 +1868,7 @@ class FullyShardedDataParallel(nn.Module):
                     self._output_pre_backward_hook_registered.clear()
 
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(self, force_full_precision: bool = False, wait_for_all_gather = True) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -1916,6 +1937,8 @@ class FullyShardedDataParallel(nn.Module):
 
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
+            if wait_for_all_gather:
+                torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
             for p in self.params:
                 update_p_data()
             return output_tensors
@@ -1978,8 +2001,8 @@ class FullyShardedDataParallel(nn.Module):
 
                     if self.move_params_to_cpu and (self.params[0].dtype == self.compute_dtype):
                         self._free_fp16_param_shard([p])
-
-        torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
+        if wait_for_all_gather:
+            torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
         return output_tensors
 
     @torch.no_grad()
@@ -2047,6 +2070,7 @@ class FullyShardedDataParallel(nn.Module):
             # Storage object and unshard it in-place. For now, just resize
             # the Storage to 0 to save memory.
             free_storage_(p._full_param_padded)
+            torch.cuda.current_stream().synchronize()
 
     def local_metadata_dict(self) -> Dict[str, Any]:
         """
