@@ -115,12 +115,18 @@ class SsdTensorHandle(torch.Tensor):
         dtype: torch.dtype,
         requires_grad: bool = False,
         device: torch.device = torch.device("cpu"),
+        flush_on_dirty: bool = True,
     ) -> SsdTensorHandle:
         r = super(SsdTensorHandle, cls)._make_wrapper_subclass(cls, shape, dtype=dtype, requires_grad=requires_grad, device=device)  # type: ignore
         return r
 
     def __init__(
-        self, shape: torch.Size, dtype: torch.dtype, requires_grad: bool, device: torch.device = torch.device("cpu")
+        self,
+        shape: torch.Size,
+        dtype: torch.dtype,
+        requires_grad: bool,
+        device: torch.device = torch.device("cpu"),
+        flush_on_dirty: bool = True,
     ) -> None:
         self._unpickle_f: Optional[Union[BinaryIO, IO[bytes]]] = None
 
@@ -136,13 +142,15 @@ class SsdTensorHandle(torch.Tensor):
         # valid if loaded to memory
         self.tensor: Optional[torch.Tensor] = None
         self.storage_state = StorageState.UNALLOCATED
+        self.flush_on_dirty = flush_on_dirty
 
     def mark_dirty(self) -> None:
         assert self.tensor is not None
         assert self.storage_state in [StorageState.ON_CPU_CLEAN, StorageState.ON_CPU_DIRTY]
         self.storage_state = StorageState.ON_CPU_DIRTY
         # hack to force write on mark_dirty
-        self.to_file()
+        if self.flush_on_dirty:
+            self.to_file()
 
     @classmethod
     def from_file(
@@ -480,6 +488,11 @@ class SsdFlatParameter(SsdParameter):
     def __setattr__(self, name: str, value: Any) -> None:
         super(SsdFlatParameter, self).__setattr__(name, value)
         if name == "data":
+            # if .data has changed, we need to totally destroy any existing views because things
+            # like device might have changed. It won't destroy any pointers to those views outside
+            # of here, however resetting self.views will trigger the old view's assertion in
+            # __torch_dispatch__ that it is the current view of it's parent object
+            self.views = []
             self._refresh_views()
 
     def _invalidate_views(self) -> None:
@@ -491,7 +504,11 @@ class SsdFlatParameter(SsdParameter):
         print(
             f" _refresh_views self.shape: {self.shape} self.tensor.shape: {self.tensor.shape} param_numels: {self._param_numels}, param_shapes: {self._param_shapes}"
         )
-        self.views = [s.view(v) for s, v in zip(self.split(self._param_numels), self._param_shapes)]  # type: ignore
+        if len(self.views) == 0:
+            self.views = [s.view(v) for s, v in zip(self.split(self._param_numels), self._param_shapes)]  # type: ignore
+        else:
+            for v, t, s in zip(self.views, self.tensor.split(self._param_numels), self._param_shapes):
+                v.tensor = t.view(s)
 
     def get_param_views(self, external_data: Optional[torch.Tensor] = None) -> Iterator[torch.Tensor]:
         """Return a generator of views that map to the original parameters."""
@@ -509,6 +526,8 @@ class SsdFlatParameter(SsdParameter):
             return (t.view(s) for (t, s) in zip(external_data.split(self._param_numels), self._param_shapes))
         else:
             # this needs to return SsdFlatParameterViews
+            if not self.is_available():
+                self.to_tensor()
             return (v for v in self.views)
 
     def metadata(self) -> Tuple[List[str], Sequence[torch.Size], List[int]]:
@@ -553,9 +572,9 @@ class SsdFlatParameter(SsdParameter):
             requires_grad=tensors[0].requires_grad,
             device=device,
         )
+        handle.set_file_params(filename, offset)
         if direct_to_file:
             assert filename != ""
-            handle.set_file_params(filename, offset)
             offset = offset
             for t in tensors:
                 write(t, handle.filename, offset)
@@ -678,8 +697,13 @@ class SsdFlatParameterView(torch.Tensor):
         def unwrap(e: Any) -> torch.Tensor:
             if isinstance(e, SsdFlatParameterView):
                 if not e.parent.is_available():
-                    print("to_tensor called, UH OH")
                     e.parent.to_tensor()
+                # first condition is to take care of the case where we are first constructing e.parent.views as a list comprehension which hasn't
+                # completed yet
+                if len(e.parent.views) != 0 and e is not e.parent.views[e.id]:
+                    raise RuntimeError(
+                        "This view should no longer be used as the parent object has had it's .data overwritten (e.parent.views[e.id])!!!"
+                    )
                 # e.parent will ensure that e.tensor is valid and points to tensor view
                 t = e.tensor
                 ssd_tensor_handles.append(e)

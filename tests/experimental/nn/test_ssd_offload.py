@@ -92,9 +92,6 @@ def test_ssd_handle_dispatch_bwd_hook():
         ssd_handle.to_file(release_tensor_after_write=True)
         one = torch.ones((1), requires_grad=True).cuda()
 
-        import pdb
-
-        pdb.set_trace()
         orig_copy = ssd_handle.data
         cuda_copy = ssd_handle.to("cuda").detach()
         ssd_handle.data = cuda_copy
@@ -121,6 +118,7 @@ def test_ssd_handle_train_simple():
             orig_copy.requires_grad = True
 
         ssd_handle = so.SsdTensorHandle.from_tensor(orig_tensor)
+        ssd_handle.flush_on_dirty = False
         ssd_handle.set_file_params(f.name, 0)
         ssd_handle.to_file(release_tensor_after_write=True)
 
@@ -212,6 +210,7 @@ def test_ssd_param_train_simple():
 
         ssd_param = so.SsdParameter(orig_tensor.shape, orig_tensor.dtype)
         ssd_param.point_to_tensor(orig_copy)
+        ssd_param.flush_on_dirty = False
         ssd_param.set_file_params(f.name, 0)
         ssd_param.to_file(release_tensor_after_write=True)
 
@@ -270,6 +269,7 @@ def test_ssd_flat_parameter_view_modify():
         refc_param = torch.nn.Parameter(torch.rand((128), dtype=torch.float32), requires_grad=False)
         ssd_flat_param = so.SsdFlatParameter.from_tensors([refa_param, refb_param, refc_param], direct_to_file=False)
         ssd_flat_param.set_file_params(f.name, 0)
+        ssd_flat_param.flush_on_dirty = False
 
         param_views = list(ssd_flat_param.get_param_views())
 
@@ -280,20 +280,6 @@ def test_ssd_flat_parameter_view_modify():
 
         param_views[0] += 0.1
         assert ssd_flat_param.storage_state == so.StorageState.ON_CPU_DIRTY
-
-
-def test_ssd_tensor_handle_grad_fn():
-    _init()
-
-    with tempfile.NamedTemporaryFile() as f:
-        orig_tensor = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32), requires_grad=True)
-        view_tensor = orig_tensor.view(-1)
-        assert view_tensor.grad_fn is not None
-        import pdb
-
-        pdb.set_trace()
-        ssd_handle = so.SsdTensorHandle.from_tensor(view_tensor)
-        assert ssd_handle.grad_fn is not None  # fails because grad_fn isn't used by dispatch
 
 
 def test_ssd_flat_parameter_view_bwd():
@@ -358,6 +344,7 @@ def test_ssd_flat_parameter_view_bwd():
         y2.sum().backward()
 
         assert "GradAccumulation_cuda" in hooks_called
+        assert "ssd_flat_param.views[0]" in hooks_called
         assert "ssd_flat_param" in hooks_called
         assert "one" in hooks_called
 
@@ -397,6 +384,7 @@ def test_ssd_flat_parameter_view_bwd_parameterization():
         grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
         grad_acc.register_hook(functools.partial(post_backward_hook, "GradAccumulation_orig", hooks_called))
 
+        ssd_flat_param.to_file(release_tensor_after_write=False)
         ssd_flat_param.data = cuda_copy
         one = torch.ones(layer1.weight.shape, requires_grad=True, device=ssd_flat_param.device)
         y1 = layer1.forward(one)
@@ -439,9 +427,6 @@ def test_ssd_flat_parameter_direct_to_file():
         assert refa_param.shape == param_views[0].shape
         assert refb_param.shape == param_views[1].shape
         assert refc_param.shape == param_views[2].shape
-
-        for p in param_views:
-            assert p.tensor is None
 
         assert torch.equal(refa_param, param_views[0])
         assert torch.equal(refb_param, param_views[1])
