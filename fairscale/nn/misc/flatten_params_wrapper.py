@@ -31,7 +31,12 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 
-from fairscale.experimental.nn.ssd_offload import SsdFlatParameter
+from fairscale.experimental.nn.ssd_offload import (
+    SsdFlatParameter,
+    SsdFlatParameterView,
+    SsdFlatParameterViewProperty,
+    _register_property,
+)
 from fairscale.utils.state_dict import replace_by_prefix_
 
 if TYPE_CHECKING:
@@ -159,6 +164,7 @@ class FlattenParamsWrapper(nn.Module):
         ssd_directory: str = "",
     ):
         super().__init__()
+        self.ssd_offload = ssd_offload
         self._fpw_module = module
         self.is_flattened = False
 
@@ -331,6 +337,7 @@ class FlattenParamsWrapper(nn.Module):
         # deregister the names as parameters
         for _, m, n in self._param_infos:
             delattr(m, n)
+
         for _, _, m, n, _, _ in self._shared_param_infos:
             delattr(m, n)
 
@@ -372,8 +379,13 @@ class FlattenParamsWrapper(nn.Module):
         ps = self.get_param_views()
         param_views = []
         for (_, m, n), p in zip(self._param_infos, ps):
-            setattr(m, n, p)  # This will set as plain attr
-            param_views.append(p)
+            if self.ssd_offload:
+                assert isinstance(p, SsdFlatParameterView)
+                _register_property(m, n, SsdFlatParameterViewProperty(p.parent, p.id))
+
+            else:
+                setattr(m, n, p)  # This will set as plain attr
+                param_views.append(p)
 
         # Save param views for easy access if anyone still wants to access
         # parameters of the module.

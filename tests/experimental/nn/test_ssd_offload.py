@@ -8,6 +8,7 @@ Testing SsdFlatParameter and SsdTensorHandle modules.
 """
 
 import filecmp
+import functools
 import os
 import tempfile
 
@@ -77,6 +78,34 @@ def test_ssd_handle_dispatch_bwd():
         assert torch.equal(ssd_handle.grad, orig_copy.grad)
 
 
+def test_ssd_handle_dispatch_bwd_hook():
+    _init()
+
+    def post_backward_hook(name, grad):
+        print(f"BACKWARD HOOK for tensor {name} CALLED")
+
+    with tempfile.NamedTemporaryFile() as f:
+        orig_tensor = torch.randn((4, 4), requires_grad=True)
+        orig_copy = orig_tensor.clone().detach().requires_grad_(True)
+        ssd_handle = so.SsdTensorHandle.from_tensor(orig_tensor)
+        ssd_handle.set_file_params(f.name, 0)
+        ssd_handle.to_file(release_tensor_after_write=True)
+        one = torch.ones((1), requires_grad=True).cuda()
+
+        import pdb
+
+        pdb.set_trace()
+        orig_copy = ssd_handle.data
+        cuda_copy = ssd_handle.to("cuda").detach()
+        ssd_handle.data = cuda_copy
+
+        ssd_handle.register_hook(functools.partial(post_backward_hook, "ssd_handle"))
+        one.register_hook(functools.partial(post_backward_hook, "one"))
+
+        y1 = ssd_handle + one
+        y1.sum().backward()
+
+
 def test_ssd_handle_train_simple():
     if torch_version() >= (1, 12, 0):
         pytest.skip("to be fixed")
@@ -102,15 +131,15 @@ def test_ssd_handle_train_simple():
         y1 = ssd_handle + 1
         optimizer_ssd.zero_grad()
         y1.sum().backward()
+        assert ssd_handle.storage_state is so.StorageState.ON_CPU_CLEAN
         optimizer_ssd.step()
+        assert ssd_handle.storage_state is so.StorageState.ON_CPU_DIRTY
 
         y2 = orig_copy + 1
         optimizer_orig.zero_grad()
         y2.sum().backward()
         optimizer_orig.step()
 
-        # make sure we are using the file version not the cached tensor
-        ssd_handle.point_to_file(f.name, 0)
         assert torch.equal(ssd_handle.to_tensor(), orig_copy)
 
 
@@ -193,15 +222,17 @@ def test_ssd_param_train_simple():
         y1 = ssd_param + 1
         optimizer_ssd.zero_grad()
         y1.sum().backward()
+        # Test to see if Dirty is being calculated correctly when optimizer modifies
+        # ssd_param
+        assert ssd_param.storage_state is so.StorageState.ON_CPU_CLEAN
         optimizer_ssd.step()
+        assert ssd_param.storage_state is so.StorageState.ON_CPU_DIRTY
 
         y2 = param + 1
         optimizer_orig.zero_grad()
         y2.sum().backward()
         optimizer_orig.step()
 
-        # make sure we are using the file version not the cached tensor
-        ssd_param.point_to_file(f.name, 0)
         assert torch.equal(ssd_param.to_tensor(), param)
 
 
@@ -211,7 +242,7 @@ def test_ssd_flat_parameter_basic():
         refa_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
         refb_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
         refc_param = torch.nn.Parameter(torch.rand((128), dtype=torch.float32))
-        ssd_flat_param = so.SsdFlatParameter.from_tensors([refa_param, refb_param, refc_param], False)
+        ssd_flat_param = so.SsdFlatParameter.from_tensors([refa_param, refb_param, refc_param], direct_to_file=False)
         ssd_flat_param.set_file_params(f.name, 0)
 
         param_views = list(ssd_flat_param.get_param_views())
@@ -224,3 +255,200 @@ def test_ssd_flat_parameter_basic():
         assert torch.equal(refb_param, param_views[1])
         assert torch.equal(refc_param, param_views[2])
         ssd_flat_param.to_file()
+
+        assert not ssd_flat_param.is_available()
+        first_value = param_views[0][0][0].item()
+        assert ssd_flat_param.is_available()
+        assert first_value == refa_param[0][0].item()
+
+
+def test_ssd_flat_parameter_view_modify():
+    _init()
+    with tempfile.NamedTemporaryFile() as f:
+        refa_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32), requires_grad=False)
+        refb_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32), requires_grad=False)
+        refc_param = torch.nn.Parameter(torch.rand((128), dtype=torch.float32), requires_grad=False)
+        ssd_flat_param = so.SsdFlatParameter.from_tensors([refa_param, refb_param, refc_param], direct_to_file=False)
+        ssd_flat_param.set_file_params(f.name, 0)
+
+        param_views = list(ssd_flat_param.get_param_views())
+
+        assert ssd_flat_param.storage_state == so.StorageState.ON_CPU_DIRTY
+        ssd_flat_param.to_file()
+        assert ssd_flat_param.storage_state == so.StorageState.ON_DISK
+        assert param_views[0].tensor is None
+
+        param_views[0] += 0.1
+        assert ssd_flat_param.storage_state == so.StorageState.ON_CPU_DIRTY
+
+
+def test_ssd_tensor_handle_grad_fn():
+    _init()
+
+    with tempfile.NamedTemporaryFile() as f:
+        orig_tensor = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32), requires_grad=True)
+        view_tensor = orig_tensor.view(-1)
+        assert view_tensor.grad_fn is not None
+        import pdb
+
+        pdb.set_trace()
+        ssd_handle = so.SsdTensorHandle.from_tensor(view_tensor)
+        assert ssd_handle.grad_fn is not None  # fails because grad_fn isn't used by dispatch
+
+
+def test_ssd_flat_parameter_view_bwd():
+    _init()
+
+    hooks_called = []
+
+    def post_backward_hook(name, hooks_called, *grads):
+        print(f"BACKWARD HOOK for tensor {name} CALLED")
+        hooks_called.append(name)
+
+    with tempfile.NamedTemporaryFile() as f:
+        refa_param = (
+            torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32), requires_grad=True)
+            .to("cpu")
+            .detach()
+            .requires_grad_()
+        )
+        refb_param = (
+            torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32), requires_grad=True)
+            .to("cpu")
+            .detach()
+            .requires_grad_()
+        )
+        refc_param = (
+            torch.nn.Parameter(torch.rand((128), dtype=torch.float32), requires_grad=True)
+            .to("cpu")
+            .detach()
+            .requires_grad_()
+        )
+        ssd_flat_param = so.SsdFlatParameter.from_tensors(
+            [refa_param, refb_param, refc_param], direct_to_file=True, filename=f.name, offset=0
+        )
+        orig_copy = ssd_flat_param.data
+        cuda_copy = ssd_flat_param.to("cuda").detach().requires_grad_()
+        cpu_copy = ssd_flat_param.to("cpu").detach().requires_grad_()
+
+        p_tmp = ssd_flat_param.expand_as(ssd_flat_param)  # Get a grad_fn on p_tmp.
+        assert p_tmp.grad_fn is not None
+        grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
+        grad_acc.register_hook(functools.partial(post_backward_hook, "GradAccumulation_orig", hooks_called))
+
+        ssd_flat_param.data = cuda_copy
+        one = torch.ones((1), requires_grad=True, device=ssd_flat_param.device)
+        y1 = ssd_flat_param.views[0] + one
+        y2 = cuda_copy + 1
+
+        # ssd_flat_param.to_file()
+        # ssd_flat_param.data = orig_copy
+
+        p_tmp = ssd_flat_param.expand_as(ssd_flat_param)  # Get a grad_fn on p_tmp.
+        assert p_tmp.grad_fn is not None
+        grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
+        grad_acc.register_hook(functools.partial(post_backward_hook, "GradAccumulation_cuda", hooks_called))
+        ssd_flat_param.views[0].register_hook(
+            functools.partial(post_backward_hook, "ssd_flat_param.views[0]", hooks_called)
+        )
+        ssd_flat_param.register_hook(functools.partial(post_backward_hook, "ssd_flat_param", hooks_called))
+        one.register_hook(functools.partial(post_backward_hook, "one", hooks_called))
+
+        y1.sum().backward()
+        y2.sum().backward()
+
+        assert "GradAccumulation_cuda" in hooks_called
+        assert "ssd_flat_param" in hooks_called
+        assert "one" in hooks_called
+
+
+def test_ssd_flat_parameter_view_bwd_parameterization():
+    _init()
+
+    hooks_called = []
+
+    def post_backward_hook(name, hooks_called, *grads):
+        print(f"BACKWARD HOOK for tensor {name} CALLED")
+        hooks_called.append(name)
+
+    with tempfile.NamedTemporaryFile() as f:
+        layer1 = torch.nn.Linear(32, 4, bias=False)
+        layer2 = torch.nn.Linear(32, 4, bias=False)
+        layer3 = torch.nn.Linear(128, 1, bias=False)
+        ssd_flat_param = so.SsdFlatParameter.from_tensors(
+            [layer1.weight, layer2.weight, layer3.weight], direct_to_file=False, filename=f.name, offset=0
+        )
+        torch.nn.utils.parametrize.register_parametrization(
+            layer1, "weight", so.SsdFlatParameterViewParameterization(ssd_flat_param, 0)
+        )
+        torch.nn.utils.parametrize.register_parametrization(
+            layer2, "weight", so.SsdFlatParameterViewParameterization(ssd_flat_param, 1)
+        )
+        torch.nn.utils.parametrize.register_parametrization(
+            layer3, "weight", so.SsdFlatParameterViewParameterization(ssd_flat_param, 2)
+        )
+
+        orig_copy = ssd_flat_param.data
+        cuda_copy = ssd_flat_param.to("cuda").detach().requires_grad_()
+        cpu_copy = ssd_flat_param.to("cpu").detach().requires_grad_()
+
+        p_tmp = ssd_flat_param.expand_as(ssd_flat_param)  # Get a grad_fn on p_tmp.
+        assert p_tmp.grad_fn is not None
+        grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
+        grad_acc.register_hook(functools.partial(post_backward_hook, "GradAccumulation_orig", hooks_called))
+
+        ssd_flat_param.data = cuda_copy
+        one = torch.ones(layer1.weight.shape, requires_grad=True, device=ssd_flat_param.device)
+        y1 = layer1.forward(one)
+        y2 = cuda_copy + 1
+
+        # ssd_flat_param.to_file()
+        # ssd_flat_param.data = orig_copy
+
+        p_tmp = ssd_flat_param.expand_as(ssd_flat_param)  # Get a grad_fn on p_tmp.
+        assert p_tmp.grad_fn is not None
+        grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
+        grad_acc.register_hook(functools.partial(post_backward_hook, "GradAccumulation_cuda", hooks_called))
+        ssd_flat_param.views[0].register_hook(
+            functools.partial(post_backward_hook, "ssd_flat_param.views[0]", hooks_called)
+        )
+        ssd_flat_param.register_hook(functools.partial(post_backward_hook, "ssd_flat_param", hooks_called))
+        one.register_hook(functools.partial(post_backward_hook, "one", hooks_called))
+
+        y1.sum().backward()
+        y2.sum().backward()
+
+        assert "GradAccumulation_cuda" in hooks_called
+        assert "ssd_flat_param.views[0]" in hooks_called
+        assert "ssd_flat_param" in hooks_called
+        assert "one" in hooks_called
+
+
+def test_ssd_flat_parameter_direct_to_file():
+    _init()
+    with tempfile.NamedTemporaryFile() as f:
+        refa_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
+        refb_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
+        refc_param = torch.nn.Parameter(torch.rand((128), dtype=torch.float32))
+        ssd_flat_param = so.SsdFlatParameter.from_tensors(
+            [refa_param, refb_param, refc_param], direct_to_file=True, filename=f.name, offset=0
+        )
+
+        param_views = list(ssd_flat_param.get_param_views())
+
+        assert refa_param.shape == param_views[0].shape
+        assert refb_param.shape == param_views[1].shape
+        assert refc_param.shape == param_views[2].shape
+
+        for p in param_views:
+            assert p.tensor is None
+
+        assert torch.equal(refa_param, param_views[0])
+        assert torch.equal(refb_param, param_views[1])
+        assert torch.equal(refc_param, param_views[2])
+        ssd_flat_param.to_file()
+
+        assert not ssd_flat_param.is_available()
+        first_value = param_views[0][0][0].item()
+        assert ssd_flat_param.is_available()
+        assert first_value == refa_param[0][0].item()

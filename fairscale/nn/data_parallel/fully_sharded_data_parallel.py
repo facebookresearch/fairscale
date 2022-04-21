@@ -1138,7 +1138,12 @@ class FullyShardedDataParallel(nn.Module):
                             # Copy any changes made to the full params back into
                             # the corresponding local shards.
                             local_shard, _ = self._get_shard(full_tensor)
-                            p._fp32_shard.copy_(local_shard.view_as(p._fp32_shard))
+                            if self.ssd_offload:
+                                assert isinstance(p, ssd_offload.SsdParameter)
+                                self._ssd_offload_reset_param_device(p)
+                                p.point_to_tensor(local_shard.view_as(p._fp32_shard).cpu())
+                            else:
+                                p._fp32_shard.copy_(local_shard.view_as(p._fp32_shard))
                         if safe_to_free:
                             free_storage_(full_tensor)
                     self.has_full_params = False
@@ -1898,7 +1903,9 @@ class FullyShardedDataParallel(nn.Module):
         if self.ssd_offload:
             for p in self.params:
                 assert isinstance(p, SsdFlatParameter)
-                p.to_tensor()
+                if not p.is_available():
+                    self._ssd_offload_reset_param_device(p)
+                    p.to_tensor()
 
             self.has_full_params = False
 
@@ -2176,12 +2183,23 @@ class FullyShardedDataParallel(nn.Module):
         return consolidated_weights
 
     @torch.no_grad()
+    def _ssd_offload_reset_param_device(self, param: ssd_offload.SsdParameter) -> None:
+        if param.device != torch.device("cpu"):
+            param.data = param._fp32_shard
+            param.tensor = None
+
+    @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
         """Use FP32 shard for a list of params."""
         if params is None:
             params = self.params
         for p in params:
-            p.data = p._fp32_shard
+            if self.ssd_offload:
+                assert isinstance(p, ssd_offload.SsdParameter)
+                self._ssd_offload_reset_param_device(p)
+                p.to_tensor()
+            else:
+                p.data = p._fp32_shard
 
     @torch.no_grad()
     def _cast_fp32_param_shards_to_fp16(self, params: Optional[List[Parameter]] = None) -> None:
@@ -2192,11 +2210,14 @@ class FullyShardedDataParallel(nn.Module):
             for p in params:
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
-                p._fp16_shard.copy_(
-                    # If move_params_to_cpu is True, this will be non-blocking
-                    # because _fp32_shard is pinned, otherwise it's a no-op.
-                    p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
-                )
+                if self.ssd_offload:
+                    p._fp16_shard.copy_(p.to(p._fp16_shard.device, non_blocking=True))
+                else:
+                    p._fp16_shard.copy_(
+                        # If move_params_to_cpu is True, this will be non-blocking
+                        # because _fp32_shard is pinned, otherwise it's a no-op.
+                        p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
+                    )
                 p.data = p._fp16_shard
         torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
 
