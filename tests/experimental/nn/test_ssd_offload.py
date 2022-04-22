@@ -93,7 +93,7 @@ def test_ssd_handle_dispatch_bwd_hook():
         one = torch.ones((1), requires_grad=True).cuda()
 
         orig_copy = ssd_handle.data
-        cuda_copy = ssd_handle.to("cuda").detach()
+        cuda_copy = ssd_handle.to("cuda").detach().requires_grad_(True)
         ssd_handle.data = cuda_copy
 
         ssd_handle.register_hook(functools.partial(post_backward_hook, "ssd_handle"))

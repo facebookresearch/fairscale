@@ -288,6 +288,8 @@ class TestSsdLoading(DistributedTest):
     @classmethod
     def _test_ssd_offloading_train_flatten_params_wrapper(self, rank, group, config):
         SIZE = 16 * 16
+        LR = 0.01
+        MOMENTUM = 0.1
         model = SimpleLinear(group, input_size=SIZE, output_size=SIZE, layers=4)
 
         with tempfile.TemporaryDirectory() as current_tempdir:
@@ -305,7 +307,7 @@ class TestSsdLoading(DistributedTest):
                 model = FullyShardedDataParallel(model, **config)
             model_device = torch.device("cuda")
             model.train()
-            optim = torch.optim.SGD(model.parameters(), lr=1.0, momentum=0.1)
+            optim = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM)
 
             checkpoint_file = tempfile.NamedTemporaryFile()
             checkpoint_load_directory = tempfile.TemporaryDirectory(prefix="checkpoint_dir")
@@ -322,8 +324,11 @@ class TestSsdLoading(DistributedTest):
                     input = model.get_input(torch.device("cuda"))
                     output = model(*input)
                     pre_checkpoint_last_output = output
-                    # print(f"pre_checkpoint value: {output[0][0].item()}")
-                    print(f"i={i} pre_checkpoint model.flat_params[0][0].item() = {model.flat_params[0][0].item()}")
+                    """
+                    param_itr = iter(model.named_parameters())
+                    p_name, p_val = next(param_itr)
+                    print(f"i={i} pre_checkpoint {p_name} = {p_val[0].item()}")
+                    """
                     loss = model.module.get_loss(input, output).to(model_device)
                     assert loss.dtype == torch.float32
                     model.module.run_backward(loss)
@@ -333,20 +338,23 @@ class TestSsdLoading(DistributedTest):
                             # so.torch_saver.save({"model": model.state_dict(), "optim": optim.state_dict()}, checkpoint_file.name)
                             torch.save({"model": model.state_dict()}, checkpoint_file.name)
                         # reset momentum just after checkpoint save
-                        optim = torch.optim.SGD(model.parameters(), lr=1.0, momentum=0.1)
+                        optim = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM)
 
                 checkpoint = torch.load(checkpoint_file.name)
                 model.load_state_dict(checkpoint["model"])
                 # reset momentum just after checkpoint load
-                optim = torch.optim.SGD(model.parameters(), lr=1.0, momentum=0.1)
+                optim = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM)
                 # do more iterations after loading checkpoint
                 for i in range(ITERATIONS - 1):
                     optim.zero_grad()
                     input = model.get_input(torch.device("cuda"))
                     output = model(*input)
                     post_checkpoint_last_output = output
-                    # print(f"post_checkpoint value: {output[0][0].item()}")
-                    print(f"i={i} post_checkpoint model.flat_params[0][0].item() = {model.flat_params[0][0].item()}")
+                    """
+                    param_itr = iter(model.named_parameters())
+                    p_name, p_val = next(param_itr)
+                    print(f"i={i} post_checkpoint {p_name} = {p_val[0].item()}")
+                    """
                     loss = model.module.get_loss(input, output).to(model_device)
                     assert loss.dtype == torch.float32
 
@@ -504,7 +512,7 @@ def spawn_and_init(fn, args=None, **spawn_kwargs):
     # _, filename_rpc = tempfile.mkstemp()
     # run_fn(0, 1, filename, filename_rpc)
 
-    spawn_for_all_world_sizes(run_fn, **spawn_kwargs, world_sizes=[2])
+    spawn_for_all_world_sizes(run_fn, **spawn_kwargs)
 
 
 def init_and_run(fn, args, rank, world_size, filename, filename_rpc):

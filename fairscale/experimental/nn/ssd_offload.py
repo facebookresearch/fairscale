@@ -69,7 +69,10 @@ def read(input_tensor: torch.Tensor, filename: str, file_offset_bytes: int = 0) 
             chunk_start = i * chunk_size_bytes
             chunk_end = min(size_in_bytes, chunk_start + chunk_size_bytes)
             data_read = f.readinto(input_tensor_mv[chunk_start:chunk_end])
-            assert data_read == chunk_end - chunk_start
+            if data_read != chunk_end - chunk_start:
+                raise RuntimeError(
+                    f"Attempted to read {chunk_end - chunk_start} more bytes from {filename}, but only read: {data_read} bytes. Total Bytes read = {chunk_start + data_read}, total bytes expected: {size_in_bytes}"
+                )
 
 
 class StorageState(Enum):
@@ -116,6 +119,7 @@ class SsdTensorHandle(torch.Tensor):
         requires_grad: bool = False,
         device: torch.device = torch.device("cpu"),
         flush_on_dirty: bool = True,
+        allow_unsafe_changes: bool = False,
     ) -> SsdTensorHandle:
         r = super(SsdTensorHandle, cls)._make_wrapper_subclass(cls, shape, dtype=dtype, requires_grad=requires_grad, device=device)  # type: ignore
         return r
@@ -127,6 +131,7 @@ class SsdTensorHandle(torch.Tensor):
         requires_grad: bool,
         device: torch.device = torch.device("cpu"),
         flush_on_dirty: bool = True,
+        allow_unsafe_changes: bool = False,
     ) -> None:
         self._unpickle_f: Optional[Union[BinaryIO, IO[bytes]]] = None
 
@@ -143,6 +148,7 @@ class SsdTensorHandle(torch.Tensor):
         self.tensor: Optional[torch.Tensor] = None
         self.storage_state = StorageState.UNALLOCATED
         self.flush_on_dirty = flush_on_dirty
+        self.allow_unsafe_changes = allow_unsafe_changes
 
     def mark_dirty(self) -> None:
         assert self.tensor is not None
@@ -186,7 +192,8 @@ class SsdTensorHandle(torch.Tensor):
 
     def point_to_tensor(self, tensor: torch.Tensor) -> None:
         assert self.tensor is None
-        assert self._shape == tensor.shape
+        if not self.allow_unsafe_changes:
+            assert self._shape == tensor.shape
         assert self._dtype == tensor.dtype
         self.tensor = tensor
         self.storage_state = StorageState.ON_CPU_DIRTY
@@ -210,7 +217,7 @@ class SsdTensorHandle(torch.Tensor):
                 raise RuntimeError(
                     f"to_tensor called on an SsdTensorHandle when the tensor has been offloaded to disk. self.device = {self.device}, it should be {torch.device('cpu')}. Some unexpected .data override has occured!!"
                 )
-            result_tensor = torch.empty(size=self._shape, dtype=self._dtype, requires_grad=self.requires_grad)
+            result_tensor = torch.empty(size=self.shape, dtype=self.dtype, requires_grad=self.requires_grad)
             self.copy_into_tensor(result_tensor)
             self.tensor = result_tensor
             self.storage_state = StorageState.ON_CPU_CLEAN
@@ -244,7 +251,9 @@ class SsdTensorHandle(torch.Tensor):
         function. This can be useful for calls like named_parameters() when
         the tensor is already offloaded to disk.
         """
-        assert self._shape == tensor.shape
+        # ideally this should be checked but .data shenanigans forces it to
+        # be disabled due to the way FSDP shards parameters
+        # assert self._shape == tensor.shape
         assert self._dtype == tensor.dtype
         if self.tensor is not None:
             tensor.copy_(self.tensor)
@@ -287,16 +296,20 @@ class SsdTensorHandle(torch.Tensor):
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "data":
             assert isinstance(value, torch.Tensor)
-            # Respect .data changes, and the user better know what they are doing!
-            if self.storage_state == StorageState.ON_CPU_DIRTY:
-                raise RuntimeError("Attempting to override tensor when the existing tensor is dirty, this is an error!")
-            if value.shape != self.shape:
-                raise RuntimeError(
-                    f"Attempting to override tensor metadata using .data to change shape of tensor. Orig shape: {self.shape} New shape: {value.shape}"
-                )
-            if value.requires_grad != self.requires_grad:
-                pass
-                # raise RuntimeError(f"Attempting to override tensor metadata using .data to change requires_grad. Orig value: {self.requires_grad} New value: {value.requires_grad}")
+            if not self.allow_unsafe_changes:
+                # Respect .data changes, and the user better know what they are doing!
+                if self.storage_state == StorageState.ON_CPU_DIRTY:
+                    raise RuntimeError(
+                        "Attempting to override tensor when the existing tensor is dirty, this is an error!"
+                    )
+                if value.shape != self.shape:
+                    raise RuntimeError(
+                        f"Attempting to override tensor metadata using .data to change shape of tensor. Orig shape: {self.shape} New shape: {value.shape}"
+                    )
+                if value.requires_grad != self.requires_grad:
+                    raise RuntimeError(
+                        f"Attempting to override tensor metadata using .data to change requires_grad. Orig value: {self.requires_grad} New value: {value.requires_grad}"
+                    )
             self.tensor = value
         super(SsdTensorHandle, self).__setattr__(name, value)
 
@@ -501,9 +514,9 @@ class SsdFlatParameter(SsdParameter):
 
     @torch.enable_grad()
     def _refresh_views(self) -> None:
-        print(
-            f" _refresh_views self.shape: {self.shape} self.tensor.shape: {self.tensor.shape} param_numels: {self._param_numels}, param_shapes: {self._param_shapes}"
-        )
+        if self._shape != self.shape:
+            self.views = []
+            return
         if len(self.views) == 0:
             self.views = [s.view(v) for s, v in zip(self.split(self._param_numels), self._param_shapes)]  # type: ignore
         else:
@@ -528,6 +541,11 @@ class SsdFlatParameter(SsdParameter):
             # this needs to return SsdFlatParameterViews
             if not self.is_available():
                 self.to_tensor()
+
+            if len(self.views) == 0:
+                raise RuntimeError(
+                    "Trying to call get_param_views when self.views is empty, this means that .data games have been played and the current .data shape doesn't match the constructed shape."
+                )
             return (v for v in self.views)
 
     def metadata(self) -> Tuple[List[str], Sequence[torch.Size], List[int]]:

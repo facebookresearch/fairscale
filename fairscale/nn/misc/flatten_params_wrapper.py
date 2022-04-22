@@ -230,6 +230,7 @@ class FlattenParamsWrapper(nn.Module):
                 assert ssd_directory != ""
                 (handle, fname) = tempfile.mkstemp(dir=ssd_directory, suffix="ssd_buf_param")
                 flat_param = SsdFlatParameter.from_tensors(tensors=params)
+                flat_param.allow_unsafe_changes = True
                 flat_param.set_file_params(fname, 0)
             else:
                 flat_param = FlatParameter(params, params[0].requires_grad)
