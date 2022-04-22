@@ -16,11 +16,12 @@ import numpy as np
 import pytest
 import torch
 
-import fairscale.experimental.nn.ssd_offload as so
-from fairscale.utils import torch_version
-
-# Note: We need the nightly version for SSD offload to work. Hence I am checking for the next PyTorch release.
-pytestmark = pytest.mark.skipif(torch_version() < (1, 11, 0), reason="requires torch version >= 1.11.0")
+try:
+    import fairscale.experimental.nn.ssd_offload as so
+except ImportError as ie:
+    # Note: We need the nightly version for SSD offload to work. Hence I am checking for the next PyTorch release.
+    pytestmark = pytest.mark.skipif(True, reason=ie.msg)
+    pass
 
 
 def _init():
@@ -104,9 +105,6 @@ def test_ssd_handle_dispatch_bwd_hook():
 
 
 def test_ssd_handle_train_simple():
-    if torch_version() >= (1, 12, 0):
-        pytest.skip("to be fixed")
-
     _init()
 
     with tempfile.NamedTemporaryFile() as f:
@@ -196,9 +194,6 @@ def test_torch_save_load_ssd_flat_param_on_mem():
 
 
 def test_ssd_param_train_simple():
-    if torch_version() >= (1, 12, 0):
-        pytest.skip("to be fixed")
-
     _init()
     with tempfile.NamedTemporaryFile() as f:
         orig_tensor = torch.randn((4, 4))

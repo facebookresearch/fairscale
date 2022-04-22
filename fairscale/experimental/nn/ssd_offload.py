@@ -17,12 +17,18 @@ import numpy as np
 import torch
 from torch.serialization import DEFAULT_PROTOCOL as DEFAULT_PROTOCOL
 
+from fairscale.utils import torch_version
+
 try:
     from torch.utils._pytree import tree_map
 except ImportError:
     # The PyTorch version(<1.9) we test with does not support the tree_map API.
     pass
 
+if torch_version() < (1, 12, 0):
+    raise ImportError(
+        f"ssd_offload only works on torch versions 1.12.0 and beyond, but torch version is: {torch.__version__}"
+    )
 
 DEFAULT_CHUNK_SIZE = 2048 * 2048
 
@@ -613,12 +619,7 @@ class SsdFlatParameter(SsdParameter):
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
         func_name = func.overloadpacket.__name__
-        value_before = 0.0
-        if func_name == "add_":
-            value_before = args[0][0].item()
         r = super(SsdFlatParameter, cls).__torch_dispatch__(func, types, args, kwargs)  # type: ignore
-        if func_name == "add_":
-            value_after = args[0][0].item()
         if func_name.startswith("split"):
             assert isinstance(args[0], SsdFlatParameter)
             parent = args[0]
@@ -684,7 +685,7 @@ class SsdFlatParameter(SsdParameter):
 
 class SsdFlatParameterView(torch.Tensor):
     """
-    Represents a view into an SsdFlatParameter
+    Represents a view into an SsdFlatParameter. It is needed due to FSDP's usage of flattening parameters.
     """
 
     def __new__(
@@ -749,6 +750,10 @@ class SsdFlatParameterView(torch.Tensor):
 # ###################################
 # ### BEGIN OVERRIDE_PROPERTY FNs ###
 # ###################################
+# This code is taken mostly from pytorch core parameterization
+# pytorch/torch/nn/utils/parametrize.py
+
+
 def _inject_new_class(module: torch.nn.Module) -> None:
     r"""Sets up a module to be parametrized.
 
@@ -838,6 +843,15 @@ def _remove_property(module: torch.nn.Module, property_name: str, new_property_v
 
 
 class SsdFlatParameterViewProperty:
+    """
+    Allows for a mutable view to replace a layer's trainable parameters.
+    This is needed since FSDP is changing .data under the covers,
+    SsdFlatParameter cannot just rely on this since each view (of type SsdFlatParameterView) has
+    an internal representation. So every time we access a view, we need to
+    make sure we get the up-to-date version, and not the original version
+    when flattening the parameters.
+    """
+
     def __init__(self, parent: SsdFlatParameter, view_id: int) -> None:
         super().__init__()
         self.parent = parent

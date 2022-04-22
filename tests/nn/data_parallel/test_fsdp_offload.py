@@ -16,16 +16,16 @@ import torch
 from torch import nn
 import torch.distributed
 
-import fairscale.experimental.nn.ssd_offload as so
+try:
+    import fairscale.experimental.nn.ssd_offload as so
+except ImportError as ie:
+    # Note: We need the nightly version for SSD offload to work. Hence I am checking for the next PyTorch release.
+    pytestmark = pytest.mark.skipif(True, reason=ie.msg)
+    pass
+
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, OffloadConfig, TrainingState
-from fairscale.utils import torch_version
 from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
-
-# Note: We need the nightly version for SSD offload to work. Hence I am checking for the next PyTorch release.
-print(f"torch version {torch_version()}")
-pytestmark = pytest.mark.skipif(torch_version() < (1, 11, 0), reason="requires torch version >= 1.11.0")
-
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod
@@ -137,8 +137,6 @@ def rename_test(testcase_func, param_num, param):
 
 class TestSsdMemory(DistributedTest):
     def test_memory_benchmark(self):
-        if torch_version() >= (1, 12, 0):
-            pytest.skip("to be fixed")
 
         test_fn = functools.partial(self._test_memory_benchmark, config={})
         spawn_and_init(test_fn)
@@ -218,8 +216,6 @@ class TimeKeeper:
 class TestModuleProperties(DistributedTest):
     @parameterized.expand(CONFIG, name_func=rename_test)
     def test_named_parameters(self, config):
-        if torch_version() >= (1, 12, 0):
-            pytest.skip("to be fixed")
 
         test_fn = functools.partial(self._test_named_params, config=config)
         spawn_and_init(test_fn)
@@ -264,23 +260,17 @@ class TestModuleProperties(DistributedTest):
 class TestSsdLoading(DistributedTest):
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_ssd_offloading_eval(self, config):
-        if torch_version() >= (1, 12, 0):
-            pytest.skip("to be fixed")
 
         test_fn = functools.partial(self._test_ssd_offload_eval, config=config)
         spawn_and_init(test_fn)
 
     @parameterized.expand(CONFIG, name_func=rename_test)
     def test_transformer_parameterized(self, config):
-        if torch_version() >= (1, 12, 0):
-            pytest.skip("to be fixed")
 
         spawn_and_init(functools.partial(self._test_identical_outputs_eval, TransformerWithSharedParams, config))
 
     @parameterized.expand(CONFIG_OPTIONS, name_func=rename_test)
     def test_ssd_offloading_train_flatten_params_wrapper(self, config):
-        if torch_version() >= (1, 12, 0):
-            pytest.skip("to be fixed")
 
         test_fn = functools.partial(self._test_ssd_offloading_train_flatten_params_wrapper, config=config)
         spawn_and_init(test_fn)

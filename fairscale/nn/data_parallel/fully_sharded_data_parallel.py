@@ -398,6 +398,10 @@ class FullyShardedDataParallel(nn.Module):
         self.state_dict_on_rank_0_only = state_dict_on_rank_0_only
         # Experimental feature for now. Use at your own risk.
         self.ssd_offload = True if offload_config and offload_config.offload_type == "ssd_offload" else False
+        if self.ssd_offload and not import_ssd_offload:
+            raise ImportError(
+                f"Trying to enable ssd_offload when it was not successfully imported (likely due to old torch version, current = {torch.__version__})"
+            )
 
         self.gradient_predivide_factor: float = gradient_predivide_factor or self._get_gradient_predivide_factor(
             self.world_size
@@ -2181,7 +2185,8 @@ class FullyShardedDataParallel(nn.Module):
         return consolidated_weights
 
     @torch.no_grad()
-    def _ssd_offload_reset_param_device(self, param: ssd_offload.SsdParameter) -> None:
+    def _ssd_offload_reset_param_device(self, param: Parameter) -> None:
+        assert isinstance(param, ssd_offload.SsdParameter)
         if param.device != torch.device("cpu"):
             param.data = param._fp32_shard
             param.tensor = None
@@ -2192,7 +2197,7 @@ class FullyShardedDataParallel(nn.Module):
         if params is None:
             params = self.params
         for p in params:
-            if self.ssd_offload:
+            if import_ssd_offload and self.ssd_offload:
                 assert isinstance(p, ssd_offload.SsdParameter)
                 self._ssd_offload_reset_param_device(p)
                 p.to_tensor()
