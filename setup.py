@@ -64,7 +64,7 @@ if __name__ == "__main__":
         packages=setuptools.find_packages(exclude=("tests", "tests.*")),
         ext_modules=extensions,
         cmdclass=cmdclass,
-        python_requires=">=3.6",
+        python_requires=">=3.7",
         author="Facebook AI Research",
         author_email="todo@fb.com",
         long_description="FairScale is a PyTorch extension library for high performance and large scale training on one or multiple machines/nodes. This library extends basic PyTorch capabilities while adding new experimental ones.",
