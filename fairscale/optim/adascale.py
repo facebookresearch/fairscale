@@ -636,7 +636,7 @@ class AdaScaleWrapper(AdaScale):
         additional_optim_args (argument dict):
             keyward arguments to the `optim` class above.
 
-        The rest params are in-sync with the `AdaScale` class above.
+    The rest params are in-sync with the `AdaScale` class above.
     """
 
     def __init__(
