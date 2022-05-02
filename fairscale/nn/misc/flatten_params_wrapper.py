@@ -31,7 +31,19 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 
-from fairscale.experimental.nn.ssd_offload import SsdFlatParameter
+try:
+    from fairscale.experimental.nn.ssd_offload import (
+        SsdFlatParameter,
+        SsdFlatParameterView,
+        SsdFlatParameterViewProperty,
+        _register_property,
+    )
+
+    import_ssd_offload = True
+except ImportError:
+    import_ssd_offload = False
+    pass
+
 from fairscale.utils.state_dict import replace_by_prefix_
 
 if TYPE_CHECKING:
@@ -116,7 +128,6 @@ class FlatParameter(nn.Parameter):
 
 
 # Static types.
-FlatTypes = Union[FlatParameter, SsdFlatParameter]
 ParamGroups = Optional[Union[List[List[nn.Parameter]], List[nn.Parameter]]]
 
 
@@ -159,6 +170,11 @@ class FlattenParamsWrapper(nn.Module):
         ssd_directory: str = "",
     ):
         super().__init__()
+        if ssd_offload and not import_ssd_offload:
+            raise ImportError(
+                f"Trying to enable ssd_offload when it was not successfully imported (likely due to old torch version, current = {torch.__version__})"
+            )
+        self.ssd_offload = ssd_offload
         self._fpw_module = module
         self.is_flattened = False
 
@@ -205,7 +221,7 @@ class FlattenParamsWrapper(nn.Module):
             # support.
             raise ValueError(f"Incorrect param groups {len(overall_param_set)} vs {self.num_param_managed}")
 
-        self.flat_params: List[FlatTypes] = []
+        self.flat_params: List[nn.Parameter] = []
 
         # Prepare flat param names.
         if flat_param_names is None:
@@ -215,7 +231,7 @@ class FlattenParamsWrapper(nn.Module):
         if len(flat_param_names) != len(set(flat_param_names)):
             raise ValueError("Each flat param must be given a unique name")
         self.flat_param_names = [f"flat_param_{n}" for n in flat_param_names]
-        flat_param: Optional[FlatTypes] = None
+        flat_param: Optional[nn.Parameter] = None
 
         # Init all flat_params.
         for new_p_set in self._param_sets:
@@ -224,6 +240,7 @@ class FlattenParamsWrapper(nn.Module):
                 assert ssd_directory != ""
                 (handle, fname) = tempfile.mkstemp(dir=ssd_directory, suffix="ssd_buf_param")
                 flat_param = SsdFlatParameter.from_tensors(tensors=params)
+                flat_param.allow_unsafe_changes = True
                 flat_param.set_file_params(fname, 0)
             else:
                 flat_param = FlatParameter(params, params[0].requires_grad)
@@ -309,13 +326,13 @@ class FlattenParamsWrapper(nn.Module):
 
     @property
     def _param_infos(self) -> Iterator[Tuple[str, nn.Module, str]]:
-        return chain(*[p._param_infos for p in self.flat_params])
+        return chain(*[p._param_infos for p in self.flat_params])  # type: ignore
 
     @property
     def _shared_param_infos(self) -> Iterator[Tuple[str, str, nn.Module, str, nn.Module, str]]:
-        return chain(*[p._shared_param_infos for p in self.flat_params])
+        return chain(*[p._shared_param_infos for p in self.flat_params])  # type: ignore
 
-    def _flatten_params(self, flat_params: List[FlatTypes]) -> None:
+    def _flatten_params(self, flat_params: List[nn.Parameter]) -> None:
         """Flatten the managed parameters and replaced the original
         attributes with views to the flat params.
         """
@@ -331,6 +348,7 @@ class FlattenParamsWrapper(nn.Module):
         # deregister the names as parameters
         for _, m, n in self._param_infos:
             delattr(m, n)
+
         for _, _, m, n, _, _ in self._shared_param_infos:
             delattr(m, n)
 
@@ -372,8 +390,13 @@ class FlattenParamsWrapper(nn.Module):
         ps = self.get_param_views()
         param_views = []
         for (_, m, n), p in zip(self._param_infos, ps):
-            setattr(m, n, p)  # This will set as plain attr
-            param_views.append(p)
+            if self.ssd_offload:
+                assert isinstance(p, SsdFlatParameterView)
+                _register_property(m, n, SsdFlatParameterViewProperty(p.parent, p.id))
+
+            else:
+                setattr(m, n, p)  # This will set as plain attr
+                param_views.append(p)
 
         # Save param views for easy access if anyone still wants to access
         # parameters of the module.
@@ -498,13 +521,13 @@ class FlattenParamsWrapper(nn.Module):
 
         gens = []
         for p, data in zip(params, external_data_list):
-            gens.append(p.get_param_views(data))
+            gens.append(p.get_param_views(data))  # type: ignore
 
         return chain(*gens)
 
     def metadata(self, flat_param_idx: int) -> Tuple[List[str], Sequence[torch.Size], List[int]]:
         """Return metadata for a flat param given its index in the flat_params list."""
-        return self.flat_params[flat_param_idx].metadata()
+        return self.flat_params[flat_param_idx].metadata()  # type: ignore
 
 
 def _post_state_dict_hook(

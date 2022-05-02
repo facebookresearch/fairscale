@@ -11,11 +11,13 @@ import io
 import os
 import pickle
 from types import TracebackType
-from typing import IO, Any, BinaryIO, Iterator, List, Optional, Sequence, Tuple, Type, Union
+from typing import IO, Any, BinaryIO, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Type, Union
 
 import numpy as np
 import torch
 from torch.serialization import DEFAULT_PROTOCOL as DEFAULT_PROTOCOL
+
+from fairscale.utils import torch_version
 
 try:
     from torch.utils._pytree import tree_map
@@ -23,6 +25,10 @@ except ImportError:
     # The PyTorch version(<1.9) we test with does not support the tree_map API.
     pass
 
+if torch_version() < (1, 12, 0):
+    raise ImportError(
+        f"ssd_offload only works on torch versions 1.12.0 and beyond, but torch version is: {torch.__version__}"
+    )
 
 DEFAULT_CHUNK_SIZE = 2048 * 2048
 
@@ -69,7 +75,10 @@ def read(input_tensor: torch.Tensor, filename: str, file_offset_bytes: int = 0) 
             chunk_start = i * chunk_size_bytes
             chunk_end = min(size_in_bytes, chunk_start + chunk_size_bytes)
             data_read = f.readinto(input_tensor_mv[chunk_start:chunk_end])
-            assert data_read == chunk_end - chunk_start
+            if data_read != chunk_end - chunk_start:
+                raise RuntimeError(
+                    f"Attempted to read {chunk_end - chunk_start} more bytes from {filename}, but only read: {data_read} bytes. Total Bytes read = {chunk_start + data_read}, total bytes expected: {size_in_bytes}"
+                )
 
 
 class StorageState(Enum):
@@ -82,7 +91,8 @@ class StorageState(Enum):
 
     UNALLOCATED = auto()
     ON_DISK = auto()
-    ON_CPU = auto()
+    ON_CPU_CLEAN = auto()
+    ON_CPU_DIRTY = auto()
 
 
 class SsdTensorHandle(torch.Tensor):
@@ -109,12 +119,26 @@ class SsdTensorHandle(torch.Tensor):
 
     @staticmethod
     def __new__(
-        cls: Type[SsdTensorHandle], shape: torch.Size, dtype: torch.dtype, requires_grad: bool = False
+        cls: Type[SsdTensorHandle],
+        shape: torch.Size,
+        dtype: torch.dtype,
+        requires_grad: bool = False,
+        device: torch.device = torch.device("cpu"),
+        flush_on_dirty: bool = True,
+        allow_unsafe_changes: bool = False,
     ) -> SsdTensorHandle:
-        r = super(SsdTensorHandle, cls)._make_wrapper_subclass(cls, shape, dtype=dtype, requires_grad=requires_grad)  # type: ignore
+        r = super(SsdTensorHandle, cls)._make_wrapper_subclass(cls, shape, dtype=dtype, requires_grad=requires_grad, device=device)  # type: ignore
         return r
 
-    def __init__(self, shape: torch.Size, dtype: torch.dtype, requires_grad: bool) -> None:
+    def __init__(
+        self,
+        shape: torch.Size,
+        dtype: torch.dtype,
+        requires_grad: bool,
+        device: torch.device = torch.device("cpu"),
+        flush_on_dirty: bool = True,
+        allow_unsafe_changes: bool = False,
+    ) -> None:
         self._unpickle_f: Optional[Union[BinaryIO, IO[bytes]]] = None
 
         self._shape = shape
@@ -128,8 +152,17 @@ class SsdTensorHandle(torch.Tensor):
         self.offset = -1
         # valid if loaded to memory
         self.tensor: Optional[torch.Tensor] = None
-        self.requires_grad = requires_grad
         self.storage_state = StorageState.UNALLOCATED
+        self.flush_on_dirty = flush_on_dirty
+        self.allow_unsafe_changes = allow_unsafe_changes
+
+    def mark_dirty(self) -> None:
+        assert self.tensor is not None
+        assert self.storage_state in [StorageState.ON_CPU_CLEAN, StorageState.ON_CPU_DIRTY]
+        self.storage_state = StorageState.ON_CPU_DIRTY
+        # hack to force write on mark_dirty
+        if self.flush_on_dirty:
+            self.to_file()
 
     @classmethod
     def from_file(
@@ -143,7 +176,7 @@ class SsdTensorHandle(torch.Tensor):
     @classmethod
     def from_tensor(cls: Type[SsdTensorHandle], tensor: torch.Tensor) -> SsdTensorHandle:
         """Returns a new SsdTensorHandle from a tensor."""
-        handle = cls(shape=tensor.shape, dtype=tensor.dtype, requires_grad=tensor.requires_grad)
+        handle = cls(shape=tensor.shape, dtype=tensor.dtype, requires_grad=tensor.requires_grad, device=tensor.device)
         handle.point_to_tensor(tensor)
         return handle
 
@@ -165,10 +198,11 @@ class SsdTensorHandle(torch.Tensor):
 
     def point_to_tensor(self, tensor: torch.Tensor) -> None:
         assert self.tensor is None
-        assert self._shape == tensor.shape
+        if not self.allow_unsafe_changes:
+            assert self._shape == tensor.shape
         assert self._dtype == tensor.dtype
         self.tensor = tensor
-        self.storage_state = StorageState.ON_CPU
+        self.storage_state = StorageState.ON_CPU_DIRTY
 
     # if resizing a handle that is part of an ssd buffer, care must be taken that the new size
     # doesn't conflict with adjacent handles!
@@ -185,21 +219,33 @@ class SsdTensorHandle(torch.Tensor):
         if self.tensor is not None:
             return self.tensor
         else:
-            result_tensor = torch.empty(size=self._shape, dtype=self._dtype, requires_grad=self.requires_grad)
+            if self.device != torch.device("cpu"):
+                raise RuntimeError(
+                    f"to_tensor called on an SsdTensorHandle when the tensor has been offloaded to disk. self.device = {self.device}, it should be {torch.device('cpu')}. Some unexpected .data override has occured!!"
+                )
+            result_tensor = torch.empty(size=self.shape, dtype=self.dtype, requires_grad=self.requires_grad)
             self.copy_into_tensor(result_tensor)
             self.tensor = result_tensor
-            self.storage_state = StorageState.ON_CPU
+            self.storage_state = StorageState.ON_CPU_CLEAN
             return self.tensor
 
     def to_file(self, permit_when_tensor_none: bool = False, release_tensor_after_write: bool = True) -> None:
         """Saves the tensor to disk and releases memory if specified."""
         assert self.tensor is not None or permit_when_tensor_none
 
+        # if it's available in Memory but not modified, no need to write-back
         if self.tensor is not None:
-            write(self.tensor, self.filename, self.offset * self.tensor.element_size())
+            if self.storage_state is StorageState.ON_CPU_DIRTY:
+                if self.device != torch.device("cpu"):
+                    raise RuntimeError(
+                        f"to_file called on an SsdTensorHandle when self.device = {self.device}, it should be {torch.device('cpu')}. Some unexpected .data override has occured!!"
+                    )
+                write(self.tensor, self.filename, self.offset * self.tensor.element_size())
             if release_tensor_after_write:
                 self.tensor = None
                 self.storage_state = StorageState.ON_DISK
+            else:
+                self.storage_state = StorageState.ON_CPU_CLEAN
 
     def copy_into_tensor(self, tensor: torch.Tensor) -> None:
         """Copies SsdTensorHandle's data into the given tensor.
@@ -211,7 +257,9 @@ class SsdTensorHandle(torch.Tensor):
         function. This can be useful for calls like named_parameters() when
         the tensor is already offloaded to disk.
         """
-        assert self._shape == tensor.shape
+        # ideally this should be checked but .data shenanigans forces it to
+        # be disabled due to the way FSDP shards parameters
+        # assert self._shape == tensor.shape
         assert self._dtype == tensor.dtype
         if self.tensor is not None:
             tensor.copy_(self.tensor)
@@ -229,24 +277,47 @@ class SsdTensorHandle(torch.Tensor):
         versions to track if modifications have been made. If we detect changes to the
         tensor, we write it to the file maintained by the Handle.
         """
+        func_name = func.overloadpacket.__name__
         ssd_tensor_handles = []
 
         def unwrap(e: Any) -> torch.Tensor:
             if isinstance(e, SsdTensorHandle):
                 t = e.to_tensor()
-                ssd_tensor_handles.append((e, t._version))  # type: ignore
+                ssd_tensor_handles.append(e)
                 return t
             else:
                 return e
 
         r = func(*tree_map(unwrap, args), **tree_map(unwrap, kwargs))
 
-        for e, saved_version in ssd_tensor_handles:
-            inplace_is_this_tensor = func.__name__[-1] == "_" and e is args[0]
+        for e in ssd_tensor_handles:
+            inplace_is_this_tensor = (
+                (func_name.endswith("_") and not func_name.endswith("__")) or func_name.startswith("__i")
+            ) and e is args[0]
             out_is_this_tensor = False if "out" not in kwargs else e is kwargs["out"]
             if inplace_is_this_tensor or out_is_this_tensor:
-                e.to_file()
+                e.mark_dirty()
         return r
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "data":
+            assert isinstance(value, torch.Tensor)
+            if not self.allow_unsafe_changes:
+                # Respect .data changes, and the user better know what they are doing!
+                if self.storage_state == StorageState.ON_CPU_DIRTY:
+                    raise RuntimeError(
+                        "Attempting to override tensor when the existing tensor is dirty, this is an error!"
+                    )
+                if value.shape != self.shape:
+                    raise RuntimeError(
+                        f"Attempting to override tensor metadata using .data to change shape of tensor. Orig shape: {self.shape} New shape: {value.shape}"
+                    )
+                if value.requires_grad != self.requires_grad:
+                    raise RuntimeError(
+                        f"Attempting to override tensor metadata using .data to change requires_grad. Orig value: {self.requires_grad} New value: {value.requires_grad}"
+                    )
+            self.tensor = value
+        super(SsdTensorHandle, self).__setattr__(name, value)
 
     @classmethod
     def __unpickle__(
@@ -264,7 +335,7 @@ class SsdTensorHandle(torch.Tensor):
             head, tail = os.path.split(self.filename)
             filename = os.path.join(self.override_directory_path, tail)
         if self.is_available():
-            byte_iter = iter(TensorChunkingIterator(self.tensor))
+            byte_iter = iter(TensorChunkingIterator(self.tensor))  # ignore: type
         else:
             byte_iter = iter(
                 FileChunkingIterator(self.filename, expected_size_bytes=self.numel() * self.element_size())
@@ -358,19 +429,29 @@ class TorchSaver:
 class SsdParameter(SsdTensorHandle, torch.nn.Parameter):
     @classmethod
     def from_tensor(cls: Type[SsdParameter], tensor: SsdTensorHandle) -> SsdParameter:  # type: ignore
-        r = cls(tensor.shape, tensor.dtype, tensor.requires_grad)
+        r = cls(tensor.shape, tensor.dtype, tensor.requires_grad, device=tensor.device)
         r.point_to_tensor(tensor)
         return r
 
     @staticmethod
     def __new__(
-        cls: Type[SsdParameter], shape: torch.Size, dtype: torch.dtype, requires_grad: bool = True
+        cls: Type[SsdParameter],
+        shape: torch.Size,
+        dtype: torch.dtype,
+        requires_grad: bool = True,
+        device: torch.device = torch.device("cpu"),
     ) -> SsdParameter:
-        r = super(SsdParameter, cls).__new__(cls, shape, dtype=dtype, requires_grad=requires_grad)
+        r = super(SsdParameter, cls).__new__(cls, shape=shape, dtype=dtype, requires_grad=requires_grad, device=device)
         return r  # type: ignore
 
-    def __init__(self, shape: torch.Size, dtype: torch.dtype, requires_grad: bool = True) -> None:
-        super(SsdParameter, self).__init__(shape, dtype, requires_grad)
+    def __init__(
+        self,
+        shape: torch.Size,
+        dtype: torch.dtype,
+        requires_grad: bool = True,
+        device: torch.device = torch.device("cpu"),
+    ) -> None:
+        super(SsdParameter, self).__init__(shape=shape, dtype=dtype, requires_grad=requires_grad, device=device)
 
 
 class SsdFlatParameter(SsdParameter):
@@ -381,7 +462,11 @@ class SsdFlatParameter(SsdParameter):
     """
 
     def __new__(
-        cls: Type[SsdFlatParameter], shapes: Sequence[torch.Size], dtype: torch.dtype, requires_grad: bool = True
+        cls: Type[SsdFlatParameter],
+        shapes: Sequence[torch.Size],
+        dtype: torch.dtype,
+        requires_grad: bool = True,
+        device: torch.device = torch.device("cpu"),
     ) -> SsdFlatParameter:
         """Make an object using the parent's __new__ function."""
 
@@ -390,10 +475,18 @@ class SsdFlatParameter(SsdParameter):
             raise ValueError("An non-empty list or tuple argument is needed")
 
         size = sum([np.prod(s) for s in shapes])
-        r = super(SsdFlatParameter, cls).__new__(cls, torch.Size((size,)), dtype=dtype, requires_grad=requires_grad)
+        r = super(SsdFlatParameter, cls).__new__(
+            cls, torch.Size((size,)), dtype=dtype, requires_grad=requires_grad, device=device
+        )
         return r  # type: ignore
 
-    def __init__(self, shapes: Sequence[torch.Size], dtype: torch.dtype, requires_grad: bool = True):
+    def __init__(
+        self,
+        shapes: Sequence[torch.Size],
+        dtype: torch.dtype,
+        requires_grad: bool = True,
+        device: torch.device = torch.device("cpu"),
+    ):
         """Initialize the _param_numels and _param_shapes lists."""
         self._param_shapes = shapes
         self._param_numels = [np.prod(s) for s in shapes]
@@ -402,6 +495,7 @@ class SsdFlatParameter(SsdParameter):
             self.numel() <= total_numels
         ), f"Something wrong with __new__ method, {self.numel()} vs. {sum(self._param_numels)}"
 
+        self.views: List[SsdFlatParameterView] = []
         # These are set by FPW class below, not by this class itself.
         self._param_infos: List[Tuple[str, torch.nn.Module, str]] = []
         self._shared_param_infos: List[Tuple[str, str, torch.nn.Module, str, torch.nn.Module, str]] = []
@@ -409,6 +503,31 @@ class SsdFlatParameter(SsdParameter):
         super(SsdFlatParameter, self).__init__(
             shape=torch.Size((total_numels,)), dtype=dtype, requires_grad=requires_grad
         )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super(SsdFlatParameter, self).__setattr__(name, value)
+        if name == "data":
+            # if .data has changed, we need to totally destroy any existing views because things
+            # like device might have changed. It won't destroy any pointers to those views outside
+            # of here, however resetting self.views will trigger the old view's assertion in
+            # __torch_dispatch__ that it is the current view of it's parent object
+            self.views = []
+            self._refresh_views()
+
+    def _invalidate_views(self) -> None:
+        for v in self.views:
+            v.tensor = None
+
+    @torch.enable_grad()
+    def _refresh_views(self) -> None:
+        if self._shape != self.shape:
+            self.views = []
+            return
+        if len(self.views) == 0:
+            self.views = [s.view(v) for s, v in zip(self.split(self._param_numels), self._param_shapes)]  # type: ignore
+        else:
+            for v, t, s in zip(self.views, self.tensor.split(self._param_numels), self._param_shapes):
+                v.tensor = t.view(s)
 
     def get_param_views(self, external_data: Optional[torch.Tensor] = None) -> Iterator[torch.Tensor]:
         """Return a generator of views that map to the original parameters."""
@@ -425,7 +544,15 @@ class SsdFlatParameter(SsdParameter):
                 )
             return (t.view(s) for (t, s) in zip(external_data.split(self._param_numels), self._param_shapes))
         else:
-            return (t.view(s) for (t, s) in zip(self.split(self._param_numels), self._param_shapes))
+            # this needs to return SsdFlatParameterViews
+            if not self.is_available():
+                self.to_tensor()
+
+            if len(self.views) == 0:
+                raise RuntimeError(
+                    "Trying to call get_param_views when self.views is empty, this means that .data games have been played and the current .data shape doesn't match the constructed shape."
+                )
+            return (v for v in self.views)
 
     def metadata(self) -> Tuple[List[str], Sequence[torch.Size], List[int]]:
         """Return tuple of (names, shapes, numels) metadata for this flat parameter."""
@@ -434,7 +561,11 @@ class SsdFlatParameter(SsdParameter):
 
     @classmethod
     def from_tensors(
-        cls: Type[SsdFlatParameter], tensors: Sequence[torch.Tensor], direct_to_file: bool = False
+        cls: Type[SsdFlatParameter],
+        tensors: Sequence[torch.Tensor],
+        direct_to_file: bool = False,
+        filename: str = "",
+        offset: int = 0,
     ) -> "SsdFlatParameter":
         """Returns a new SsdFlatParameter from a sequence of tensors."""
         assert (
@@ -449,16 +580,74 @@ class SsdFlatParameter(SsdParameter):
         if any(isinstance(t, SsdFlatParameter) for t in tensors):
             raise ValueError("Nesting SsdFlatParameter is not supported")
 
-        handle = cls(shapes=[t.size() for t in tensors], dtype=tensors[0].dtype, requires_grad=tensors[0].requires_grad)
+        requires_grad = tensors[0].requires_grad
+        dtype = tensors[0].dtype
+        device = tensors[0].device
+        for t in tensors:
+            if t.requires_grad != requires_grad:
+                raise RuntimeError("Not all tensors have identical requires_grad option")
+            if t.dtype != dtype:
+                raise RuntimeError("Not all tensors have identical dtype option")
+            if t.device != device:
+                raise RuntimeError("Not all tensors have identical device option")
+        handle = cls(
+            shapes=[t.size() for t in tensors],
+            dtype=tensors[0].dtype,
+            requires_grad=tensors[0].requires_grad,
+            device=device,
+        )
+        handle.set_file_params(filename, offset)
         if direct_to_file:
-            assert False, "direct_to_file not implemented yet"
-            pass
+            assert filename != ""
+            offset = offset
+            for t in tensors:
+                write(t, handle.filename, offset)
+                offset += t.numel() * t.element_size()
+
+            handle.storage_state = StorageState.ON_DISK
         else:
             tensor = torch.cat(
-                [t.detach().reshape(-1) if isinstance(t, torch.nn.Parameter) else t.reshape(-1) for t in tensors], 0
-            )
+                [t.reshape(-1) if isinstance(t, torch.nn.Parameter) else t.reshape(-1) for t in tensors],
+                0,
+            ).detach()
+            tensor.requires_grad_()
             handle.point_to_tensor(tensor)
         return handle
+
+    __torch_function__ = torch._C._disabled_torch_function_impl
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
+        func_name = func.overloadpacket.__name__
+        r = super(SsdFlatParameter, cls).__torch_dispatch__(func, types, args, kwargs)  # type: ignore
+        if func_name.startswith("split"):
+            assert isinstance(args[0], SsdFlatParameter)
+            parent = args[0]
+            return [SsdFlatParameterView(parent, t, idx) for idx, t in enumerate(r)]
+        else:
+            return r
+
+    # need to subclass these methods to support Views
+    def point_to_tensor(self, tensor: torch.Tensor) -> None:
+        super(SsdFlatParameter, self).point_to_tensor(tensor)
+        self._refresh_views()
+
+    def point_to_file(self, filename: str, offset: int) -> None:
+        super(SsdFlatParameter, self).point_to_file(filename, offset)
+        self._invalidate_views()
+
+    def to_tensor(self) -> torch.Tensor:
+        call_refresh_views = False
+        if self.tensor is None:
+            call_refresh_views = True
+        result = super(SsdFlatParameter, self).to_tensor()
+        if call_refresh_views:
+            self._refresh_views()
+        return result
+
+    def to_file(self, permit_when_tensor_none: bool = False, release_tensor_after_write: bool = True) -> None:
+        super(SsdFlatParameter, self).to_file(permit_when_tensor_none, release_tensor_after_write)
+        self._invalidate_views()
 
     @classmethod
     def __unpickle_SFP__(
@@ -492,6 +681,194 @@ class SsdFlatParameter(SsdParameter):
             None,
             byte_iter,
         )
+
+
+class SsdFlatParameterView(torch.Tensor):
+    """
+    Represents a view into an SsdFlatParameter. It is needed due to FSDP's usage of flattening parameters.
+    """
+
+    def __new__(
+        cls: Type[SsdFlatParameterView], parent: SsdFlatParameter, tensor: torch.Tensor, id: int
+    ) -> SsdFlatParameterView:
+        r = super(SsdFlatParameterView, cls)._make_wrapper_subclass(cls, tensor.shape, dtype=tensor.dtype, requires_grad=tensor.requires_grad, device=tensor.device)  # type: ignore
+        return r
+
+    def __init__(self: SsdFlatParameterView, parent: SsdFlatParameter, tensor: torch.Tensor, id: int) -> None:
+        self.parent = parent
+        self.tensor: Optional[torch.Tensor] = tensor
+        self.id = id
+
+    __torch_function__ = torch._C._disabled_torch_function_impl
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore
+        """Intercepts all operations performed on this handle object.
+
+        Before any operation, the tensor attribute is unwrapped from the handle
+        and used in the operation. We maintain a refernce to the tensor and its current
+        versions to track if modifications have been made. If we detect changes to the
+        tensor, we write it to the file maintained by the Handle.
+        """
+        func_name = func.overloadpacket.__name__
+        ssd_tensor_handles = []
+
+        def unwrap(e: Any) -> torch.Tensor:
+            if isinstance(e, SsdFlatParameterView):
+                if not e.parent.is_available():
+                    e.parent.to_tensor()
+                # first condition is to take care of the case where we are first constructing e.parent.views as a list comprehension which hasn't
+                # completed yet
+                if len(e.parent.views) != 0 and e is not e.parent.views[e.id]:
+                    raise RuntimeError(
+                        "This view should no longer be used as the parent object has had it's .data overwritten (e.parent.views[e.id])!!!"
+                    )
+                # e.parent will ensure that e.tensor is valid and points to tensor view
+                t = e.tensor
+                ssd_tensor_handles.append(e)
+                return t
+            else:
+                return e
+
+        r = func(*tree_map(unwrap, args), **tree_map(unwrap, kwargs))
+
+        for e in ssd_tensor_handles:
+            inplace_is_this_tensor = (
+                (func_name.endswith("_") and not func_name.endswith("__")) or func_name.startswith("__i")
+            ) and e is args[0]
+            out_is_this_tensor = False if "out" not in kwargs else e is kwargs["out"]
+            if inplace_is_this_tensor or out_is_this_tensor:
+                e.parent.mark_dirty()
+
+        if func_name.startswith("view"):
+            assert isinstance(args[0], SsdFlatParameterView)
+            flat_view = args[0]
+            return SsdFlatParameterView(flat_view.parent, r, flat_view.id)
+        return r
+
+
+# ###################################
+# ### BEGIN OVERRIDE_PROPERTY FNs ###
+# ###################################
+# This code is taken mostly from pytorch core parameterization
+# pytorch/torch/nn/utils/parametrize.py
+
+
+def _inject_new_class(module: torch.nn.Module) -> None:
+    r"""Sets up a module to be parametrized.
+
+    This works by substituting the class of the module by a class
+    that extends it to be able to inject a property
+
+    Args:
+        module (nn.Module): module into which to inject the property
+    """
+    cls = module.__class__
+
+    def getstate(self):  # type: ignore
+        raise RuntimeError(
+            "Serialization of parametrized modules is only "
+            "supported through state_dict(). See:\n"
+            "https://pytorch.org/tutorials/beginner/saving_loading_models.html"
+            "#saving-loading-a-general-checkpoint-for-inference-and-or-resuming-training"
+        )
+
+    param_cls = type(
+        f"Parametrized{cls.__name__}",
+        (cls,),
+        {
+            "__getstate__": getstate,
+        },
+    )
+
+    module.__class__ = param_cls
+    module.override_properties: Dict[str, Callable[[], torch.Tensor]] = {}  # type: ignore
+    # setattr(module, "override_properties", {})
+
+
+def _inject_property(module: torch.nn.Module, property_name: str) -> None:
+    r"""Injects a property into module[property_name].
+
+    It assumes that the class in the module has already been modified from its
+    original one using _inject_new_class and that the tensor under :attr:`property_name`
+    has already been moved out
+
+    Args:
+        module (nn.Module): module into which to inject the property
+        property_name (str): name of the name of the property to create
+    """
+
+    def get_parametrized(self: torch.nn.Module) -> torch.Tensor:
+        prop: Callable[[], torch.Tensor] = self.override_properties[property_name]  # type: ignore
+        # If caching is not active, this function just evaluates the parameterization
+        return prop()
+
+    def set_original(self: torch.nn.Module, value: Callable[[], torch.Tensor]) -> None:
+        self.override_properties[property_name] = value  # type: ignore
+
+    def del_fn(self: torch.nn.Module) -> None:
+        _remove_property(self, property_name)
+
+    setattr(module.__class__, property_name, property(get_parametrized, set_original, del_fn))
+
+
+def _register_property(module: torch.nn.Module, property_name: str, property_value: Callable[[], torch.Tensor]) -> None:
+    has_injected_class = hasattr(module, "override_properties")
+    if not has_injected_class:
+        _inject_new_class(module)
+        if hasattr(module, property_name):
+            delattr(module, property_name)
+    module.override_properties[property_name] = property_value  # type: ignore
+    _inject_property(module, property_name)
+
+
+def _remove_property(module: torch.nn.Module, property_name: str, new_property_value: Optional[Any] = None) -> None:
+    delattr(module.__class__, property_name)
+    del module.override_properties[property_name]  # type: ignore
+
+    # Roll back the parametrized class if no other buffer or parameter
+    # is currently parametrized in this class
+    if len(module.override_properties) == 0:  # type: ignore
+        delattr(module, "override_properties")
+        # Restore class
+        orig_cls = module.__class__.__bases__[0]
+        module.__class__ = orig_cls
+    if new_property_value is not None:
+        setattr(module.__class__, property_name, new_property_value)
+
+
+# #################################
+# ### END OVERRIDE_PROPERTY FNs ###
+# #################################
+
+
+class SsdFlatParameterViewProperty:
+    """
+    Allows for a mutable view to replace a layer's trainable parameters.
+    This is needed since FSDP is changing .data under the covers,
+    SsdFlatParameter cannot just rely on this since each view (of type SsdFlatParameterView) has
+    an internal representation. So every time we access a view, we need to
+    make sure we get the up-to-date version, and not the original version
+    when flattening the parameters.
+    """
+
+    def __init__(self, parent: SsdFlatParameter, view_id: int) -> None:
+        super().__init__()
+        self.parent = parent
+        self.view_id = view_id
+
+    def __call__(self) -> SsdFlatParameterView:
+        return self.parent.views[self.view_id]
+
+
+class SsdFlatParameterViewParameterization(torch.nn.Module):
+    def __init__(self, parent: SsdFlatParameter, view_id: int) -> None:
+        super().__init__()
+        self.parent = parent
+        self.view_id = view_id
+
+    def forward(self, *args: Any, **kwargs: Any) -> SsdFlatParameterView:
+        return self.parent.views[self.view_id]
 
 
 class DisableMemoizationPicklerModule:

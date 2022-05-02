@@ -66,7 +66,6 @@ else:
 
 try:
     import fairscale.experimental.nn.ssd_offload as ssd_offload
-    from fairscale.experimental.nn.ssd_offload import SsdFlatParameter
 
     import_ssd_offload = True
 except ImportError:
@@ -399,6 +398,10 @@ class FullyShardedDataParallel(nn.Module):
         self.state_dict_on_rank_0_only = state_dict_on_rank_0_only
         # Experimental feature for now. Use at your own risk.
         self.ssd_offload = True if offload_config and offload_config.offload_type == "ssd_offload" else False
+        if self.ssd_offload and not import_ssd_offload:
+            raise ImportError(
+                f"Trying to enable ssd_offload when it was not successfully imported (likely due to old torch version, current = {torch.__version__})"
+            )
 
         self.gradient_predivide_factor: float = gradient_predivide_factor or self._get_gradient_predivide_factor(
             self.world_size
@@ -761,16 +764,14 @@ class FullyShardedDataParallel(nn.Module):
             p._is_sharded = True
 
             # Replace p.data with the relevant shard.
+            orig_data = p.data
+            p.data, num_padded = self._get_shard(p.data)
+            self.numel_padded_per_param.append(num_padded)
+
             if self.ssd_offload:
-                assert isinstance(p, SsdFlatParameter)
-                sharded_tensor, num_padded = self._get_shard(p.data)
-                p.point_to_resized_tensor(sharded_tensor)
-                self.numel_padded_per_param.append(num_padded)
+                assert isinstance(p, ssd_offload.SsdParameter)
                 p.to_file()
             else:
-                orig_data = p.data
-                p.data, num_padded = self._get_shard(p.data)
-                self.numel_padded_per_param.append(num_padded)
                 free_storage_(orig_data)
 
         assert len(self.numel_padded_per_param) == len(self.params)
@@ -987,7 +988,7 @@ class FullyShardedDataParallel(nn.Module):
     def _move_params_to_memory(self) -> None:
         """Move params from disk to CPU."""
         for p in self.params:
-            assert isinstance(p, SsdFlatParameter)
+            assert isinstance(p, ssd_offload.SsdParameter)
             p.to_tensor()
 
     def _load_state_dict(
@@ -1138,14 +1139,19 @@ class FullyShardedDataParallel(nn.Module):
                             # Copy any changes made to the full params back into
                             # the corresponding local shards.
                             local_shard, _ = self._get_shard(full_tensor)
-                            p._fp32_shard.copy_(local_shard.view_as(p._fp32_shard))
+                            if self.ssd_offload:
+                                assert isinstance(p, ssd_offload.SsdParameter)
+                                self._ssd_offload_reset_param_device(p)
+                                p.point_to_tensor(local_shard.view_as(p._fp32_shard).cpu())
+                            else:
+                                p._fp32_shard.copy_(local_shard.view_as(p._fp32_shard))
                         if safe_to_free:
                             free_storage_(full_tensor)
                     self.has_full_params = False
                     if self.ssd_offload:
                         # Store tensors in the SSD buffer and free param storage.
                         for p in self.params:
-                            assert isinstance(p, SsdFlatParameter)
+                            assert isinstance(p, ssd_offload.SsdParameter)
                             p.to_file()
                     else:
                         self._use_fp32_param_shard()
@@ -1281,10 +1287,11 @@ class FullyShardedDataParallel(nn.Module):
             # shard in pinned memory so that we can do a non-blocking transfer.
             # This is only needed during training and not evaluation.
             if self.ssd_offload:
-                assert isinstance(p, SsdFlatParameter)
+                assert isinstance(p, ssd_offload.SsdParameter)
                 # Gradients also need to be offloaded to SSD otherwise it can result in
                 # OOMs when the memory requirements of a model are larger than host memory.
                 p._cpu_grad = ssd_offload.SsdTensorHandle.from_tensor(torch.zeros_like(p.data, device="cpu"))
+                p._cpu_grad.allow_unsafe_changes = True
                 p._cpu_grad.set_file_params(p.filename + "_grad", 0)
                 p._cpu_grad.to_file()
             else:
@@ -1441,7 +1448,7 @@ class FullyShardedDataParallel(nn.Module):
     def _free_ssd_offload(self) -> None:
         if self.ssd_offload:
             for p in self.params:
-                assert isinstance(p, SsdFlatParameter)
+                assert isinstance(p, ssd_offload.SsdParameter)
                 p.to_file(permit_when_tensor_none=True)
 
     def _register_pre_backward_hooks(self, outputs: Any) -> Any:
@@ -1897,8 +1904,10 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.ssd_offload:
             for p in self.params:
-                assert isinstance(p, SsdFlatParameter)
-                p.to_tensor()
+                assert isinstance(p, ssd_offload.SsdParameter)
+                if not p.is_available():
+                    self._ssd_offload_reset_param_device(p)
+                    p.to_tensor()
 
             self.has_full_params = False
 
@@ -2176,12 +2185,24 @@ class FullyShardedDataParallel(nn.Module):
         return consolidated_weights
 
     @torch.no_grad()
+    def _ssd_offload_reset_param_device(self, param: Parameter) -> None:
+        assert isinstance(param, ssd_offload.SsdParameter)
+        if param.device != torch.device("cpu"):
+            param.data = param._fp32_shard
+            param.tensor = None
+
+    @torch.no_grad()
     def _use_fp32_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
         """Use FP32 shard for a list of params."""
         if params is None:
             params = self.params
         for p in params:
-            p.data = p._fp32_shard
+            if import_ssd_offload and self.ssd_offload:
+                assert isinstance(p, ssd_offload.SsdParameter)
+                self._ssd_offload_reset_param_device(p)
+                p.to_tensor()
+            else:
+                p.data = p._fp32_shard
 
     @torch.no_grad()
     def _cast_fp32_param_shards_to_fp16(self, params: Optional[List[Parameter]] = None) -> None:
@@ -2192,11 +2213,14 @@ class FullyShardedDataParallel(nn.Module):
             for p in params:
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
-                p._fp16_shard.copy_(
-                    # If move_params_to_cpu is True, this will be non-blocking
-                    # because _fp32_shard is pinned, otherwise it's a no-op.
-                    p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
-                )
+                if self.ssd_offload:
+                    p._fp16_shard.copy_(p.to(p._fp16_shard.device, non_blocking=True))
+                else:
+                    p._fp16_shard.copy_(
+                        # If move_params_to_cpu is True, this will be non-blocking
+                        # because _fp32_shard is pinned, otherwise it's a no-op.
+                        p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
+                    )
                 p.data = p._fp16_shard
         torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
 
