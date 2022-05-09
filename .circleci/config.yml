@@ -233,6 +233,9 @@ commands:
        - run:
            name: Setup pyenv
            command: |
+             cd /opt/circleci/.pyenv/
+             git remote update
+             git checkout v2.3.0
              pyenv install -f <<parameters.version>>
              pyenv global <<parameters.version>>
              exit 0
