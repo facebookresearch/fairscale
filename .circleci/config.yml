@@ -75,6 +75,7 @@ setup_venv: &setup_venv
         type python
         which python
         python -m venv ~/venv
+        exit 0
         echo ". ~/venv/bin/activate" >> $BASH_ENV
         . ~/venv/bin/activate
         python --version
