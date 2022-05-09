@@ -69,7 +69,8 @@ setup_venv: &setup_venv
   - run:
       name: Setup Virtual Env
       working_directory: ~/
-      shell: /bin/bash -x
+      # use bash -x for debug early commands executed in .bashrc.
+      shell: /bin/bash
       command: |
         set -e
         set -o pipefail
@@ -232,15 +233,17 @@ commands:
      steps:
        - run:
            name: Setup pyenv
+           # We used to use the following commands to update pyenv.
+           #   git clone https://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
+           #   pyenv update
+           # However, it is not deterministic since pyenv is being updated.
+           # It is now fixed to a version. (v2.3.0 is broken since it cause bash to fail when it try to do "eval $(pyenv init -)")
            command: |
              cd /opt/circleci/.pyenv/
              git remote update
              git checkout v2.2.0
              pyenv install -f <<parameters.version>>
              pyenv global <<parameters.version>>
-             exit 0
-             git clone https://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
-             pyenv update
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
@@ -466,13 +469,7 @@ jobs:
     steps:
       - checkout
 
-      - run:
-          name: smi
-          shell: /bin/bash -x
-          command: |
-            pwd
-            nvidia-smi
-            echo $PATH
+      - run: nvidia-smi
 
       - setup_pyenv:
           version: 3.9.7
