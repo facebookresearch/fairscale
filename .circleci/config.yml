@@ -69,13 +69,11 @@ setup_venv: &setup_venv
   - run:
       name: Setup Virtual Env
       working_directory: ~/
-      shell: /bin/bash
+      shell: /bin/bash -x
       command: |
-        pwd
-        type python
-        which python
+        set -e
+        set -o pipefail
         python -m venv ~/venv
-        exit 0
         echo ". ~/venv/bin/activate" >> $BASH_ENV
         . ~/venv/bin/activate
         python --version
@@ -235,10 +233,11 @@ commands:
        - run:
            name: Setup pyenv
            command: |
-             git clone https://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
-             pyenv update
              pyenv install -f <<parameters.version>>
              pyenv global <<parameters.version>>
+             exit 0
+             git clone https://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
+             pyenv update
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
