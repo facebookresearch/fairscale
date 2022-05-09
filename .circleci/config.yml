@@ -466,7 +466,13 @@ jobs:
     steps:
       - checkout
 
-      - run: nvidia-smi
+      - run:
+          name: smi
+          shell: /bin/bash -x
+          command: |
+            pwd
+            nvidia-smi
+            echo $PATH
 
       - setup_pyenv:
           version: 3.9.7
