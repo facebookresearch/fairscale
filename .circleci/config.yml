@@ -69,7 +69,11 @@ setup_venv: &setup_venv
   - run:
       name: Setup Virtual Env
       working_directory: ~/
+      shell: /bin/bash
       command: |
+        pwd
+        type python
+        which python
         python -m venv ~/venv
         echo ". ~/venv/bin/activate" >> $BASH_ENV
         . ~/venv/bin/activate
