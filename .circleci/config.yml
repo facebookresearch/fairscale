@@ -69,7 +69,11 @@ setup_venv: &setup_venv
   - run:
       name: Setup Virtual Env
       working_directory: ~/
+      # use bash -x for debug early commands executed in .bashrc.
+      shell: /bin/bash
       command: |
+        set -e
+        set -o pipefail
         python -m venv ~/venv
         echo ". ~/venv/bin/activate" >> $BASH_ENV
         . ~/venv/bin/activate
@@ -229,9 +233,15 @@ commands:
      steps:
        - run:
            name: Setup pyenv
+           # We used to use the following commands to update pyenv.
+           #   git clone https://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
+           #   pyenv update
+           # However, it is not deterministic since pyenv is being updated.
+           # It is now fixed to a version. (v2.3.0 is broken since it cause bash to fail when it try to do "eval $(pyenv init -)")
            command: |
-             git clone https://github.com/pyenv/pyenv-update.git $(pyenv root)/plugins/pyenv-update
-             pyenv update
+             cd /opt/circleci/.pyenv/
+             git remote update
+             git checkout v2.2.0
              pyenv install -f <<parameters.version>>
              pyenv global <<parameters.version>>
 
