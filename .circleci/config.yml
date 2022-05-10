@@ -208,6 +208,7 @@ run_unittests: &run_unittests
        name: Run all unit tests.
        # We run all and not stopping on failure on CPU since docker time is cheaper.
        command: |
+         ulimit -n 10000
          pytest --junitxml=test-results/junit.xml --verbose --timeout 60 --cov-report=xml --cov=./
 
 commands:
@@ -223,6 +224,7 @@ commands:
        - run:
            name: Run Unit Tests
            command: |
+             ulimit -n 10000
              if [ ! -f <<parameters.test_list_file>> ]; then exit 1; fi
              pytest --junitxml=test-results/junit.xml --verbose --timeout 70 --cov-report=xml --cov=./ `cat <<parameters.test_list_file>>`
 
