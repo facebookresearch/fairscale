@@ -147,6 +147,10 @@ class AdaScale(Optimizer):
         num_gradients_to_accumulate: int = 1,
         debias_ewma: bool = True,
     ):
+        # Init hook_handles list, otherwise, a partial init'ed object may fail in ``__del__``.
+        self._hook_handles: List[Any] = []
+
+        # Init other fields.
         self._optimizer = optimizer
         self._local_grad_sqr: Optional[torch.Tensor] = None
         self._world_size: int = (
@@ -183,7 +187,7 @@ class AdaScale(Optimizer):
         self._scale = 1.0  # Assign to inform mypy about the typing of this variable.
         self.set_scale(self._world_size * self._num_grads_to_accum if scale is None else scale)
 
-        self._hook_handles: List[Any] = []
+        # Safer to register hooks after all init actions are done.
         self._hook()
 
     def _hook(self) -> None:
