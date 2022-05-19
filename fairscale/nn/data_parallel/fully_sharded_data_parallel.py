@@ -776,18 +776,27 @@ class FullyShardedDataParallel(nn.Module):
 
         assert len(self.numel_padded_per_param) == len(self.params)
 
-    def _get_shard(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int]:
+    def _get_shard(self, tensor: torch.Tensor, world_size=None, rank=None) -> Tuple[torch.Tensor, int]:
         """Return the local shard of a full tensor."""
+        if not world_size:
+            world_size = self.world_size
+        if not rank:
+            rank = self.rank
+        rank = int(rank // (self.world_size / world_size))
         # Shard using torch.chunk to match all-gather/reduce-scatter.
-        chunks = list(torch.flatten(tensor).chunk(self.world_size))
-        while len(chunks) < self.world_size:
+        chunks = list(torch.flatten(tensor).chunk(world_size))
+        while len(chunks) < world_size:
             chunks.append(chunks[0].new_empty(0))
 
         # Determine number of padding elements.
-        num_to_pad = chunks[0].numel() - chunks[self.rank].numel()
+        # Figure out how to get the right rank
+        assert rank < len(chunks), f"rank {rank} >= number_of_chunks {len(chunks)}, world_size = {world_size}"
+        num_to_pad = chunks[0].numel() - chunks[rank].numel()
+        #num_to_pad = 0
         assert num_to_pad >= 0, num_to_pad
 
-        shard = chunks[self.rank].clone()
+        shard = chunks[rank].clone()
+        #shard = chunks[0].clone()
         if num_to_pad > 0:
             shard = F.pad(shard, [0, num_to_pad])
         return shard, num_to_pad
@@ -2285,6 +2294,7 @@ class FullyShardedDataParallel(nn.Module):
             # different than the parent module. For example, when FSDP is used with MoE.
             non_shared_world_size = self._fsdp_instances[k].world_size
             non_shared_process_group = self._fsdp_instances[k].process_group
+            non_shared_rank = int(self._fsdp_instances[k].rank // (self.world_size / non_shared_world_size) )
 
             assert (
                 len(non_shared_params) == 1
@@ -2300,16 +2310,16 @@ class FullyShardedDataParallel(nn.Module):
                     if singleton_buffer is None:
                         singleton_buffer = list(t.new_zeros(non_shared_world_size).chunk(non_shared_world_size))
                     dist.all_gather(singleton_buffer, t, group=non_shared_process_group)
-                    if self.rank == 0:
+                    if non_shared_rank == 0:
                         singleton_state[k][buffer_name] = [x.cpu().squeeze() for x in singleton_buffer]
                         assert ou.is_singleton_tensor(singleton_state[k][buffer_name][0])
                 elif torch.is_tensor(t):
                     if buffer is None:
                         buffer = list(t.new_zeros(*desired_buffer_size).chunk(non_shared_world_size))
                     dist.all_gather(buffer, t, group=non_shared_process_group)
-                    if self.rank == 0:
+                    if non_shared_rank == 0:
                         gathered_state[k][buffer_name] = [x.cpu() for x in buffer]
-                elif self.rank == 0:  # Add non tensor state
+                elif non_shared_rank == 0:  # Add non tensor state
                     gathered_state[k][buffer_name] = [t]
 
         return gathered_state, singleton_state
@@ -2416,10 +2426,10 @@ class FullyShardedDataParallel(nn.Module):
         for id, s in full_optim_state_dict["state"].items():
             for k, v in s.items():
                 if torch.is_tensor(v) and id not in ids_not_to_shard:
-                    v_shard, _ = self._get_shard(v)
+                    v_shard, _ = self._get_shard(v, instance_list[id].world_size, instance_list[id].rank)
                 elif isinstance(v, list) and ou.is_singleton_tensor(v[0]):
                     # if we are resuming on larger world size, take first entry
-                    v_shard = v[0] if self.rank >= len(v) else v[self.rank]
+                    v_shard = v[0] if instance_list[id].rank >= len(v) else v[instance_list[id].rank]
                     assert ou.is_singleton_tensor(v_shard)
                 else:
                     v_shard = v  # don't shard entries that are not tensors
