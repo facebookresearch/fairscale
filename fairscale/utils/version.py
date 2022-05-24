@@ -17,13 +17,13 @@ def torch_version(version: str = torch.__version__) -> Tuple[int, ...]:
     if not numbering:
         return tuple()
     # Catch torch version if run against internal pre-releases, like `1.8.0a0fb`,
-    if numbering.group(4):
+    # if numbering.group(4):
         # Two options here:
         # - either skip this version (minor number check is not relevant)
         # - or check that our codebase is not broken by this ongoing development.
 
         # Assuming that we're interested in the second use-case more than the first,
         # return the pre-release or dev numbering
-        logging.warning(f"Pytorch pre-release version {version} - assuming intent to test it")
+        # logging.warning(f"Pytorch pre-release version {version} - assuming intent to test it")
 
     return tuple(int(numbering.group(n)) for n in range(1, 4))
