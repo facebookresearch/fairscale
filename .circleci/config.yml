@@ -8,7 +8,7 @@
 # Pro tip: download circle ci cli to validate the config locally during development.
 #
 # To reset/clean the cache update the CACHE_VERSION variable in project settings
-# in the fairscale project in CircleCI. The CACHE_VERSION follows the convention
+# in the fairscale project in CircleCI's web UI. The CACHE_VERSION follows the convention
 # v$(FAIRSCALE_VERSION)-${CACHE_NUMBER}. E.g. v0.4.2-1. CACHE_NUMBER must start
 # at 1 and increase in whole numbers. When changing the CACHE_VERSION manually
 # always set the FAIRSCALE_VERSION value to the fairscale version being tested.
@@ -21,22 +21,19 @@ orbs:
 # -------------------------------------------------------------------------------------
 # Environments to run the jobs in
 # -------------------------------------------------------------------------------------
-cpu_py37: &cpu_py37
-  docker:
-    # python version 3.7.12
-    - image: circleci/python:3.7
-  resource_class: large
-
 cpu_py38: &cpu_py38
   docker:
-    # python version 3.8.12
     - image: circleci/python:3.8
   resource_class: large
 
 cpu_py39: &cpu_py39
   docker:
-    # python version 3.9.7
     - image: circleci/python:3.9
+  resource_class: large
+
+cpu_py310: &cpu_py310
+  docker:
+    - image: circleci/python:3.10
   resource_class: large
 
 # Here is the list of GPU images:
@@ -252,35 +249,6 @@ commands:
 # -------------------------------------------------------------------------------------
 
 jobs:
-  cpu_tests_py37:
-    <<: *cpu_py37
-
-    working_directory: ~/fairscale
-
-    steps:
-      - checkout
-      - <<: *check_test_list
-      - <<: *setup_venv
-
-      # Cache the venv directory that contains dependencies
-      - restore_cache:
-          keys:
-            - cache-key-cpu-py37-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-
-      - <<: *install_dep_1_10_2
-
-      - save_cache:
-          paths:
-            - ~/venv
-          key: cache-key-cpu-py37-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-
-      - <<: *install_repo
-      - <<: *run_unittests
-      - <<: *run_doc_build
-
-      - store_test_results:
-          path: test-results
-
   cpu_tests_py38:
     <<: *cpu_py38
 
@@ -330,6 +298,35 @@ jobs:
           paths:
             - ~/venv
           key: cache-key-cpu-py39-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+
+      - <<: *install_repo
+      - <<: *run_unittests
+      - <<: *run_doc_build
+
+      - store_test_results:
+          path: test-results
+
+  cpu_tests_py310:
+    <<: *cpu_py310
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+      - <<: *check_test_list
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-cpu-py310-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+
+      - <<: *install_dep_1_10_2
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-cpu-py310-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_repo
       - <<: *run_unittests
@@ -561,9 +558,9 @@ workflows:
   version: 2
   build:
     jobs:
-      - cpu_tests_py37
       - cpu_tests_py38
       - cpu_tests_py39
+      - cpu_tests_py310
       - gpu_tests_1_8_1:
           test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_1_10_0:
