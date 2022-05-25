@@ -96,14 +96,14 @@ install_dep_1_8_2: &install_dep_1_8_2
         wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
 # most recent stable version
-install_dep_1_10_2: &install_dep_1_10_2
+install_dep_1_11_0: &install_dep_1_11_0
   - run:
-      name: Install Dependencies with torch 1.10.2
+      name: Install Dependencies with torch 1.11.0
       command: |
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.10 && exit 0; fi
         # start installing
-        pip install --progress-bar off torch==1.10.2+cu113 torchvision==0.11.3+cu113 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off torch==1.11.0+cu115 torchvision==0.12.0+cu115 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-dev.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -263,7 +263,7 @@ jobs:
       - restore_cache:
           keys:
             - cache-key-cpu-py38-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
@@ -292,7 +292,7 @@ jobs:
           keys:
             - cache-key-cpu-py39-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
@@ -321,7 +321,7 @@ jobs:
           keys:
             - cache-key-cpu-py310-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
@@ -335,7 +335,7 @@ jobs:
       - store_test_results:
           path: test-results
 
-  gpu_tests_1_8_1:
+  gpu_tests_lts:
     parameters:
       test_list_file:
         type: string
@@ -378,7 +378,7 @@ jobs:
 
       - <<: *upload_coverage
 
-  gpu_tests_1_10_0:
+  gpu_tests_stable:
     parameters:
       test_list_file:
         type: string
@@ -404,7 +404,7 @@ jobs:
           keys:
             - cache-key-py-3-9-7-gpu-torch-1-10-0-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
@@ -485,7 +485,7 @@ jobs:
           keys:
             - cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION }}-{{checksum "benchmarks/datasets/mnist.py"}}
 
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
@@ -537,7 +537,7 @@ jobs:
           keys:
             - cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION }}-{{checksum "benchmarks/datasets/mnist.py"}}
 
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
@@ -561,21 +561,21 @@ workflows:
       - cpu_tests_py38
       - cpu_tests_py39
       - cpu_tests_py310
-      - gpu_tests_1_8_1:
+      - gpu_tests_lts:
           test_list_file: tests/ci_test_list_1.txt
-      - gpu_tests_1_10_0:
+      - gpu_tests_stable:
           test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_pytorch_nightly:
           test_list_file: tests/ci_test_list_1.txt
-      - gpu_tests_1_8_1:
+      - gpu_tests_lts:
           test_list_file: tests/ci_test_list_2.txt
-      - gpu_tests_1_10_0:
+      - gpu_tests_stable:
           test_list_file: tests/ci_test_list_2.txt
       - gpu_tests_pytorch_nightly:
           test_list_file: tests/ci_test_list_2.txt
-      - gpu_tests_1_8_1:
+      - gpu_tests_lts:
           test_list_file: tests/ci_test_list_3.txt
-      - gpu_tests_1_10_0:
+      - gpu_tests_stable:
           test_list_file: tests/ci_test_list_3.txt
       - gpu_tests_pytorch_nightly:
           test_list_file: tests/ci_test_list_3.txt
