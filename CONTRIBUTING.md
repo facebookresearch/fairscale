@@ -39,7 +39,7 @@ outlined on that page and do not file a public issue.
 ## Environment setup
 
 ```
-~$ python3 -m venv venv2
+~$ python3 -m venv venv
 ~$ source venv2/bin/activate
 (venv2) ~$ cd git/fairscale/
 (venv2) ~/git/fairscale $ pip3 install -r requirements-dev.txt
