@@ -131,7 +131,7 @@ def run_ddp_parity(
 
     # Any model works. Add one different buffer per rank
     model = _get_mlp_emb(multiple_fw)
-    model.register_buffer("test_buffer", torch.ones((1)) * rank)
+    model.register_buffer("test_buffer", torch.ones(1) * rank)
     model.to(device)
 
     # Make sure that the model starts with non-trainable, so that we check for the buckets to be
@@ -289,7 +289,7 @@ def run_ddp_parity_two_optim(rank, world_size, backend, temp_file_name, reduce_b
     BATCHS = 20
 
     model = _get_mlp_emb()
-    model.register_buffer("test_buffer", torch.ones((1)) * rank)
+    model.register_buffer("test_buffer", torch.ones(1) * rank)
     model.to(device)
     n_half_params = len(list(model.parameters())) // 2
     optim_settings = {"lr": 1e-3, "momentum": 0.99}

@@ -82,7 +82,7 @@ def run_one_step(
 
     # Any model works. Add one different buffer per rank
     model = _get_mlp()
-    model.register_buffer("test_buffer", torch.ones((1)) * rank)
+    model.register_buffer("test_buffer", torch.ones(1) * rank)
     model.to(device)
 
     next(model.parameters()).requires_grad = False  # Test non-trainable parameters

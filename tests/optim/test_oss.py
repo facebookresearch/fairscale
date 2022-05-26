@@ -146,7 +146,7 @@ class TestSingleRank(unittest.TestCase):
 
         # Move the model to device after OSS was constructed
         x.to(DEVICE)
-        x(torch.zeros((1), device=DEVICE)).backward()
+        x(torch.zeros(1, device=DEVICE)).backward()
 
         # Check that OSS detects that the device changed
         o.step()
@@ -853,7 +853,7 @@ def run_ddp_parity(rank, world_size, backend, temp_file_name, change_train_graph
         trunk = torch.nn.Sequential(
             torch.nn.Linear(in_channels, hidden), torch.nn.Linear(hidden, hidden), torch.nn.Linear(hidden, hidden)
         )
-        trunk.register_buffer("test_buffer", torch.ones((1)) * rank)
+        trunk.register_buffer("test_buffer", torch.ones(1) * rank)
         trunk.to(device)
 
         head = torch.nn.Linear(hidden, out_channels).to(device)
