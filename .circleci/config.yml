@@ -230,6 +230,11 @@ commands:
        version:
          type: string
      steps:
+       # Cache the pyenv download directory to avoid re-downloading over and over.
+       - restore_cache:
+          keys:
+             - cache-key-pyenv-3-9-7
+
        - run:
            name: Setup pyenv
            # We used to use the following commands to update pyenv.
@@ -243,6 +248,12 @@ commands:
              git checkout v2.2.0
              pyenv install -f <<parameters.version>>
              pyenv global <<parameters.version>>
+             find .|grep cache
+
+       - save_cache:
+          paths:
+             - /opt/circleci/.pyenv/.cache
+          key: cache-key-pyenv-3-9-7
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
