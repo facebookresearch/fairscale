@@ -2,11 +2,15 @@
 *~
 *.swp
 
+# IDEs
+.idea/
+
 # Testing
 *.pyc
 *.pyo
 .mypy_cache/
 *.egg-info/
+.testmondata
 
 # Build and release
 build/
