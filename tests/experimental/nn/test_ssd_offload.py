@@ -33,7 +33,7 @@ def test_write_read():
     _init()
 
     with tempfile.NamedTemporaryFile() as f:
-        ref_tensor = torch.rand((128), dtype=torch.float32)
+        ref_tensor = torch.rand(128, dtype=torch.float32)
         test_tensor = torch.zeros_like(ref_tensor)
         assert not torch.equal(ref_tensor, test_tensor)
         so.write(ref_tensor, f.name)
@@ -45,7 +45,7 @@ def test_ssd_handle_dispatch_fwd():
     _init()
 
     with tempfile.NamedTemporaryFile() as f:
-        orig_tensor = torch.randn((128))
+        orig_tensor = torch.randn(128)
         ssd_handle = so.SsdTensorHandle.from_tensor(orig_tensor)
         ssd_handle.set_file_params(f.name, 0)
         ssd_handle.to_file(release_tensor_after_write=True)
@@ -91,7 +91,7 @@ def test_ssd_handle_dispatch_bwd_hook():
         ssd_handle = so.SsdTensorHandle.from_tensor(orig_tensor)
         ssd_handle.set_file_params(f.name, 0)
         ssd_handle.to_file(release_tensor_after_write=True)
-        one = torch.ones((1), requires_grad=True).cuda()
+        one = torch.ones(1, requires_grad=True).cuda()
 
         orig_copy = ssd_handle.data
         cuda_copy = ssd_handle.to("cuda").detach().requires_grad_(True)
@@ -235,7 +235,7 @@ def test_ssd_flat_parameter_basic():
     with tempfile.NamedTemporaryFile() as f:
         refa_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
         refb_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
-        refc_param = torch.nn.Parameter(torch.rand((128), dtype=torch.float32))
+        refc_param = torch.nn.Parameter(torch.rand(128, dtype=torch.float32))
         ssd_flat_param = so.SsdFlatParameter.from_tensors([refa_param, refb_param, refc_param], direct_to_file=False)
         ssd_flat_param.set_file_params(f.name, 0)
 
@@ -261,7 +261,7 @@ def test_ssd_flat_parameter_view_modify():
     with tempfile.NamedTemporaryFile() as f:
         refa_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32), requires_grad=False)
         refb_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32), requires_grad=False)
-        refc_param = torch.nn.Parameter(torch.rand((128), dtype=torch.float32), requires_grad=False)
+        refc_param = torch.nn.Parameter(torch.rand(128, dtype=torch.float32), requires_grad=False)
         ssd_flat_param = so.SsdFlatParameter.from_tensors([refa_param, refb_param, refc_param], direct_to_file=False)
         ssd_flat_param.set_file_params(f.name, 0)
         ssd_flat_param.flush_on_dirty = False
@@ -300,7 +300,7 @@ def test_ssd_flat_parameter_view_bwd():
             .requires_grad_()
         )
         refc_param = (
-            torch.nn.Parameter(torch.rand((128), dtype=torch.float32), requires_grad=True)
+            torch.nn.Parameter(torch.rand(128, dtype=torch.float32), requires_grad=True)
             .to("cpu")
             .detach()
             .requires_grad_()
@@ -318,7 +318,7 @@ def test_ssd_flat_parameter_view_bwd():
         grad_acc.register_hook(functools.partial(post_backward_hook, "GradAccumulation_orig", hooks_called))
 
         ssd_flat_param.data = cuda_copy
-        one = torch.ones((1), requires_grad=True, device=ssd_flat_param.device)
+        one = torch.ones(1, requires_grad=True, device=ssd_flat_param.device)
         y1 = ssd_flat_param.views[0] + one
         y2 = cuda_copy + 1
 
@@ -412,7 +412,7 @@ def test_ssd_flat_parameter_direct_to_file():
     with tempfile.NamedTemporaryFile() as f:
         refa_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
         refb_param = torch.nn.Parameter(torch.rand((32, 4), dtype=torch.float32))
-        refc_param = torch.nn.Parameter(torch.rand((128), dtype=torch.float32))
+        refc_param = torch.nn.Parameter(torch.rand(128, dtype=torch.float32))
         ssd_flat_param = so.SsdFlatParameter.from_tensors(
             [refa_param, refb_param, refc_param], direct_to_file=True, filename=f.name, offset=0
         )
