@@ -8,7 +8,7 @@
 # Pro tip: download circle ci cli to validate the config locally during development.
 #
 # To reset/clean the cache update the CACHE_VERSION variable in project settings
-# in the fairscale project in CircleCI. The CACHE_VERSION follows the convention
+# in the fairscale project in CircleCI's web UI. The CACHE_VERSION follows the convention
 # v$(FAIRSCALE_VERSION)-${CACHE_NUMBER}. E.g. v0.4.2-1. CACHE_NUMBER must start
 # at 1 and increase in whole numbers. When changing the CACHE_VERSION manually
 # always set the FAIRSCALE_VERSION value to the fairscale version being tested.
@@ -21,22 +21,19 @@ orbs:
 # -------------------------------------------------------------------------------------
 # Environments to run the jobs in
 # -------------------------------------------------------------------------------------
-cpu_py37: &cpu_py37
-  docker:
-    # python version 3.7.12
-    - image: circleci/python:3.7
-  resource_class: large
-
 cpu_py38: &cpu_py38
   docker:
-    # python version 3.8.12
     - image: circleci/python:3.8
   resource_class: large
 
 cpu_py39: &cpu_py39
   docker:
-    # python version 3.9.7
     - image: circleci/python:3.9
+  resource_class: large
+
+cpu_py310: &cpu_py310
+  docker:
+    - image: circleci/python:3.10
   resource_class: large
 
 # Here is the list of GPU images:
@@ -99,18 +96,18 @@ install_dep_1_8_2: &install_dep_1_8_2
         wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
 # most recent stable version
-install_dep_1_10_2: &install_dep_1_10_2
+install_dep_1_11_0: &install_dep_1_11_0
   - run:
-      name: Install Dependencies with torch 1.10.2
+      name: Install Dependencies with torch 1.11.0
       command: |
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
-        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.10 && exit 0; fi
+        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.11 && exit 0; fi
         # start installing
-        pip install --progress-bar off torch==1.10.2+cu113 torchvision==0.11.3+cu113 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off torch==1.11.0+cu115 torchvision==0.12.0+cu115 -f https://download.pytorch.org/whl/torch_stable.html
         pip install --progress-bar off -r requirements-dev.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
-        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "10"], "wrong torch version"'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "11"], "wrong torch version"'
         python -m torch.utils.collect_env
         wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
@@ -252,35 +249,6 @@ commands:
 # -------------------------------------------------------------------------------------
 
 jobs:
-  cpu_tests_py37:
-    <<: *cpu_py37
-
-    working_directory: ~/fairscale
-
-    steps:
-      - checkout
-      - <<: *check_test_list
-      - <<: *setup_venv
-
-      # Cache the venv directory that contains dependencies
-      - restore_cache:
-          keys:
-            - cache-key-cpu-py37-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-
-      - <<: *install_dep_1_10_2
-
-      - save_cache:
-          paths:
-            - ~/venv
-          key: cache-key-cpu-py37-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-
-      - <<: *install_repo
-      - <<: *run_unittests
-      - <<: *run_doc_build
-
-      - store_test_results:
-          path: test-results
-
   cpu_tests_py38:
     <<: *cpu_py38
 
@@ -294,13 +262,13 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py38-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-      - <<: *install_dep_1_10_2
+            - cache-key-cpu-py38-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py38-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-cpu-py38-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_repo
       - <<: *run_unittests
@@ -322,14 +290,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py39-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+            - cache-key-cpu-py39-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py39-torch-1-10-0-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-cpu-py39-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_repo
       - <<: *run_unittests
@@ -338,7 +306,36 @@ jobs:
       - store_test_results:
           path: test-results
 
-  gpu_tests_1_8_1:
+  cpu_tests_py310:
+    <<: *cpu_py310
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+      - <<: *check_test_list
+      - <<: *setup_venv
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-cpu-py310-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+
+      - <<: *install_dep_1_11_0
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-cpu-py310-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+
+      - <<: *install_repo
+      - <<: *run_unittests
+      - <<: *run_doc_build
+
+      - store_test_results:
+          path: test-results
+
+  gpu_tests_lts:
     parameters:
       test_list_file:
         type: string
@@ -362,14 +359,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py-3-9-7-gpu-torch-1-8-1-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+            - cache-key-py-3-9-7-gpu-torch-1-8-2-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_dep_1_8_2
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py-3-9-7-gpu-torch-1-8-1-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-py-3-9-7-gpu-torch-1-8-2-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_repo
 
@@ -381,7 +378,7 @@ jobs:
 
       - <<: *upload_coverage
 
-  gpu_tests_1_10_0:
+  gpu_tests_stable:
     parameters:
       test_list_file:
         type: string
@@ -405,14 +402,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py-3-9-7-gpu-torch-1-10-0-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+            - cache-key-py-3-9-7-gpu-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py-3-9-7-gpu-torch-1-10-0-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-py-3-9-7-gpu-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_repo
 
@@ -446,14 +443,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py-3-9-7-gpu-pytorch-nightly-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+            - cache-key-py-3-9-7-gpu-torch-1-12-0424-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_dep_pytorch_nightly
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py-3-9-7-gpu-pytorch-nightly-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-py-3-9-7-gpu-torch-1-12-0424-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_repo
 
@@ -481,19 +478,19 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py-3-9-7-benchmarks-torch-1-10-0-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+            - cache-key-py-3-9-7-benchmarks-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       # Cache the MNIST directory that contains benchmark data
       - restore_cache:
           keys:
-            - cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION }}-{{checksum "benchmarks/datasets/mnist.py"}}
+            - cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION}}-{{checksum "benchmarks/datasets/mnist.py"}}
 
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py-3-9-7-benchmarks-torch-1-10-0-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-py-3-9-7-benchmarks-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_repo
 
@@ -512,7 +509,7 @@ jobs:
       - save_cache:
           paths:
             - /tmp/MNIST
-          key: cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION }}-{{checksum "benchmarks/datasets/mnist.py"}}
+          key: cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION}}-{{checksum "benchmarks/datasets/mnist.py"}}
 
   benchmarks_2:
     <<: *gpu_cu_11_2_medium_multi
@@ -532,20 +529,20 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-py-3-9-7-benchmarks-torch-1-10-0-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+            - cache-key-py-3-9-7-benchmarks-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
 
       # Cache the MNIST directory that contains benchmark data
       - restore_cache:
           keys:
-            - cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION }}-{{checksum "benchmarks/datasets/mnist.py"}}
+            - cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION}}-{{checksum "benchmarks/datasets/mnist.py"}}
 
-      - <<: *install_dep_1_10_2
+      - <<: *install_dep_1_11_0
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-py-3-9-7-benchmarks-torch-1-10-0-cuda-11-2-{{.Environment.CACHE_VERSION }}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-py-3-9-7-benchmarks-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *install_repo
 
@@ -561,24 +558,24 @@ workflows:
   version: 2
   build:
     jobs:
-      - cpu_tests_py37
       - cpu_tests_py38
       - cpu_tests_py39
-      - gpu_tests_1_8_1:
+      - cpu_tests_py310
+      - gpu_tests_lts:
           test_list_file: tests/ci_test_list_1.txt
-      - gpu_tests_1_10_0:
+      - gpu_tests_stable:
           test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_pytorch_nightly:
           test_list_file: tests/ci_test_list_1.txt
-      - gpu_tests_1_8_1:
+      - gpu_tests_lts:
           test_list_file: tests/ci_test_list_2.txt
-      - gpu_tests_1_10_0:
+      - gpu_tests_stable:
           test_list_file: tests/ci_test_list_2.txt
       - gpu_tests_pytorch_nightly:
           test_list_file: tests/ci_test_list_2.txt
-      - gpu_tests_1_8_1:
+      - gpu_tests_lts:
           test_list_file: tests/ci_test_list_3.txt
-      - gpu_tests_1_10_0:
+      - gpu_tests_stable:
           test_list_file: tests/ci_test_list_3.txt
       - gpu_tests_pytorch_nightly:
           test_list_file: tests/ci_test_list_3.txt
