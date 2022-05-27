@@ -230,6 +230,11 @@ commands:
        version:
          type: string
      steps:
+       # Cache the pyenv download directory to avoid re-downloading over and over.
+       - restore_cache:
+          keys:
+             - cache-key-pyenv-3-9-7-v1
+
        - run:
            name: Setup pyenv
            # We used to use the following commands to update pyenv.
@@ -237,12 +242,21 @@ commands:
            #   pyenv update
            # However, it is not deterministic since pyenv is being updated.
            # It is now fixed to a version. (v2.3.0 is broken since it cause bash to fail when it try to do "eval $(pyenv init -)")
+           #
+           # We use "-sf" to skip already installed version after cache restoring the pyenv dir. This should avoid redoing
+           # downloading and installing. The key name has a "v1" in the end so that we can debug and try different cache objects
+           # while doing development.
            command: |
              cd /opt/circleci/.pyenv/
              git remote update
              git checkout v2.2.0
-             pyenv install -f <<parameters.version>>
+             pyenv install -sf <<parameters.version>>
              pyenv global <<parameters.version>>
+
+       - save_cache:
+          paths:
+             - /opt/circleci/.pyenv
+          key: cache-key-pyenv-3-9-7-v1
 
 # -------------------------------------------------------------------------------------
 # Jobs to run
