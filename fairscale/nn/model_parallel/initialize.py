@@ -28,6 +28,8 @@ import torch
 
 from .utils import ensure_divisibility
 
+# FIXME: this assumes exactly one distributed process.
+
 # Model parallel group that the current rank belongs to.
 _MODEL_PARALLEL_GROUP = None
 # Data parallel group that the current rank belongs to.

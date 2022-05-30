@@ -6,6 +6,7 @@
 
 """ Golden data used in unit tests. """
 
+# FIXME: why is this in the main lib, rather than the unittests directory?
 adascale_test_data = [
     # "input" value is a list of input tensors for micro-batch/rank 0 and micro-batch/rank 1.
     {"input": [[1.0, 0], [0, 1.0]], "expected_gain": 4.0 / 3},

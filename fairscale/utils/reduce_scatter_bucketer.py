@@ -20,6 +20,8 @@ else:
 
 
 class Bucket:
+    # FIXME: docs
+    # FIXME: class field annotations.
     def __init__(self, data: Tensor, group: ProcessGroup):
         self.data = data
         self.group = group
@@ -32,6 +34,7 @@ class Bucket:
         if self.offset == 0:
             assert len(self.callbacks) == 0
             return
+        # FIXME: docs about this case in the constructor?
         # reduce-scatter bucket
         if hasattr(dist, "_reduce_scatter_base") and enable_nccl_base_collectives:
             dist._reduce_scatter_base(
@@ -96,6 +99,8 @@ class ReduceScatterBucketer:
         bucket_cap_mb (int, Optional): bucket size for communicating. Buckets
             are sub-divided based on world_size. Values <= 0 disable bucketing.
     """
+
+    # FIXME: class field annotations.
 
     def __init__(self, bucket_cap_mb: int = 25):
         self.bucket_cap_mb = bucket_cap_mb

@@ -12,6 +12,9 @@ from torch.nn.utils.rnn import PackedSequence
 """Useful functions to deal with tensor types with other python container types."""
 
 
+# FIXME: the semantics and definition of this are more flexible
+# and more coherent if we define this in terms of Tensor, Mapping, Set, and Iterable,
+# and yield Tensor, Dict, Set, and List.
 def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
     """Recursively apply to all tensor in different kinds of container types."""
 
@@ -24,6 +27,17 @@ def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tu
                 od[key] = _apply(value)
             return od
         elif isinstance(x, PackedSequence):
+            # FIXME: undocumented out-of-bound usage.
+            # PackedSequence calls are made with in-place mutations,
+            # which is why the below (where the result is lost)
+            # is permitted in the current code.
+            #
+            # in-place mutation ops could be used on ANY of the other cases,
+            # and this could be made consistent by returning the result here.
+            #
+            # collecting operations cannot, in principle, give us batch sizes;
+            # so the argument for returning the same datatype is limited,
+            # it might as well be any sequence.
             _apply(x.data)
             return x
         elif isinstance(x, dict):

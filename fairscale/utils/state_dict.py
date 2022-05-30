@@ -53,8 +53,12 @@ def find_module_instances(module: nn.Module, search_class: Type[nn.Module]) -> L
     return paths
 
 
+# FIXME: this changes the order of OrderedDict keys.
 def replace_by_prefix_(
-    state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], old_prefix: str, new_prefix: str
+    # TODO: drop "QuotedClass" style type quoting here.
+    state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"],
+    old_prefix: str,
+    new_prefix: str,
 ) -> None:
     """
     Replace all keys that match a given old_prefix with a new_prefix (in-place).

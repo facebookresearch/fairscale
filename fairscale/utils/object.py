@@ -9,6 +9,7 @@ from typing import Any
 import torch
 
 
+# FIXME: both of these mechanisms at _least_ double allocate and double copy.
 def pyobject_to_tensor(obj: Any, fixed_buffer_size: int = 0) -> torch.Tensor:
     pickled = pickle.dumps(obj)
     result: torch.Tensor = torch.ByteTensor(bytearray(pickled))

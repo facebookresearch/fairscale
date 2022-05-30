@@ -11,6 +11,8 @@ from typing import Tuple
 import torch
 
 
+# FIXME: write a test for this.
+# Also, this is unsafe and hard to imagine being deterministic for tests.
 def find_tensor_by_shape(target_shape: Tuple, only_param: bool = True) -> bool:
     """Find a tensor from the heap
 

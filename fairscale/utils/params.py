@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 
 
+# FIXME: dataclass?
 class Workhandle:
     def __init__(self, handle: Any, callback: Optional[Callable]) -> None:
         self.handle = handle
@@ -38,6 +39,7 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
     if isinstance(value, torch.Tensor):
         return value.to(device, non_blocking=non_blocking)
 
+    # FIXME: Sequence? Iterable (put Mapping first)?
     if isinstance(value, (list, tuple)):
         values = []
         for val in value:
@@ -45,6 +47,7 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
 
         return values if isinstance(value, list) else tuple(values)
 
+    # FIXME: typing.Mapping?
     if isinstance(value, abc.Mapping):
         device_val: Dict[str, Any] = {}
         for key, val in value.items():
@@ -55,6 +58,8 @@ def recursive_copy_to_device(value: Any, non_blocking: bool, device: torch.devic
     return value
 
 
+# FIXME: no test!
+# FIXME: is anything in this specific to Parameter, or would any Tensor work?
 def calc_grad_norm(parameters: List[torch.nn.Parameter], p: float) -> torch.Tensor:
     r"""Calculate gradient norm of an iterable of parameters.
     Returns:
@@ -62,12 +67,14 @@ def calc_grad_norm(parameters: List[torch.nn.Parameter], p: float) -> torch.Tens
     """
     if isinstance(parameters, torch.Tensor):
         parameters = [parameters]
+    # TODO: comp? parameters = [par for par in parameters if par.grad is not None]
     parameters = list(filter(lambda par: par.grad is not None, parameters))
 
     if len(parameters) == 0:
         return torch.tensor(0.0)
     p = float(p)
     if p == inf:
+        # FIXME: document the `inf` case?
         local_norm = max(par.grad.detach().abs().max() for par in parameters)  # type: ignore
     else:
         # Compute the norm in full precision no matter what

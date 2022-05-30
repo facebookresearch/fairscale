@@ -26,6 +26,7 @@ from fairscale.optim import OSS
 from fairscale.utils.params import Workhandle, get_global_rank
 
 
+# FIXME? `util/tensor/grad.py`?
 def _trainable(param: torch.Tensor) -> bool:
     return param.requires_grad
 
@@ -93,6 +94,8 @@ class ShardedDataParallel(nn.Module):
 
     """
 
+    # FIXME: class annotations?
+
     def __init__(
         self,
         module: nn.Module,
@@ -155,6 +158,12 @@ class ShardedDataParallel(nn.Module):
         # several optimizers can be present each working on seperate parameter set which is spread across multiple ranks
 
         # - we build an iterator which goes through all the parameters involved globally
+        # TODO? comprehension
+        # self._all_params = [
+        #   p
+        #   for optim in self._sharded_optimizers
+        #   for p in optim._per_device_params.values()
+        # ]
         self._all_params = list(
             chain(
                 *[
@@ -601,12 +610,16 @@ class ShardedDataParallel(nn.Module):
                     self._buckets[device][dst_rank].add_grad(param)
                     self._should_bucket_grad[i] = True
 
+            # TODO? comprehension
+            # TODO? method? property?
+            # self._bucket_list = [ b for device_buckets in self._buckets.values() for b in device_buckets ]
             self._bucket_list = list(chain(*[self._buckets[device].values() for device in self._buckets.keys()]))
 
             # Resize the buckets to remove lost space in the end
             for bucket in self._bucket_list:
                 bucket.shrink()
 
+    # FIXME: merge blocking/non-blocking method
     def _consume_work_handles(self) -> None:
         """Consume all the futures which are tied to this optimizer's buckets.
         We start from the first/older ones, since they are the most likely to be ready and non-blocking
@@ -652,15 +665,18 @@ class ShardedDataParallel(nn.Module):
     def _detect_train_change(self) -> bool:
         with profiler.record_function("fairscale::sdp::detect_train_changes"):
             # Optionally check whether the trainable parameters have changed
+            # FIXME? comprehension?
+            # trainable_mask = [_trainable(p) for p in self._all_params]
             trainable_mask = list(map(_trainable, self._all_params))
 
-            # - one or more parameters trainability changed
+            # - one or more parameter's trainability changed
             trainability_changed = trainable_mask != self._reference_trainable_mask
 
             # - the whole model is not trainable but we still have grad hooks
             trainability_changed |= not self.training and len(self._grad_hooks) > 0
 
             if self._warn_on_trainable_params_changed and trainability_changed:
+                # FIXME: add assert mode?
                 logging.warning(
                     "ShardedDDP detected that the trainable params changed, "
                     "either because of eval/train mode or parameter freezing/unfreeze."

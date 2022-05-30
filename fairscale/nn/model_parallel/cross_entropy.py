@@ -27,6 +27,7 @@ from .utils import VocabUtility
 
 
 class _VocabParallelCrossEntropy(torch.autograd.Function):
+    # FIXME: docs
     @staticmethod
     def forward(ctx, vocab_parallel_logits, target):  # type: ignore
 
@@ -102,5 +103,6 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
 
 
 def vocab_parallel_cross_entropy(vocab_parallel_logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    # FIXME: why does this exist?
     """Helper function for the cross entropy."""
     return _VocabParallelCrossEntropy.apply(vocab_parallel_logits, target)

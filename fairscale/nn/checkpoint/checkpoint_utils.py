@@ -28,6 +28,9 @@ def patch_batchnorm(module: nn.Module) -> List:
             A list of hook handles, late can be freed.
     """
 
+    # FIXME: avoid attaching state to module;
+    # lift pre/post to common class, put state on hook class.
+
     def pre_forward(module: _BatchNorm, input: Tensor) -> None:
         if torch.is_grad_enabled():
             return

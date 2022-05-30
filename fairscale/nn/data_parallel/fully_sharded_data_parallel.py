@@ -305,6 +305,8 @@ class FullyShardedDataParallel(nn.Module):
             Default: False
     """
 
+    # FIXME: class annotations?
+
     def __init__(
         self,
         module: nn.Module,
@@ -358,6 +360,7 @@ class FullyShardedDataParallel(nn.Module):
                 if not hasattr(process_group_reduce_scatter, "allgather") and hasattr(
                     process_group_reduce_scatter, "rank"
                 ):
+                    # FIXME: common test func for dummy PG.
                     # Likely a dummy pg for unit test
                     self.process_group_reduce_scatter = process_group_reduce_scatter
                 else:

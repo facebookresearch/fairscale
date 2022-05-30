@@ -15,6 +15,8 @@ from torch.distributed import ProcessGroup
 import torch.nn.functional as F
 
 
+# FIXME: this seems like a candidate for pytorch.
+# this doesn't naturally belong in 'parallel', maybe 'util/tensor/chunk.py'
 def chunk_and_pad(tensor: torch.Tensor, num_chunks: int) -> List[torch.Tensor]:
     """Chunk a given Tensor into num_chunks parts and add any necessary padding."""
     chunks = list(torch.flatten(tensor).chunk(num_chunks))
@@ -33,6 +35,11 @@ def validate_process_group(device: torch.device, process_group: ProcessGroup) ->
     the CPU.
     """
     if not hasattr(process_group, "allgather"):
+        # FIXME: consider dummy having an explicit marker or base class,
+        # and having an explicit `is_dummy_process_group(pg)` test,
+        # rather than assuming that malformed pgs are dummy pgs,
+        # and doing the test differently in each of these places.
+
         # Likely a dummy pg for unit test, skip checking.
         return
 
@@ -104,12 +111,19 @@ def get_process_group_cached(
     if not dist.is_initialized():
         # Likely caused by initiating a dummy pg for unit test, skip checking.
         if name == ProcessGroupName.reduce_scatter and "pytest" in sys.modules:
+            # FIXME: consider dummy having an explicit marker or base class,
+            # and having an explicit `is_dummy_process_group(pg)` test,
+            # rather than assuming that malformed pgs are dummy pgs,
+            # and doing the test differently in each of these places.
             return None
         else:
             raise RuntimeError("torch.distributed is not yet initialized but process group is requested.")
 
+    # FIXME: it is _very_ odd to hang this cache off a function attribute,
+    # rather than making it a module attribute.
     # Init the cache if needed.
     if not hasattr(get_process_group_cached, "_global_group_cache"):
+        # FIXME: this init, not thread-safe.
         get_process_group_cached._global_group_cache = {}  # type: ignore
         # Populate with default process group.
         cache = get_process_group_cached._global_group_cache  # type: ignore

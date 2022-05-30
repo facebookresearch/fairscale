@@ -243,6 +243,7 @@ def build_unflat_state_dict(
     return unflat_optim_state_dict
 
 
+# FIXME: `util/tensor/shape.py` ? lift to pytorch?
 def is_singleton_tensor(x: Any) -> bool:
     """Is x a dimensionless tensor?"""
     return torch.is_tensor(x) and x.dim() == 0

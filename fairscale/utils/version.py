@@ -24,6 +24,7 @@ def torch_version(version: str = torch.__version__) -> Tuple[int, ...]:
 
         # Assuming that we're interested in the second use-case more than the first,
         # return the pre-release or dev numbering
+        # FIXME: log this ... everytime we call `torch_version()`? This is pretty spammy.
         logging.warning(f"Pytorch pre-release version {version} - assuming intent to test it")
 
     return tuple(int(numbering.group(n)) for n in range(1, 4))

@@ -81,6 +81,9 @@ def _initialize_affine_weight(
     return None
 
 
+# FIXME: these may make more sense in their own modules.
+
+
 class VocabParallelEmbedding(torch.nn.Module):
     """Embedding parallelized in the vocabulary dimension.
 
@@ -91,6 +94,8 @@ class VocabParallelEmbedding(torch.nn.Module):
         embedding_dim: size of hidden state.
         init_method: method to initialize weights.
     """
+
+    # FIXME: field annotations?
 
     def __init__(
         self,
@@ -159,6 +164,8 @@ class ParallelEmbedding(torch.nn.Module):
         embedding_dim: size of hidden state.
         init_method: method to initialize weights.
     """
+
+    # FIXME: field annotations?
 
     def __init__(
         self,
@@ -235,6 +242,8 @@ class ColumnParallelLinear(torch.nn.Module):
                                      set to False. It returns the master weights
                                      used for initialization.
     """
+
+    # FIXME: field annotations?
 
     def __init__(
         self,
