@@ -19,7 +19,7 @@ import torchvision.transforms as transforms
 
 from fairscale.optim.layerwise_gradient_scaler import LayerwiseGradientScaler
 from fairscale.utils.testing import skip_a_test_if_in_CI
-from tests.common_paths import DATASET_ROOT
+from tests.common_paths import DATASET_CACHE_ROOT
 
 
 # Test: feed forward network
@@ -72,7 +72,12 @@ def load_data(model_type: str) -> Union[DataLoader, Tuple[Any, Any]]:
         transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
         # TODO: we should NOT do this download over and over again during test.
-        train_ds = torchvision.datasets.CIFAR10(root=DATASET_ROOT, train=True, download=True, transform=transform)
+        train_ds = torchvision.datasets.CIFAR10(
+            root=DATASET_CACHE_ROOT,
+            train=True,
+            download=True,
+            transform=transform,
+        )
         train_ds_loader = torch.utils.data.DataLoader(train_ds, batch_size=128, shuffle=False, num_workers=2)
 
         image, _ = train_ds[0]
