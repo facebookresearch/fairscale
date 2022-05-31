@@ -692,6 +692,10 @@ def state_dict_norm(state: Dict[str, torch.Tensor]) -> torch.Tensor:
     return norm
 
 
+# FIXME: more comprehensive lib https://testfixtures.readthedocs.io/en/latest/files.html ??
+# consider moving all of this tempfile/tempdir machinery to `testfixtures`
+
+
 def rmf(filename: str) -> None:
     """Remove a file like rm -f."""
     try:
@@ -706,6 +710,8 @@ def in_temporary_directory() -> Generator:
     Context manager to create a temporary direction and remove
     it at the end of the context
     """
+    # FIXME: more comprehensive lib https://testfixtures.readthedocs.io/en/latest/files.html ??
+    # consider moving all of this tempfile/tempdir machinery to `testfixtures`
     old_cwd = os.getcwd()
     with tempfile.TemporaryDirectory() as temp_dir:
         os.chdir(temp_dir)
