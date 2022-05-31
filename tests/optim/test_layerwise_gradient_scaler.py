@@ -17,9 +17,9 @@ from torch.utils.data import DataLoader
 import torchvision
 import torchvision.transforms as transforms
 
+from fair_dev.common_paths import DATASET_CACHE_ROOT
 from fairscale.optim.layerwise_gradient_scaler import LayerwiseGradientScaler
 from fairscale.utils.testing import skip_a_test_if_in_CI
-from tests.common_paths import DATASET_CACHE_ROOT
 
 
 # Test: feed forward network
