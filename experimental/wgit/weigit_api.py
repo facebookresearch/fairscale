@@ -31,12 +31,13 @@ class WeiGit:
 
             # create sha1_ref_count
             with open(".wgit/sha1_ref_count.json", "w") as f:
-                print("\nThe sha1_ref_count.json file has been created!")
+                print("The sha1_ref_count.json file has been created!")
 
             # Make the .wgit a git repo, add a gitignore and add SHA1_ref
             pygit2.init_repository(".wgit/.git", False)
             with open("./.wgit/.gitignore", "w") as f:
                 f.write("sha1_ref_count.json")
+
         except FileExistsError:
             sys.stderr.write("WeiGit has been already Initialized \n")
 
@@ -97,3 +98,40 @@ class SHA1_store:
 
     def __init__(self) -> None:
         print("\nSHA1_store has been initialized!!")
+
+
+class Repo:
+    def __init__(self, check_path) -> None:
+        self.repo_path = None
+        self.find_existing_repo()
+
+    def find_existing_repo(self):
+        check_dir = os.path.join(os.getcwd(), os.path.dirname(sys.argv[0]))
+
+        # checks if wgit has been initialized
+        is_wgit_in_curr = pathlib.Path(os.path.join(check_dir, ".wgit")).exists()
+        is_refcount_in_wgit = pathlib.Path(os.path.join(check_dir, ".wgit/sha1_ref_count.json")).exists()
+        is_git_in_wgit = pathlib.Path(os.path.join(check_dir, ".wgit/.git")).exists()
+
+        if is_wgit_in_curr and is_refcount_in_wgit and is_git_in_wgit:
+            self.repo_path = os.path.join(check_dir, ".wgit")
+            print(f"repo path: {self.repo_path}")
+        else:
+            run_while_max = 100
+            while check_dir != os.getcwd() and (run_while_max != 0):
+                check_dir = os.path.dirname(check_dir)
+
+                if pathlib.Path(os.path.join(check_dir, ".wgit")).exists():
+                    self.repo_path = os.path.join(check_dir, ".wgit")
+                    print(f"repo path: {self.repo_path}")
+                    break
+
+                run_while_max -= 1
+
+        if self.repo_path is None:
+            print("No weigit repo exists! Initialize one..")
+
+    def get_repo_path(self):
+        if self.repo_path is None:
+            self.find_existing_repo()
+        return self.repo_path

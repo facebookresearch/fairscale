@@ -10,7 +10,7 @@ import experimental.wgit.cli as cli
 
 
 def setup_module(module):
-    cli.main(["--init"])
+    cli.main(["init"])
 
 
 def test_cli_init(capsys):
@@ -22,35 +22,35 @@ def test_cli_init(capsys):
 
 
 def test_cli_add(capsys):
-    cli.main(["--add", "test"])
+    cli.main(["add", "test"])
     captured = capsys.readouterr()
     assert captured.out == "wgit added\n"
     assert captured.err == ""
 
 
 def test_cli_status(capsys):
-    cli.main(["--status"])
+    cli.main(["status"])
     captured = capsys.readouterr()
     assert captured.out == "wgit status\n"
     assert captured.err == ""
 
 
 def test_cli_log(capsys):
-    cli.main(["--log"])
+    cli.main(["log"])
     captured = capsys.readouterr()
     assert captured.out == "wgit log\n"
     assert captured.err == ""
 
 
 def test_cli_commit(capsys):
-    cli.main(["--commit"])
+    cli.main(["commit"])
     captured = capsys.readouterr()
     assert captured.out == "wgit commit\n"
     assert captured.err == ""
 
 
 def test_cli_checkout(capsys):
-    cli.main(["--checkout"])
+    cli.main(["checkout", "sha1"])
     captured = capsys.readouterr()
     assert captured.out == "wgit checkout\n"
     assert captured.err == ""
