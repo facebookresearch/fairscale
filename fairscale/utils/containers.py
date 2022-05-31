@@ -78,6 +78,8 @@ def split_non_tensors(
     Split a tuple into a list of tensors and the rest with information
     for later reconstruction.
 
+    When called with a tensor X, will return: (x,), None
+
     Usage::
 
         x = torch.Tensor([1])
