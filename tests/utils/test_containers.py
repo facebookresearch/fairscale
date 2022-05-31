@@ -35,7 +35,7 @@ def test_apply_to_tensors(devices):
     def get_a_tensor():
         """Return a random tensor on random device."""
         dev = random.choice(devices)
-        shape = random.choice(((1), (2, 3), (4, 5, 6), (7, 8, 9, 10)))
+        shape = random.choice((1, (2, 3), (4, 5, 6), (7, 8, 9, 10)))
         t = torch.rand(shape).to(dev)
         nonlocal expected
         expected += t.numel()
@@ -45,7 +45,7 @@ def test_apply_to_tensors(devices):
     data = [1, "str"]
     data.append({"key1": get_a_tensor(), "key2": {1: get_a_tensor()}, "key3": 3})
     data.insert(0, set(["x", get_a_tensor(), get_a_tensor()]))
-    data.append(([1], get_a_tensor(), (1), [get_a_tensor()], set((1, 2))))
+    data.append(([1], get_a_tensor(), 1, [get_a_tensor()], set((1, 2))))
     od = OrderedDict()
     od["k"] = "value"
     data.append(od)
@@ -99,6 +99,7 @@ def test_split_unpack():
     x = torch.Tensor([1])
     y = torch.Tensor([2])
 
+    # degenerate case, args is a single tensor.
     tensors, packed_non_tensors = split_non_tensors(x)
     assert tensors == (x,)
     assert packed_non_tensors is None
