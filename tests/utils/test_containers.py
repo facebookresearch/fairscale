@@ -99,6 +99,11 @@ def test_split_unpack():
     x = torch.Tensor([1])
     y = torch.Tensor([2])
 
+    # degenerate case, args is a single tensor.
+    tensors, packed_non_tensors = split_non_tensors(x)
+    assert tensors == (x,)
+    assert packed_non_tensors is None
+
     tensors, packed_non_tensors = split_non_tensors((x, y, None, 3))
     assert tensors == (x, y)
     assert packed_non_tensors == {
