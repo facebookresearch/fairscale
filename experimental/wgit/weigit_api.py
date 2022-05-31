@@ -25,55 +25,51 @@ class WeiGit:
         # Make .wgit directory
         try:
             os.mkdir(".wgit")
-
-            # if no .wgit dir then initialize the following
-            SHA1_store()
-
-            # create sha1_ref_count
-            with open(".wgit/sha1_ref_count.json", "w") as f:
-                print("The sha1_ref_count.json file has been created!")
-
-            # Make the .wgit a git repo, add a gitignore and add SHA1_ref
-            pygit2.init_repository(".wgit/.git", False)
-            with open("./.wgit/.gitignore", "w") as f:
-                f.write("sha1_ref_count.json")
-
         except FileExistsError:
             sys.stderr.write("WeiGit has been already Initialized \n")
+            sys.exit(0)
+
+        # if no .wgit dir then initialize the following
+        SHA1_store()
+
+        # create sha1_ref_count
+        with open(".wgit/sha1_ref_count.json", "w") as f:
+            print("The sha1_ref_count.json file has been created!")
+
+        # Make the .wgit a git repo, add a gitignore and add SHA1_ref
+        pygit2.init_repository(".wgit/.git", False)
+        with open("./.wgit/.gitignore", "w") as f:
+            f.write("sha1_ref_count.json")
 
     @staticmethod
     def add(file):
-        if not pathlib.Path(".wgit").exists():
-            print("Initialize wgit first!")
-        else:
+        if Repo(os.getcwd()).exists():
             print("wgit added")
 
     @staticmethod
     def status():
-        if not pathlib.Path(".wgit").exists():
-            print("Initialize wgit first!")
-        else:
+        if Repo(os.getcwd()).exists():
             print("wgit status")
 
     @staticmethod
-    def log():
-        if not pathlib.Path(".wgit").exists():
-            print("Initialize wgit first!")
-        else:
-            print("wgit log")
+    def log(file):
+        if Repo(os.getcwd()).exists():
+            if file:
+                print(f"wgit log of the file {file}")
+            else:
+                print("wgit log")
 
     @staticmethod
-    def commit():
-        if not pathlib.Path(".wgit").exists():
-            print("Initialize wgit first!")
-        else:
-            print("wgit commit")
+    def commit(message):
+        if Repo(os.getcwd()).exists():
+            if message:
+                print(f"commited with message: {message}")
+            else:
+                print("wgit commit")
 
     @staticmethod
     def checkout():
-        if not pathlib.Path(".wgit").exists():
-            print("Initialize wgit first!")
-        else:
+        if Repo(os.getcwd()).exists():
             print("wgit checkout")
 
     @staticmethod
@@ -97,39 +93,47 @@ class SHA1_store:
     """
 
     def __init__(self) -> None:
-        print("\nSHA1_store has been initialized!!")
+        print("SHA1_store has been initialized!!")
 
 
 class Repo:
-    def __init__(self, check_path) -> None:
+    """
+    Designates the weigit repo, which is identified by a path to the repo.
+    """
+
+    def __init__(self, check_dir) -> None:
         self.repo_path = None
-        self.find_existing_repo()
+        self.check_dir = check_dir
 
-    def find_existing_repo(self):
-        check_dir = os.path.join(os.getcwd(), os.path.dirname(sys.argv[0]))
+    def exists(self):
+        def weigit_repo_exists(check_dir):
+            """
+            checks if the input path to dir (check_dir) is a valid weigit repo
+            with .git and sha1_ref_count in the repo.
+            """
+            is_wgit_in_curr = pathlib.Path(os.path.join(check_dir, ".wgit")).exists()
+            is_refcount_in_wgit = pathlib.Path(os.path.join(check_dir, ".wgit/sha1_ref_count.json")).exists()
+            is_git_in_wgit = pathlib.Path(os.path.join(check_dir, ".wgit/.git")).exists()
+            return is_wgit_in_curr and is_refcount_in_wgit and is_git_in_wgit
 
-        # checks if wgit has been initialized
-        is_wgit_in_curr = pathlib.Path(os.path.join(check_dir, ".wgit")).exists()
-        is_refcount_in_wgit = pathlib.Path(os.path.join(check_dir, ".wgit/sha1_ref_count.json")).exists()
-        is_git_in_wgit = pathlib.Path(os.path.join(check_dir, ".wgit/.git")).exists()
-
-        if is_wgit_in_curr and is_refcount_in_wgit and is_git_in_wgit:
-            self.repo_path = os.path.join(check_dir, ".wgit")
-            print(f"repo path: {self.repo_path}")
+        if weigit_repo_exists(self.check_dir):
+            self.repo_path = os.path.join(self.check_dir, ".wgit")
         else:
-            run_while_max = 100
-            while check_dir != os.getcwd() and (run_while_max != 0):
-                check_dir = os.path.dirname(check_dir)
+            max_dir_depth = 100
+            while self.check_dir != os.getcwd() and (max_dir_depth != 0):
+                self.check_dir = os.path.dirname(self.check_dir)
 
-                if pathlib.Path(os.path.join(check_dir, ".wgit")).exists():
-                    self.repo_path = os.path.join(check_dir, ".wgit")
-                    print(f"repo path: {self.repo_path}")
+                if weigit_repo_exists(self.check_dir):
+                    self.repo_path = os.path.join(self.check_dir, ".wgit")
                     break
-
-                run_while_max -= 1
+                max_dir_depth -= 1
 
         if self.repo_path is None:
-            print("No weigit repo exists! Initialize one..")
+            print("Initialize a weigit repo first!!")
+            is_exist = False
+        else:
+            is_exist = True
+        return is_exist
 
     def get_repo_path(self):
         if self.repo_path is None:

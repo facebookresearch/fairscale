@@ -5,16 +5,16 @@
 
 import argparse
 
+import experimental.wgit as wgit
 import experimental.wgit.weigit_api as weigit_api
 
 
 def main(argv=None):
-    # create the parser for the "a" command
     desc = "WeiGit: A git-like tool for model weight tracking"
 
-    # Create a top level parser
+    # top level parser and corresponding subparser
     parser = argparse.ArgumentParser(description=desc)
-    subparsers = parser.add_subparsers()
+    subparsers = parser.add_subparsers(dest="command")
 
     # Version
     version_parser = subparsers.add_parser("version", description="Display version")
@@ -24,14 +24,8 @@ def main(argv=None):
     init_parser = subparsers.add_parser("init", description="Initialize a weigit repo")
     init_parser.add_argument("init", action="store_true", help="initialize the repo")
 
-    status_parser = subparsers.add_parser("status", description="Show the repo's current status")
+    status_parser = subparsers.add_parser("status", description="Shows the repo's current status")
     status_parser.add_argument("status", action="store_true", help="Show the repo's current status")
-
-    log_parser = subparsers.add_parser("log", description="Show the repo's history log")
-    log_parser.add_argument("log", action="store_true", help="Show the repo's history log")
-
-    commit_parser = subparsers.add_parser("commit", description="Commit the staged changes")
-    commit_parser.add_argument("commit", action="store_true", help="Commit the staged changes")
 
     add_parser = subparsers.add_parser("add", description="add a file to the staged changeset (default: none)")
     add_parser.add_argument(
@@ -42,7 +36,19 @@ def main(argv=None):
         help="add a file to the staged changeset (default: none)",
     )
 
-    checkout_parser = subparsers.add_parser("checkout", description="Initialize a weigit repo")
+    commit_parser = subparsers.add_parser("commit", description="Commits the staged changes")
+    commit_parser.add_argument("commit", action="store_true", help="Commit the staged changes")
+    commit_parser.add_argument(
+        "-m",
+        "--message",
+        default="",
+        type=str,
+        metavar="MESSAGE",
+        required=True,
+        help="commit message",
+    )
+
+    checkout_parser = subparsers.add_parser("checkout", description="checkout from a commit")
     checkout_parser.add_argument(
         "checkout",
         default="",
@@ -50,29 +56,41 @@ def main(argv=None):
         metavar="FILE_SHA1",
         help="checkout from a commit",
     )
-    parser.set_defaults(init=False, add="", status=False, log=False, commit=False, checkout="")
+
+    log_parser = subparsers.add_parser("log", description="Show the history log of the repo or optionally of a file.")
+    log_parser.add_argument("log", action="store_true", help="Show the repo's history log")
+    log_parser.add_argument(
+        "-f",
+        "--file",
+        default="",
+        type=str,
+        metavar="FILE_PATH",
+        help="Show the history log of a file",
+    )
 
     args = parser.parse_args(argv)
-    # print(f"Print args: {args}")
 
-    if args.init:
+    if args.command == "init":
         weigit = weigit_api.WeiGit()
-        print("Wgit has been initialized!")
 
-    if args.add:
+    if args.command == "add":
         weigit_api.WeiGit.add(args.add)
 
-    if args.status:
+    if args.command == "status":
         weigit_api.WeiGit.status()
 
-    if args.log:
-        weigit_api.WeiGit.log()
+    if args.command == "log":
+        weigit_api.WeiGit.log(args.file)
 
-    if args.commit:
-        weigit_api.WeiGit.commit()
+    if args.command == "commit":
+        weigit_api.WeiGit.commit(args.message)
 
-    if args.checkout:
+    if args.command == "checkout":
         weigit_api.WeiGit.checkout()
+
+    if args.command == "version":
+        print(wgit.__version__)
+        exit(0)
 
 
 if __name__ == "__main__":

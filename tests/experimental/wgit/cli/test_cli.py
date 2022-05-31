@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 import pathlib
 import shutil
 
@@ -10,11 +11,15 @@ import experimental.wgit.cli as cli
 
 
 def setup_module(module):
+    try:
+        shutil.rmtree(".wgit")
+    except FileNotFoundError:
+        pass
+
     cli.main(["init"])
 
 
 def test_cli_init(capsys):
-    # cli.main(["--init"])
     # Check if the json and other files have been created by the init
     assert pathlib.Path(".wgit/sha1_ref_count.json").is_file()
     assert pathlib.Path(".wgit/.gitignore").is_file()
@@ -43,9 +48,9 @@ def test_cli_log(capsys):
 
 
 def test_cli_commit(capsys):
-    cli.main(["commit"])
+    cli.main(["commit", "-m", "text"])
     captured = capsys.readouterr()
-    assert captured.out == "wgit commit\n"
+    assert captured.out == "commited with message: text\n"
     assert captured.err == ""
 
 
