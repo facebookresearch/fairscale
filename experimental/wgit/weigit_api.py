@@ -28,13 +28,13 @@ class WeiGit:
         try:
             os.mkdir(".wgit")
         except FileExistsError:
-            sys.stderr.write("WeiGit has been already Initialized")
+            sys.stderr.write("An exception occured while wgit initialization: WeiGit already Initialized\n")
             sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
         # if no .wgit dir then initialize the following
         SHA1_store()
 
-        # create sha1_ref_count:
+        # create sha1_ref_count and a .gitignore:
         # In general sha1_ref_count is only create only if .wgit already exists
         try:
             ref_count_json = ".wgit/sha1_ref_count.json"
@@ -44,15 +44,21 @@ class WeiGit:
             sys.stderr.write(f"An exception occured while creating {ref_count_json}: {repr(error)}\n")
             sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
-        # Make the .wgit a git repo, add a gitignore and add SHA1_ref
+        # Make the .wgit a git repo
         try:
             pygit2.init_repository(".wgit/.git", False)
         except BaseException as error:
             sys.stderr.write(f"An exception occurred while initializing .wgit/.git: {repr(error)}\n")
             sys.exit(ExitCode.ERROR)
 
-        with open("./.wgit/.gitignore", "w") as f:
-            f.write("sha1_ref_count.json")
+        # add a .gitignore:
+        try:
+            gitignore = ".wgit/.gitignore"
+            with open(gitignore, "w") as f:
+                f.write("sha1_ref_count.json")
+        except FileExistsError as error:
+            sys.stderr.write(f"An exception occured while creating {gitignore}: {repr(error)}\n")
+            sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
     @staticmethod
     def add(file):
@@ -68,7 +74,7 @@ class WeiGit:
     def log(file):
         if Repo(os.getcwd()).exists():
             if file:
-                print(f"wgit log of the file {file}")
+                print(f"wgit log of the file: {file}")
             else:
                 print("wgit log")
 
