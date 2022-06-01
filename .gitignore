@@ -12,6 +12,10 @@
 *.egg-info/
 .testmondata
 
+# experimental weigit
+experimental/.gitignore
+.wgit
+
 # Build and release
 build/
 dist/
