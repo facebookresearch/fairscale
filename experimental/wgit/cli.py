@@ -90,7 +90,6 @@ def main(argv=None):
 
     if args.command == "version":
         print(wgit.__version__)
-        exit(0)
 
 
 if __name__ == "__main__":

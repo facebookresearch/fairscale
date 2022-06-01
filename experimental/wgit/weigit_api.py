@@ -10,6 +10,8 @@ import sys
 
 import pygit2
 
+from experimental.wgit.utils import ExitCode
+
 
 class WeiGit:
     def __init__(self) -> None:
@@ -22,22 +24,33 @@ class WeiGit:
             4. add a .gitignore within the .wgit directory, so that the git repo within will ignore `sha1_ref_count.json`
         """
 
-        # Make .wgit directory
+        # Make .wgit directory. If already exists, we error out
         try:
             os.mkdir(".wgit")
         except FileExistsError:
-            sys.stderr.write("WeiGit has been already Initialized \n")
-            sys.exit(0)
+            sys.stderr.write("WeiGit has been already Initialized")
+            sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
         # if no .wgit dir then initialize the following
         SHA1_store()
 
-        # create sha1_ref_count
-        with open(".wgit/sha1_ref_count.json", "w") as f:
-            print("The sha1_ref_count.json file has been created!")
+        # create sha1_ref_count:
+        # In general sha1_ref_count is only create only if .wgit already exists
+        try:
+            ref_count_json = ".wgit/sha1_ref_count.json"
+            with open(ref_count_json, "w") as f:
+                pass
+        except FileExistsError as error:
+            sys.stderr.write(f"An exception occured while creating {ref_count_json}: {repr(error)}\n")
+            sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
         # Make the .wgit a git repo, add a gitignore and add SHA1_ref
-        pygit2.init_repository(".wgit/.git", False)
+        try:
+            pygit2.init_repository(".wgit/.git", False)
+        except BaseException as error:
+            sys.stderr.write(f"An exception occurred while initializing .wgit/.git: {repr(error)}\n")
+            sys.exit(ExitCode.ERROR)
+
         with open("./.wgit/.gitignore", "w") as f:
             f.write("sha1_ref_count.json")
 
@@ -93,7 +106,7 @@ class SHA1_store:
     """
 
     def __init__(self) -> None:
-        print("SHA1_store has been initialized!!")
+        pass
 
 
 class Repo:
@@ -103,7 +116,7 @@ class Repo:
 
     def __init__(self, check_dir) -> None:
         self.repo_path = None
-        self.check_dir = check_dir
+        self.check_dir = os.path.realpath(check_dir)
 
     def exists(self):
         def weigit_repo_exists(check_dir):
@@ -119,14 +132,12 @@ class Repo:
         if weigit_repo_exists(self.check_dir):
             self.repo_path = os.path.join(self.check_dir, ".wgit")
         else:
-            max_dir_depth = 100
-            while self.check_dir != os.getcwd() and (max_dir_depth != 0):
+            while self.check_dir != os.getcwd():
                 self.check_dir = os.path.dirname(self.check_dir)
 
                 if weigit_repo_exists(self.check_dir):
                     self.repo_path = os.path.join(self.check_dir, ".wgit")
                     break
-                max_dir_depth -= 1
 
         if self.repo_path is None:
             print("Initialize a weigit repo first!!")
@@ -137,5 +148,5 @@ class Repo:
 
     def get_repo_path(self):
         if self.repo_path is None:
-            self.find_existing_repo()
+            self.exists()
         return self.repo_path

@@ -11,6 +11,9 @@
 .mypy_cache/
 *.egg-info/
 .testmondata
+
+# experimental
+experimental/.gitignore
 .wgit
 
 # Build and release
