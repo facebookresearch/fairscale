@@ -12,7 +12,7 @@
 *.egg-info/
 .testmondata
 
-# experimental
+# experimental weigit
 experimental/.gitignore
 .wgit
 
