@@ -74,19 +74,24 @@ def main(argv=None):
         weigit = weigit_api.WeiGit()
 
     if args.command == "add":
-        weigit_api.WeiGit.add(args.add)
+        weigit = weigit_api.WeiGit()
+        weigit.add(args.add)
 
     if args.command == "status":
-        weigit_api.WeiGit.status()
+        weigit = weigit_api.WeiGit()
+        weigit.status()
 
     if args.command == "log":
-        weigit_api.WeiGit.log(args.file)
+        weigit = weigit_api.WeiGit()
+        weigit.log(args.file)
 
     if args.command == "commit":
-        weigit_api.WeiGit.commit(args.message)
+        weigit = weigit_api.WeiGit()
+        weigit.commit(args.message)
 
     if args.command == "checkout":
-        weigit_api.WeiGit.checkout()
+        weigit = weigit_api.WeiGit()
+        weigit.checkout()
 
     if args.command == "version":
         print(wgit.__version__)
