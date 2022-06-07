@@ -29,8 +29,8 @@ class PyGit:
             self.exists = True
             self.repo = pygit2.Repository(str(self.path))
             self.index = self.repo.index
-            self.name = self.repo.default_signature.name  # Commit metadata
-            self.email = self.repo.default_signature.email
+            self.name = "user"  # Commit metadata
+            self.email = "user@email.com"
 
     def add(self):
         if self.exists:
