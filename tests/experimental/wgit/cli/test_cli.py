@@ -11,7 +11,7 @@ import shutil
 import pytest
 
 import experimental.wgit.cli as cli
-import experimental.wgit.weigit_api as api
+from experimental.wgit.utils import get_sha1_hash
 
 
 @pytest.fixture
@@ -52,7 +52,7 @@ def test_cli_add(capsys):
     chkpt0 = "checkpoint_0.pt"
     cli.main(["add", "checkpoint_0.pt"])
 
-    sha1_hash = api.SHA1_store.get_sha1_hash(chkpt0)
+    sha1_hash = get_sha1_hash(chkpt0)
     with open(os.path.join(".wgit", "checkpoint.pt"), "r") as f:
         json_data = json.load(f)
 
