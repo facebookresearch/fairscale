@@ -24,3 +24,4 @@ tests/optim/test_ddp_adascale.py
 tests/experimental/nn/data_parallel/test_gossip.py
 tests/nn/data_parallel/test_fsdp_hf_transformer_eval.py
 tests/experimental/wgit/cli/test_cli.py
+tests/experimental/wgit/api/test_api.py
