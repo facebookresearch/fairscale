@@ -71,27 +71,27 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.command == "init":
-        weigit = weigit_api.WeiGit()
+        repo = weigit_api.WeiGitRepo()
 
     if args.command == "add":
-        weigit = weigit_api.WeiGit()
-        weigit.add(args.add)
+        repo = weigit_api.WeiGitRepo()
+        repo.add(args.add)
 
     if args.command == "status":
-        weigit = weigit_api.WeiGit()
-        weigit.status()
+        repo = weigit_api.WeiGitRepo()
+        repo.status()
 
     if args.command == "log":
-        weigit = weigit_api.WeiGit()
-        weigit.log(args.file)
+        repo = weigit_api.WeiGitRepo()
+        repo.log(args.file)
 
     if args.command == "commit":
-        weigit = weigit_api.WeiGit()
-        weigit.commit(args.message)
+        repo = weigit_api.WeiGitRepo()
+        repo.commit(args.message)
 
     if args.command == "checkout":
-        weigit = weigit_api.WeiGit()
-        weigit.checkout()
+        repo = weigit_api.WeiGitRepo()
+        repo.checkout()
 
     if args.command == "version":
         print(wgit.__version__)

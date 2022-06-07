@@ -4,6 +4,6 @@
 # LICENSE file in the root directory of this source tree.
 
 from .cli import main
-from .weigit_api import WeiGit
+from .weigit_api import WeiGitRepo
 
 __version__ = "0.0.1"

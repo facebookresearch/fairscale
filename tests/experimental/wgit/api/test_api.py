@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 import json
 import os
 from pathlib import Path
@@ -36,21 +37,26 @@ def create_test_dir():
     return test_dir
 
 
+@pytest.fixture
+def repo():
+    repo = api.WeiGitRepo()
+    return repo
+
+
 def test_setup(create_test_dir):
-    cli.main(["init"])
     assert str(create_test_dir.stem) == "wgit_testing"
 
 
-def test_cli_init(capsys):
-    # Check if the json and other files have been created by the init
+def test_api_init(capsys, repo):
     assert Path(".wgit/sha1_refs.json").is_file()
     assert Path(".wgit/.gitignore").is_file()
     assert Path(".wgit/.git").exists()
+    assert Path(".wgit/.gitignore").exists()
 
 
-def test_cli_add(capsys):
+def test_api_add(capsys, repo):
     chkpt0 = "checkpoint_0.pt"
-    cli.main(["add", "checkpoint_0.pt"])
+    repo.add("checkpoint_0.pt")
 
     sha1_hash = api.SHA1_store.get_sha1_hash(chkpt0)
     with open(os.path.join(".wgit", "checkpoint.pt"), "r") as f:
@@ -61,25 +67,26 @@ def test_cli_add(capsys):
     assert json_data["file_path"] == os.path.join(os.getcwd(), ".wgit/sha1_store/", sha1_dir_0)
 
 
-def test_cli_commit(capsys):
+def test_api_commit(capsys, repo):
     commit_msg = "epoch_1"
-    cli.main(["commit", "-m", f"{commit_msg}"])
+    repo.commit(message=commit_msg)
     with open(".wgit/.git/logs/HEAD") as f:
         line = f.readlines()
     assert line[0].rstrip().split()[-1] == commit_msg
 
 
-def test_cli_status(capsys):
-    cli.main(["status"])
+def test_api_status(capsys, repo):
+    repo.status()
+
     captured = capsys.readouterr()
     assert captured.out == "wgit status\n"
     assert captured.err == ""
 
 
-def test_cli_log(capsys):
-    cli.main(["log"])
+def test_api_log(capsys, repo):
+    repo.log("testfile.pt")
     captured = capsys.readouterr()
-    assert captured.out == "wgit log\n"
+    assert captured.out == "wgit log of the file: testfile.pt\n"
     assert captured.err == ""
 
 
