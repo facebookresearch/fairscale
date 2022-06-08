@@ -4,8 +4,11 @@
 # LICENSE file in the root directory of this source tree.
 
 import argparse
+from pathlib import Path
+import sys
 
 import fairscale.experimental.wgit as wgit
+from fairscale.experimental.wgit.utils import ExitCode, weigit_repo_exists
 import fairscale.experimental.wgit.weigit_api as weigit_api
 
 
@@ -74,24 +77,59 @@ def main(argv: str = None) -> None:
         repo = weigit_api.WeiGitRepo()
 
     if args.command == "add":
-        repo = weigit_api.WeiGitRepo()
-        repo.add(args.add)
+        try:
+            if weigit_repo_exists(Path.cwd()):
+                repo = weigit_api.WeiGitRepo()
+                repo.add(args.add)
+            else:
+                raise FileExistsError("No WeiGit repo found in the cwd... Initialize one first!")
+        except FileExistsError as error:
+            sys.stderr.write(f"{repr(error)}\n")
+            sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
     if args.command == "status":
-        repo = weigit_api.WeiGitRepo()
-        repo.status()
+        try:
+            if weigit_repo_exists(Path.cwd()):
+                repo = weigit_api.WeiGitRepo()
+                repo.status()
+            else:
+                raise FileExistsError("No WeiGit repo found in the cwd... Initialize one first!")
+        except FileExistsError as error:
+            sys.stderr.write(f"{repr(error)}\n")
+            sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
     if args.command == "log":
-        repo = weigit_api.WeiGitRepo()
-        repo.log(args.file)
+        try:
+            if weigit_repo_exists(Path.cwd()):
+                repo = weigit_api.WeiGitRepo()
+                repo.log(args.file)
+            else:
+                raise FileExistsError("No WeiGit repo found in the cwd... Initialize one first!")
+        except FileExistsError as error:
+            sys.stderr.write(f"{repr(error)}\n")
+            sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
     if args.command == "commit":
-        repo = weigit_api.WeiGitRepo()
-        repo.commit(args.message)
+        try:
+            if weigit_repo_exists(Path.cwd()):
+                repo = weigit_api.WeiGitRepo()
+                repo.commit(args.message)
+            else:
+                raise FileExistsError("No WeiGit repo found in the cwd... Initialize one first!")
+        except FileExistsError as error:
+            sys.stderr.write(f"{repr(error)}\n")
+            sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
     if args.command == "checkout":
-        repo = weigit_api.WeiGitRepo()
-        repo.checkout()
+        try:
+            if weigit_repo_exists(Path.cwd()):
+                repo = weigit_api.WeiGitRepo()
+                repo.checkout()
+            else:
+                raise FileExistsError("No WeiGit repo found in the cwd... Initialize one first!")
+        except FileExistsError as error:
+            sys.stderr.write(f"{repr(error)}\n")
+            sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
     if args.command == "version":
         print(wgit.__version__)

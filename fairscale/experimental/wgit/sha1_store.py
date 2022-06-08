@@ -36,10 +36,8 @@ class SHA1_store:
     def add_ref(self, current_sha1_hash: str) -> None:
         # should use the sha1_refser to track the parent and children references. How exactly is open question to me!
         ref_file = ".wgit/sha1_refs.json"
-        print(f"\n {type(current_sha1_hash)} \n")
         if not os.path.getsize(ref_file):  # If no entry yet
             with open(ref_file) as f:
-                print(f"\n {current_sha1_hash} \n")
                 ref_data = {
                     current_sha1_hash: {"parent": "ROOT", "child": "HEAD", "ref_count": 0},
                 }
