@@ -5,11 +5,11 @@
 
 import argparse
 
-import experimental.wgit as wgit
-import experimental.wgit.weigit_api as weigit_api
+import fairscale.experimental.wgit as wgit
+import fairscale.experimental.wgit.weigit_api as weigit_api
 
 
-def main(argv=None):
+def main(argv: str = None) -> None:
     desc = "WeiGit: A git-like tool for model weight tracking"
 
     # top level parser and corresponding subparser

@@ -7,10 +7,12 @@
 from enum import Enum
 import hashlib
 import os
+import pathlib
 import sys
+from typing import Union
 
 
-def create_dir(dir_path, exception_msg=""):
+def create_dir(dir_path: Union[str, pathlib.Path], exception_msg: str = "") -> None:
     try:
         os.mkdir(dir_path)
     except FileExistsError:
@@ -18,7 +20,9 @@ def create_dir(dir_path, exception_msg=""):
         sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
 
-def create_file(file_path, exception_msg="An exception occured while creating "):
+def create_file(
+    file_path: Union[str, pathlib.Path], exception_msg: str = "An exception occured while creating "
+) -> None:
     if not os.path.isfile(file_path):
         with open(file_path, "w") as f:
             pass
@@ -27,12 +31,12 @@ def create_file(file_path, exception_msg="An exception occured while creating ")
         sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
 
-def write_to_file(file_path, msg):
+def write_to_file(file_path: Union[str, pathlib.Path], msg: str) -> None:
     with open(file_path, "a") as file:
         file.write(msg)
 
 
-def get_sha1_hash(file_path):
+def get_sha1_hash(file_path: Union[str, pathlib.Path]) -> str:
     BUF_SIZE = 104857600  # Reading file in 100MB chunks
 
     sha1 = hashlib.sha1()

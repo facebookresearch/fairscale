@@ -6,9 +6,11 @@
 
 import json
 import os
+from pathlib import Path
 import sys
+import typing
 
-from experimental.wgit.utils import ExitCode
+from fairscale.experimental.wgit.utils import ExitCode
 
 
 class SHA1_store:
@@ -24,17 +26,20 @@ class SHA1_store:
 
     def __init__(self) -> None:
         try:
-            sha1_store_path = os.path.join(os.getcwd(), ".wgit", "sha1_store")
-            os.makedirs(sha1_store_path)
+            sha1_store_path = Path.cwd().joinpath(".wgit", "sha1_store")
+            if not sha1_store_path.exists():
+                Path.mkdir(sha1_store_path, parents=False, exist_ok=False)
         except FileExistsError as error:
             sys.stderr.write(f"An exception occured while creating Sha1_store: {repr(error)}\n")
             sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
-    def add_ref(current_sha1_hash):
+    def add_ref(self, current_sha1_hash: str) -> None:
         # should use the sha1_refser to track the parent and children references. How exactly is open question to me!
         ref_file = ".wgit/sha1_refs.json"
+        print(f"\n {type(current_sha1_hash)} \n")
         if not os.path.getsize(ref_file):  # If no entry yet
             with open(ref_file) as f:
+                print(f"\n {current_sha1_hash} \n")
                 ref_data = {
                     current_sha1_hash: {"parent": "ROOT", "child": "HEAD", "ref_count": 0},
                 }
@@ -52,7 +57,9 @@ class SHA1_store:
             ref_data[parent]["child"] = current_sha1_hash
 
             # increase the ref counter of that (now parent sha1)
-            ref_data[parent]["ref_count"] += 1
+            ref_count = typing.cast(int, ref_data[parent]["ref_count"])
+            ref_count += 1
+            ref_data[parent]["ref_count"] = ref_count
 
             # Add this new sha1 as a new entry, make the earlier sha1 a parent
             # make "HEAD" as a child, and json dump

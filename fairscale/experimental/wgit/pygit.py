@@ -3,7 +3,10 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+
+import pathlib
 from pathlib import Path
+from typing import Union
 
 import pygit2
 
@@ -13,7 +16,7 @@ class PyGit:
     PyGit class to wrap the wgit/.git repo and interacta with the git repo.
     """
 
-    def __init__(self, wgit_path) -> None:
+    def __init__(self, wgit_path: Union[str, pathlib.Path]) -> None:
         # Find if a git repo exists within .wgit repo:
         # If exists: then discover it and set the self.gitrepo path to its path
         self.exists = None
@@ -32,12 +35,12 @@ class PyGit:
             self.name = "user"  # Commit metadata
             self.email = "user@email.com"
 
-    def add(self):
+    def add(self) -> None:
         if self.exists:
             self.index.add_all()
             self.index.write()
 
-    def commit(self, message):
+    def commit(self, message: str) -> None:
         if self.exists:
             # if no commit exists, set ref to HEAD and parents to empty
             try:
@@ -52,5 +55,5 @@ class PyGit:
             tree = self.index.write_tree()
             self.repo.create_commit(ref, author, committer, message, tree, parents)
 
-    def status(self):
+    def status(self) -> None:
         print(self.repo.status())

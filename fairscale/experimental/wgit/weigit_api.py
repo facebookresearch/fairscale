@@ -6,15 +6,17 @@
 
 import json
 import os
+import pathlib
 from pathlib import Path
 import shutil
 import sys
+import typing
 
 import pygit2
 
-from experimental.wgit.pygit import PyGit
-from experimental.wgit.sha1_store import SHA1_store
-from experimental.wgit.utils import ExitCode, create_dir, create_file, get_sha1_hash, write_to_file
+from fairscale.experimental.wgit.pygit import PyGit
+from fairscale.experimental.wgit.sha1_store import SHA1_store
+from fairscale.experimental.wgit.utils import ExitCode, create_dir, create_file, get_sha1_hash, write_to_file
 
 
 class WeiGitRepo:
@@ -32,7 +34,7 @@ class WeiGitRepo:
         # and notes all the internal files.
         # else, if repo already exists: create a pygit object from the .wgit/.git.
         self._cwd = Path.cwd()
-        self._repo_path = None
+        self._repo_path: typing.Union[None, Path] = None
         self._wgit_dir = Path(".wgit")
         self._metadata_file = Path(".wgit/checkpoint.pt")
         self._sha1_ref = Path(".wgit/sha1_refs.json")
@@ -62,15 +64,15 @@ class WeiGitRepo:
         else:
             self.pygit = PyGit(self._cwd.joinpath(self._wgit_dir))
 
-    def add(self, file_path):
+    def add(self, file_path: str) -> None:
         if self._exists():
             # file_name = os.path.basename(file_path)
             sha1_hash = get_sha1_hash(file_path)
 
             # use the sha1_has to create a directory with first2 sha naming convention
             try:
-                repo_fdir = os.path.join(self.path, "sha1_store", sha1_hash[:2])
-                os.mkdir(repo_fdir)
+                repo_fdir = os.path.join(self.path, "sha1_store", sha1_hash[:2]) + "/"
+                os.makedirs(repo_fdir)
             except FileExistsError as error:
                 sys.stderr.write(f"An exception occured: {repr(error)}\n")
                 sys.exit(ExitCode.FILE_EXISTS_ERROR)
@@ -81,7 +83,8 @@ class WeiGitRepo:
                 change_time = Path(repo_fpath).stat().st_ctime
 
                 # Create the dependency Graph and track reference
-                SHA1_store.add_ref(current_sha1_hash=sha1_hash)
+                sha1_store = SHA1_store()
+                sha1_store.add_ref(current_sha1_hash=sha1_hash)
                 metadata = {
                     "SHA1": {
                         "__sha1_full__": sha1_hash,
@@ -95,19 +98,20 @@ class WeiGitRepo:
 
             except BaseException as error:
                 # Cleans up the sub-directories created to store sha1-named checkpoints
+                sys.stderr.write(f"An exception occured: {repr(error)}\n")
                 shutil.rmtree(repo_fdir)
 
-    def commit(self, message):
+    def commit(self, message: str) -> None:
         """Commits staged changes to the repo"""
         if self._exists():
             self.pygit.commit(message)
 
-    def status(self):
+    def status(self) -> None:
         """Skeleton"""
         if self._exists():
             print("wgit status")
 
-    def log(self, file):
+    def log(self, file: str) -> None:
         """Skeleton"""
         if self._exists():
             if file:
@@ -115,30 +119,30 @@ class WeiGitRepo:
             else:
                 print("wgit log")
 
-    def checkout(self):
+    def checkout(self) -> None:
         """Skeleton"""
         if self._exists():
             print("wgit checkout")
 
-    def compression(self):
+    def compression(self) -> None:
         print("Not Implemented!")
 
-    def checkout_by_steps(self):
+    def checkout_by_steps(self) -> None:
         print("Not Implemented!")
 
     @property
-    def path(self):
+    def path(self) -> str:
         if self._repo_path is None:
             self._exists()
         return str(self._repo_path)
 
-    def _add_metadata_to_json(self, metadata):
+    def _add_metadata_to_json(self, metadata: dict) -> None:
         """Populates the meta_data_file: checkpoint.pt with the meta_data"""
         file_pt_json = self._metadata_file
         with open(file_pt_json, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=4)
 
-    def _exists(self):
+    def _exists(self) -> bool:
         """
         Returns True if a valid wgit exists within the cwd, and sets the self._repo_path to the wgit path.
         """
@@ -146,11 +150,11 @@ class WeiGitRepo:
             self._repo_path = self._cwd.joinpath(".wgit")
         return True if self._repo_path is not None else False
 
-    def _weigit_repo_exists(self, check_dir):
+    def _weigit_repo_exists(self, check_dir: pathlib.Path) -> bool:
         wgit_exists, sha1_refs, git_exists, gitignore_exists = self._weigit_repo_status(check_dir)
         return wgit_exists and sha1_refs and git_exists and gitignore_exists
 
-    def _weigit_repo_status(self, check_dir):
+    def _weigit_repo_status(self, check_dir: Path) -> tuple:
         """
         returns the state of the weigit repo and checks if all the required files are present.
         """
