@@ -3,14 +3,13 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-
 import json
 import os
 import pathlib
 from pathlib import Path
 import shutil
 import sys
-import typing
+from typing import Union
 
 import pygit2
 
@@ -29,19 +28,20 @@ class WeiGitRepo:
     4. add a .gitignore within the .wgit directory, so that the git repo within will ignore `sha1_refs.json`
     """
 
-    def __init__(self) -> None:
+    def __init__(self, parent_dir: Path, init: bool = False) -> None:
         # If repo does not exist, creates a new wgit repo object with self.repo.path pointing to the path of repo
         # and notes all the internal files.
         # else, if repo already exists: create a pygit object from the .wgit/.git.
-        self._cwd = Path.cwd()
-        self._repo_path: typing.Union[None, Path] = None
+        self.wgit_parent = parent_dir
+        self._repo_path: Union[None, Path] = None
         self._wgit_dir = Path(".wgit")
         self._metadata_file = Path(".wgit/checkpoint.pt")
         self._sha1_ref = Path(".wgit/sha1_refs.json")
         self._wgit_git_path = Path(".wgit/.git")
         self._sha1_store = Path(".wgit/sha1_store")
 
-        if not self._exists():
+        if not self._exists() and init:
+            # No weigit repo exists and is being initialized with init=True
             # Make .wgit directory, create sha1_refs and metadata file
             create_dir(dir_path=self._wgit_dir, exception_msg="An exception occured: WeiGit already Initialized")
             create_file(file_path=self._metadata_file)
@@ -50,7 +50,7 @@ class WeiGitRepo:
             # Make the .wgit a git repo
             try:
                 pygit2.init_repository(str(self._wgit_git_path), False)
-                self.pygit = PyGit(self._cwd.joinpath(self._wgit_dir))
+                self.pygit = PyGit(self.wgit_parent.joinpath(self._wgit_dir))
                 create_file(self._wgit_dir.joinpath(".gitignore"))
                 write_to_file(
                     self._wgit_dir.joinpath(".gitignore"), msg=f"{self._sha1_ref.name}\n{self._sha1_store.name}"
@@ -61,8 +61,15 @@ class WeiGitRepo:
 
             # Initializing sha1_store only after wgit has been initialized!
             SHA1_store()
+        elif init:
+            # if weigit repo already exists and init is being called, wrap the existing .wgit/.git repo with PyGit
+            self.pygit = PyGit(self.wgit_parent.joinpath(self._wgit_dir))
+        elif not self._exists() and not init:
+            # weigit doesn't exist and is not trying to be initialized (triggers during non-init commands)
+            sys.stderr.write("fatal: not a wgit repository!\n")
         else:
-            self.pygit = PyGit(self._cwd.joinpath(self._wgit_dir))
+            # weigit exists and non-init commands are triggered
+            self.pygit = PyGit(self.wgit_parent.joinpath(self._wgit_dir))
 
     def add(self, file_path: str) -> None:
         if self._exists():
@@ -146,8 +153,8 @@ class WeiGitRepo:
         """
         Returns True if a valid wgit exists within the cwd, and sets the self._repo_path to the wgit path.
         """
-        if self._weigit_repo_exists(self._cwd):
-            self._repo_path = self._cwd.joinpath(".wgit")
+        if self._weigit_repo_exists(self.wgit_parent):
+            self._repo_path = self.wgit_parent.joinpath(".wgit")
         return True if self._repo_path is not None else False
 
     def _weigit_repo_exists(self, check_dir: pathlib.Path) -> bool:

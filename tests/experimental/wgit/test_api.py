@@ -40,7 +40,7 @@ def create_test_dir():
 
 @pytest.fixture
 def repo():
-    repo = api.WeiGitRepo()
+    repo = api.WeiGitRepo(Path.cwd())
     return repo
 
 
@@ -49,6 +49,7 @@ def test_setup(create_test_dir):
 
 
 def test_api_init(capsys, repo):
+    repo = api.WeiGitRepo(Path.cwd(), init=True)
     assert Path(".wgit/sha1_refs.json").is_file()
     assert Path(".wgit/.gitignore").is_file()
     assert Path(".wgit/.git").exists()
