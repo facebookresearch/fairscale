@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from .cli import main
-from .weigit_api import WeiGitRepo
+from .repo import Repo
+from .version import __version_tuple__
 
-__version__ = "0.0.1"
+__version__ = ".".join([str(x) for x in __version_tuple__])

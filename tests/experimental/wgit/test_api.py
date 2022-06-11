@@ -12,7 +12,7 @@ import shutil
 import pytest
 
 from fairscale.experimental.wgit import cli
-from fairscale.experimental.wgit import weigit_api as api
+from fairscale.experimental.wgit import repo as api
 from fairscale.experimental.wgit.utils import get_sha1_hash
 
 
@@ -40,7 +40,7 @@ def create_test_dir():
 
 @pytest.fixture
 def repo():
-    repo = api.WeiGitRepo(Path.cwd())
+    repo = api.Repo(Path.cwd())
     return repo
 
 
@@ -49,7 +49,7 @@ def test_setup(create_test_dir):
 
 
 def test_api_init(capsys, repo):
-    repo = api.WeiGitRepo(Path.cwd(), init=True)
+    repo = api.Repo(Path.cwd(), init=True)
     assert Path(".wgit/sha1_refs.json").is_file()
     assert Path(".wgit/.gitignore").is_file()
     assert Path(".wgit/.git").exists()
@@ -95,7 +95,7 @@ def test_api_log(capsys, repo):
 def test_cli_checkout(capsys):
     cli.main(["checkout", "sha1"])
     captured = capsys.readouterr()
-    assert captured.out == "wgit checkout\n"
+    assert captured.out == "wgit checkout: sha1\n"
     assert captured.err == ""
 
 

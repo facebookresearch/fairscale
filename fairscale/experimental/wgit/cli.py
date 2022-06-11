@@ -5,12 +5,12 @@
 
 import argparse
 from pathlib import Path
+from typing import List
 
-import fairscale.experimental.wgit as wgit
-from fairscale.experimental.wgit.weigit_api import WeiGitRepo
+from . import Repo, version
 
 
-def main(argv: str = None) -> None:
+def main(argv: List[str] = None) -> None:
     desc = "WeiGit: A git-like tool for model weight tracking"
 
     # top level parser and corresponding subparser
@@ -72,30 +72,30 @@ def main(argv: str = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "init":
-        repo = WeiGitRepo(Path.cwd(), init=True)
+        repo = Repo(Path.cwd(), init=True)
 
     if args.command == "add":
-        repo = WeiGitRepo(Path.cwd())
+        repo = Repo(Path.cwd())
         repo.add(args.add)
 
     if args.command == "status":
-        repo = WeiGitRepo(Path.cwd())
+        repo = Repo(Path.cwd())
         repo.status()
 
     if args.command == "log":
-        repo = WeiGitRepo(Path.cwd())
+        repo = Repo(Path.cwd())
         repo.log(args.file)
 
     if args.command == "commit":
-        repo = WeiGitRepo(Path.cwd())
+        repo = Repo(Path.cwd())
         repo.commit(args.message)
 
     if args.command == "checkout":
-        repo = WeiGitRepo(Path.cwd())
-        repo.checkout()
+        repo = Repo(Path.cwd())
+        repo.checkout(args.checkout)
 
     if args.command == "version":
-        print(wgit.__version__)
+        print(".".join([str(x) for x in version.__version_tuple__]))
 
 
 if __name__ == "__main__":

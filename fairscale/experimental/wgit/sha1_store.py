@@ -7,44 +7,82 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import typing
 
-from fairscale.experimental.wgit.utils import ExitCode
+from .utils import ExitCode
 
 
 class SHA1_store:
-    """
-    Planned Features:
-        1. def init
-        2. def add <file or data> -> SHA1
-        3. def remove (SHA1)
-        4. def add_ref(children_SHA1, parent_SHA1)
-        5. def read(SHA1): ->
-        6. def lookup(SHA1): -> file path to the data. NotFound Exception if not found.
-    """
+    def __init__(self, weigit_path: Path, init: bool = False) -> None:
+        """
+        Planned Features:
+            1. def init
+            2. def add <file or data> -> SHA1
+            3. def remove (SHA1)
+            4. def add_ref(children_SHA1, parent_SHA1)
+            5. def read(SHA1): ->
+            6. def lookup(SHA1): -> file path to the data. NotFound Exception if not found.
+        """
+        # should use the sha1_refs.json to track the parent references.
+        self._path = weigit_path.joinpath("sha1_store")
+        self._ref_file_name = Path(".wgit/sha1_refs.json")
+        self._metadata_file = Path(".wgit/checkpoint.pt")
 
-    def __init__(self) -> None:
+        # initialize the sha1_store
+        if init:
+            try:
+                sha1_store_path = Path.cwd().joinpath(".wgit", "sha1_store")
+                if not sha1_store_path.exists():
+                    Path.mkdir(sha1_store_path, parents=False, exist_ok=False)
+            except FileExistsError as error:
+                sys.stderr.write(f"An exception occured while creating Sha1_store: {repr(error)}\n")
+                sys.exit(ExitCode.FILE_EXISTS_ERROR)
+
+    def add(self, sha1_hash: str, file_path: str) -> None:
+        # use the sha1_hash to create a directory with first2 sha naming convention
         try:
-            sha1_store_path = Path.cwd().joinpath(".wgit", "sha1_store")
-            if not sha1_store_path.exists():
-                Path.mkdir(sha1_store_path, parents=False, exist_ok=False)
+            repo_fdir = self._path.joinpath(sha1_hash[:2])
+            repo_fdir.mkdir(exist_ok=False)
         except FileExistsError as error:
-            sys.stderr.write(f"An exception occured while creating Sha1_store: {repr(error)}\n")
+            sys.stderr.write(f"An exception occured: {repr(error)}\n")
             sys.exit(ExitCode.FILE_EXISTS_ERROR)
+        try:
+            # First transfer the file to the internal sha1_store
+            repo_fpath = Path.cwd().joinpath(repo_fdir, sha1_hash[2:])
+            shutil.copy2(file_path, repo_fpath)
+            change_time = Path(repo_fpath).stat().st_ctime
+
+            # Create the dependency Graph and track reference
+            self.add_ref(current_sha1_hash=sha1_hash)
+            metadata = {
+                "SHA1": {
+                    "__sha1_full__": sha1_hash,
+                },
+                "file_path": str(repo_fpath),
+                "time_stamp": change_time,
+            }
+
+            # Populate the meta_data file with the meta_data and git add
+            self._add_metadata_to_json(metadata)
+
+        except BaseException as error:
+            # in case of failure: Cleans up the sub-directories created to store sha1-named checkpoints
+            sys.stderr.write(f"An exception occured: {repr(error)}\n")
+            shutil.rmtree(repo_fdir)
 
     def add_ref(self, current_sha1_hash: str) -> None:
-        # should use the sha1_refser to track the parent and children references. How exactly is open question to me!
-        ref_file = ".wgit/sha1_refs.json"
-        if not os.path.getsize(ref_file):  # If no entry yet
-            with open(ref_file) as f:
+        """Populates the sha1_refs.json file when file is added and keeps track of reference to earlier commits"""
+        if not os.path.getsize(self._ref_file_name):  # If no entry yet
+            with open(self._ref_file_name) as f:
                 ref_data = {
                     current_sha1_hash: {"parent": "ROOT", "child": "HEAD", "ref_count": 0},
                 }
-            with open(ref_file, "w", encoding="utf-8") as f:
+            with open(self._ref_file_name, "w", encoding="utf-8") as f:
                 json.dump(ref_data, f, ensure_ascii=False, indent=4)
         else:
-            with open(ref_file, "r") as f:
+            with open(self._ref_file_name, "r") as f:
                 ref_data = json.load(f)
 
             # get the last head and replace it's child from HEAD -> this sha1
@@ -64,5 +102,11 @@ class SHA1_store:
             ref_data[current_sha1_hash] = {"parent": parent, "child": "HEAD", "ref_count": 0}
 
             # Try
-            with open(ref_file, "w", encoding="utf-8") as f:
+            with open(self._ref_file_name, "w", encoding="utf-8") as f:
                 json.dump(ref_data, f, ensure_ascii=False, indent=4)
+
+    def _add_metadata_to_json(self, metadata: dict) -> None:
+        """Populates the meta_data_file: checkpoint.pt with the meta_data"""
+        file_pt_json = self._metadata_file
+        with open(file_pt_json, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=4)

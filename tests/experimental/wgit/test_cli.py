@@ -86,7 +86,7 @@ def test_cli_log(capsys):
 def test_cli_checkout(capsys):
     cli.main(["checkout", "sha1"])
     captured = capsys.readouterr()
-    assert captured.out == "wgit checkout\n"
+    assert captured.out == "wgit checkout: sha1\n"
     assert captured.err == ""
 
 
