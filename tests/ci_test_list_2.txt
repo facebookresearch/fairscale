@@ -1,3 +1,12 @@
+tests/experimental/nn/test_mevo.py
+tests/experimental/nn/test_multiprocess_pipe.py
+tests/experimental/nn/test_sync_batchnorm.py
+tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
+tests/experimental/nn/test_offload.py
+tests/experimental/nn/test_auto_shard.py
+tests/experimental/optim/test_dynamic_loss_scaler.py
+tests/experimental/tooling/test_layer_memory_tracker.py
+tests/experimental/nn/test_ssd_offload.py
 tests/nn/data_parallel/test_fsdp_shared_weights_mevo.py
 tests/nn/data_parallel/test_fsdp_shared_weights.py
 tests/nn/data_parallel/test_fsdp_pre_backward_hook.py
@@ -41,13 +50,4 @@ tests/nn/pipe/test_dependency.py
 tests/nn/pipe/test_stream.py
 tests/nn/moe/test_moe_layer.py
 tests/nn/moe/test_top2gating.py
-tests/experimental/nn/test_mevo.py
-tests/experimental/nn/test_multiprocess_pipe.py
-tests/experimental/nn/test_sync_batchnorm.py
-tests/experimental/nn/ampnet_pipe_process/test_ampnet_pipe.py
-tests/experimental/nn/test_offload.py
-tests/experimental/nn/test_auto_shard.py
-tests/experimental/optim/test_dynamic_loss_scaler.py
-tests/experimental/tooling/test_layer_memory_tracker.py
-tests/experimental/nn/test_ssd_offload.py
 tests/nn/data_parallel/test_fsdp_offload.py

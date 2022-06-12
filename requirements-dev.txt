@@ -33,3 +33,6 @@ numpy == 1.21.5
 
 # For layerwise gradient scaler
 sklearn >= 0.0
+
+# For weigit
+pygit2==1.9.2
