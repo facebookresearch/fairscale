@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# This is a command trampoline for commands in '$REPO/commands/'
+
+# The goal is to allow us to seperate repository commands from repository code;
+# so that actions we may wish to take can be put in a tree organized by the actions;
+# and documented appropriately.
+
+# We guarantee that subcommands will have access to:
+# - WORKSPACE_ROOT_DIR
+# - WORKSPACE_VENV_DIR
+# - GRIND
+# - MARKDOWN_READER
+
+# Standard trick to resolve the 'real' location of
+# the directory this file is run from.
+export WORKSPACE_ROOT_DIR="$(cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd)"
+
+# Where do we keep the python venv?
+export WORKSPACE_VENV_DIR="$WORKSPACE_ROOT_DIR/venv"
+
+# If we want to re-invoke this target; where is it?
+export GRIND="$WORKSPACE_ROOT_DIR/grind"
+
+COMMAND_DIR="$WORKSPACE_ROOT_DIR/commands"
+
+if [ -z "$MARKDOWN_READER" ]; then
+  if command -v glow &> /dev/null; then
+    export MARKDOWN_READER="glow -w 80"
+  else
+    export MARKDOWN_READER=${PAGER:="less"}
+  fi
+fi
+
+
+function group_help() {
+  local group_path="$1"
+
+  (
+    cd "$WORKSPACE_ROOT_DIR/$group_path"
+
+    cat
+
+    echo "# grind $group_path"
+
+    if [ -f README.md ]; then
+      # Directory README
+      cat README.md
+    fi
+
+    local cmds=( $(find -mindepth 1 -maxdepth 1 -type f -executable | sort | sed 's/^\.\///') )
+    if (( ${#cmds[@]} )); then
+      echo "# Commands:"
+      for cmd in "${cmds[@]}"; do
+        echo -n "  * \`$cmd\`"
+
+	local readme="$cmd.md"
+	if [ -f "$readme" ]; then
+	  echo -n " - "
+          head -1 "$readme"
+        else
+	  echo
+	fi
+      done
+
+      for cmd in "${cmds[@]}"; do
+        echo "# Command: \`$cmd\`"
+
+	if [ -f "$cmd.md" ]; then
+	  echo
+          cat "$cmd.md"
+	fi
+      done
+    fi
+
+    local groups=( $(find -mindepth 1 -maxdepth 1 -type d | sort | sed 's/^\.\///') )
+    if (( ${#groups[@]} )); then
+      echo "# Sub-Groups:"
+      for g in ${groups[@]}; do
+	echo -n "  * \`${g}\`"
+
+	local sub_readme="$g/README.md"
+	if [ -f "$sub_readme" ]; then
+	  echo -n " - "
+          head -1 "$sub_readme"
+        else
+	  echo
+	fi
+      done
+    fi
+
+  ) | $MARKDOWN_READER -
+}
+
+function main() {
+  local group_path='commands'
+  local target=''
+
+  while true; do
+    if [ "$#" -eq "0" ]; then
+      echo -n | group_help "$group_path";
+      exit 0;
+    fi
+
+    target="$1"
+    shift;
+
+    if [ -d "$WORKSPACE_ROOT_DIR/$group_path/$target" ]; then
+      group_path="$group_path/$target"
+
+    else
+      break;
+    fi
+  done
+
+  local cmd_path="$group_path/$target"
+
+  if [ -x "$cmd_path" ]; then
+    exec "$cmd_path" "$@";
+
+  else
+    echo "*ERROR: No Such Command: $cmd_path*" \
+      | group_help "$group_path" 1>&2;
+
+    exit 1;
+  fi
+
+}
+
+main "$@"

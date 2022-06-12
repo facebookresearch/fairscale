@@ -1,0 +1,14 @@
+#!/bin/bash
+
+_grind_completion() {
+
+  # See: https://iridakos.com/programming/2018/03/01/bash-programmable-completion-tutorial
+
+  # Standard trick to resolve the 'real' location of
+  # the directory this file is run from.
+  local dir="$(cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd)"
+
+  source "$dir/_grind_completion"
+}
+
+complete -F _grind_completion ./grind

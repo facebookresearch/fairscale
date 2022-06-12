@@ -143,7 +143,6 @@ def _distributed_worker(
             if hasattr(torch.distributed, "_all_gather_base") is False:
                 # no such method, to make mock_all_gather_base 0 invocation, use an impossible name
                 method_string_all_gather_base = "math.nan"
-                pass
             # forward pass
             #
             # Even though both e1 & e2 are on the compute stream, since

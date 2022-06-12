@@ -21,7 +21,6 @@ try:
 except ImportError as ie:
     # Note: We need the nightly version for SSD offload to work. Hence I am checking for the next PyTorch release.
     pytestmark = pytest.mark.skipif(True, reason=ie.msg)
-    pass
 
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, OffloadConfig, TrainingState

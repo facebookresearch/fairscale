@@ -1,0 +1,6 @@
+#!/bin/bash
+
+source venv/bin/activate
+
+# TODO: --supress-no-test-exit-code plugin needed with --testmon
+exec pytest "$@"

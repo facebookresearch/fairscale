@@ -1,0 +1,38 @@
+#!/bin/bash
+
+set -e
+
+cd $WORKSPACE_ROOT_DIR
+
+source venv/bin/activate
+
+if (( $# )) ; then
+  TARGETS=( $@ )
+else
+  TARGETS=( $( $GRIND changed ) )
+fi
+
+# TARGETS may contain file or directories that were deleted or moved;
+# which obviously cannot be formatted, and need to be excluded.
+
+PY_TARGETS=()
+
+for x in "${TARGETS[@]}"; do
+  if [[ -d "$x" ]]; then
+    PY_TARGETS+=( "$x" )
+    NB_TARGETS+=( "$x" )
+
+  elif [[ -f "$x" ]]; then
+    case "$x" in
+      *.py)
+        PY_TARGETS+=( "$x" )
+	;;
+    esac
+  fi
+done
+
+if (( ${#PY_TARGETS[@]} )); then
+  black "${PY_TARGETS[@]}"
+  autoflake -i -r --remove-all-unused-imports "${PY_TARGETS[@]}"
+  isort "${PY_TARGETS[@]}"
+fi

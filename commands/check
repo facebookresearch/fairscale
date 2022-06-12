@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -e
+
+cd $WORKSPACE_ROOT_DIR
+
+source venv/bin/activate
+
+if (( $# )) ; then
+  TARGETS=( $@ )
+else
+  TARGETS=( fairscale, fair_dev, tests )
+fi
+
+# TODO: lift current .pre-commit hooks
+# echo "Code Quality Scans ..."
+# mypy --incremental "${TARGETS[@]}"

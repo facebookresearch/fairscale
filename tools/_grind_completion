@@ -1,0 +1,22 @@
+#!/bin/bash
+# Real Completion Script, meant to be sourced by completion trampoline.
+
+local workspace_dir="$(cd "$( dirname "${BASH_SOURCE[0]}" )/.." >/dev/null 2>&1 && pwd)"
+
+local cur=${COMP_WORDS[COMP_CWORD]}
+local cmd_group=( ${COMP_WORDS[@]:1:COMP_CWORD-1} )
+local cmd_path="${workspace_dir}/commands"$(printf "/%s" "${cmd_group[@]}")
+
+COMPREPLY=()
+
+local ws=$( find "$cmd_path" -mindepth 1 -maxdepth 1 -executable -printf '%f\n' )
+
+# Debug widget.
+# (
+#  echo
+#  echo $cmd_path
+#  echo c:"$cur"
+#  echo w:"${ws[@]}"
+# ) >> /tmp/comp_debug.txt
+
+COMPREPLY=( $( compgen -W "$ws" -- $cur ) )

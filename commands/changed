@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -e
+
+cd $WORKSPACE_ROOT_DIR
+
+(
+  git ls-files -o --exclude-standard --full-name
+  git diff --name-only $(git merge-base --fork-point main HEAD)
+) | sort -u
