@@ -17,10 +17,10 @@ import torch.multiprocessing as mp
 from torch.nn import Linear, Module, Sequential
 from torch.optim import SGD
 
+from fair_dev.testing.testing import dist_init, skip_if_no_cuda, teardown
+from fairscale.internal import torch_version
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import TrainingState
-from fairscale.utils import torch_version
-from fairscale.utils.testing import dist_init, skip_if_no_cuda, teardown
 
 
 def _test_func(rank, world_size, fsdp_config, tempfile_name, unused):

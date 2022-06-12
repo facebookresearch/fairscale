@@ -1,4 +1,4 @@
-from fairscale.utils import torch_version
+from fairscale.internal import torch_version
 
 
 def test_torch_version():

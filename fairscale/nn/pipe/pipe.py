@@ -27,7 +27,7 @@ from torch import Tensor, nn
 import torch.autograd
 import torch.cuda
 
-from fairscale.utils import torch_version
+from fairscale.internal import torch_version
 
 from . import microbatch
 from .batchnorm import DeferredBatchNorm

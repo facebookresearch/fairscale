@@ -21,8 +21,8 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel
 import torch.optim as optim
 
+from fair_dev.testing.testing import dist_init, objects_are_equal, rmf, skip_if_single_gpu, teardown
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.utils.testing import dist_init, objects_are_equal, rmf, skip_if_single_gpu, teardown
 
 
 class FreezeModel(nn.Module):

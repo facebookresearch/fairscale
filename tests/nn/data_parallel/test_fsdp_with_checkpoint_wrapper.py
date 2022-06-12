@@ -13,9 +13,9 @@ from torch import nn
 import torch.distributed
 import torch.multiprocessing as mp
 
+from fair_dev.testing.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
 
 
 @skip_if_single_gpu

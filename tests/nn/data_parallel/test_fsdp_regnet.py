@@ -33,10 +33,7 @@ from torch.nn import (
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
-from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.nn.data_parallel import TrainingState, auto_wrap_bn
-from fairscale.utils import torch_version
-from fairscale.utils.testing import (
+from fair_dev.testing.testing import (
     dist_init,
     objects_are_equal,
     rmf,
@@ -45,6 +42,9 @@ from fairscale.utils.testing import (
     teardown,
     torch_cuda_version,
 )
+from fairscale.internal import torch_version
+from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+from fairscale.nn.data_parallel import TrainingState, auto_wrap_bn
 
 if torch_version() >= (1, 8, 0):
     from fairscale.optim.grad_scaler import ShardedGradScaler

@@ -22,8 +22,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from fair_dev.testing.testing import skip_if_single_gpu
 from fairscale.nn.pipe import Pipe
-from fairscale.utils.testing import skip_if_single_gpu
 
 
 def test_python_autograd_function():
