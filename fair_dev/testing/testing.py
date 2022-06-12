@@ -49,9 +49,9 @@ from torch.distributed import rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
+from fairscale.internal import torch_version
 from fairscale.nn.model_parallel import destroy_model_parallel, initialize_model_parallel
 from fairscale.nn.model_parallel.random import model_parallel_cuda_manual_seed
-from fairscale.utils import torch_version
 
 if TYPE_CHECKING:
     Base = nn.Module[Tensor]

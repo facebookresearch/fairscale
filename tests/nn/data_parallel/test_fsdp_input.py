@@ -16,10 +16,10 @@ import torch
 from torch.nn import Linear, Module
 from torch.optim import SGD
 
+from fair_dev.testing.testing import dist_init, rmf, skip_if_no_cuda, teardown
+from fairscale.internal import torch_version
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import TrainingState
-from fairscale.utils import torch_version
-from fairscale.utils.testing import dist_init, rmf, skip_if_no_cuda, teardown
 
 
 # A fixture to get tempfiles and ensure they are cleaned up.

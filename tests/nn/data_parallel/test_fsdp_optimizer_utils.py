@@ -11,10 +11,10 @@ import torch
 from torch import nn
 from torch.optim import SGD, Adadelta, Adam  # type: ignore
 
+from fair_dev.testing.testing import dist_init, objects_are_equal, spawn_for_all_world_sizes
+from fairscale.internal.params import recursive_copy_to_device
 from fairscale.nn import FullyShardedDataParallel
 from fairscale.nn.data_parallel.fsdp_optim_utils import is_singleton_tensor
-from fairscale.utils.params import recursive_copy_to_device
-from fairscale.utils.testing import dist_init, objects_are_equal, spawn_for_all_world_sizes
 
 from .test_fsdp import (
     DistributedTest,

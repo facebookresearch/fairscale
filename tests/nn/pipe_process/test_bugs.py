@@ -22,8 +22,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from fair_dev.testing.testing import get_worker_map, torch_spawn
 from fairscale.nn.pipe import AsyncPipe
-from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 @torch_spawn([2])

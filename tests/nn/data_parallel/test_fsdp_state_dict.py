@@ -11,9 +11,9 @@ import pytest
 import torch
 from torch import nn
 
+from fair_dev.testing.testing import dist_init, objects_are_equal, skip_if_cuda, teardown, temp_files_ctx
+from fairscale.internal import torch_version
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.utils import torch_version
-from fairscale.utils.testing import dist_init, objects_are_equal, skip_if_cuda, teardown, temp_files_ctx
 
 from .test_fsdp import (
     CONFIG_OPTIONS,

@@ -12,9 +12,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from fair_dev.testing.testing import DummyProcessGroup
 from fairscale.nn import FullyShardedDataParallel as FSDP
 from fairscale.nn import auto_wrap, default_auto_wrap_policy, enable_wrap, wrap
-from fairscale.utils.testing import DummyProcessGroup
 
 try:
     from torch.cuda.amp import autocast

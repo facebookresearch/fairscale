@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from torch.serialization import DEFAULT_PROTOCOL as DEFAULT_PROTOCOL
 
-from fairscale.utils import torch_version
+from fairscale.internal import torch_version
 
 try:
     from torch.utils._pytree import tree_map

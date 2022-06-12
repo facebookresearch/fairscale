@@ -10,7 +10,7 @@ from parameterized import parameterized
 import pytest
 import torch.nn as nn
 
-from fairscale.utils import torch_version
+from fairscale.internal import torch_version
 
 from .test_fsdp import (
     CONFIG_OPTIONS,

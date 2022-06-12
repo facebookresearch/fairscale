@@ -11,7 +11,7 @@ from parameterized import parameterized
 import pytest
 import torch
 
-from fairscale.utils.version import torch_version
+from fairscale.internal.version import torch_version
 
 from .test_fsdp import CONFIG_OPTIONS, DistributedTest, rename_test, spawn_and_init
 

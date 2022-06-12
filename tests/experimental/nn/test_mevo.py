@@ -12,9 +12,9 @@ import os
 import pytest
 import torch
 
+from fair_dev.testing.testing import skip_if_no_cuda
 from fairscale.experimental.nn import MEVO
 from fairscale.experimental.nn.mevo import BaselineSoftmaxNllLoss, get_data
-from fairscale.utils.testing import skip_if_no_cuda
 
 
 @pytest.fixture(scope="session", params=[torch.float16, torch.float32])

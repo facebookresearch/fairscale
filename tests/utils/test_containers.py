@@ -16,7 +16,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from fairscale.utils.containers import (
+from fairscale.internal.containers import (
     apply_to_tensors,
     pack_kwargs,
     split_non_tensors,

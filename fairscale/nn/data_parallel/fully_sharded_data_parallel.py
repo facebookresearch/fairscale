@@ -40,19 +40,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
-from fairscale.nn.misc import FlattenParamsWrapper
-from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
-from fairscale.utils.containers import apply_to_tensors
-from fairscale.utils.parallel import (
+from fairscale.internal.containers import apply_to_tensors
+from fairscale.internal.parallel import (
     ProcessGroupName,
     chunk_and_pad,
     enable_pytorch_sync_bn,
     get_process_group_cached,
     validate_process_group,
 )
-from fairscale.utils.params import calc_grad_norm, recursive_copy_to_device
-from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
-from fairscale.utils.state_dict import replace_by_prefix_
+from fairscale.internal.params import calc_grad_norm, recursive_copy_to_device
+from fairscale.internal.reduce_scatter_bucketer import ReduceScatterBucketer
+from fairscale.internal.state_dict import replace_by_prefix_
+from fairscale.nn.misc import FlattenParamsWrapper
+from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 
 from . import fsdp_optim_utils as ou
 

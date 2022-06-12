@@ -10,8 +10,8 @@ import torch
 from torch import Tensor, nn
 from torch.distributed import rpc
 
+from fairscale.internal import torch_version
 from fairscale.nn.pipe import microbatch
-from fairscale.utils import torch_version
 
 from .data import DataConsumer
 from .graph import Node, PipelineModulesGraph

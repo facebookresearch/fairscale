@@ -18,7 +18,7 @@ import torch.distributed as dist
 from torch.optim import Optimizer
 from torch.optim.sgd import SGD
 
-from fairscale.utils import torch_version
+from fairscale.internal import torch_version
 
 
 class _GeneralMultiDeviceReplicator(object):

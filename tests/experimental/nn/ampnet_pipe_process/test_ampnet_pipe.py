@@ -22,8 +22,8 @@ from torch import nn
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader, Dataset
 
+from fair_dev.testing.testing import get_worker_map, torch_spawn
 from fairscale.experimental.nn.ampnet_pipe.pipe import AMPnetPipe
-from fairscale.utils.testing import get_worker_map, torch_spawn
 
 
 class MySGD(Optimizer):

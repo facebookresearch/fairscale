@@ -20,9 +20,9 @@ from torch.nn import Linear, Sequential
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
+from fair_dev.testing.testing import skip_if_no_cuda, skip_if_single_gpu
 from fairscale.nn.pipe.checkpoint import Checkpointing, Function, TensorOrTensors
 from fairscale.nn.pipe.microbatch import Batch
-from fairscale.utils.testing import skip_if_no_cuda, skip_if_single_gpu
 
 # This test is mainly for checking pytorch & checkpointing behavior. pipe's checkpointing
 # code is tested already in another file. Therefore, we can run this test less frequently.

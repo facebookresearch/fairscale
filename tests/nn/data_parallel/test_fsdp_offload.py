@@ -22,9 +22,9 @@ except ImportError as ie:
     # Note: We need the nightly version for SSD offload to work. Hence I am checking for the next PyTorch release.
     pytestmark = pytest.mark.skipif(True, reason=ie.msg)
 
+from fair_dev.testing.testing import dist_init, spawn_for_all_world_sizes
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, OffloadConfig, TrainingState
-from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
 
 # How to use remote-pdb: https://gist.github.com/sshleifer/9d43351957179c13606e015b072927d4
 # All helper functions called by spawn must be either @classmethod, @staticmethod

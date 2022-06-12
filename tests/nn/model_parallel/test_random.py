@@ -21,10 +21,10 @@
 
 import torch
 
+from fair_dev.testing.testing import dist_init, spawn_for_all_world_sizes
 from fairscale.nn.model_parallel import initialize as mpu
 from fairscale.nn.model_parallel import random
 from fairscale.nn.model_parallel.random import get_cuda_rng_tracker, model_parallel_cuda_manual_seed
-from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
 
 
 def run_test_set_cuda_rng_state(rank, model_parallel_size, filename, filename_rpc):

@@ -19,10 +19,10 @@ import torch.multiprocessing as mp
 from torch.nn import Linear, Sequential
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from fair_dev.testing.testing import check_same_model_params, skip_if_no_cuda, skip_if_single_gpu, temp_files_ctx
+from fairscale.internal import torch_version
 from fairscale.nn.data_parallel import ShardedDataParallel
 from fairscale.optim import OSS
-from fairscale.utils import torch_version
-from fairscale.utils.testing import check_same_model_params, skip_if_no_cuda, skip_if_single_gpu, temp_files_ctx
 
 if torch_version() >= (1, 8, 0):
     from fairscale.optim.grad_scaler import ShardedGradScaler
