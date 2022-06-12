@@ -21,10 +21,10 @@ import pytest
 import torch
 from torch import nn
 
+from fair_dev.testing.testing import skip_if_single_gpu
 from fairscale.nn.pipe import Pipe
 from fairscale.nn.pipe.skip import pop, skippable, stash
 from fairscale.nn.pipe.skip.portal import PortalBlue, PortalCopy, PortalOrange
-from fairscale.utils.testing import skip_if_single_gpu
 
 
 @skip_if_single_gpu

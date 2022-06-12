@@ -20,9 +20,9 @@ import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
+from fair_dev.testing.testing import skip_if_single_gpu
 from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
-from fairscale.utils import torch_version
-from fairscale.utils.testing import skip_if_single_gpu
+from fairscale.internal import torch_version
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch_version() < (1, 9, 0),

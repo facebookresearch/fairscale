@@ -11,9 +11,9 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
+from fair_dev.testing.testing import make_cudnn_deterministic
+from fairscale.internal import torch_version
 from fairscale.nn import MOELayer, Top2Gate
-from fairscale.utils import torch_version
-from fairscale.utils.testing import make_cudnn_deterministic
 
 pytestmark = pytest.mark.skipif(
     not (torch.cuda.is_available() and torch_version() >= (1, 8, 0)), reason="cuda and torch>=1.8.0 required"

@@ -16,9 +16,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import utils
 
 from benchmarks.golden_configs.lm_wikitext2 import Pipe as lm_wikitext2
+from fair_dev.testing.testing import dist_init
 from fairscale.nn import Pipe
 from fairscale.nn.model_parallel import initialize_model_parallel
-from fairscale.utils.testing import dist_init
 
 MPI_PORT = 29500
 RPC_PORT = 29501

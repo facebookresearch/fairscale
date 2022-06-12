@@ -18,10 +18,7 @@ import torch
 from torch import nn
 import torch.distributed
 
-from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
-from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
-from fairscale.utils import torch_version
-from fairscale.utils.testing import (
+from fair_dev.testing.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,
     dist_init,
@@ -30,6 +27,9 @@ from fairscale.utils.testing import (
     skip_a_test_if_in_CI,
     spawn_for_all_world_sizes,
 )
+from fairscale.internal import torch_version
+from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
+from fairscale.nn.data_parallel import FullyShardedDataParallel, TrainingState
 
 if torch_version() >= (1, 8, 0):
     from fairscale.optim.grad_scaler import ShardedGradScaler

@@ -16,9 +16,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn import Linear, Sequential
 
-from fairscale.nn.data_parallel import ShardedDataParallel
-from fairscale.optim import OSS
-from fairscale.utils.testing import (
+from fair_dev.testing.testing import (
     GPT2,
     SGDWithPausingCompute,
     available_devices,
@@ -28,6 +26,8 @@ from fairscale.utils.testing import (
     skip_if_single_gpu,
     temp_files_ctx,
 )
+from fairscale.nn.data_parallel import ShardedDataParallel
+from fairscale.optim import OSS
 
 
 def _get_mlp(tripwire: bool = False):

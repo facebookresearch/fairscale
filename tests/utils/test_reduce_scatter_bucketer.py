@@ -12,9 +12,9 @@ from unittest import mock
 from parameterized import parameterized
 import torch
 
-from fairscale.utils import torch_version
-from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
-from fairscale.utils.testing import dist_init, spawn_for_all_world_sizes
+from fair_dev.testing.testing import dist_init, spawn_for_all_world_sizes
+from fairscale.internal import torch_version
+from fairscale.internal.reduce_scatter_bucketer import ReduceScatterBucketer
 
 
 def rename_test(testcase_func, param_num, param):

@@ -14,7 +14,7 @@ from torch import Tensor
 import torch.nn as nn
 import torch.utils.checkpoint as torch_checkpoint
 
-from fairscale.utils.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
+from fairscale.internal.containers import pack_kwargs, split_non_tensors, unpack_kwargs, unpack_non_tensors
 
 from .checkpoint_utils import patch_batchnorm
 

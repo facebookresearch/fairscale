@@ -22,9 +22,9 @@ from torch.nn import Linear, Sequential
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
+from fair_dev.testing.golden_testing_data import adascale_test_data
+from fair_dev.testing.testing import skip_if_single_gpu
 from fairscale.optim import OSS, AdaScale, AdaScaleWrapper
-from fairscale.utils.golden_testing_data import adascale_test_data
-from fairscale.utils.testing import skip_if_single_gpu
 
 
 def _dist_init(rank, world_size, tempfile_name, backend):

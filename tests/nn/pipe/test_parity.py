@@ -14,8 +14,8 @@ import numpy as np
 import pytest
 import torch
 
+from fair_dev.testing.testing import skip_if_single_gpu
 from fairscale.nn import Pipe
-from fairscale.utils.testing import skip_if_single_gpu
 
 
 def _get_model(num_inputs=2, num_hidden=20, num_outputs=2):

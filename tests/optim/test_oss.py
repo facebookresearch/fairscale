@@ -21,15 +21,15 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-import fairscale.optim as optim
-from fairscale.utils import torch_version
-from fairscale.utils.testing import (
+from fair_dev.testing.testing import (
     check_same_model_params,
     check_same_models_across_ranks,
     skip_if_no_cuda,
     skip_if_py39_no_cuda,
     skip_if_single_gpu,
 )
+from fairscale.internal import torch_version
+import fairscale.optim as optim
 
 BACKEND = dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO  # type: ignore
 DEVICE = "cuda" if torch.cuda.is_available() else torch.device("cpu")
