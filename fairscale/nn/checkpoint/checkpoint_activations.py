@@ -96,7 +96,6 @@ def is_recomputing() -> bool:
     return thread_local.is_recomputing
 
 
-# FIXME: calling this a wrapper is misleading, this is an in-place modification.
 def checkpoint_wrapper(
     module: nn.Module,
     offload_to_cpu: bool = False,
@@ -213,7 +212,6 @@ def _checkpointed_forward(
     return output
 
 
-# FIXME: why is this in this module?
 def get_rng_state() -> Dict[str, Any]:
     state = {"torch_rng_state": torch.get_rng_state()}
     if torch.cuda.is_available():
@@ -221,14 +219,12 @@ def get_rng_state() -> Dict[str, Any]:
     return state
 
 
-# FIXME: why is this in this module?
 def set_rng_state(state: Dict[str, Any]) -> None:
     torch.set_rng_state(state["torch_rng_state"])
     if torch.cuda.is_available():
         torch.cuda.set_rng_state(state["cuda_rng_state"])
 
 
-# FIXME: why is this in this module?
 def is_autocast_enabled() -> bool:
     """Similar to torch.is_autocast_enabled, but compatible with torch 1.5.1"""
     if hasattr(torch, "is_autocast_enabled"):
@@ -236,7 +232,6 @@ def is_autocast_enabled() -> bool:
     return False
 
 
-# FIXME: why is this in this module?
 @contextmanager
 def autocast(enabled: bool) -> Generator:
     """Similar to torch.cuda.amp.autocast, but compatible with torch 1.5.1"""
