@@ -12,7 +12,7 @@
 import torch
 from torch import nn
 
-from fairscale.utils.state_dict import find_module_instances, replace_by_prefix_
+from fairscale.internal.state_dict import find_module_instances, replace_by_prefix_
 
 
 def test_find_module_instances():

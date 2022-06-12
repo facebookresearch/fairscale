@@ -12,7 +12,7 @@
 from parameterized import parameterized
 import torch
 
-from fairscale.utils.parallel import chunk_and_pad
+from fairscale.internal.parallel import chunk_and_pad
 
 
 @parameterized.expand([[num_chunks] for num_chunks in range(1, 33)])

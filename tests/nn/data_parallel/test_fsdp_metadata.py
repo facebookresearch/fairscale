@@ -14,8 +14,8 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.optim import Adam
 
+from fair_dev.testing.testing import in_temporary_directory, skip_if_single_gpu, temp_files_ctx
 from fairscale.nn import FullyShardedDataParallel
-from fairscale.utils.testing import in_temporary_directory, skip_if_single_gpu, temp_files_ctx
 from tests.nn.data_parallel.test_fsdp import DistributedTest, MixtureOfExperts, rename_test, spawn_and_init
 
 USE_TEMPFILE = True  # False for debugging

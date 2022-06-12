@@ -20,12 +20,12 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel
 import torch.optim as optim
 
+from fair_dev.testing.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
+from fairscale.internal import torch_version
 from fairscale.nn import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import auto_wrap_bn
 from fairscale.nn.wrap import enable_wrap, wrap
-from fairscale.utils import torch_version
-from fairscale.utils.testing import dist_init, skip_if_single_gpu, teardown, temp_files_ctx
 
 
 class Model(nn.Module):

@@ -14,9 +14,9 @@ import numpy as np
 import pytest
 import torch
 
+from fair_dev.testing.testing import skip_if_no_cuda
 from fairscale.experimental.nn.offload import OffloadModel
-from fairscale.utils import torch_version
-from fairscale.utils.testing import skip_if_no_cuda
+from fairscale.internal import torch_version
 
 if torch_version() >= (1, 8, 0):
     from fairscale.experimental.nn.auto_shard import shard_model

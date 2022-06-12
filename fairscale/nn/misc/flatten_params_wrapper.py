@@ -44,7 +44,7 @@ except ImportError:
     import_ssd_offload = False
     pass
 
-from fairscale.utils.state_dict import replace_by_prefix_
+from fairscale.internal.state_dict import replace_by_prefix_
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401

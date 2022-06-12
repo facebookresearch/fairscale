@@ -10,8 +10,8 @@ from torch import Tensor
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
 
+from fairscale.internal import torch_version
 from fairscale.nn.checkpoint import is_checkpointing, is_recomputing
-from fairscale.utils import torch_version
 
 
 def _forward(input: Tensor, affine: bool, mean: Tensor, invstd: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
