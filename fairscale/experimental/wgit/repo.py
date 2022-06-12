@@ -10,9 +10,6 @@ from typing import Union
 
 from .pygit import PyGit
 from .sha1_store import SHA1_store
-from .utils import get_sha1_hash
-
-# from .utils import ExitCode, create_dir, create_new_file, get_sha1_hash
 
 
 class Repo:
@@ -47,16 +44,23 @@ class Repo:
             self._pygit = PyGit(self.wgit_parent.joinpath(self._wgit_dir), gitignore=gitignore_files)
 
             # Initializing sha1_store only after wgit has been initialized!
-            self._sha1_store = SHA1_store(self._wgit_dir, init=True)
+            self._sha1_store = SHA1_store(self._wgit_dir, self._metadata_file, self._sha1_ref, init=True)
         elif self._exists() and init:
             # if weigit repo already exists and init is being called, wrap the existing .wgit/.git repo with PyGit
-            print(f"wgit exists: {self._exists()}")
-            self._sha1_store = SHA1_store(self._wgit_dir)
+            self._sha1_store = SHA1_store(
+                self._wgit_dir,
+                self._metadata_file,
+                self._sha1_ref,
+            )
             self._pygit = PyGit(self.wgit_parent.joinpath(self._wgit_dir))
 
         elif self._exists() and not init:
             # weigit exists and non-init commands are triggered
-            self._sha1_store = SHA1_store(self._wgit_dir)
+            self._sha1_store = SHA1_store(
+                self._wgit_dir,
+                self._metadata_file,
+                self._sha1_ref,
+            )
             self._pygit = PyGit(self.wgit_parent.joinpath(self._wgit_dir))
 
         else:
@@ -66,10 +70,8 @@ class Repo:
     def add(self, file_path: str) -> None:
         """Adds a file to the wgit repo"""
         if self._exists():
-            sha1_hash = get_sha1_hash(file_path)  #
-            self._sha1_store.add(sha1_hash, file_path)  # add the filefile to the sha1_store
+            self._sha1_store.add(file_path)  # add the filefile to the sha1_store
             self._pygit.add()  # add to the .wgit/.git repo
-            print(f"add completed: {self._pygit.repo}\n")
 
     def commit(self, message: str) -> None:
         """Commits staged changes to the repo"""

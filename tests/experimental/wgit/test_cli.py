@@ -11,7 +11,7 @@ import shutil
 import pytest
 
 import fairscale.experimental.wgit.cli as cli
-from fairscale.experimental.wgit.utils import get_sha1_hash
+from fairscale.experimental.wgit.sha1_store import SHA1_store
 
 
 @pytest.fixture
@@ -52,7 +52,15 @@ def test_cli_add(capsys):
     chkpt0 = "checkpoint_0.pt"
     cli.main(["add", "checkpoint_0.pt"])
 
-    sha1_hash = get_sha1_hash(chkpt0)
+    sha1_store = SHA1_store(
+        Path.cwd().joinpath(".wgit"),
+        Path.cwd().joinpath(".wgit", "checkpoint.pt"),
+        Path.cwd().joinpath(".wgit", "sha1_refs.json"),
+        init=False,
+    )
+
+    sha1_hash = sha1_store.get_sha1_hash(chkpt0)
+
     with open(os.path.join(".wgit", "checkpoint.pt"), "r") as f:
         json_data = json.load(f)
 

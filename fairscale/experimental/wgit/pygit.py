@@ -41,15 +41,12 @@ class PyGit:
             if pygit_parent_p == self._parent_path:
                 self.repo = pygit2.Repository(str(self._parent_path))
                 self.path = self._parent_path.joinpath(".git")
-                print("\nJUST Wrapping!\n")
             else:
                 # if the parent is not a .wgit repo,
                 # then the found-repo is a different git repo. Init new .wgit/.git
-                print("\nFound but not .wgit - SO Creating!\n")
                 self._init_wgit_git(gitignore)
         else:
             # no git repo found, make .wgit a git repo
-            print("\nCreating from scratch\n")
             self._init_wgit_git(gitignore)
 
     def _init_wgit_git(self, gitignore: List) -> None:
@@ -90,11 +87,14 @@ class PyGit:
 
     @property
     def _exists(self) -> bool:
+        """returns True if wgit is a git repository"""
         return self._parent_path == Path(self.repo.path).parent
 
     @property
     def _path(self) -> str:
+        """returns the path of the git repository PyGit is wrapped around"""
         return self.repo.path
 
     def status(self) -> None:
+        """Print the status of the git repo"""
         print(self.repo.status())

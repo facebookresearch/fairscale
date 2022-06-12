@@ -75,14 +75,6 @@ def test_pygit_commit(pygit_repo_wrap):
     assert repo.status() == {}
 
 
-def status():
-    pass
-
-
-def test_log():
-    pass
-
-
 def test_tear_down(repo_data):
     # clean up: delete the .wgit directory created during this Test
     # Making sure the current directory is ./temp_wgit_testing before removing test dir

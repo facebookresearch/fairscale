@@ -13,7 +13,6 @@ import pytest
 
 from fairscale.experimental.wgit import cli
 from fairscale.experimental.wgit import repo as api
-from fairscale.experimental.wgit.utils import get_sha1_hash
 
 
 @pytest.fixture
@@ -60,7 +59,7 @@ def test_api_add(capsys, repo):
     chkpt0 = "checkpoint_0.pt"
     repo.add("checkpoint_0.pt")
 
-    sha1_hash = get_sha1_hash(chkpt0)
+    sha1_hash = repo._sha1_store.get_sha1_hash(chkpt0)
     with open(os.path.join(".wgit", "checkpoint.pt"), "r") as f:
         json_data = json.load(f)
 
