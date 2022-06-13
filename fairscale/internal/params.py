@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import collections.abc as abc
+from dataclasses import dataclass
 from math import inf
 from typing import Any, Callable, Dict, List, Optional
 
@@ -11,10 +12,10 @@ import torch
 import torch.distributed as dist
 
 
+@dataclass
 class Workhandle:
-    def __init__(self, handle: Any, callback: Optional[Callable]) -> None:
-        self.handle = handle
-        self.callback = callback
+    handle: Any
+    callback: Optional[Callable] = None
 
 
 def get_global_rank(group: Any, rank: int) -> int:
