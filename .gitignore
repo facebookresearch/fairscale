@@ -13,7 +13,7 @@
 .testmondata
 
 # experimental weigit
-experimental/.gitignore
+fairscale/experimental/wgit/dev
 .wgit
 
 # Build and release

@@ -3,7 +3,12 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from .cli import main
-from .weigit_api import WeiGit
+from enum import Enum
 
-__version__ = "0.0.1"
+
+class ExitCode(Enum):
+    """Collections of the Exit codes as an Enum class"""
+
+    CLEAN = 0
+    FILE_EXISTS_ERROR = 1
+    FILE_DOES_NOT_EXIST_ERROR = 2
