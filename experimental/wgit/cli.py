@@ -4,13 +4,12 @@
 # LICENSE file in the root directory of this source tree.
 
 import argparse
-from pathlib import Path
-from typing import List
 
-from . import Repo, version
+import experimental.wgit as wgit
+import experimental.wgit.weigit_api as weigit_api
 
 
-def main(argv: List[str] = None) -> None:
+def main(argv=None):
     desc = "WeiGit: A git-like tool for model weight tracking"
 
     # top level parser and corresponding subparser
@@ -72,30 +71,25 @@ def main(argv: List[str] = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "init":
-        repo = Repo(Path.cwd(), init=True)
+        weigit = weigit_api.WeiGit()
 
     if args.command == "add":
-        repo = Repo(Path.cwd())
-        repo.add(args.add)
+        weigit_api.WeiGit.add(args.add)
 
     if args.command == "status":
-        repo = Repo(Path.cwd())
-        repo.status()
+        weigit_api.WeiGit.status()
 
     if args.command == "log":
-        repo = Repo(Path.cwd())
-        repo.log(args.file)
+        weigit_api.WeiGit.log(args.file)
 
     if args.command == "commit":
-        repo = Repo(Path.cwd())
-        repo.commit(args.message)
+        weigit_api.WeiGit.commit(args.message)
 
     if args.command == "checkout":
-        repo = Repo(Path.cwd())
-        repo.checkout(args.checkout)
+        weigit_api.WeiGit.checkout()
 
     if args.command == "version":
-        print(".".join([str(x) for x in version.__version_tuple__]))
+        print(wgit.__version__)
 
 
 if __name__ == "__main__":
