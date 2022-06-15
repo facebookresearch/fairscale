@@ -54,14 +54,12 @@ def test_cli_add(capsys):
 
     sha1_store = SHA1_store(
         Path.cwd().joinpath(".wgit"),
-        Path.cwd().joinpath(".wgit", "checkpoint.pt"),
-        Path.cwd().joinpath(".wgit", "sha1_refs.json"),
         init=False,
     )
 
     sha1_hash = sha1_store.get_sha1_hash(chkpt0)
 
-    with open(os.path.join(".wgit", "checkpoint.pt"), "r") as f:
+    with open(os.path.join(".wgit", "checkpoint_0.pt"), "r") as f:
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"

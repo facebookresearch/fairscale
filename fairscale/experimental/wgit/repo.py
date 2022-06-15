@@ -26,42 +26,32 @@ class Repo:
         # else, if repo already exists: create a pygit object from the .wgit/.git.
         self.wgit_parent = parent_dir
         self._repo_path: Union[None, Path] = None
-        self._wgit_dir = Path(".wgit")
-        self._metadata_file = Path(".wgit/checkpoint.pt")
-        self._sha1_ref = Path(".wgit/sha1_refs.json")
+        self._wgit_in_path = self.wgit_parent.joinpath(".wgit")
         self._wgit_git_path = Path(".wgit/.git")
         self._sha1_store_path = Path(".wgit/sha1_store")
 
         if not self._exists() and init:
             # No weigit repo exists and is being initialized with init=True
-            # Make .wgit directory, create sha1_refs and metadata file
-            self._wgit_dir.mkdir(exist_ok=True)
-            self._metadata_file.touch(exist_ok=False)
-            self._sha1_ref.touch(exist_ok=False)
-
-            # # Make the .wgit a git repo
-            gitignore_files = [self._sha1_store_path.name, self._sha1_ref.name]
-            self._pygit = PyGit(self.wgit_parent.joinpath(self._wgit_dir), gitignore=gitignore_files)
+            # Make .wgit directory, create sha1_refs
+            self._wgit_in_path.mkdir(parents=False, exist_ok=True)
+            # self._sha1_ref.touch(exist_ok=False)
 
             # Initializing sha1_store only after wgit has been initialized!
-            self._sha1_store = SHA1_store(self._wgit_dir, self._metadata_file, self._sha1_ref, init=True)
+            self._sha1_store = SHA1_store(self._wgit_in_path, init=True)
+
+            # # Make the .wgit a git repo
+            gitignore_files = [self._sha1_store_path.name, self._sha1_store.ref_file_path.name]
+            self._pygit = PyGit(self._wgit_in_path, gitignore=gitignore_files)
+
         elif self._exists() and init:
             # if weigit repo already exists and init is being called, wrap the existing .wgit/.git repo with PyGit
-            self._sha1_store = SHA1_store(
-                self._wgit_dir,
-                self._metadata_file,
-                self._sha1_ref,
-            )
-            self._pygit = PyGit(self.wgit_parent.joinpath(self._wgit_dir))
+            self._sha1_store = SHA1_store(self._wgit_in_path)
+            self._pygit = PyGit(self._wgit_in_path)
 
         elif self._exists() and not init:
             # weigit exists and non-init commands are triggered
-            self._sha1_store = SHA1_store(
-                self._wgit_dir,
-                self._metadata_file,
-                self._sha1_ref,
-            )
-            self._pygit = PyGit(self.wgit_parent.joinpath(self._wgit_dir))
+            self._sha1_store = SHA1_store(self._wgit_in_path)
+            self._pygit = PyGit(self._wgit_in_path)
 
         else:
             # weigit doesn't exist and is not trying to be initialized (triggers during non-init commands)
@@ -105,11 +95,11 @@ class Repo:
         print("Not Implemented!")
 
     @property
-    def path(self) -> str:
+    def path(self) -> Path:
         """Get the path to the WeiGit repo"""
         if self._repo_path is None:
             self._exists()
-        return str(self._repo_path)
+        return self._repo_path
 
     def _exists(self) -> bool:
         """Returns True if a valid wgit exists within the cwd, and sets the self._repo_path to the wgit path."""

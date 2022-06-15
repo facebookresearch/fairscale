@@ -20,55 +20,63 @@ def sha1_configs():
     class Sha1StorePaths:
         test_dirs = Path("temp_wgit_testing/.wgit")
         test_path = Path.cwd().joinpath(test_dirs)
-        metadata_file = test_path.joinpath("checkpoint.pt")
         sha1_ref = test_path.joinpath("sha1_refs.json")
-        chkpt_dir = test_path.joinpath("checkpoint")
-        checkpoint_1 = test_path.joinpath("checkpoint", "checkpoint_1.pt")
-        checkpoint_2 = test_path.joinpath("checkpoint", "checkpoint_2.pt")
-        checkpoint_3 = test_path.joinpath("checkpoint", "checkpoint_3.pt")
+        chkpt1a_dir = test_path.joinpath("checkpoint_1a")
+        chkpt1b_dir = test_path.joinpath("checkpoint_1b")
+        chkpt1c_dir = test_path.joinpath("checkpoint_1c")
+        checkpoint_1a = test_path.joinpath("checkpoint_1a", "checkpoint_1.pt")
+        checkpoint_1b = test_path.joinpath("checkpoint_1b", "checkpoint_1.pt")
+        checkpoint_1c = test_path.joinpath("checkpoint_1c", "checkpoint_1.pt")
+        checkpoint_2 = test_path.joinpath("checkpoint_1a", "checkpoint_2.pt")
+        checkpoint_3 = test_path.joinpath("checkpoint_1a", "checkpoint_3.pt")
 
     return Sha1StorePaths
 
 
 @pytest.fixture
 def sha1_store(sha1_configs):
-    sha1_store = SHA1_store(sha1_configs.test_dirs, sha1_configs.metadata_file, sha1_configs.sha1_ref, init=False)
+    sha1_store = SHA1_store(sha1_configs.test_dirs, init=False)
     return sha1_store
 
 
 def test_setup(sha1_configs):
     # Set up the testing directory
     sha1_configs.test_dirs.mkdir(parents=True, exist_ok=True)  # create test .wgit dir
-    sha1_configs.metadata_file.touch()
-    sha1_configs.sha1_ref.touch()
 
     # Create the test checkpoint files
-    sha1_configs.chkpt_dir.mkdir(exist_ok=False)
-    sha1_configs.checkpoint_1.touch()
-    sha1_configs.checkpoint_2.touch()
+    sha1_configs.chkpt1a_dir.mkdir(exist_ok=False)
+    sha1_configs.chkpt1b_dir.mkdir(exist_ok=False)
+    sha1_configs.chkpt1c_dir.mkdir(exist_ok=False)
 
     # Create random checkpoints
-    size_list = [30e5, 35e5, 40e5]
-    chkpts = [sha1_configs.checkpoint_1, sha1_configs.checkpoint_2, sha1_configs.checkpoint_3]
+    size_list = [25e5, 27e5, 30e5, 35e5, 40e5]
+    chkpts = [
+        sha1_configs.checkpoint_1a,
+        sha1_configs.checkpoint_1b,
+        sha1_configs.checkpoint_1c,
+        sha1_configs.checkpoint_2,
+        sha1_configs.checkpoint_3,
+    ]
     for file, size in zip(chkpts, size_list):
         with open(file, "wb") as f:
             f.write(os.urandom(int(size)))
 
-    sha1_store = SHA1_store(sha1_configs.test_dirs, sha1_configs.metadata_file, sha1_configs.sha1_ref, init=True)
+    sha1_store = SHA1_store(sha1_configs.test_dirs, init=True)
     return sha1_store
 
 
 def test_sha1_add(sha1_configs, sha1_store):
     # add the file to sha1_store
-    sha1_store.add(sha1_configs.checkpoint_1)
+    sha1_store.add(sha1_configs.checkpoint_1a)
 
-    with open(sha1_configs.metadata_file, "r") as file:
+    metadata_file = sha1_configs.test_path.joinpath(sha1_configs.checkpoint_1a.name)
+    with open(metadata_file, "r") as file:
         metadata = json.load(file)
 
     file_sha1 = metadata["SHA1"]["__sha1_full__"]
 
     # Check metadata file creation
-    assert file_sha1 == sha1_store.get_sha1_hash(sha1_configs.checkpoint_1)
+    assert file_sha1 == sha1_store.get_sha1_hash(sha1_configs.checkpoint_1a)
     assert metadata["file_path"] == str(sha1_configs.test_path.joinpath(sha1_store.name, file_sha1[:2], file_sha1[2:]))
 
 
@@ -78,12 +86,14 @@ def test_sha1_refs(sha1_configs, sha1_store):
         refs_data = json.load(file)
 
     # get checkpoint1 sha1
-    sha1_chkpt1 = sha1_store.get_sha1_hash(sha1_configs.checkpoint_1)
-    assert refs_data[sha1_chkpt1]["parent"] == "ROOT"
-    assert refs_data[sha1_chkpt1]["child"] == "HEAD"
-    assert refs_data[sha1_chkpt1]["ref_count"] == 0
+    sha1_chkpt1a_hash = sha1_store.get_sha1_hash(sha1_configs.checkpoint_1a)
+    assert refs_data[sha1_configs.checkpoint_1a.name][sha1_chkpt1a_hash]["parent"] == "ROOT"
+    assert refs_data[sha1_configs.checkpoint_1a.name][sha1_chkpt1a_hash]["child"] == "HEAD"
+    assert refs_data[sha1_configs.checkpoint_1a.name][sha1_chkpt1a_hash]["ref_count"] == 0
 
     # add checkpoint 2 and checkpoint 3
+    sha1_store.add(sha1_configs.checkpoint_1b)
+    sha1_store.add(sha1_configs.checkpoint_1c)
     sha1_store.add(sha1_configs.checkpoint_2)
     sha1_store.add(sha1_configs.checkpoint_3)
 
@@ -92,12 +102,20 @@ def test_sha1_refs(sha1_configs, sha1_store):
         refs_data = json.load(file)
 
     # get checkpoint1 sha1
-    sha1_chkpt2 = sha1_store.get_sha1_hash(sha1_configs.checkpoint_2)
-    sha1_chkpt3 = sha1_store.get_sha1_hash(sha1_configs.checkpoint_3)
+    sha1_chkpt1b_hash = sha1_store.get_sha1_hash(sha1_configs.checkpoint_1b)
+    sha1_chkpt1c_hash = sha1_store.get_sha1_hash(sha1_configs.checkpoint_1c)
 
-    assert refs_data[sha1_chkpt2]["parent"] == sha1_chkpt1
-    assert refs_data[sha1_chkpt2]["child"] == sha1_chkpt3
-    assert refs_data[sha1_chkpt2]["ref_count"] == 1
+    sha1_chkpt2_hash = sha1_store.get_sha1_hash(sha1_configs.checkpoint_2)
+    sha1_chkpt3_hash = sha1_store.get_sha1_hash(sha1_configs.checkpoint_3)
+
+    # Tests for same file versions
+    assert refs_data[sha1_configs.checkpoint_1b.name][sha1_chkpt1b_hash]["parent"] == sha1_chkpt1a_hash
+    assert refs_data[sha1_configs.checkpoint_1b.name][sha1_chkpt1b_hash]["child"] == sha1_chkpt1c_hash
+    assert refs_data[sha1_configs.checkpoint_1b.name][sha1_chkpt1b_hash]["ref_count"] == 1
+
+    # Tests for new files
+    assert refs_data[sha1_configs.checkpoint_2.name][sha1_chkpt2_hash]["parent"] == "ROOT"
+    assert refs_data[sha1_configs.checkpoint_3.name][sha1_chkpt3_hash]["parent"] == "ROOT"
 
 
 def test_tear_down(sha1_configs):
