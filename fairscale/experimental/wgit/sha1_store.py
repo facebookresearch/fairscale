@@ -9,22 +9,33 @@ import json
 from pathlib import Path
 import shutil
 import sys
-from typing import Union, cast
+from typing import Tuple, Union, cast
 
 from .utils import ExitCode
 
 
 class SHA1_store:
+    """
+    Represent the sha1_store within the WeiGit repo for handling added file to the store and managing references.
+
+    Args:
+        weigit_path (pathlib.Path)
+            The path to the weigit repo where a sha1_store will be created, or if already exists will be wrapped.
+        init (bool, optional)
+            - If ``True``, initializes a new sha1_store in the weigit_path. Initialization creates a `sha1_store` directory within WeiGit repo in ./<weigit_path>/,
+                and a `sha1_refs.json` withiin ./<weigit_path>/.
+            - If ``False``, a new sha1_store is not initialized and the existing sha1_store is simply wrapped, populating the `name`, `path` and the `ref_file_path` attributes.
+            - Default: False
+    Methods:
+        add(in_file_path: str)
+            adds a file to the sha1_store. If a new version of an existing file is added, updates the reference to the existing file.
+
+        get_sha1_hash(file_path: Union[str, Path])
+            Takes a file and returns its SHA1 checksum
+    """
+
     def __init__(self, weigit_path: Path, init: bool = False) -> None:
-        """
-        Planned Features:
-            1. def init
-            2. def add <file or data> -> SHA1
-            3. def remove (SHA1)
-            4. def add_ref(children_SHA1, parent_SHA1)
-            5. def read(SHA1): ->
-            6. def lookup(SHA1): -> file path to the data. NotFound Exception if not found.
-        """
+        """Create or wrap (if already exists) a sha1_store within the WeiGit repo."""
         # should use the sha1_refs.json to track the parent references.
         self.name = "sha1_store"
         self.path = weigit_path.joinpath(self.name)
@@ -42,8 +53,14 @@ class SHA1_store:
                 sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
     def add(self, in_file_path: str) -> None:
-        """Adds a file/checkpoint to the internal sha1_store and update the metadata and the
-        sha1 references accordingly.
+        """
+        Adds a file/checkpoint to the internal sha1_store and updates the metadata and the sha1 references accordingly.
+        First, a metadata file of the same name as the input file to be tracked is created in the  WeiGit repo.
+        A sha1 hash is then calculated. Utilizing the sha1 hash string, the actual file in <in_file_path> is moved
+        within the sha1_store, and the metadata file of the same name is populated with the metadata of the input file.
+
+        Args:
+            in_file_path (str): path to the file to be added to the sha1_store.
         """
         # create the metadata file
         file_path = Path(in_file_path)
@@ -81,21 +98,40 @@ class SHA1_store:
             sys.stderr.write(f"An exception occured: {repr(error)}\n")
             shutil.rmtree(repo_fdir)
 
+    def get_sha1_hash(self, file_path: Union[str, Path]) -> str:
+        """return the sha1 hash of a file
+
+        Args:
+            file_path (str, Path): Path to the file whose sha1 hash is to be calculalated and returned.
+
+        """
+        SHA1_BUF_SIZE = 104857600  # Reading file in 100MB chunks
+
+        sha1 = hashlib.sha1()
+        with open(file_path, "rb") as f:
+            while True:
+                data = f.read(SHA1_BUF_SIZE)
+                if not data:
+                    break
+                sha1.update(data)
+        return sha1.hexdigest()
+
     def _add_ref(self, file_path: Path, current_sha1_hash: str) -> None:
-        """Populates the sha1_refs.json file when file is added and keeps track of reference to earlier commits"""
-        try:
-            with open(self.ref_file_path, "r") as f:
-                ref_data = json.load(f)
-            if file_path.name in ref_data.keys():
-                entry_exists = True
-            else:
-                entry_exists = False
-            sha1_refs_empty = False
-        except json.JSONDecodeError as error:
-            # print(f"Json decode error")
-            if not self.ref_file_path.stat().st_size:
-                sha1_refs_empty = True
-            entry_exists = False
+        """
+        Populates the sha1_refs.json file when file is added and keeps track of reference to earlier file additions.
+        If the sha1_refs.json file is empty, then a new tracking entry of the added file is logged in the sha1_refs file.
+        If the file already has an entry, first it checks if the incoming new added file is a new version of any of the
+        existing entries. If it is, then logs the tracking info as a new version of that existing entry.
+        Otherwise a new entry for the new added file is created for tracking.
+
+        Args:
+            file_path (pathlib.Path)
+                Path to the incoming added file.
+            current_sha1_hash (str)
+                The sha1 hash of the incoming added file.
+        """
+        # Check the current state of the reference file and check if the added file already has an entry.
+        sha1_refs_empty, entry_exists = self._sha1_refs_file_state(file_path)
 
         if sha1_refs_empty:
             with open(self.ref_file_path) as f:
@@ -127,20 +163,39 @@ class SHA1_store:
 
             self._write_to_json(self.ref_file_path, ref_data)
 
-    def get_sha1_hash(self, file_path: Union[str, Path]) -> str:
-        """ " return the sha1 hash of a file"""
-        SHA1_BUF_SIZE = 104857600  # Reading file in 100MB chunks
+    def _sha1_refs_file_state(self, file_path: Path) -> Tuple[bool, bool]:
+        """
+        Checks the state of the sha1 reference file, whether the file is empty or not.
+        If not empty, it checks whether the input file in <file_path> has an older entry (version)
+        in the reference file.
 
-        sha1 = hashlib.sha1()
-        with open(file_path, "rb") as f:
-            while True:
-                data = f.read(SHA1_BUF_SIZE)
-                if not data:
-                    break
-                sha1.update(data)
-        return sha1.hexdigest()
+        Args:
+            file_path (pathlib.Path)
+                input File whose entry will be checked if it exists in the reference file.
+        """
+        try:
+            with open(self.ref_file_path, "r") as f:
+                ref_data = json.load(f)
+            if file_path.name in ref_data.keys():
+                entry_exists: bool = True
+            else:
+                entry_exists = False
+            sha1_refs_empty: bool = False
+        except json.JSONDecodeError as error:
+            # print(f"Json decode error")
+            if not self.ref_file_path.stat().st_size:
+                sha1_refs_empty = True
+            entry_exists = False
+        return sha1_refs_empty, entry_exists
 
     def _write_to_json(self, file: Path, data: dict) -> None:
-        """Populates a json file with data"""
+        """
+        Populates a json file with data.
+        Args:
+            file (pathlib.Path)
+                path to the file to be written in.
+            data (pathlib.Path)
+                Data to be written in the file.
+        """
         with open(file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)

@@ -10,6 +10,27 @@ import pygit2
 
 
 class PyGit:
+    """
+    PyGit class to initialized (or wrap if already exists) the WeiGit repo as a git repo and interact with the git repo.
+
+    Args:
+        parent_path (pathlib.Path)
+            Has to be the full path of the parent!
+        gitignore (List)
+            a list of files to be added to the .gitignore
+        name (str)
+            Name of the author of the git repo
+        email (str)
+            email address of the author of the git repo
+    Methods:
+        add
+            adds the untracked files that are not gitignored to the git repo
+        commit (message: str)
+            commits the staged changes to the git repo
+        status
+            show the status of the git repo
+    """
+
     def __init__(
         self,
         parent_path: Path,
@@ -17,12 +38,7 @@ class PyGit:
         name: str = "user",
         email: str = "user@email.com",
     ) -> None:
-        """
-        PyGit class to wrap the wgit/.git repo and interact with the git repo.
 
-        Args:
-        parent_path: Has to be the full path of the parent!
-        """
         # Find if a git repo exists within .wgit repo:
         # If exists: then discover it and set the self.gitrepo path to its path
         self._parent_path = parent_path
@@ -50,7 +66,13 @@ class PyGit:
             self._init_wgit_git(gitignore)
 
     def _init_wgit_git(self, gitignore: List) -> None:
-        """Initializes a .git within .wgit directory, making it a git repo."""
+        """
+        Initializes a .git within .wgit directory, making it a git repo.
+
+        Args:
+            gitignore (List)
+                a list of file paths to be ignored by the wgit git repo.
+        """
         self.repo = pygit2.init_repository(str(self._parent_path), False)
         self.path = self._parent_path.joinpath(".git")
 
@@ -62,14 +84,23 @@ class PyGit:
                 file.write(f"{item}\n")
 
     def add(self) -> None:
-        """git add all the untracked files not in gitignore, to the .wgit/.git repo."""
+        """
+        git add all the untracked files not in gitignore, to the .wgit/.git repo.
+        """
         # If .wgit is git repo, add all the files in .wgit not being ignored to git
+        # TODO: Add functionalities for add specific files and add all files.
         if self._exists:
             self.repo.index.add_all()
             self.repo.index.write()
 
     def commit(self, message: str) -> None:
-        """git commit the staged changes to the .wgit/.git repo."""
+        """
+        git commit the staged changes to the .wgit/.git repo.
+
+        Args:
+            message (str)
+                Commit message
+        """
         # If .wgit is git repo, commit the staged files to git
         if self._exists:
             # if no commit exists, set ref to HEAD and parents to empty
@@ -96,5 +127,5 @@ class PyGit:
         return self.repo.path
 
     def status(self) -> None:
-        """Print the status of the git repo"""
+        """Show the status of the git repo"""
         print(self.repo.status())

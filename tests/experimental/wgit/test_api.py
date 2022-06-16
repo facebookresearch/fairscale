@@ -11,7 +11,6 @@ import shutil
 
 import pytest
 
-from fairscale.experimental.wgit import cli
 from fairscale.experimental.wgit import repo as api
 
 
@@ -91,11 +90,11 @@ def test_api_log(capsys, repo):
     assert captured.err == ""
 
 
-def test_cli_checkout(capsys):
-    cli.main(["checkout", "sha1"])
-    captured = capsys.readouterr()
-    assert captured.out == "wgit checkout: sha1\n"
-    assert captured.err == ""
+def test_api_checkout(repo):
+    try:
+        repo.checkout("sha1")
+    except NotImplementedError:
+        assert True
 
 
 def teardown_module(module):
