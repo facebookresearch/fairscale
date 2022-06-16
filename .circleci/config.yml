@@ -149,45 +149,45 @@ run_offload_benchmark: &run_offload_benchmark
   - run:
       name: Run Offload Benchmark
       command: |
-        python benchmarks/experimental/offload.py --checkpoint_activation
+        PYTHONPATH=. python benchmarks/experimental/offload.py --checkpoint_activation
 
 run_fsdp_benchmark: &run_fsdp_benchmark
   - run:
       name: Run FSDP Benchmark
       command: |
-        python benchmarks/fsdp.py --use_synthetic_data
+        PYTHONPATH=. python benchmarks/fsdp.py --use_synthetic_data
 
 run_pipe_benchmark: &run_pipe_benchmark
   - run:
       name: Run Pipe Benchmark
       command: |
-        python benchmarks/pipe.py
+        PYTHONPATH=. python benchmarks/pipe.py
 
 run_oss_benchmark: &run_oss_benchmark
   - run:
       name: Run OSS Benchmark
       command: |
-        python benchmarks/oss.py --world_size 4 --epochs 2
-        python benchmarks/oss.py --check_regression --world_size 4 --optim_type oss_sharded_ddp --epochs 12
+        PYTHONPATH=. python benchmarks/oss.py --world_size 4 --epochs 2
+        PYTHONPATH=. python benchmarks/oss.py --check_regression --world_size 4 --optim_type oss_sharded_ddp --epochs 12
 
 run_oss_gloo: &run_oss_gloo
   - run:
       name: Run OSS with Gloo
       command: |
-        python benchmarks/oss.py --gloo --optim_type oss_ddp --epochs 2
-        python benchmarks/oss.py --gloo --optim_type oss_sharded_ddp --epochs 2
+        PYTHONPATH=. python benchmarks/oss.py --gloo --optim_type oss_ddp --epochs 2
+        PYTHONPATH=. python benchmarks/oss.py --gloo --optim_type oss_sharded_ddp --epochs 2
 
 run_oss_amp: &run_oss_amp
    - run:
        name: Run OSS with Torch AMP
        command: |
-         python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp
+         PYTHONPATH=. python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp
 
 run_oss_for_each: &run_oss_for_each
    - run:
        name: Run OSS with Torch AMP and ForEach optmizer
        command: |
-         python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp --multi_tensor_optim
+         PYTHONPATH=. python benchmarks/oss.py --amp --epochs 3 --optim_type oss_sharded_ddp --multi_tensor_optim
 
 run_doc_build: &run_doc_build
    - run:
