@@ -60,7 +60,7 @@ class SHA1_store:
         # use the sha1_hash to create a directory with first2 sha naming convention
         try:
             repo_fdir = self.path.joinpath(sha1_hash[:2])
-            repo_fdir.mkdir(exist_ok=False)
+            repo_fdir.mkdir(exist_ok=True)
         except FileExistsError as error:
             sys.stderr.write(f"An exception occured: {repr(error)}\n")
             sys.exit(ExitCode.FILE_EXISTS_ERROR)
