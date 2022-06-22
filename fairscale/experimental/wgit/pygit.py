@@ -4,14 +4,15 @@
 # LICENSE file in the root directory of this source tree.
 
 from pathlib import Path
-from typing import List
+import sys
+from typing import List, Tuple
 
 import pygit2
 
 
 class PyGit:
     """
-    PyGit class to initialized (or wrap if already exists) the WeiGit repo as a git repo and interact with the git repo.
+    PyGit class represents a git repo within a weigit repo.
 
     Args:
         parent_path (pathlib.Path)
@@ -19,16 +20,9 @@ class PyGit:
         gitignore (List)
             a list of files to be added to the .gitignore
         name (str)
-            Name of the author of the git repo
+            Name of the author of the git repo. Optionally used if it can't be determined from user's .gitconfig.
         email (str)
             email address of the author of the git repo
-    Methods:
-        add
-            adds the untracked files that are not gitignored to the git repo
-        commit (message: str)
-            commits the staged changes to the git repo
-        status
-            show the status of the git repo
     """
 
     def __init__(
@@ -42,10 +36,10 @@ class PyGit:
         # Find if a git repo exists within .wgit repo:
         # If exists: then discover it and set the self.gitrepo path to its path
         self._parent_path = parent_path
-        self.name = name
-        self.email = email
-
         git_repo_found = pygit2.discover_repository(self._parent_path)
+
+        # If gitconfig file exists use the name and email from the file
+        self.name, self.email = self._set_author_config(name, email)
 
         if git_repo_found:
             # grab the parent dir of this git repo
@@ -92,6 +86,8 @@ class PyGit:
         if self._exists:
             self.repo.index.add_all()
             self.repo.index.write()
+        else:
+            sys.stderr.write("fatal: git repo does not exist")
 
     def commit(self, message: str) -> None:
         """
@@ -129,3 +125,19 @@ class PyGit:
     def status(self) -> None:
         """Show the status of the git repo"""
         print(self.repo.status())
+
+    def _set_author_config(self, name: str, email: str) -> Tuple[str, str]:
+        """Set the name and email for the pygit repo collecting from the gitconfig.
+        If not available in gitconfig, set the values from the passed arguments."""
+        gitconfig = Path("~/.gitconfig").expanduser()
+        # parse the .gitconfig file for name and email
+        try:
+            data = gitconfig.read_text().split()
+            name_idx = data.index("name")
+            email_idx = data.index("email")
+            set_name = f"{data[name_idx+2]} {data[name_idx+3]}"
+            set_email = data[email_idx + 2]
+        except BaseException:
+            set_name = name
+            set_email = email
+        return set_name, set_email

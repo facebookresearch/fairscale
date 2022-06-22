@@ -7,6 +7,7 @@
 import json
 import os
 from pathlib import Path
+import random
 import shutil
 
 import pytest
@@ -55,16 +56,16 @@ def test_api_init(capsys, repo):
 
 
 def test_api_add(capsys, repo):
-    chkpt0 = "checkpoint_0.pt"
-    repo.add("checkpoint_0.pt")
+    fnum = random.randint(0, 2)
+    chkpt0 = f"checkpoint_{fnum}.pt"
+    repo.add(f"checkpoint_{fnum}.pt")
 
-    sha1_hash = repo._sha1_store.get_sha1_hash(chkpt0)
-    with open(os.path.join(".wgit", "checkpoint_0.pt"), "r") as f:
+    sha1_hash = repo._sha1_store._get_sha1_hash(chkpt0)
+    with open(os.path.join(".wgit", f"checkpoint_{fnum}.pt"), "r") as f:
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
     assert json_data["SHA1"] == {"__sha1_full__": sha1_hash}
-    assert json_data["file_path"] == os.path.join(os.getcwd(), ".wgit/sha1_store/", sha1_dir_0)
 
 
 def test_api_commit(capsys, repo):
@@ -77,7 +78,6 @@ def test_api_commit(capsys, repo):
 
 def test_api_status(capsys, repo):
     repo.status()
-
     captured = capsys.readouterr()
     assert captured.out == "wgit status\n"
     assert captured.err == ""

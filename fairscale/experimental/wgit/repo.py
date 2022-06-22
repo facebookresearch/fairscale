@@ -3,10 +3,11 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+import json
 import pathlib
 from pathlib import Path
 import sys
-from typing import Union
+from typing import Tuple, Union
 
 from .pygit import PyGit
 from .sha1_store import SHA1_store
@@ -24,26 +25,11 @@ class Repo:
                 of a sha1_store in the ./<parent_dir>/.wgit directory, and makes the ./<parent_dir>/.wgit a git repository through git initialization.
             - If ``False``, a new WeiGit repo is not initialized and the existing repo is simply wrapped, populating the `wgit_parent` and other internal attributes.
             - Default: False
-    Methods:
-        add (in_file_path: str)
-            adds a file to the sha1_store. If a new version of an existing file is added, updates the reference to the existing file.
-        commit(message: str)
-            Commits the staged changes to the repo
-        status(self)
-            Shows the state of the working tree.
-        log(self, file: str)
-            shows the weigit log of the commit history
-        checkout(self, sha1: str)
-            Checkout a previously commited version of the checkpoint
-        compression(self)
-            Not implemented
-        checkout_by_steps
-            Not implemented
-        path
-            Get path to the weigit
     """
 
     def __init__(self, parent_dir: Union[Path, str] = Path.cwd(), init: bool = False) -> None:
+        """initialize a weigit repo: Subsequently, also initialize a sha1_store and a pygit git repo within as
+        part of the weigit initialization process"""
         # If repo does not exist, creates a new wgit repo object with self.repo.path pointing to the path of repo
         # and notes all the internal files.
         # else, if repo already exists: create a pygit object from the .wgit/.git.
@@ -80,7 +66,7 @@ class Repo:
             # weigit doesn't exist and is not trying to be initialized (triggers during non-init commands)
             sys.stderr.write("fatal: not a wgit repository!\n")
 
-    def add(self, file_path: str) -> None:
+    def add(self, in_file_path: str) -> None:
         """
         Adds a file to the wgit repo.
 
@@ -89,8 +75,18 @@ class Repo:
                 Path to the file to be added to the weigit repo
         """
         if self._exists(self.wgit_parent):
-            self._sha1_store.add(file_path)  # add the filefile to the sha1_store
+            # create the corresponding metadata file
+            file_path = Path(in_file_path)
+            metadata_file, parent_sha1 = self._process_metadata_file(file_path.name)
+
+            # add the file to the sha1_store
+            sha1_hash = self._sha1_store.add(file_path, parent_sha1)
+
+            # write metadata to the metadata-file
+            self._write_metadata(metadata_file, sha1_hash)
             self._pygit.add()  # add to the .wgit/.git repo
+        else:
+            sys.stderr.write("fatal: no wgit repo exists!\n")
 
     def commit(self, message: str) -> None:
         """
@@ -102,11 +98,15 @@ class Repo:
         """
         if self._exists(self.wgit_parent):
             self._pygit.commit(message)
+        else:
+            sys.stderr.write("fatal: no wgit repo exists!\n")
 
     def status(self) -> None:
         """Show the state of the working tree."""
         if self._exists(self.wgit_parent):
             print("wgit status")
+        else:
+            sys.stderr.write("fatal: no wgit repo exists!\n")
 
     def log(self, file: str) -> None:
         """
@@ -121,6 +121,8 @@ class Repo:
                 print(f"wgit log of the file: {file}")
             else:
                 print("wgit log")
+        else:
+            sys.stderr.write("fatal: no wgit repo exists!\n")
 
     def checkout(self, sha1: str) -> None:
         """
@@ -145,6 +147,31 @@ class Repo:
         if self._repo_path is None:
             self._exists(self.wgit_parent)
         return self._repo_path
+
+    def _process_metadata_file(self, metadata_fname: str) -> Tuple[Path, str]:
+        """Create a metadata_file corresponding to the file to be tracked by weigit if the first version of the file is encountered.
+        If a version already exists, open the file and get the sha1_hash of the last version as parent_sha1"""
+        metadata_file = self.path.joinpath(metadata_fname)
+        if not metadata_file.exists() or not metadata_file.stat().st_size:
+            metadata_file.touch()
+            parent_sha1 = "ROOT"
+        else:
+            with open(metadata_file, "r") as f:
+                ref_data = json.load(f)
+            parent_sha1 = ref_data["SHA1"]["__sha1_full__"]
+        return metadata_file, parent_sha1
+
+    def _write_metadata(self, metadata_file: Path, sha1_hash: str) -> None:
+        """Write metadata to the metadata file file"""
+        change_time = Path(metadata_file).stat().st_ctime
+        metadata = {
+            "SHA1": {
+                "__sha1_full__": sha1_hash,
+            },
+            "last_modified_time_stamp": change_time,
+        }
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=4)
 
     def _exists(self, check_dir: Path) -> bool:
         """Returns True if a valid wgit exists within the cwd and iteratively checks to the root directory and
