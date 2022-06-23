@@ -65,6 +65,7 @@ class Repo:
         else:
             # weigit doesn't exist and is not trying to be initialized (triggers during non-init commands)
             sys.stderr.write("fatal: not a wgit repository!\n")
+            sys.exit(1)
 
     def add(self, in_file_path: str) -> None:
         """
@@ -87,6 +88,7 @@ class Repo:
             self._pygit.add()  # add to the .wgit/.git repo
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
+            sys.exit(1)
 
     def commit(self, message: str) -> None:
         """
@@ -100,6 +102,7 @@ class Repo:
             self._pygit.commit(message)
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
+            sys.exit(1)
 
     def status(self) -> None:
         """Show the state of the working tree."""
@@ -107,6 +110,7 @@ class Repo:
             print("wgit status")
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
+            sys.exit(1)
 
     def log(self, file: str) -> None:
         """
@@ -123,6 +127,7 @@ class Repo:
                 print("wgit log")
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
+            sys.exit(1)
 
     def checkout(self, sha1: str) -> None:
         """

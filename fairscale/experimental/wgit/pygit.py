@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from pathlib import Path
+import subprocess
 import sys
 from typing import List, Tuple
 
@@ -132,11 +133,8 @@ class PyGit:
         gitconfig = Path("~/.gitconfig").expanduser()
         # parse the .gitconfig file for name and email
         try:
-            data = gitconfig.read_text().split()
-            name_idx = data.index("name")
-            email_idx = data.index("email")
-            set_name = f"{data[name_idx+2]} {data[name_idx+3]}"
-            set_email = data[email_idx + 2]
+            set_name = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True).stdout.rstrip()
+            set_email = subprocess.run(["git", "config", "user.email"], capture_output=True, text=True).stdout.rstrip()
         except BaseException:
             set_name = name
             set_email = email

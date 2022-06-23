@@ -39,7 +39,7 @@ def create_test_dir():
 
 @pytest.fixture
 def repo():
-    repo = api.Repo(Path.cwd())
+    repo = api.Repo(Path.cwd(), init=True)
     return repo
 
 
