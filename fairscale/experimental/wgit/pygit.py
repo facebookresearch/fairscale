@@ -135,6 +135,9 @@ class PyGit:
         try:
             set_name = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True).stdout.rstrip()
             set_email = subprocess.run(["git", "config", "user.email"], capture_output=True, text=True).stdout.rstrip()
+            if not set_name or not set_email:
+                set_name = name
+                set_email = email
         except BaseException:
             set_name = name
             set_email = email
