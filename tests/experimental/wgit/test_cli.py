@@ -54,19 +54,16 @@ def test_cli_add(capsys):
 
     sha1_store = SHA1_store(
         Path.cwd().joinpath(".wgit"),
-        Path.cwd().joinpath(".wgit", "checkpoint.pt"),
-        Path.cwd().joinpath(".wgit", "sha1_refs.json"),
         init=False,
     )
 
-    sha1_hash = sha1_store.get_sha1_hash(chkpt0)
+    sha1_hash = sha1_store._get_sha1_hash(chkpt0)
 
-    with open(os.path.join(".wgit", "checkpoint.pt"), "r") as f:
+    with open(os.path.join(".wgit", "checkpoint_0.pt"), "r") as f:
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
     assert json_data["SHA1"] == {"__sha1_full__": sha1_hash}
-    assert json_data["file_path"] == os.path.join(os.getcwd(), ".wgit/sha1_store/", sha1_dir_0)
 
 
 def test_cli_commit(capsys):
@@ -92,10 +89,10 @@ def test_cli_log(capsys):
 
 
 def test_cli_checkout(capsys):
-    cli.main(["checkout", "sha1"])
-    captured = capsys.readouterr()
-    assert captured.out == "wgit checkout: sha1\n"
-    assert captured.err == ""
+    try:
+        cli.main(["checkout", "sha1"])
+    except NotImplementedError:
+        assert True
 
 
 def teardown_module(module):

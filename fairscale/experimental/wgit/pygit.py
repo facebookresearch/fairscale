@@ -4,12 +4,28 @@
 # LICENSE file in the root directory of this source tree.
 
 from pathlib import Path
-from typing import List
+import subprocess
+import sys
+from typing import List, Tuple
 
 import pygit2
 
 
 class PyGit:
+    """
+    PyGit class represents a git repo within a weigit repo.
+
+    Args:
+        parent_path (pathlib.Path)
+            Has to be the full path of the parent!
+        gitignore (List)
+            a list of files to be added to the .gitignore
+        name (str)
+            Name of the author of the git repo. Optionally used if it can't be determined from user's .gitconfig.
+        email (str)
+            email address of the author of the git repo
+    """
+
     def __init__(
         self,
         parent_path: Path,
@@ -17,19 +33,14 @@ class PyGit:
         name: str = "user",
         email: str = "user@email.com",
     ) -> None:
-        """
-        PyGit class to wrap the wgit/.git repo and interact with the git repo.
 
-        Args:
-        parent_path: Has to be the full path of the parent!
-        """
         # Find if a git repo exists within .wgit repo:
         # If exists: then discover it and set the self.gitrepo path to its path
         self._parent_path = parent_path
-        self.name = name
-        self.email = email
-
         git_repo_found = pygit2.discover_repository(self._parent_path)
+
+        # If gitconfig file exists use the name and email from the file
+        self.name, self.email = self._set_author_config(name, email)
 
         if git_repo_found:
             # grab the parent dir of this git repo
@@ -50,7 +61,13 @@ class PyGit:
             self._init_wgit_git(gitignore)
 
     def _init_wgit_git(self, gitignore: List) -> None:
-        """Initializes a .git within .wgit directory, making it a git repo."""
+        """
+        Initializes a .git within .wgit directory, making it a git repo.
+
+        Args:
+            gitignore (List)
+                a list of file paths to be ignored by the wgit git repo.
+        """
         self.repo = pygit2.init_repository(str(self._parent_path), False)
         self.path = self._parent_path.joinpath(".git")
 
@@ -62,14 +79,25 @@ class PyGit:
                 file.write(f"{item}\n")
 
     def add(self) -> None:
-        """git add all the untracked files not in gitignore, to the .wgit/.git repo."""
+        """
+        git add all the untracked files not in gitignore, to the .wgit/.git repo.
+        """
         # If .wgit is git repo, add all the files in .wgit not being ignored to git
+        # TODO: Add functionalities for add specific files and add all files.
         if self._exists:
             self.repo.index.add_all()
             self.repo.index.write()
+        else:
+            sys.stderr.write("fatal: git repo does not exist")
 
     def commit(self, message: str) -> None:
-        """git commit the staged changes to the .wgit/.git repo."""
+        """
+        git commit the staged changes to the .wgit/.git repo.
+
+        Args:
+            message (str)
+                Commit message
+        """
         # If .wgit is git repo, commit the staged files to git
         if self._exists:
             # if no commit exists, set ref to HEAD and parents to empty
@@ -96,5 +124,21 @@ class PyGit:
         return self.repo.path
 
     def status(self) -> None:
-        """Print the status of the git repo"""
+        """Show the status of the git repo"""
         print(self.repo.status())
+
+    def _set_author_config(self, name: str, email: str) -> Tuple[str, str]:
+        """Set the name and email for the pygit repo collecting from the gitconfig.
+        If not available in gitconfig, set the values from the passed arguments."""
+        gitconfig = Path("~/.gitconfig").expanduser()
+        # parse the .gitconfig file for name and email
+        try:
+            set_name = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True).stdout.rstrip()
+            set_email = subprocess.run(["git", "config", "user.email"], capture_output=True, text=True).stdout.rstrip()
+            if not set_name or not set_email:
+                set_name = name
+                set_email = email
+        except BaseException:
+            set_name = name
+            set_email = email
+        return set_name, set_email
