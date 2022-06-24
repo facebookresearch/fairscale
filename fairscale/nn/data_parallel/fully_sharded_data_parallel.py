@@ -371,7 +371,7 @@ class FullyShardedDataParallel(nn.Module):
             # the world size and reduce scatter process group size are differnt.
             if self.world_size != reduce_scatter_group_size:
                 self.process_group_reduce_scatter = self.process_group
-                logging.warn(
+                logging.warning(
                     "Rolled back to use the default process group for the reduce scatter "
                     "operation because the reduce_scatter process group "
                     f"size is {reduce_scatter_group_size}, which is different with the "
