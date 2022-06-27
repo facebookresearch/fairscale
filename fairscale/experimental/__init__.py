@@ -9,6 +9,6 @@
 
 from typing import List
 
-from . import nn, optim
+from . import nn, optim, wgit
 
 __all__: List[str] = []
