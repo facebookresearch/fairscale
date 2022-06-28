@@ -7,7 +7,7 @@ import json
 import pathlib
 from pathlib import Path
 import sys
-from typing import Tuple, Union
+from typing import Dict, Tuple, Union
 
 from .pygit import PyGit
 from .sha1_store import SHA1_store
@@ -49,7 +49,10 @@ class Repo:
             self._sha1_store = SHA1_store(weigit_dir, init=True)
 
             # # Make the .wgit a git repo
-            gitignore_files = [self._sha1_store_path.name, self._sha1_store.ref_file_path.name]
+            gitignore_files = [
+                self._sha1_store_path.name,
+                self._sha1_store.ref_file_path.name,
+            ]
             self._pygit = PyGit(weigit_dir, gitignore=gitignore_files)
 
         elif exists and init:
@@ -84,7 +87,7 @@ class Repo:
             sha1_hash = self._sha1_store.add(file_path, parent_sha1)
 
             # write metadata to the metadata-file
-            self._write_metadata(metadata_file, sha1_hash)
+            self._write_metadata(metadata_file, file_path, sha1_hash)
             self._pygit.add()  # add to the .wgit/.git repo
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
@@ -107,7 +110,17 @@ class Repo:
     def status(self) -> None:
         """Show the state of the working tree."""
         if self._exists(self.wgit_parent):
-            print("wgit status")
+            pygit_status = self._pygit.status()
+
+            status = self._check_tracked_metadata_files()
+            for metadata_file, is_modified in status.items():
+                # if metadata_file is among the keys of pygit_status dict, it has not been commited to git yet.
+                if is_modified and metadata_file in pygit_status.keys():
+                    print(f"[ Dirty ]  change not added:   {metadata_file}")
+                elif not is_modified and metadata_file in pygit_status.keys():
+                    print(f"[ Dirty ]  change added:       {metadata_file}")
+                elif not is_modified and metadata_file not in pygit_status.keys():
+                    print(f"[ Clean ]  no changes to add:     {metadata_file}")
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
             sys.exit(1)
@@ -153,6 +166,42 @@ class Repo:
             self._exists(self.wgit_parent)
         return self._repo_path
 
+    def _check_tracked_metadata_files(self) -> Dict:
+        metadata_d = dict()
+        for file in self.path.iterdir():
+            if file.is_file() and self._is_metadata_file(file):
+                try:
+                    metadata_d[file.name] = self._is_file_modified(file)
+                except json.JSONDecodeError as error:
+                    # files that are not json files are skipped
+                    print(f"error: {error}: {file}")
+        return metadata_d
+
+    def _is_metadata_file(self, file: Path) -> bool:
+        """Goes through the weigit directory to find the metadata file of the files being tracked."""
+        try:
+            with open(file) as f:
+                metadata = json.load(f)
+            is_metadata = list(metadata.keys()) == [
+                "SHA1",
+                "file_path",
+                "last_modified_time_stamp",
+            ]  # TODO: Consider storing the keys as a class attribute, instead of hard coding.
+        except json.JSONDecodeError:
+            return False
+        return is_metadata
+
+    def _is_file_modified(self, file: Path) -> bool:
+        """Checks whether a file has been modified since its last recorded modification time in its metadata_file"""
+        with open(file) as f:
+            data = json.load(f)
+        # get the last modified timestamp recorded by weigit and the current modified timestamp. If not the
+        # same, then file has been modified since last weigit updated metadata
+        last_mod_timestamp = data["last_modified_time_stamp"]
+        curr_mod_timestamp = Path(data["file_path"]).stat().st_mtime
+        # print(f"last_mod_timestamp: {last_mod_timestamp} | curr_mod_timestamp: {curr_mod_timestamp}")
+        return not curr_mod_timestamp == last_mod_timestamp
+
     def _process_metadata_file(self, metadata_fname: str) -> Tuple[Path, str]:
         """Create a metadata_file corresponding to the file to be tracked by weigit if the first version of the file is encountered.
         If a version already exists, open the file and get the sha1_hash of the last version as parent_sha1"""
@@ -166,13 +215,14 @@ class Repo:
             parent_sha1 = ref_data["SHA1"]["__sha1_full__"]
         return metadata_file, parent_sha1
 
-    def _write_metadata(self, metadata_file: Path, sha1_hash: str) -> None:
+    def _write_metadata(self, metadata_file: Path, file_path: Path, sha1_hash: str) -> None:
         """Write metadata to the metadata file file"""
-        change_time = Path(metadata_file).stat().st_ctime
+        change_time = Path(file_path).stat().st_mtime
         metadata = {
             "SHA1": {
                 "__sha1_full__": sha1_hash,
             },
+            "file_path": str(file_path),
             "last_modified_time_stamp": change_time,
         }
         with open(metadata_file, "w", encoding="utf-8") as f:
