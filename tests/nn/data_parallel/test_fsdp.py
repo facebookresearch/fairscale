@@ -211,6 +211,17 @@ class TestMixedPrecision(DistributedTest):
             expected_buffer_type=torch.float32,
         )
 
+    def test_mixed_precision_bfloat16(self):
+        self._spawn_test_case(
+            {"mixed_precision": True, "compute_dtype": torch.bfloat16},
+            True,  # autocast enabled
+            torch.bfloat16,  # expected_input_dtype
+            torch.bfloat16,  # expected_param_dtype
+            torch.float32,  # expected_loss_dtype
+            torch.bfloat16,  # expected_reduce_dtype
+            expected_buffer_type=torch.float32,
+        )
+
     def test_fp32_reduce_scatter(self):
         self._spawn_test_case(
             {"mixed_precision": True, "fp32_reduce_scatter": True},

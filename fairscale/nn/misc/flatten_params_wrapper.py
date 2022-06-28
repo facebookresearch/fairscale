@@ -372,6 +372,7 @@ class FlattenParamsWrapper(nn.Module):
         ps = self.get_param_views()
         param_views = []
         for (_, m, n), p in zip(self._param_infos, ps):
+            setattr(p, '_fsdp_weight', True)
             setattr(m, n, p)  # This will set as plain attr
             param_views.append(p)
 
@@ -381,6 +382,7 @@ class FlattenParamsWrapper(nn.Module):
 
         for (_, _, m, n, shared_m, shared_n) in self._shared_param_infos:
             setattr(m, n, getattr(shared_m, shared_n))
+
 
     @contextmanager
     def unflatten_params(self, flat_params: Optional[List[Tensor]] = None) -> Generator:

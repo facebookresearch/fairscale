@@ -1386,8 +1386,9 @@ class FullyShardedDataParallel(nn.Module):
 
         # For root and mixed precision, we convert the input to FP16 (no_grad is needed for
         # the conversion).
+        is_bf16 = self.compute_dtype == torch.bfloat16
         if self._is_root and self.mixed_precision:
-            args, kwargs = cast_floats_to_right_precision(True, True, *args, **kwargs)
+            args, kwargs = cast_floats_to_right_precision(True, True, is_bf16, *args, **kwargs)
 
         if self not in self._fsdp_forward_ordering:
             self._my_fsdp_instance_idx = len(self._fsdp_forward_ordering)
@@ -1397,7 +1398,7 @@ class FullyShardedDataParallel(nn.Module):
         # no_grad is not used because the input might be for a non-root instance,
         # which mean autograd needs to go through the conversion.
         if self.force_input_to_fp32 and not self.mixed_precision:
-            args, kwargs = cast_floats_to_right_precision(False, False, *args, **kwargs)
+            args, kwargs = cast_floats_to_right_precision(False, False, is_bf16, *args, **kwargs)
 
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
@@ -2054,6 +2055,7 @@ class FullyShardedDataParallel(nn.Module):
         if params is None:
             params = self.params
         self.has_full_params = False
+
         current_stream = torch.cuda.current_stream()
         for p in params:
             if not p._is_sharded:  # e.g., world_size == 1
@@ -2182,7 +2184,6 @@ class FullyShardedDataParallel(nn.Module):
                 for n, t, s in zip(names, full_param.split(numels), shapes):
                     out_state_dict_key = ".".join([fsdp_path, n]) if fsdp_path else n
                     consolidated_weights[out_state_dict_key] = t.view(s)
-
         # copy shared parameters
         for src_path, dest_path in metadata["shared_param_info"]:
             consolidated_weights[dest_path] = consolidated_weights[src_path]
@@ -2462,7 +2463,7 @@ def _get_default_cuda_device(module: nn.Module) -> torch.device:
     return torch.device("cuda")
 
 
-def cast_floats_to_right_precision(to_fp16: bool, no_grad: bool, *args: Any, **kwargs: Any) -> Tuple[Any, Any]:
+def cast_floats_to_right_precision(to_fp16: bool, no_grad: bool, is_bf16: bool, *args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     """
     Cast floating point Tensors in *args or **kwargs to FP16 or FP32 if they are not.
     We also retain the requires_grad flag so that casting doesn't affect the autograd graph.
@@ -2470,7 +2471,10 @@ def cast_floats_to_right_precision(to_fp16: bool, no_grad: bool, *args: Any, **k
 
     def fn_fp16(x: torch.Tensor) -> torch.Tensor:
         if x.dtype is torch.float32:
-            y = x.half()
+            if is_bf16:
+                y = x.bfloat16()
+            else:
+                y = x.half()
             if x.is_leaf:
                 y.requires_grad = x.requires_grad
             return y
