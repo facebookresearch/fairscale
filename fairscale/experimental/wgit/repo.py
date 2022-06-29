@@ -111,16 +111,18 @@ class Repo:
         """Show the state of the working tree."""
         if self._exists(self.wgit_parent):
             pygit_status = self._pygit.status()
-
             status = self._check_tracked_metadata_files()
-            for metadata_file, is_modified in status.items():
-                # if metadata_file is among the keys of pygit_status dict, it has not been commited to git yet.
-                if is_modified and metadata_file in pygit_status.keys():
-                    print(f"[ Dirty ]  change not added:   {metadata_file}")
-                elif not is_modified and metadata_file in pygit_status.keys():
-                    print(f"[ Dirty ]  change added:       {metadata_file}")
-                elif not is_modified and metadata_file not in pygit_status.keys():
-                    print(f"[ Clean ]  no changes to add:     {metadata_file}")
+            if not status:  # if status dict is empty, nothing has been added so far.
+                print("Clean:  tracking no file")
+            else:
+                for metadata_file, is_modified in status.items():
+                    # if metadata_file is among the keys of pygit_status dict, it has not been commited to git yet.
+                    if is_modified:
+                        print(f"state - dirty:  file modified, not added:   {metadata_file}")
+                    elif not is_modified and metadata_file in pygit_status.keys():
+                        print(f"state - dirty:  change added, not commited:       {metadata_file}")
+                    elif not is_modified and metadata_file not in pygit_status.keys():
+                        print(f"state - Clean:  tracking:     {metadata_file}")
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
             sys.exit(1)
