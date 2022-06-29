@@ -81,6 +81,10 @@ skip_if_py39_no_cuda = pytest.mark.skipif(
     reason="Python3.9 without CUDA is skipped",
 )
 
+skip_due_to_flakyness = pytest.mark.skip(
+    reason="Flaky test to be fixed or removed",
+)
+
 available_devices = ["cpu"]
 if torch.cuda.is_available():
     available_devices.append("cuda")
