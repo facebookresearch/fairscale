@@ -6,7 +6,7 @@
 from pathlib import Path
 import subprocess
 import sys
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import pygit2
 
@@ -123,9 +123,14 @@ class PyGit:
         """returns the path of the git repository PyGit is wrapped around"""
         return self.repo.path
 
-    def status(self) -> None:
+    def status(self) -> Dict:
         """Show the status of the git repo"""
-        print(self.repo.status())
+        status_dict = self.repo.status()
+        tracking_dict = {}
+        for key, val in status_dict.items():
+            if val != pygit2.GIT_STATUS_IGNORED:
+                tracking_dict[key] = val
+        return tracking_dict
 
     def _set_author_config(self, name: str, email: str) -> Tuple[str, str]:
         """Set the name and email for the pygit repo collecting from the gitconfig.
