@@ -20,7 +20,7 @@ import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
-from fair_dev.testing.testing import skip_if_single_gpu
+from fair_dev.testing.testing import skip_due_to_flakyness, skip_if_single_gpu
 from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
 from fairscale.internal import torch_version
 
@@ -113,6 +113,7 @@ def create_multiple_layers():
 @rpc_test(world_size=2)
 @pytest.mark.parametrize("devices", DEVICES)
 @skip_if_single_gpu
+@skip_due_to_flakyness
 def create_multiple_workers(devices):
     model = [RemoteModuleParams(nn.Linear, (4, 4), {}), RemoteModuleParams(nn.ReLU, (), {})]
     pipe = create_sequence_pipeline(model, balance=[1, 1], chunks=1, devices=devices[:2])
