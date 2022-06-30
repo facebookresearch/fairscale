@@ -128,14 +128,20 @@ def test_api_status(capsys, repo):
     repo.add(chkpt3)
     repo.status()
     captured = capsys.readouterr()
-    assert captured.out == StateMsg(chkpt0).added + StateMsg(chkpt3).added
+    # CircleCi seems to be printing files in the opposite
+    # order. Since only printing info correctly matters and sequence doesn't matter:
+    output1 = captured.out == StateMsg(chkpt0).added + StateMsg(chkpt3).added
+    output2 = captured.out == StateMsg(chkpt3).added + StateMsg(chkpt0).added
+    assert (output1 or output2) is True
     assert captured.err == ""
 
     # check status after the new file is commited to be tracked by weigit
     repo.commit("e2")
     repo.status()
     captured = capsys.readouterr()
-    assert captured.out == StateMsg(chkpt0).committed + StateMsg(chkpt3).committed
+    output1 = captured.out == StateMsg(chkpt0).committed + StateMsg(chkpt3).committed
+    output2 = captured.out == StateMsg(chkpt3).committed + StateMsg(chkpt0).committed
+    assert (output1 or output2) is True
     assert captured.err == ""
 
 
