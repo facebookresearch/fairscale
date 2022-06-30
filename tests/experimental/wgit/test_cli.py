@@ -77,7 +77,7 @@ def test_cli_commit(capsys):
 def test_cli_status(capsys):
     cli.main(["status"])
     captured = capsys.readouterr()
-    assert captured.out == "wgit status\n"
+    assert captured.out == "state - Clean:  tracking:     checkpoint_0.pt\n"
     assert captured.err == ""
 
 

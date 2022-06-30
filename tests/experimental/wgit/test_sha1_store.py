@@ -81,7 +81,7 @@ def test_sha1_add(sha1_configs, sha1_store):
     metadata_file, parent_sha1 = repo._process_metadata_file(chkpt1.name)
 
     sha1_hash = sha1_store.add(sha1_configs.checkpoint_1a, parent_sha1)
-    repo._write_metadata(metadata_file, sha1_hash)
+    repo._write_metadata(metadata_file, chkpt1, sha1_hash)
 
     # for checkpoint 1
     metadata_file = sha1_configs.test_path.joinpath(sha1_configs.checkpoint_1a.name)
@@ -97,7 +97,7 @@ def test_sha1_refs(sha1_configs, sha1_store):
     def add_checkpoint(checkpoint):
         metadata_file, parent_sha1 = repo._process_metadata_file(checkpoint.name)
         sha1_hash = sha1_store.add(checkpoint, parent_sha1)
-        repo._write_metadata(metadata_file, sha1_hash)
+        repo._write_metadata(metadata_file, checkpoint, sha1_hash)
         return sha1_hash
 
     with open(sha1_configs.sha1_ref, "r") as file:

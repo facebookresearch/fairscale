@@ -108,10 +108,12 @@ class Repo:
             sys.exit(1)
 
     def status(self) -> None:
-        """Show the state of the working tree."""
+        """Show the state of the weigit working tree. State can be 1. clean and tracking no files,
+        2. dirty with a added but uncommited change, 3. dirty with a file changed/modified but not
+        added and finally 4. clean and tracking files after a change is committed"""
         if self._exists(self.wgit_parent):
             pygit_status = self._pygit.status()
-            status = self._check_tracked_metadata_files()
+            status = self._get_tracked_metadata_files()
             if not status:  # if status dict is empty, nothing has been added so far.
                 print("Clean:  tracking no file")
             else:
@@ -168,19 +170,21 @@ class Repo:
             self._exists(self.wgit_parent)
         return self._repo_path
 
-    def _check_tracked_metadata_files(self) -> Dict:
+    def _get_tracked_metadata_files(self) -> Dict:
+        """Goes through the weigit directory to find the metadata file of the files being tracked."""
         metadata_d = dict()
         for file in self.path.iterdir():
             if file.is_file() and self._is_metadata_file(file):
                 try:
                     metadata_d[file.name] = self._is_file_modified(file)
                 except json.JSONDecodeError as error:
-                    # files that are not json files are skipped
-                    print(f"error: {error}: {file}")
+                    # files that are not json files are simply skipped
+                    pass
         return metadata_d
 
     def _is_metadata_file(self, file: Path) -> bool:
-        """Goes through the weigit directory to find the metadata file of the files being tracked."""
+        """Checks whether a file is a valid metadata file by matching keys and checking if it has valid
+        json data."""
         try:
             with open(file) as f:
                 metadata = json.load(f)
@@ -194,14 +198,13 @@ class Repo:
         return is_metadata
 
     def _is_file_modified(self, file: Path) -> bool:
-        """Checks whether a file has been modified since its last recorded modification time in its metadata_file"""
+        """Checks whether a file has been modified since its last recorded modification time recorded its metadata_file"""
         with open(file) as f:
             data = json.load(f)
         # get the last modified timestamp recorded by weigit and the current modified timestamp. If not the
         # same, then file has been modified since last weigit updated metadata
         last_mod_timestamp = data["last_modified_time_stamp"]
         curr_mod_timestamp = Path(data["file_path"]).stat().st_mtime
-        # print(f"last_mod_timestamp: {last_mod_timestamp} | curr_mod_timestamp: {curr_mod_timestamp}")
         return not curr_mod_timestamp == last_mod_timestamp
 
     def _process_metadata_file(self, metadata_fname: str) -> Tuple[Path, str]:

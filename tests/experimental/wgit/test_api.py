@@ -3,7 +3,6 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-
 import json
 import os
 from pathlib import Path
@@ -30,7 +29,7 @@ def create_test_dir():
     os.chdir(test_dir)
 
     # create random checkpoints
-    size_list = [30e5, 35e5, 40e5]
+    size_list = [30e5, 35e5, 40e5, 40e5]
     for i, size in enumerate(size_list):
         with open(f"checkpoint_{i}.pt", "wb") as f:
             f.write(os.urandom(int(size)))
@@ -58,7 +57,7 @@ def test_api_init(capsys, repo):
 def test_api_add(capsys, repo):
     fnum = random.randint(0, 2)
     chkpt0 = f"checkpoint_{fnum}.pt"
-    repo.add(f"checkpoint_{fnum}.pt")
+    repo.add(chkpt0)
 
     sha1_hash = repo._sha1_store._get_sha1_hash(chkpt0)
     with open(os.path.join(".wgit", f"checkpoint_{fnum}.pt"), "r") as f:
@@ -77,9 +76,66 @@ def test_api_commit(capsys, repo):
 
 
 def test_api_status(capsys, repo):
+    class StateMsg:
+        def __init__(self, chkpt=None) -> None:
+            self.clean = "Clean:  tracking no file\n"
+            self.added = f"state - dirty:  change added, not commited:       {chkpt}\n"
+            self.modified = f"state - dirty:  file modified, not added:   {chkpt}\n"
+            self.committed = f"state - Clean:  tracking:     {chkpt}\n"
+
+    # delete the repo and initialize a new one:
+    shutil.rmtree(".wgit")
+    repo = api.Repo(Path.cwd(), init=True)
+
+    # check status before any file is added
     repo.status()
     captured = capsys.readouterr()
-    assert captured.out == "wgit status\n"
+    assert captured.out == StateMsg().clean
+    assert captured.err == ""
+
+    # check status before after a file is added but not committed
+    chkpt0 = f"checkpoint_{random.randint(0, 1)}.pt"
+    repo.add(chkpt0)
+    repo.status()
+    captured = capsys.readouterr()
+    assert captured.out == StateMsg(chkpt0).added
+    assert captured.err == ""
+
+    # check status after commit
+    repo.commit("e1")
+    repo.status()
+    captured = capsys.readouterr()
+    assert captured.out == StateMsg(chkpt0).committed
+    assert captured.err == ""
+
+    # check status after a new change has been made to the file
+    with open(chkpt0, "wb") as f:
+        f.write(os.urandom(int(15e5)))
+    repo.status()
+    captured = capsys.readouterr()
+    assert captured.out == StateMsg(chkpt0).modified
+    assert captured.err == ""
+
+    # add the new changes made to weigit
+    repo.add(chkpt0)
+    repo.status()
+    captured = capsys.readouterr()
+    assert captured.out == StateMsg(chkpt0).added
+    assert captured.err == ""
+
+    # check status after a a new different file is added to be tracked by weigit
+    chkpt = f"checkpoint_{random.randint(2, 3)}.pt"
+    repo.add(chkpt)
+    repo.status()
+    captured = capsys.readouterr()
+    assert captured.out == StateMsg(chkpt0).added + StateMsg(chkpt).added
+    assert captured.err == ""
+
+    # check status after a a new different file is added to be tracked by weigit
+    repo.commit("e2")
+    repo.status()
+    captured = capsys.readouterr()
+    assert captured.out == StateMsg(chkpt0).committed + StateMsg(chkpt).committed
     assert captured.err == ""
 
 
