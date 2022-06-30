@@ -453,15 +453,48 @@ class FullyShardedDataParallel(nn.Module):
         to_be_flatten_params: List[List[Parameter]] = [[]]
         non_flatten_params = params
         param_name_groups = [[n] for n in param_names]
+
+        # This is the suffix list that we appended to flattened parameters to seperate parameters of weight, bias and the rest of
+        # the parameters.
+        param_names_suffix = []
         if self.flatten_parameters:
-            to_be_flatten_params = [params]
+            # We put the params to three groups. weight, bias and the rest of parameters
+            to_be_flatten_params = []
             non_flatten_params = []
-            param_name_groups = [param_names]
+            del param_name_groups
+            group_to_index = {}
+            param_name_groups = []
+
+
+            for i, n in enumerate(param_names):
+                pg = getattr(params[i], "param_group", "default")
+                if pg not in group_to_index:
+                    group_to_index[pg] = len(param_name_groups)
+                    param_name_groups.append([])
+                    to_be_flatten_params.append([])
+                    param_names_suffix.append(pg)
+
+                idx = group_to_index[pg]
+                param_name_groups[idx].append(n)
+                to_be_flatten_params[idx].append(params[i])
+
         del param_names
 
+        # if there are no params to be flattened, do not assign flat_param_names, else pass the flat_param_names suffix to the
+        # param groups created above.
+        if len(to_be_flatten_params) == 0:
+            flat_param_names = None
+        else:
+            flat_param_names = param_names_suffix
+
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
-            module, param_list=to_be_flatten_params, ssd_offload=self.ssd_offload, ssd_directory=self.ssd_directory
+            module,
+            param_list=to_be_flatten_params,
+            flat_param_names=flat_param_names,
+            ssd_offload=self.ssd_offload,
+            ssd_directory=self.ssd_directory,
         )
+
         del module  # free original module in case it helps garbage collection
 
         # Now, in this FSDP wrapper class, we keep a list of to-be-flatten and not-to-be-flatten
@@ -2529,7 +2562,7 @@ def _post_state_dict_hook(
     # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
     # which keeps track of tensors that are no longer at risk of being freed.
     for key in state_dict.keys():
-        if not key.startswith(prefix) or getattr(state_dict[key], "_has_been_cloned", False):
+        if not key.startswith(prefix) or not torch.is_tensor(state_dict[key]) or getattr(state_dict[key], "_has_been_cloned", False):
             continue
         if state_dict[key].device.type != module.state_dict_device.type:
             state_dict[key] = state_dict[key].to(device=module.state_dict_device)
