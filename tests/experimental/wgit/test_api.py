@@ -123,19 +123,19 @@ def test_api_status(capsys, repo):
     assert captured.out == StateMsg(chkpt0).added
     assert captured.err == ""
 
-    # check status after a a new different file is added to be tracked by weigit
-    chkpt = f"checkpoint_{random.randint(2, 3)}.pt"
-    repo.add(chkpt)
+    # check status after a new different file is added to be tracked by weigit
+    chkpt3 = "checkpoint_3.pt"
+    repo.add(chkpt3)
     repo.status()
     captured = capsys.readouterr()
-    assert captured.out == StateMsg(chkpt0).added + StateMsg(chkpt).added
+    assert captured.out == StateMsg(chkpt0).added + StateMsg(chkpt3).added
     assert captured.err == ""
 
-    # check status after a a new different file is added to be tracked by weigit
+    # check status after the new file is commited to be tracked by weigit
     repo.commit("e2")
     repo.status()
     captured = capsys.readouterr()
-    assert captured.out == StateMsg(chkpt0).committed + StateMsg(chkpt).committed
+    assert captured.out == StateMsg(chkpt0).committed + StateMsg(chkpt3).committed
     assert captured.err == ""
 
 
