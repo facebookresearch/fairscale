@@ -465,7 +465,6 @@ class FullyShardedDataParallel(nn.Module):
             group_to_index = {}
             param_name_groups = []
 
-
             for i, n in enumerate(param_names):
                 pg = getattr(params[i], "param_group", "default")
                 if pg not in group_to_index:
