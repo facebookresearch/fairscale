@@ -2003,6 +2003,9 @@ class FullyShardedDataParallel(nn.Module):
                             alloc_storage_(p._full_param_padded, size=p_size)
                         output_tensor = p._full_param_padded
 
+                    if output_tensor.dtype != p_data.dtype:
+                        output_tensor = output_tensor.to(dtype=p_data.dtype)
+
                     # Fill output_tensor with (p.data for each shard in self.world_size)
                     if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
