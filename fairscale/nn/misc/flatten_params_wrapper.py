@@ -97,7 +97,9 @@ class FlatParameter(nn.Parameter):
         assert self.data.numel() <= sum(
             self._param_numels
         ), f"Incorrect internal state {self.data.numel()} vs. {sum(self._param_numels)}"
+
         data = external_data if external_data is not None else self
+
         if data.numel() != sum(self._param_numels):
             raise ValueError(
                 f"Incorrect numel of supplied data: got {data.numel()} but expected {sum(self._param_numels)}"
@@ -196,6 +198,7 @@ class FlattenParamsWrapper(nn.Module):
         self._param_sets = []
         overall_param_set: Set[nn.Parameter] = set()
         for p_list in param_list:
+
             # Remove any duplicates from the list.
             p_set: Set[nn.Parameter] = set(cast(List[nn.Parameter], p_list))
 
@@ -210,6 +213,9 @@ class FlattenParamsWrapper(nn.Module):
             for m in self.modules():
                 for n, p in m.named_parameters(recurse=False):
                     if p in p_set:
+                        pg = getattr(p, "param_group", None)
+                        if pg is not None:
+                            m.param_group = pg
                         new_p_set_with_names.add((m, n))
             if new_p_set_with_names:
                 self._param_sets.append(new_p_set_with_names)
@@ -235,6 +241,7 @@ class FlattenParamsWrapper(nn.Module):
 
         # Init all flat_params.
         for new_p_set in self._param_sets:
+
             params, param_infos, shared_param_infos = self._init_flatten_params(new_p_set)
             if ssd_offload:
                 assert ssd_directory != ""
@@ -342,6 +349,7 @@ class FlattenParamsWrapper(nn.Module):
         # register the flatten ones and save it to self.
         assert len(self.flat_param_names) == len(flat_params), f"{len(self.flat_param_names)} vs. {len(flat_params)}"
         for n, flat_param in zip(self.flat_param_names, flat_params):
+            flat_param.param_group = n[11:]
             self.register_parameter(n, flat_param)
         self.flat_params = flat_params
 
@@ -495,7 +503,7 @@ class FlattenParamsWrapper(nn.Module):
         match the input state_dict.
         """
         # unflatten the module automatically if the state_dict is non-flat
-        if self.is_flattened and "flat_param_0" not in state_dict:
+        if self.is_flattened and not any(k.startswith("flat_param_") for k in state_dict.keys()):
             # This object is flatten but state_dict is not. So we unflatten and load.
             with self.unflatten_params():
                 return super().load_state_dict(state_dict, strict)
