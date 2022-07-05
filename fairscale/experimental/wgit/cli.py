@@ -80,7 +80,8 @@ def main(argv: List[str] = None) -> None:
 
     if args.command == "status":
         repo = Repo(Path.cwd())
-        repo.status()
+        out = repo.status()
+        print(out)
 
     if args.command == "log":
         repo = Repo(Path.cwd())

@@ -3,7 +3,6 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-
 import json
 import os
 from pathlib import Path
@@ -13,6 +12,7 @@ import shutil
 import pytest
 
 from fairscale.experimental.wgit import repo as api
+from fairscale.experimental.wgit.repo import RepoStatus
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def create_test_dir():
     os.chdir(test_dir)
 
     # create random checkpoints
-    size_list = [30e5, 35e5, 40e5]
+    size_list = [30e5, 35e5, 40e5, 40e5]
     for i, size in enumerate(size_list):
         with open(f"checkpoint_{i}.pt", "wb") as f:
             f.write(os.urandom(int(size)))
@@ -58,10 +58,11 @@ def test_api_init(capsys, repo):
 def test_api_add(capsys, repo):
     fnum = random.randint(0, 2)
     chkpt0 = f"checkpoint_{fnum}.pt"
-    repo.add(f"checkpoint_{fnum}.pt")
-
+    repo.add(chkpt0)
     sha1_hash = repo._sha1_store._get_sha1_hash(chkpt0)
-    with open(os.path.join(".wgit", f"checkpoint_{fnum}.pt"), "r") as f:
+    metadata_path = repo._rel_file_path(Path(chkpt0))
+
+    with open(os.path.join(".wgit", metadata_path), "r") as f:
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
@@ -77,10 +78,51 @@ def test_api_commit(capsys, repo):
 
 
 def test_api_status(capsys, repo):
-    repo.status()
-    captured = capsys.readouterr()
-    assert captured.out == "wgit status\n"
-    assert captured.err == ""
+    # delete the repo and initialize a new one:
+    shutil.rmtree(".wgit")
+    repo = api.Repo(Path.cwd(), init=True)
+
+    # check status before any file is added
+    out = repo.status()
+    assert out == {"": RepoStatus.CLEAN}
+
+    # check status before after a file is added but not committed
+    chkpt0 = f"checkpoint_{random.randint(0, 1)}.pt"
+    repo.add(chkpt0)
+    out = repo.status()
+    key_list = list(repo._get_metdata_files().keys())
+    assert out == {key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED}
+
+    # check status after commit
+    repo.commit("e1")
+    out = repo.status()
+    assert out == {key_list[0]: RepoStatus.CLEAN}
+
+    # check status after a new change has been made to the file
+    with open(chkpt0, "wb") as f:
+        f.write(os.urandom(int(15e5)))
+    out = repo.status()
+    assert out == {key_list[0]: RepoStatus.CHANGES_NOT_ADDED}
+
+    # add the new changes made to weigit
+    repo.add(chkpt0)
+    out = repo.status()
+    assert out == {key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED}
+
+    # check status after a new different file is added to be tracked by weigit
+    chkpt3 = "checkpoint_3.pt"
+    repo.add(chkpt3)
+    key_list = list(repo._get_metdata_files().keys())
+    out = repo.status()
+    assert out == {
+        key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED,
+        key_list[1]: RepoStatus.CHANGES_ADDED_NOT_COMMITED,
+    }
+
+    # check status after the new file is commited to be tracked by weigit
+    repo.commit("e2")
+    out = repo.status()
+    assert out == {key_list[0]: RepoStatus.CLEAN, key_list[1]: RepoStatus.CLEAN}
 
 
 def test_api_log(capsys, repo):

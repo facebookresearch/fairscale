@@ -6,7 +6,7 @@
 from pathlib import Path
 import subprocess
 import sys
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import pygit2
 
@@ -123,9 +123,18 @@ class PyGit:
         """returns the path of the git repository PyGit is wrapped around"""
         return self.repo.path
 
-    def status(self) -> None:
-        """Show the status of the git repo"""
-        print(self.repo.status())
+    def status(self) -> Dict:
+        """Gathers the status of the git repo within wgit and returns a dictionary detailing the status.
+        The dictionary contains the relative paths of the metadata files as keys and the values represent
+        the status of the file in the form of an int number as status codes. These status codes are
+        elaborated within PyGit2's documentation: https://www.pygit2.org/index_file.html#status and
+        https://github.com/libgit2/pygit2/blob/320ee5e733039d4a3cc952b287498dbc5737c353/src/pygit2.c#L312-L320
+
+        Returns: {"relative path to a file" : pygit2 status codes}
+        """
+        status_dict = self.repo.status()
+        tracking_dict = dict(filter(lambda item: item[1] != pygit2.GIT_STATUS_IGNORED, status_dict.items()))
+        return tracking_dict
 
     def _set_author_config(self, name: str, email: str) -> Tuple[str, str]:
         """Set the name and email for the pygit repo collecting from the gitconfig.

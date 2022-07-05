@@ -3,11 +3,12 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from enum import Enum
 import json
 import pathlib
 from pathlib import Path
 import sys
-from typing import Tuple, Union
+from typing import Dict, Tuple, Union
 
 from .pygit import PyGit
 from .sha1_store import SHA1_store
@@ -49,7 +50,10 @@ class Repo:
             self._sha1_store = SHA1_store(weigit_dir, init=True)
 
             # # Make the .wgit a git repo
-            gitignore_files = [self._sha1_store_path.name, self._sha1_store.ref_file_path.name]
+            gitignore_files = [
+                self._sha1_store_path.name,
+                self._sha1_store.ref_file_path.name,
+            ]
             self._pygit = PyGit(weigit_dir, gitignore=gitignore_files)
 
         elif exists and init:
@@ -78,13 +82,14 @@ class Repo:
         if self._exists(self.wgit_parent):
             # create the corresponding metadata file
             file_path = Path(in_file_path)
-            metadata_file, parent_sha1 = self._process_metadata_file(file_path.name)
+            rel_file_path = self._rel_file_path(file_path)
+            metadata_file, parent_sha1 = self._process_metadata_file(rel_file_path)
 
             # add the file to the sha1_store
             sha1_hash = self._sha1_store.add(file_path, parent_sha1)
 
             # write metadata to the metadata-file
-            self._write_metadata(metadata_file, sha1_hash)
+            self._write_metadata(metadata_file, file_path, sha1_hash)
             self._pygit.add()  # add to the .wgit/.git repo
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
@@ -104,10 +109,28 @@ class Repo:
             sys.stderr.write("fatal: no wgit repo exists!\n")
             sys.exit(1)
 
-    def status(self) -> None:
-        """Show the state of the working tree."""
+    def status(self) -> Dict:
+        """Show the state of the weigit working tree. State can be
+        1. dirty with changes/modifications not added to weigit repo,
+        2. dirty with a file changes added but not committed
+        3. clean and tracking files after a change has been committed, or clean with with an empty repo.
+        """
         if self._exists(self.wgit_parent):
-            print("wgit status")
+            pygit_status = self._pygit.status()
+            status = self._get_metdata_files()
+            if status:
+                out_status = dict()
+                for metadata_file, is_modified in status.items():
+                    # if metadata_file is among the keys of pygit_status dict, it has not been commited to git yet.
+                    if is_modified:
+                        out_status[str(metadata_file)] = RepoStatus.CHANGES_NOT_ADDED
+                    elif not is_modified and metadata_file in pygit_status.keys():
+                        out_status[str(metadata_file)] = RepoStatus.CHANGES_ADDED_NOT_COMMITED
+                    elif not is_modified and metadata_file not in pygit_status.keys():
+                        out_status[str(metadata_file)] = RepoStatus.CLEAN
+                return out_status
+            else:  # if status dict is empty, nothing has been added so far.
+                return {"": RepoStatus.CLEAN}  # sub case of case-3, clean with an empty repo
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
             sys.exit(1)
@@ -153,10 +176,52 @@ class Repo:
             self._exists(self.wgit_parent)
         return self._repo_path
 
-    def _process_metadata_file(self, metadata_fname: str) -> Tuple[Path, str]:
-        """Create a metadata_file corresponding to the file to be tracked by weigit if the first version of the file is encountered.
-        If a version already exists, open the file and get the sha1_hash of the last version as parent_sha1"""
+    def _get_metdata_files(self) -> Dict:
+        """Walk the directories that contain the metadata files and check the status of those files,
+        whether they have been modified or not.
+        """
+        metadata_d = dict()
+        for file in self.path.iterdir():  # iterate over the .wgit directory
+            # exlude all the .wgit files and directory
+            if file.name not in {"sha1_store", "sha1_refs.json", ".git", ".gitignore"}:
+                # perform a directory walk on the metadata_file directories to find the metadata files
+                for path in file.rglob("*"):
+                    if path.is_file():
+                        rel_path = str(path.relative_to(self.path))  # metadata path relative to .wgit dir
+                        metadata_d[rel_path] = self._is_file_modified(path)
+        return metadata_d
+
+    def _is_metadata_file(self, file: Path) -> bool:
+        """Checks whether a file is a valid metadata file by matching keys and checking if it has valid
+        json data."""
+        try:
+            with open(file) as f:
+                metadata = json.load(f)
+            is_metadata = set(metadata.keys()) == {
+                "SHA1",
+                "file_path",
+                "last_modified_time_stamp",
+            }  # TODO: Consider storing the keys as a class attribute, instead of hard coding.
+        except json.JSONDecodeError:
+            return False  # not a json file, so not valid metadata file
+        return is_metadata
+
+    def _is_file_modified(self, file: Path) -> bool:
+        """Checks whether a file has been modified since its last recorded modification time recorded in the metadata_file"""
+        with open(file) as f:
+            data = json.load(f)
+        # get the last modified timestamp recorded by weigit and the current modified timestamp. If not the
+        # same, then file has been modified since last weigit updated metadata
+        last_mod_timestamp = data["last_modified_time_stamp"]
+        curr_mod_timestamp = Path(data["file_path"]).stat().st_mtime
+        return not curr_mod_timestamp == last_mod_timestamp
+
+    def _process_metadata_file(self, metadata_fname: Path) -> Tuple[Path, str]:
+        """Create a metadata_file corresponding to the file to be tracked by weigit if the first version of the file
+        is encountered. If a version already exists, open the file and get the sha1_hash of the last version as parent_sha1"""
         metadata_file = self.path.joinpath(metadata_fname)
+        metadata_file.parent.mkdir(parents=True, exist_ok=True)  # create parent dirs for metadata file
+
         if not metadata_file.exists() or not metadata_file.stat().st_size:
             metadata_file.touch()
             parent_sha1 = "ROOT"
@@ -166,17 +231,28 @@ class Repo:
             parent_sha1 = ref_data["SHA1"]["__sha1_full__"]
         return metadata_file, parent_sha1
 
-    def _write_metadata(self, metadata_file: Path, sha1_hash: str) -> None:
-        """Write metadata to the metadata file file"""
-        change_time = Path(metadata_file).stat().st_ctime
+    def _write_metadata(self, metadata_file: Path, file_path: Path, sha1_hash: str) -> None:
+        """Write metadata to the metadata file"""
+        change_time = Path(file_path).stat().st_mtime
         metadata = {
             "SHA1": {
                 "__sha1_full__": sha1_hash,
             },
+            "file_path": str(file_path),
             "last_modified_time_stamp": change_time,
         }
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=4)
+
+    def _rel_file_path(self, filepath: Path) -> Path:
+        """Find the relative part to the filepath from the current working directory and return the relative path."""
+        # get the absolute path
+        filepath = filepath.resolve()
+        # using zipped loop we get the path common to the filepath and cwd
+        for i, (x, y) in enumerate(zip(filepath.parts, Path.cwd().parts)):
+            pass
+        # return the relative part (path not common to cwd)
+        return Path(*filepath.parts[i:])
 
     def _exists(self, check_dir: Path) -> bool:
         """Returns True if a valid wgit exists within the cwd and iteratively checks to the root directory and
@@ -209,3 +285,11 @@ class Repo:
         git_exists = check_dir.joinpath(".wgit/.git").exists()
         gitignore_exists = check_dir.joinpath(".wgit/.gitignore").exists()
         return wgit_exists, sha1_refs, git_exists, gitignore_exists
+
+
+class RepoStatus(Enum):
+    """Collections of Repo Statuses"""
+
+    CLEAN = 1
+    CHANGES_NOT_ADDED = 2
+    CHANGES_ADDED_NOT_COMMITED = 3
