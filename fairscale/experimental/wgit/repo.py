@@ -117,7 +117,6 @@ class Repo:
         """
         if self._exists(self.wgit_parent):
             pygit_status = self._pygit.status()
-            # status = self._get_tracked_metadata_files()
             status = self._get_metdata_files()
             if status:
                 out_status = dict()

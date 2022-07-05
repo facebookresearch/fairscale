@@ -130,7 +130,7 @@ class PyGit:
         elaborated within PyGit2's documentation: https://www.pygit2.org/index_file.html#status and
         https://github.com/libgit2/pygit2/blob/320ee5e733039d4a3cc952b287498dbc5737c353/src/pygit2.c#L312-L320
 
-        Returns: {"relative path to file" : pygit2 status codes}
+        Returns: {"relative path to a file" : pygit2 status codes}
         """
         status_dict = self.repo.status()
         tracking_dict = dict(filter(lambda item: item[1] != pygit2.GIT_STATUS_IGNORED, status_dict.items()))
