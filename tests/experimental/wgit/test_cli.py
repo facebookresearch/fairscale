@@ -27,7 +27,6 @@ def create_test_dir():
         shutil.rmtree(test_dir)
         os.makedirs(test_dir)
     os.chdir(test_dir)
-
     # create random checkpoints
     size_list = [30e5, 35e5, 40e5]
     for i, size in enumerate(size_list):
@@ -56,10 +55,8 @@ def test_cli_add(capsys):
         Path.cwd().joinpath(".wgit"),
         init=False,
     )
-
     sha1_hash = sha1_store._get_sha1_hash(chkpt0)
-
-    with open(os.path.join(".wgit", "checkpoint_0.pt"), "r") as f:
+    with open(os.path.join(".wgit", "wgit_testing/checkpoint_0.pt"), "r") as f:
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
@@ -77,7 +74,7 @@ def test_cli_commit(capsys):
 def test_cli_status(capsys):
     cli.main(["status"])
     captured = capsys.readouterr()
-    assert captured.out == "state - Clean:  tracking:     checkpoint_0.pt\n"
+    assert captured.out == "{'wgit_testing/checkpoint_0.pt': <RepoStatus.CLEAN: 1>}\n"
     assert captured.err == ""
 
 

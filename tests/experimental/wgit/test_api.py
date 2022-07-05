@@ -12,6 +12,7 @@ import shutil
 import pytest
 
 from fairscale.experimental.wgit import repo as api
+from fairscale.experimental.wgit.repo import RepoStatus
 
 
 @pytest.fixture
@@ -58,9 +59,10 @@ def test_api_add(capsys, repo):
     fnum = random.randint(0, 2)
     chkpt0 = f"checkpoint_{fnum}.pt"
     repo.add(chkpt0)
-
     sha1_hash = repo._sha1_store._get_sha1_hash(chkpt0)
-    with open(os.path.join(".wgit", f"checkpoint_{fnum}.pt"), "r") as f:
+    metadata_path = repo._rel_file_path(Path(chkpt0))
+
+    with open(os.path.join(".wgit", metadata_path), "r") as f:
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
@@ -76,73 +78,51 @@ def test_api_commit(capsys, repo):
 
 
 def test_api_status(capsys, repo):
-    class StateMsg:
-        def __init__(self, chkpt=None) -> None:
-            self.clean = "Clean:  tracking no file\n"
-            self.added = f"state - dirty:  change added, not commited:       {chkpt}\n"
-            self.modified = f"state - dirty:  file modified, not added:   {chkpt}\n"
-            self.committed = f"state - Clean:  tracking:     {chkpt}\n"
-
     # delete the repo and initialize a new one:
     shutil.rmtree(".wgit")
     repo = api.Repo(Path.cwd(), init=True)
 
     # check status before any file is added
-    repo.status()
-    captured = capsys.readouterr()
-    assert captured.out == StateMsg().clean
-    assert captured.err == ""
+    out = repo.status()
+    assert out == {"": RepoStatus.CLEAN}
 
     # check status before after a file is added but not committed
     chkpt0 = f"checkpoint_{random.randint(0, 1)}.pt"
     repo.add(chkpt0)
-    repo.status()
-    captured = capsys.readouterr()
-    assert captured.out == StateMsg(chkpt0).added
-    assert captured.err == ""
+    out = repo.status()
+    key_list = list(repo._get_metdata_files().keys())
+    assert out == {key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED}
 
     # check status after commit
     repo.commit("e1")
-    repo.status()
-    captured = capsys.readouterr()
-    assert captured.out == StateMsg(chkpt0).committed
-    assert captured.err == ""
+    out = repo.status()
+    assert out == {key_list[0]: RepoStatus.CLEAN}
 
     # check status after a new change has been made to the file
     with open(chkpt0, "wb") as f:
         f.write(os.urandom(int(15e5)))
-    repo.status()
-    captured = capsys.readouterr()
-    assert captured.out == StateMsg(chkpt0).modified
-    assert captured.err == ""
+    out = repo.status()
+    assert out == {key_list[0]: RepoStatus.CHANGES_NOT_ADDED}
 
     # add the new changes made to weigit
     repo.add(chkpt0)
-    repo.status()
-    captured = capsys.readouterr()
-    assert captured.out == StateMsg(chkpt0).added
-    assert captured.err == ""
+    out = repo.status()
+    assert out == {key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED}
 
     # check status after a new different file is added to be tracked by weigit
     chkpt3 = "checkpoint_3.pt"
     repo.add(chkpt3)
-    repo.status()
-    captured = capsys.readouterr()
-    # CircleCi seems to be printing files in the opposite
-    # order. Since only printing info correctly matters and sequence doesn't matter:
-    output1 = captured.out == StateMsg(chkpt0).added + StateMsg(chkpt3).added
-    output2 = captured.out == StateMsg(chkpt3).added + StateMsg(chkpt0).added
-    assert (output1 or output2) is True
-    assert captured.err == ""
+    key_list = list(repo._get_metdata_files().keys())
+    out = repo.status()
+    assert out == {
+        key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED,
+        key_list[1]: RepoStatus.CHANGES_ADDED_NOT_COMMITED,
+    }
 
     # check status after the new file is commited to be tracked by weigit
     repo.commit("e2")
-    repo.status()
-    captured = capsys.readouterr()
-    output1 = captured.out == StateMsg(chkpt0).committed + StateMsg(chkpt3).committed
-    output2 = captured.out == StateMsg(chkpt3).committed + StateMsg(chkpt0).committed
-    assert (output1 or output2) is True
-    assert captured.err == ""
+    out = repo.status()
+    assert out == {key_list[0]: RepoStatus.CLEAN, key_list[1]: RepoStatus.CLEAN}
 
 
 def test_api_log(capsys, repo):
