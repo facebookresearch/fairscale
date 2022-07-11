@@ -27,9 +27,9 @@ class SHA1_Store:
     being de-duplicated.
 
     Args:
-        parent_path (pathlib.Path)
+        parent_path (pathlib.Path):
             The parent path in which a SHA1_Store will be created.
-        init (bool, optional)
+        init (bool, optional):
             - If ``True``, initializes a new SHA1_Store in the parent_path. Initialization
               creates a `sha1_store` directory within WeiGit repo in ./<parent_path>/,
               and a `ref_count.json` within ./<parent_path>/.
@@ -37,12 +37,15 @@ class SHA1_Store:
               `sha1_store` is used to init this class, populating `created_on`, `path` and
               `ref_file_path` attributes.
             - Default: False
+         sha1_buf_size (int):
+            Buffer size used for checksumming. Default: 100MB.
     """
 
-    def __init__(self, parent_path: Path, init: bool = False) -> None:
+    def __init__(self, parent_path: Path, init: bool = False, sha1_buf_size: int = 100 * 1024 * 1024) -> None:
         """Create or wrap (if already exists) a sha1_store within the WeiGit repo."""
         self.path = parent_path.joinpath(SHA1_STORE_DIR_NAME)
         self.ref_file_path = parent_path.joinpath("ref_count.json")
+        self._sha1_buf_size = sha1_buf_size
 
         # initialize the sha1_store if not exist and init==True
         if init and not self.path.exists():
@@ -102,12 +105,10 @@ class SHA1_Store:
             file_path (str, Path):
                 Path to the file whose sha1 hash is to be calculalated and returned.
         """
-        SHA1_BUF_SIZE = 104857600  # Reading file in 100MB chunks
-
         sha1 = hashlib.sha1()
         with open(file_path, "rb") as f:
             while True:
-                data = f.read(SHA1_BUF_SIZE)
+                data = f.read(self._sha1_buf_size)
                 if not data:
                     break
                 sha1.update(data)
