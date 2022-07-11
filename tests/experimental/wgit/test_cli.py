@@ -42,7 +42,7 @@ def test_setup(create_test_dir):
 
 def test_cli_init(capsys):
     # Check if the json and other files have been created by the init
-    assert Path(".wgit/sha1_refs.json").is_file()
+    assert Path(".wgit/sha1_store").is_dir()
     assert Path(".wgit/.gitignore").is_file()
     assert Path(".wgit/.git").exists()
 

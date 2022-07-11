@@ -42,7 +42,7 @@ class Repo:
         exists = self._exists(self.wgit_parent)
         if not exists and init:
             # No weigit repo exists and is being initialized with init=True
-            # Make .wgit directory, create sha1_refs
+            # Make .wgit directory, create sha1_store
             weigit_dir = self.wgit_parent.joinpath(".wgit")
             weigit_dir.mkdir(parents=False, exist_ok=True)
 
@@ -183,7 +183,7 @@ class Repo:
         metadata_d = dict()
         for file in self.path.iterdir():  # iterate over the .wgit directory
             # exlude all the .wgit files and directory
-            if file.name not in {"sha1_store", "sha1_refs.json", ".git", ".gitignore"}:
+            if file.name not in {"sha1_store", ".git", ".gitignore"}:
                 # perform a directory walk on the metadata_file directories to find the metadata files
                 for path in file.rglob("*"):
                     if path.is_file():
@@ -275,16 +275,15 @@ class Repo:
 
     def _weigit_repo_exists(self, check_dir: pathlib.Path) -> bool:
         """Returns True if a valid WeiGit repo exists in the path: check_dir"""
-        wgit_exists, sha1_refs, git_exists, gitignore_exists = self._weight_repo_file_check(check_dir)
-        return wgit_exists and sha1_refs and git_exists and gitignore_exists
+        wgit_exists, git_exists, gitignore_exists = self._weight_repo_file_check(check_dir)
+        return wgit_exists and git_exists and gitignore_exists
 
     def _weight_repo_file_check(self, check_dir: Path) -> tuple:
         """Returns a tuple of boolean corresponding to the existence of each .wgit internally required files."""
         wgit_exists = check_dir.joinpath(".wgit").exists()
-        sha1_refs = check_dir.joinpath(".wgit/sha1_refs.json").exists()
         git_exists = check_dir.joinpath(".wgit/.git").exists()
         gitignore_exists = check_dir.joinpath(".wgit/.gitignore").exists()
-        return wgit_exists, sha1_refs, git_exists, gitignore_exists
+        return wgit_exists, git_exists, gitignore_exists
 
 
 class RepoStatus(Enum):

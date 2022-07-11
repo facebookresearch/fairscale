@@ -27,26 +27,22 @@ class SHA1_Store:
     being de-duplicated.
 
     Args:
-        weigit_path (pathlib.Path)
-            The path to the weigit repo where a SHA1_Store will be created, or if
-            already exists will be wrapped.
+        parent_path (pathlib.Path)
+            The parent path in which a SHA1_Store will be created.
         init (bool, optional)
-            - If ``True``, initializes a new SHA1_Store in the weigit_path. Initialization
-              creates a `sha1_store` directory within WeiGit repo in ./<weigit_path>/,
-              and a `sha1_refs.json` within ./<weigit_path>/.
+            - If ``True``, initializes a new SHA1_Store in the parent_path. Initialization
+              creates a `sha1_store` directory within WeiGit repo in ./<parent_path>/,
+              and a `ref_count.json` within ./<parent_path>/.
             - If ``False``, a new `sha1_store` dir is not initialized and the existing
               `sha1_store` is used to init this class, populating `created_on`, `path` and
               `ref_file_path` attributes.
             - Default: False
     """
 
-    def __init__(self, weigit_path: Path, init: bool = False) -> None:
+    def __init__(self, parent_path: Path, init: bool = False) -> None:
         """Create or wrap (if already exists) a sha1_store within the WeiGit repo."""
-        # Should use the sha1_refs.json to track the parent references.
-        self.path = weigit_path.joinpath(SHA1_STORE_DIR_NAME)
-        self.ref_file_path = weigit_path.joinpath("sha1_refs.json")
-
-        self._weigit_path = weigit_path
+        self.path = parent_path.joinpath(SHA1_STORE_DIR_NAME)
+        self.ref_file_path = parent_path.joinpath("ref_count.json")
 
         # initialize the sha1_store if not exist and init==True
         if init and not self.path.exists():
@@ -119,11 +115,11 @@ class SHA1_Store:
 
     def _add_ref(self, current_sha1_hash: str, parent_hash: str) -> None:
         """
-        Populates the sha1_refs.json file when file is added and keeps track of
+        Populates the reference counting file when file is added and keeps track of
         reference to earlier file additions.
 
-        If the sha1_refs.json file does not have this sha1, then a new tracking
-        entry of the added file is logged in the sha1_refs file.
+        If the reference counting file does not have this sha1, then a new tracking
+        entry of the added file is logged in the file.
 
         If the file already has an entry for this sha1, first we check if the
         incoming new added file is a new version of any of the existing entries.
@@ -137,10 +133,10 @@ class SHA1_Store:
                 The sha1 hash of the parent file.
         """
         # Check the current state of the reference file and check if the added file already has an entry.
-        sha1_refs_empty = self._sha1_refs_file_state()
+        refs_empty = self._ref_count_file_state()
 
         # if the file is empty: add the first entry
-        if sha1_refs_empty:
+        if refs_empty:
             with open(self.ref_file_path) as f:
                 ref_data = {current_sha1_hash: {"parent": "ROOT", "ref_count": 1, "is_leaf": True}}
             self._write_to_json(self.ref_file_path, ref_data)
@@ -158,7 +154,7 @@ class SHA1_Store:
 
             self._write_to_json(self.ref_file_path, ref_data)
 
-    def _sha1_refs_file_state(self) -> bool:
+    def _ref_count_file_state(self) -> bool:
         """
         Checks the state of the sha1 reference file, whether the file is empty or not.
         If not empty, it checks whether the input file in <file_path> has an older
@@ -171,11 +167,11 @@ class SHA1_Store:
         try:
             with open(self.ref_file_path, "r") as f:
                 ref_data = json.load(f)
-            sha1_refs_empty: bool = False
+            refs_empty = False
         except json.JSONDecodeError as error:
             if not self.ref_file_path.stat().st_size:
-                sha1_refs_empty = True
-        return sha1_refs_empty
+                refs_empty = True
+        return refs_empty
 
     def _write_to_json(self, file: Path, data: dict) -> None:
         """
