@@ -11,7 +11,7 @@ import shutil
 import pytest
 
 import fairscale.experimental.wgit.cli as cli
-from fairscale.experimental.wgit.sha1_store import SHA1_store
+from fairscale.experimental.wgit.sha1_store import SHA1_Store
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def test_cli_add(capsys):
     chkpt0 = "checkpoint_0.pt"
     cli.main(["add", "checkpoint_0.pt"])
 
-    sha1_store = SHA1_store(
+    sha1_store = SHA1_Store(
         Path.cwd().joinpath(".wgit"),
         init=False,
     )

@@ -12,7 +12,7 @@ import shutil
 import pytest
 
 from fairscale.experimental.wgit.repo import Repo
-from fairscale.experimental.wgit.sha1_store import SHA1_store
+from fairscale.experimental.wgit.sha1_store import SHA1_Store
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def sha1_configs():
 @pytest.fixture
 def sha1_store(sha1_configs):
     repo = Repo(sha1_configs.test_path.parent, init=False)
-    sha1_store = SHA1_store(sha1_configs.test_dirs, init=False)
+    sha1_store = SHA1_Store(sha1_configs.test_dirs, init=False)
     return repo, sha1_store
 
 
@@ -68,7 +68,7 @@ def test_setup(sha1_configs):
             f.write(os.urandom(int(size)))
 
     repo = Repo(sha1_configs.test_path.parent, init=True)
-    sha1_store = SHA1_store(sha1_configs.test_dirs, init=True)
+    sha1_store = SHA1_Store(sha1_configs.test_dirs, init=True)
 
     return sha1_store
 

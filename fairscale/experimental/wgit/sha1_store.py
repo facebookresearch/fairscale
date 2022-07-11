@@ -9,42 +9,57 @@ import json
 from pathlib import Path
 import shutil
 import sys
+import time
 from typing import Union
 
 from .utils import ExitCode
 
+# This is a fixed dir name we use for sha1_store. It should not be changed
+# for backward compatibility reasons.
+SHA1_STORE_DIR_NAME = "sha1_store"
 
-class SHA1_store:
+
+class SHA1_Store:
     """
-    Represent the sha1_store within the WeiGit repo for handling added file to the store and managing references.
+    This class represents a SHA1 checksum based storage area within a WeiGit repo
+    for handling added file to the store and managing references in a content based
+    fashion. This means the same content will not be stored multiple times, end up
+    being de-duplicated.
 
     Args:
         weigit_path (pathlib.Path)
-            The path to the weigit repo where a sha1_store will be created, or if already exists will be wrapped.
+            The path to the weigit repo where a SHA1_Store will be created, or if
+            already exists will be wrapped.
         init (bool, optional)
-            - If ``True``, initializes a new sha1_store in the weigit_path. Initialization creates a `sha1_store` directory within WeiGit repo in ./<weigit_path>/,
-                and a `sha1_refs.json` withiin ./<weigit_path>/.
-            - If ``False``, a new sha1_store is not initialized and the existing sha1_store is simply wrapped, populating the `name`, `path` and the `ref_file_path` attributes.
+            - If ``True``, initializes a new SHA1_Store in the weigit_path. Initialization
+              creates a `sha1_store` directory within WeiGit repo in ./<weigit_path>/,
+              and a `sha1_refs.json` within ./<weigit_path>/.
+            - If ``False``, a new `sha1_store` dir is not initialized and the existing
+              `sha1_store` is used to init this class, populating `path` and
+              `ref_file_path` attributes.
             - Default: False
     """
 
     def __init__(self, weigit_path: Path, init: bool = False) -> None:
         """Create or wrap (if already exists) a sha1_store within the WeiGit repo."""
-        # should use the sha1_refs.json to track the parent references.
-        self.name = "sha1_store"
-        self.path = weigit_path.joinpath(self.name)
+        # Should use the sha1_refs.json to track the parent references.
+        self.path = weigit_path.joinpath(SHA1_STORE_DIR_NAME)
         self.ref_file_path = weigit_path.joinpath("sha1_refs.json")
 
         self._weigit_path = weigit_path
-        # initialize the sha1_store
-        if init:
+
+        # initialize the sha1_store if not exist and init==True
+        if init and not self.path.exists():
             try:
-                if not self.path.exists():
-                    Path.mkdir(self.path, parents=False, exist_ok=False)
-                    self.ref_file_path.touch(exist_ok=False)
+                Path.mkdir(self.path, parents=False, exist_ok=False)
+                self._write_to_json(self.ref_file_path, {"created_on": time.ctime()})
             except FileExistsError as error:
                 sys.stderr.write(f"An exception occured while creating Sha1_store: {repr(error)}\n")
                 sys.exit(ExitCode.FILE_EXISTS_ERROR)
+
+        # By now, we can load the store in memory into this class.
+        with open(self.ref_file_path, "r") as f:
+            self.created_on = json.load(f)["created_on"]
 
     def add(self, file_path: Path, parent_sha1: str) -> str:
         """

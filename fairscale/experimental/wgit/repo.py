@@ -11,7 +11,7 @@ import sys
 from typing import Dict, Tuple, Union
 
 from .pygit import PyGit
-from .sha1_store import SHA1_store
+from .sha1_store import SHA1_Store
 
 
 class Repo:
@@ -47,7 +47,7 @@ class Repo:
             weigit_dir.mkdir(parents=False, exist_ok=True)
 
             # Initializing sha1_store only after wgit has been initialized!
-            self._sha1_store = SHA1_store(weigit_dir, init=True)
+            self._sha1_store = SHA1_Store(weigit_dir, init=True)
 
             # # Make the .wgit a git repo
             gitignore_files = [
@@ -58,12 +58,12 @@ class Repo:
 
         elif exists and init:
             # if weigit repo already exists and init is being called, wrap the existing .wgit/.git repo with PyGit
-            self._sha1_store = SHA1_store(self.path)
+            self._sha1_store = SHA1_Store(self.path)
             self._pygit = PyGit(self.path)
 
         elif exists and not init:
             # weigit exists and non-init commands are triggered
-            self._sha1_store = SHA1_store(self.path)
+            self._sha1_store = SHA1_Store(self.path)
             self._pygit = PyGit(self.path)
 
         else:
