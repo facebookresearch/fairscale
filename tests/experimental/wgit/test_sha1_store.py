@@ -21,7 +21,7 @@ def sha1_configs():
     class Sha1StorePaths:
         test_dirs = Path("temp_wgit_testing/.wgit")
         test_path = Path.cwd().joinpath(test_dirs)
-        sha1_ref = test_path.joinpath("ref_count.json")
+        sha1_ref = test_path.joinpath("sha1_store/ref_count.json")
         chkpt1a_dir = test_path.joinpath("checkpoint_1a")
         chkpt1b_dir = test_path.joinpath("checkpoint_1b")
         chkpt1c_dir = test_path.joinpath("checkpoint_1c")

@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 
+from collections import OrderedDict
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +12,8 @@ import shutil
 import sys
 import time
 from typing import Union
+
+import torch
 
 from .utils import ExitCode
 
@@ -21,44 +24,78 @@ SHA1_STORE_DIR_NAME = "sha1_store"
 
 class SHA1_Store:
     """
-    This class represents a SHA1 checksum based storage area within a WeiGit repo
-    for handling added file to the store and managing references in a content based
-    fashion. This means the same content will not be stored multiple times, end up
-    being de-duplicated.
+    This class represents a SHA1 checksum based storage dir for state_dict
+    and tensors.
+
+    This means the same content will not be stored multiple times, resulting
+    in space savings. (a.k.a. de-duplication)
+
+    To make things easier for the callers, this class accept input data
+    as files, state_dict or tensors. This class always returns in-memory
+    data, not on-disk files. This class doesn't really care or know the actually
+    data types. It uses torch.save() and torch.load() to do serialization.
+
+    A key issue is dealing with content deletion. We use a reference counting
+    algorithm, which means the caller must have symmetrical add/remove calls
+    for each object.
+
+    We used to support children-parent dependency graph and ref counting, but
+    it is flawed since a grand-child can have the same SHA1 as the grand-parent,
+    resulting in a cycle. This means caller must compute which parent is safe
+    to delete in a version tracking graph. The lesson here is that content
+    addressibility and dependency graphs do not mix well.
 
     Args:
-        parent_path (pathlib.Path):
+        parent_path (Path):
             The parent path in which a SHA1_Store will be created.
         init (bool, optional):
             - If ``True``, initializes a new SHA1_Store in the parent_path. Initialization
-              creates a `sha1_store` directory within WeiGit repo in ./<parent_path>/,
+              creates a `sha1_store` directory in ./<parent_path>/,
               and a `ref_count.json` within ./<parent_path>/.
             - If ``False``, a new `sha1_store` dir is not initialized and the existing
-              `sha1_store` is used to init this class, populating `created_on`, `path` and
-              `ref_file_path` attributes.
+              `sha1_store` is used to init this class, populating `created_on`, and other
+              attributes.
             - Default: False
-         sha1_buf_size (int):
+        sha1_buf_size (int):
             Buffer size used for checksumming. Default: 100MB.
+        tmp_dir (str):
+            Dir for temporary files if input is an in-memory object.
     """
 
-    def __init__(self, parent_path: Path, init: bool = False, sha1_buf_size: int = 100 * 1024 * 1024) -> None:
-        """Create or wrap (if already exists) a sha1_store within the WeiGit repo."""
+    def __init__(
+        self, parent_path: Path, init: bool = False, sha1_buf_size: int = 100 * 1024 * 1024, tmp_dir: str = ""
+    ) -> None:
+        """Create or wrap (if already exists) a sha1_store."""
         self.path = parent_path.joinpath(SHA1_STORE_DIR_NAME)
-        self.ref_file_path = parent_path.joinpath("ref_count.json")
+        self.ref_file_path = self.path.joinpath("ref_count.json")
         self._sha1_buf_size = sha1_buf_size
 
-        # initialize the sha1_store if not exist and init==True
+        # Initialize the sha1_store if not exist and init==True.
         if init and not self.path.exists():
             try:
                 Path.mkdir(self.path, parents=False, exist_ok=False)
-                self._write_to_json(self.ref_file_path, {"created_on": time.ctime()})
             except FileExistsError as error:
                 sys.stderr.write(f"An exception occured while creating Sha1_store: {repr(error)}\n")
                 sys.exit(ExitCode.FILE_EXISTS_ERROR)
+            # Create a new json file for this new store.
+            self._write_to_json(self.ref_file_path, {"created_on": time.ctime()})
+
+        # This is an internal error.
+        assert self.path.exists(), "SHA1 store does not exist and init==False"
 
         # By now, we can load the store in memory into this class.
         with open(self.ref_file_path, "r") as f:
             self.created_on = json.load(f)["created_on"]
+
+        if tmp_dir:
+            # Caller supplied tmp dir
+            assert Path(tmp_dir).is_dir(), "incorrect input"
+            self._tmp_dir = Path(tmp_dir)
+        else:
+            # Default tmp dir, need to clean it.
+            self._tmp_dir = self.path.joinpath("tmp")
+            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            self._tmp_dir.mkdir()
 
     def add(self, file_path: Path, parent_sha1: str) -> str:
         """
@@ -97,6 +134,29 @@ class SHA1_Store:
             sys.stderr.write(f"An exception occured: {repr(error)}\n")
             shutil.rmtree(repo_fdir)
         return sha1_hash
+
+    def get(self, sha1: str) -> Union[torch.Tensor, OrderedDict]:
+        """Get data from a SHA1
+
+        Args:
+            sha1 (str):
+                SHA1 of the object to get.
+
+        Returns:
+            (Tensor or OrderedDict):
+                In-memory object.
+        """
+        raise NotImplementedError()
+
+    def delete(self, sha1: str) -> None:
+        """Delete a SHA1
+
+        Args:
+            sha1 (str):
+                SHA1 of the object to delete.
+
+        """
+        raise NotImplementedError()
 
     def _get_sha1_hash(self, file_path: Union[str, Path]) -> str:
         """return the sha1 hash of a file
@@ -180,7 +240,7 @@ class SHA1_Store:
 
         Args:
             file (pathlib.Path)
-                path to the file to be written in.
+                Path to the file to be written in.
             data (pathlib.Path)
                 Data to be written in the file.
         """
