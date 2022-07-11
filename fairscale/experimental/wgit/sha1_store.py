@@ -35,7 +35,7 @@ class SHA1_Store:
               creates a `sha1_store` directory within WeiGit repo in ./<weigit_path>/,
               and a `sha1_refs.json` within ./<weigit_path>/.
             - If ``False``, a new `sha1_store` dir is not initialized and the existing
-              `sha1_store` is used to init this class, populating `path` and
+              `sha1_store` is used to init this class, populating `created_on`, `path` and
               `ref_file_path` attributes.
             - Default: False
     """
@@ -63,13 +63,19 @@ class SHA1_Store:
 
     def add(self, file_path: Path, parent_sha1: str) -> str:
         """
-        Adds a file/checkpoint to the internal sha1_store and the sha1 references accordingly.
-        First, a sha1 hash is calculated. Utilizing the sha1 hash string, the actual file in <in_file_path> is moved
-        within the sha1_store and the sha1 reference file is updated accordingly with the information of their parents
+        Adds a file/checkpoint to the internal sha1_store and the sha1 references
+        accordingly.
+
+        First, a sha1 hash is calculated. Utilizing the sha1 hash string, the actual file
+        in <in_file_path> is moved within the sha1_store and the sha1 reference file is
+        updated accordingly with the information of their parents
         node (if exists) and whether the new version is a leaf node or not.
 
         Args:
-            in_file_path (str): path to the file to be added to the sha1_store.
+            file_path (str):
+                path to the file to be added to the sha1_store.
+            parent_sha1 (str):
+                sha1 of the parent object (if any).
         """
         sha1_hash = self._get_sha1_hash(file_path)
         # use the sha1_hash to create a directory with first2 sha naming convention
@@ -97,7 +103,8 @@ class SHA1_Store:
         """return the sha1 hash of a file
 
         Args:
-            file_path (str, Path): Path to the file whose sha1 hash is to be calculalated and returned.
+            file_path (str, Path):
+                Path to the file whose sha1 hash is to be calculalated and returned.
         """
         SHA1_BUF_SIZE = 104857600  # Reading file in 100MB chunks
 
@@ -112,17 +119,22 @@ class SHA1_Store:
 
     def _add_ref(self, current_sha1_hash: str, parent_hash: str) -> None:
         """
-        Populates the sha1_refs.json file when file is added and keeps track of reference to earlier file additions.
-        If the sha1_refs.json file is empty, then a new tracking entry of the added file is logged in the sha1_refs file.
-        If the file already has an entry, first it checks if the incoming new added file is a new version of any of the
-        existing entries. If it is, then logs the tracking info as a new version of that existing entry.
-        Otherwise a new entry for the new added file is created for tracking.
+        Populates the sha1_refs.json file when file is added and keeps track of
+        reference to earlier file additions.
+
+        If the sha1_refs.json file does not have this sha1, then a new tracking
+        entry of the added file is logged in the sha1_refs file.
+
+        If the file already has an entry for this sha1, first we check if the
+        incoming new added file is a new version of any of the existing entries.
+        If it is, then logs the tracking info as a new version of that existing
+        entry.  Otherwise a new entry for the new added file is created for tracking.
 
         Args:
-            file_path (pathlib.Path)
-                Path to the incoming added file.
-            current_sha1_hash (str)
+            current_sha1_hash (str):
                 The sha1 hash of the incoming added file.
+            parent_hash (str):
+                The sha1 hash of the parent file.
         """
         # Check the current state of the reference file and check if the added file already has an entry.
         sha1_refs_empty = self._sha1_refs_file_state()
@@ -149,11 +161,11 @@ class SHA1_Store:
     def _sha1_refs_file_state(self) -> bool:
         """
         Checks the state of the sha1 reference file, whether the file is empty or not.
-        If not empty, it checks whether the input file in <file_path> has an older entry (version)
-        in the reference file.
+        If not empty, it checks whether the input file in <file_path> has an older
+        entry (version) in the reference file.
 
         Args:
-            file_path (pathlib.Path)
+            file_path (pathlib.Path):
                 input File whose entry will be checked if it exists in the reference file.
         """
         try:
@@ -168,6 +180,7 @@ class SHA1_Store:
     def _write_to_json(self, file: Path, data: dict) -> None:
         """
         Populates a json file with data.
+
         Args:
             file (pathlib.Path)
                 path to the file to be written in.
