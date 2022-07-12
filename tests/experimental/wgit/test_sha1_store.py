@@ -30,6 +30,7 @@ def sha1_store(request):
     """
     # Attach a teardown function.
     def teardown():
+        os.chdir(PARENT_DIR.joinpath("..").resolve())
         shutil.rmtree(PARENT_DIR, ignore_errors=True)
 
     request.addfinalizer(teardown)
