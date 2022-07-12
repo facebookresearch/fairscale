@@ -3,148 +3,103 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-from dataclasses import dataclass
-import json
 import os
 from pathlib import Path
 import shutil
 
 import pytest
+import torch
+from torch import nn
 
-from fairscale.experimental.wgit.repo import Repo
 from fairscale.experimental.wgit.sha1_store import SHA1_Store
 
-
-@pytest.fixture
-def sha1_configs():
-    @dataclass
-    class Sha1StorePaths:
-        test_dirs = Path("temp_wgit_testing/.wgit")
-        test_path = Path.cwd().joinpath(test_dirs)
-        sha1_ref = test_path.joinpath("sha1_store/ref_count.json")
-        chkpt1a_dir = test_path.joinpath("checkpoint_1a")
-        chkpt1b_dir = test_path.joinpath("checkpoint_1b")
-        chkpt1c_dir = test_path.joinpath("checkpoint_1c")
-        checkpoint_1a = test_path.joinpath("checkpoint_1a", "checkpoint_1.pt")
-        checkpoint_1b = test_path.joinpath("checkpoint_1b", "checkpoint_1.pt")
-        checkpoint_1c = test_path.joinpath("checkpoint_1c", "checkpoint_1.pt")
-        checkpoint_2 = test_path.joinpath("checkpoint_1a", "checkpoint_2.pt")
-        checkpoint_3 = test_path.joinpath("checkpoint_1a", "checkpoint_3.pt")
-        metadata_1 = test_path.joinpath("checkpoint_1.pt")
-        metadata_2 = test_path.joinpath("checkpoint_2.pt")
-        metadata_3 = test_path.joinpath("checkpoint_3.pt")
-
-    return Sha1StorePaths
+# Get the absolute path of the parent at the beginning before any os.chdir(),
+# so that we can proper clean it up at any CWD.
+PARENT_DIR = Path("sha1_store_testing").resolve()
 
 
-@pytest.fixture
-def sha1_store(sha1_configs):
-    repo = Repo(sha1_configs.test_path.parent, init=False)
-    sha1_store = SHA1_Store(sha1_configs.test_dirs, init=False)
-    return repo, sha1_store
+@pytest.fixture(scope="function")
+def sha1_store(request):
+    """A fixture for setup and teardown.
 
+    This only runs once per test function. So don't make this too slow.
 
-def test_setup(sha1_configs):
-    # Set up the testing directory
-    sha1_configs.test_dirs.mkdir(parents=True, exist_ok=True)  # create test .wgit dir
+    Tests must be written in a way that either all of the tests run
+    in the order they appears in this file or a specific test is
+    run separately by the user. Either way, the test should work.
+    """
+    # Attach a teardown function.
+    def teardown():
+        shutil.rmtree(PARENT_DIR, ignore_errors=True)
 
-    # Create the test checkpoint files
-    sha1_configs.chkpt1a_dir.mkdir(exist_ok=False)
-    sha1_configs.chkpt1b_dir.mkdir(exist_ok=False)
-    sha1_configs.chkpt1c_dir.mkdir(exist_ok=False)
+    request.addfinalizer(teardown)
 
-    # Create random checkpoints
-    size_list = [25e5, 27e5, 30e5, 35e5, 40e5]
-    chkpts = [
-        sha1_configs.checkpoint_1a,
-        sha1_configs.checkpoint_1b,
-        sha1_configs.checkpoint_1c,
-        sha1_configs.checkpoint_2,
-        sha1_configs.checkpoint_3,
-    ]
+    # Teardown in case last run didn't clean it up.
+    teardown()
 
-    for file, size in zip(chkpts, size_list):
-        with open(file, "wb") as f:
-            f.write(os.urandom(int(size)))
-
-    repo = Repo(sha1_configs.test_path.parent, init=True)
-    sha1_store = SHA1_Store(sha1_configs.test_dirs, init=True)
+    # Get an empty sha1 store.
+    PARENT_DIR.mkdir()
+    sha1_store = SHA1_Store(PARENT_DIR, init=True)
 
     return sha1_store
 
 
-def test_sha1_add(sha1_configs, sha1_store):
-    repo, sha1_store = sha1_store
+def test_sha1_add_file(sha1_store):
+    os.chdir(PARENT_DIR)
 
-    # Add checkpoint_1: Create the meta_data
-    chkpt1 = sha1_configs.checkpoint_1a
-    metadata_file, parent_sha1 = repo._process_metadata_file(chkpt1.name)
+    # Create random checkpoints
+    size_list = [25e5, 27e5, 30e5, 35e5, 40e5]
+    chkpts = [
+        "checkpoint_1a.pt",
+        "checkpoint_1b.pt",
+        "checkpoint_1c.pt",
+        "checkpoint_2.pt",
+        "checkpoint_3.pt",
+    ]
 
-    sha1_hash = sha1_store.add(sha1_configs.checkpoint_1a, parent_sha1)
-    repo._write_metadata(metadata_file, chkpt1, sha1_hash)
+    for file, size in zip(chkpts, size_list):
+        torch.save(nn.Linear(1, int(size)), file)
 
-    # for checkpoint 1
-    metadata_file = sha1_configs.test_path.joinpath(sha1_configs.checkpoint_1a.name)
+    # Add those 5 random files.
+    for c in chkpts:
+        sha1_store.add(c)
 
-    with open(metadata_file, "r") as file:
-        metadata = json.load(file)
-    assert metadata["SHA1"]["__sha1_full__"] == sha1_hash
+    # Add a fixed data twice.
+    module = nn.Linear(100, 100, bias=False)
+    module.weight.data = torch.zeros(100, 100)
+    zeros_file = "zeros.pt"
+    torch.save(module.state_dict(), zeros_file)
+    sha1_store.add(zeros_file)
+    sha1_store.add(zeros_file)
 
-
-def test_sha1_refs(sha1_configs, sha1_store):
-    repo, sha1_store = sha1_store
-
-    def add_checkpoint(checkpoint):
-        metadata_file, parent_sha1 = repo._process_metadata_file(checkpoint.name)
-        sha1_hash = sha1_store.add(checkpoint, parent_sha1)
-        repo._write_metadata(metadata_file, checkpoint, sha1_hash)
-        return sha1_hash
-
-    with open(sha1_configs.sha1_ref, "r") as file:
-        refs_data = json.load(file)
-
-    # get checkpoint1 sha1
-    sha1_chkpt1a_hash = sha1_store._get_sha1_hash(sha1_configs.checkpoint_1a)
-    assert refs_data[sha1_chkpt1a_hash]["parent"] == "ROOT"
-    assert refs_data[sha1_chkpt1a_hash]["ref_count"] == 1
-
-    ck1a_sha1_hash = sha1_store._get_sha1_hash(sha1_configs.checkpoint_1a)
-
-    # add checkpoint new version of checkpoint-1
-    ck1b_sha1_hash = add_checkpoint(sha1_configs.checkpoint_1b)
-
-    # Add new checkpoints 2 and 3
-    ck2_sha1_hash = add_checkpoint(sha1_configs.checkpoint_2)
-    ck3_sha1_hash = add_checkpoint(sha1_configs.checkpoint_3)
-
-    # add another version of checkpoint 1
-    ck1c_sha1_hash = add_checkpoint(sha1_configs.checkpoint_1c)
-
-    # load ref file after Sha1 add
-    with open(sha1_configs.sha1_ref, "r") as file:
-        refs_data = json.load(file)
-
-    # Tests for same file versions
-    assert refs_data[ck1b_sha1_hash]["parent"] == ck1a_sha1_hash
-    assert refs_data[ck1c_sha1_hash]["parent"] == ck1b_sha1_hash
-    assert refs_data[ck1b_sha1_hash]["ref_count"] == 1
-    assert refs_data[ck1a_sha1_hash]["is_leaf"] is False
-    assert refs_data[ck1a_sha1_hash]["is_leaf"] is False
-    assert refs_data[ck1b_sha1_hash]["is_leaf"] is False
-    assert refs_data[ck1c_sha1_hash]["is_leaf"] is True
-
-    # Tests for new files
-    assert refs_data[ck2_sha1_hash]["parent"] == "ROOT"
-    assert refs_data[ck2_sha1_hash]["is_leaf"] is True
-    assert refs_data[ck3_sha1_hash]["parent"] == "ROOT"
-    assert refs_data[ck3_sha1_hash]["is_leaf"] is True
+    # Assert the ref counts are 1,1,1,1,1 and 2
+    sha1_store._load_json_dict()
+    json_dict = sha1_store._json_dict
+    assert json_dict["da3e19590de8f77fcf7a09c888c526b0149863a0"] == 2
+    del json_dict["created_on"]
+    assert sorted(json_dict.values()) == [1, 1, 1, 1, 1, 2], json_dict
 
 
-def test_tear_down(sha1_configs):
-    # clean up: delete the .wgit directory created during this Test
-    # Making sure the current directory is ./temp_wgit_testing before removing test dir
-    test_parent_dir = sha1_configs.test_path.parent
-    if (test_parent_dir.stem == "temp_wgit_testing") and (sha1_configs.test_path.stem == ".wgit"):
-        shutil.rmtree(test_parent_dir)
-    else:
-        raise Exception("Exception in testing directory tear down!")
+def test_sha1_add_state_dict(sha1_store):
+    os.chdir(PARENT_DIR)
+    # add once
+    for i in range(3):
+        sha1_store.add(nn.Linear(10, 10).state_dict())
+    # add twice
+    for i in range(3):
+        sd = nn.Linear(8, 8).state_dict()
+        sha1_store.add(sd)
+        sha1_store.add(sd)
+
+    sha1_store._load_json_dict()
+    json_dict = sha1_store._json_dict
+    del json_dict["created_on"]
+    assert sorted(json_dict.values()) == [1, 1, 1, 2, 2, 2], json_dict
+
+
+def test_sha1_add_tensor(sha1_store):
+    os.chdir(PARENT_DIR)
+    sha1_store.add(torch.Tensor([1.0, 5.5, 3.4]))
+    sha1_store._load_json_dict()
+    json_dict = sha1_store._json_dict
+    assert json_dict["71df4069a03a766eacf9f03eea50968e87eae9f8"] == 1, json_dict

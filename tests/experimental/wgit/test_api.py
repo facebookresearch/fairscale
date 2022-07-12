@@ -10,9 +10,10 @@ import random
 import shutil
 
 import pytest
+import torch
+from torch import nn
 
-from fairscale.experimental.wgit import repo as api
-from fairscale.experimental.wgit.repo import RepoStatus
+from fairscale.experimental.wgit.repo import Repo, RepoStatus
 
 
 @pytest.fixture
@@ -32,14 +33,13 @@ def create_test_dir():
     # create random checkpoints
     size_list = [30e5, 35e5, 40e5, 40e5]
     for i, size in enumerate(size_list):
-        with open(f"checkpoint_{i}.pt", "wb") as f:
-            f.write(os.urandom(int(size)))
+        torch.save(nn.Linear(1, int(size)), f"checkpoint_{i}.pt")
     return test_dir
 
 
 @pytest.fixture
 def repo():
-    repo = api.Repo(Path.cwd(), init=True)
+    repo = Repo(Path.cwd(), init=True)
     return repo
 
 
@@ -48,7 +48,7 @@ def test_setup(create_test_dir):
 
 
 def test_api_init(capsys, repo):
-    repo = api.Repo(Path.cwd(), init=True)
+    repo = Repo(Path.cwd(), init=True)
     assert Path(".wgit/sha1_store").is_dir()
     assert Path(".wgit/.gitignore").is_file()
     assert Path(".wgit/.git").exists()
@@ -80,7 +80,7 @@ def test_api_commit(capsys, repo):
 def test_api_status(capsys, repo):
     # delete the repo and initialize a new one:
     shutil.rmtree(".wgit")
-    repo = api.Repo(Path.cwd(), init=True)
+    repo = Repo(Path.cwd(), init=True)
 
     # check status before any file is added
     out = repo.status()
@@ -99,8 +99,7 @@ def test_api_status(capsys, repo):
     assert out == {key_list[0]: RepoStatus.CLEAN}
 
     # check status after a new change has been made to the file
-    with open(chkpt0, "wb") as f:
-        f.write(os.urandom(int(15e5)))
+    torch.save(nn.Linear(1, int(15e5)), chkpt0)
     out = repo.status()
     assert out == {key_list[0]: RepoStatus.CHANGES_NOT_ADDED}
 

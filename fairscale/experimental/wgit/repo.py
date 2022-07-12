@@ -52,7 +52,6 @@ class Repo:
             # # Make the .wgit a git repo
             gitignore_files = [
                 self._sha1_store_path.name,
-                self._sha1_store.ref_file_path.name,
             ]
             self._pygit = PyGit(weigit_dir, gitignore=gitignore_files)
 
@@ -86,7 +85,10 @@ class Repo:
             metadata_file, parent_sha1 = self._process_metadata_file(rel_file_path)
 
             # add the file to the sha1_store
-            sha1_hash = self._sha1_store.add(file_path, parent_sha1)
+            # TODO (Min): We don't add parent sha1 tracking to sha1 store due to
+            #             de-duplication & dependency tracking can create cycles.
+            #             We need to figure out a way to handle deletion.
+            sha1_hash = self._sha1_store.add(file_path)
 
             # write metadata to the metadata-file
             self._write_metadata(metadata_file, file_path, sha1_hash)
