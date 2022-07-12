@@ -76,7 +76,8 @@ def test_sha1_add_file(sha1_store):
     # Assert the ref counts are 1,1,1,1,1 and 2
     sha1_store._load_json_dict()
     json_dict = sha1_store._json_dict
-    assert json_dict["da3e19590de8f77fcf7a09c888c526b0149863a0"] == 2
+    key = "da3e19590de8f77fcf7a09c888c526b0149863a0"
+    assert key in json_dict.keys() and json_dict[key] == 2, json_dict
     del json_dict["created_on"]
     assert sorted(json_dict.values()) == [1, 1, 1, 1, 1, 2], json_dict
 
@@ -103,4 +104,5 @@ def test_sha1_add_tensor(sha1_store):
     sha1_store.add(torch.Tensor([1.0, 5.5, 3.4]))
     sha1_store._load_json_dict()
     json_dict = sha1_store._json_dict
-    assert json_dict["71df4069a03a766eacf9f03eea50968e87eae9f8"] == 1, json_dict
+    key = "71df4069a03a766eacf9f03eea50968e87eae9f8"
+    assert key in json_dict.keys() and json_dict[key] == 1, json_dict
