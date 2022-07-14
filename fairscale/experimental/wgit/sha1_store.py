@@ -182,7 +182,15 @@ class SHA1_Store:
             (Tensor or OrderedDict):
                 In-memory object.
         """
-        raise NotImplementedError()
+        path = self._sha1_to_dir(sha1).joinpath(sha1)
+        if not path.exists():
+            # This is potentially valid case for the caller, we need to inform the
+            # the caller about it.
+            raise ValueError(f"Try to get SHA1 {sha1} but it is not found")
+        # Directly return the object after loading it. This could be throw an
+        # exception but that indicates some internal error since we should never
+        # have stored the (invalid) object in the first place with the add() API.
+        return torch.load(path)
 
     def delete(self, sha1: str) -> None:
         """Delete a SHA1
