@@ -23,6 +23,20 @@ from .utils import ExitCode
 # for backward compatibility reasons.
 SHA1_STORE_DIR_NAME = "sha1_store"
 
+# Const string keys for json file. Do not change for backward compatibilities.
+RF_KEY = "ref_count"
+
+
+def _get_json_entry(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Get a dict from a json entry.
+
+    This fills in any missing entries in case we load an older version
+    json file from the disk.
+    """
+    if RF_KEY not in d.keys():
+        d[RF_KEY] = 0
+    return d
+
 
 class SHA1_Store:
     """
@@ -181,6 +195,9 @@ class SHA1_Store:
         Returns:
             (Tensor or OrderedDict):
                 In-memory object.
+
+        Throws:
+            ValueError if sha1 is not found.
         """
         path = self._sha1_to_dir(sha1).joinpath(sha1)
         if not path.exists():
@@ -190,6 +207,9 @@ class SHA1_Store:
         # Directly return the object after loading it. This could be throw an
         # exception but that indicates some internal error since we should never
         # have stored the (invalid) object in the first place with the add() API.
+        #
+        # TODO (Min): we could also keep a stats in the meta data on how many
+        #             times the object is read. Will add if that's needed.
         return torch.load(path)
 
     def delete(self, sha1: str) -> None:
@@ -199,8 +219,34 @@ class SHA1_Store:
             sha1 (str):
                 SHA1 of the object to delete.
 
+        Throws:
+            ValueError if sha1 is not found.
         """
-        raise NotImplementedError()
+        path = self._sha1_to_dir(sha1).joinpath(sha1)
+        if not path.exists():
+            # This is potentially a valid case for the caller, we need to inform the
+            # the caller about it.
+            raise ValueError(f"Try to delete SHA1 {sha1} but it is not found")
+
+        self._load_json_dict()
+
+        assert sha1 in self._json_dict.keys(), "internal error: sha1 not found in json"
+        entry = _get_json_entry(self._json_dict[sha1])
+
+        assert entry[RF_KEY] > 0, f"ref count {entry[RF_KEY]} should be positive"
+        entry[RF_KEY] -= 1
+        if entry[RF_KEY] == 0:
+            # Now, since ref count is 0 now deleting the object.
+            path.unlink()  # We may leave behind an empty dir, which is OK.
+            entry = {}  # Below, we remove the entry because of this.
+
+        # Put the entry back and store it or delete it.
+        if entry:
+            self._json_dict[sha1] = entry
+        else:
+            # empty entry, it means this sha1 is deleted.
+            del self._json_dict[sha1]
+        self._store_json_dict()
 
     def _get_sha1_hash(self, file_path: Union[str, Path]) -> str:
         """Return the sha1 hash of a file
@@ -257,12 +303,16 @@ class SHA1_Store:
 
         # Init the entry if needed.
         if current_sha1_hash not in self._json_dict:
-            self._json_dict[current_sha1_hash] = 0
+            entry = {}
+        else:
+            entry = self._json_dict[current_sha1_hash]
+        entry = _get_json_entry(entry)
 
         # Update the ref count.
-        self._json_dict[current_sha1_hash] += 1 if inc else -1
-        assert self._json_dict[current_sha1_hash] >= 0, "negative ref count"
+        entry[RF_KEY] += 1 if inc else -1
+        assert entry[RF_KEY] >= 0, "negative ref count"
 
+        self._json_dict[current_sha1_hash] = entry
         self._store_json_dict()
 
-        return self._json_dict[current_sha1_hash]
+        return entry[RF_KEY]
