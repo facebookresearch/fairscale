@@ -47,7 +47,8 @@ def sha1_store(request):
     return sha1_store
 
 
-def test_sha1_add_file(sha1_store):
+@pytest.mark.parametrize("compress", [True, False])
+def test_sha1_add_file(sha1_store, compress):
     os.chdir(PARENT_DIR)
 
     # Create random checkpoints
@@ -65,15 +66,15 @@ def test_sha1_add_file(sha1_store):
 
     # Add those 5 random files.
     for c in chkpts:
-        sha1_store.add(c)
+        sha1_store.add(c, compress)
 
     # Add a fixed data twice.
     module = nn.Linear(100, 100, bias=False)
     module.weight.data = torch.zeros(100, 100)
     zeros_file = "zeros.pt"
     torch.save(module.state_dict(), zeros_file)
-    sha1_store.add(zeros_file)
-    sha1_store.add(zeros_file)
+    sha1_store.add(zeros_file, compress)
+    sha1_store.add(zeros_file, compress)
 
     # Assert the ref counts are 1,1,1,1,1 and 2
     sha1_store._load_json_dict()
@@ -86,16 +87,17 @@ def test_sha1_add_file(sha1_store):
     assert sorted(map(lambda x: x["ref_count"], json_dict.values())) == [1, 1, 1, 1, 1, 2], json_dict
 
 
-def test_sha1_add_state_dict(sha1_store):
+@pytest.mark.parametrize("compress", [True, False])
+def test_sha1_add_state_dict(sha1_store, compress):
     os.chdir(PARENT_DIR)
     # add once
     for i in range(3):
-        sha1_store.add(nn.Linear(10, 10).state_dict())
+        sha1_store.add(nn.Linear(10, 10).state_dict(), compress)
     # add twice
     for i in range(3):
         sd = nn.Linear(8, 8).state_dict()
-        sha1_store.add(sd)
-        sha1_store.add(sd)
+        sha1_store.add(sd, compress)
+        sha1_store.add(sd, compress)
 
     sha1_store._load_json_dict()
     json_dict = sha1_store._json_dict
@@ -103,9 +105,10 @@ def test_sha1_add_state_dict(sha1_store):
     assert sorted(map(lambda x: x["ref_count"], json_dict.values())) == [1, 1, 1, 2, 2, 2], json_dict
 
 
-def test_sha1_add_tensor(sha1_store):
+@pytest.mark.parametrize("compress", [True, False])
+def test_sha1_add_tensor(sha1_store, compress):
     os.chdir(PARENT_DIR)
-    sha1_store.add(torch.Tensor([1.0, 5.5, 3.4]))
+    sha1_store.add(torch.Tensor([1.0, 5.5, 3.4]), compress)
     sha1_store._load_json_dict()
     json_dict = sha1_store._json_dict
     if torch_version() >= (1, 9, 0):
@@ -114,7 +117,8 @@ def test_sha1_add_tensor(sha1_store):
         assert key in json_dict.keys() and json_dict[key]["ref_count"] == 1, json_dict
 
 
-def test_sha1_get(sha1_store):
+@pytest.mark.parametrize("compress", [True, False])
+def test_sha1_get(sha1_store, compress):
     """Testing the get() API: normal and exception cases."""
     os.chdir(PARENT_DIR)
 
@@ -125,15 +129,15 @@ def test_sha1_get(sha1_store):
     tensor = torch.ones(20, 30)
 
     # Check that we can get them back.
-    file_sha1 = sha1_store.add(file)
+    file_sha1 = sha1_store.add(file, compress)
     sd = sha1_store.get(file_sha1)
     assert objects_are_equal(sd, torch.load(file))
 
-    sd_sha1 = sha1_store.add(state_dict)
+    sd_sha1 = sha1_store.add(state_dict, compress)
     sd = sha1_store.get(sd_sha1)
     assert objects_are_equal(sd, state_dict)
 
-    tensor_sha1 = sha1_store.add(tensor)
+    tensor_sha1 = sha1_store.add(tensor, compress)
     tensor_got = sha1_store.get(tensor_sha1)
     assert objects_are_equal(tensor_got, tensor)
 
@@ -142,22 +146,23 @@ def test_sha1_get(sha1_store):
         sha1_store.get(tensor_sha1[:-1])
 
 
-def test_sha1_delete(sha1_store):
+@pytest.mark.parametrize("compress", [True, False])
+def test_sha1_delete(sha1_store, compress):
     """Testing the delete() API: with ref counting behavior."""
     os.chdir(PARENT_DIR)
 
     # Add once and delete, second delete should throw an exception.
     tensor = torch.ones(30, 50)
-    sha1 = sha1_store.add(tensor)
+    sha1 = sha1_store.add(tensor, compress)
     sha1_store.delete(sha1)
     with pytest.raises(ValueError):
         sha1_store.delete(sha1)
 
     # Add multiple times and delete should match that.
     state_dict = nn.Sequential(nn.Linear(10, 10), nn.Linear(10, 20)).state_dict()
-    sha1 = sha1_store.add(state_dict)
+    sha1 = sha1_store.add(state_dict, compress)
     for i in range(3):
-        new_sha1 = sha1_store.add(state_dict)
+        new_sha1 = sha1_store.add(state_dict, compress)
         assert sha1 == new_sha1, f"{sha1} vs. {new_sha1}"
     for i in range(4):
         sha1_store.delete(sha1)
