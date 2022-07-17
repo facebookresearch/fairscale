@@ -70,6 +70,15 @@ class Repo:
             sys.stderr.write("fatal: not a wgit repository!\n")
             sys.exit(1)
 
+        # We are done init. Do a check.
+        self._sanity_check()
+
+    def _sanity_check(self) -> None:
+        """Helper to check if on-disk state matches what we expect."""
+        if not self._weigit_repo_exists(self._wgit_parent):
+            sys.stderr.write("fatal: no wgit repo exists!\n")
+            sys.exit(1)
+
     def add(self, in_file_path: str) -> None:
         """Add a file to the wgit repo.
 
@@ -77,24 +86,22 @@ class Repo:
             in_file_path (str):
                 Path to the file to be added to the weigit repo
         """
-        if self._weigit_repo_exists(self._wgit_parent):
-            # create the corresponding metadata file
-            file_path = Path(in_file_path)
-            rel_file_path = self._rel_file_path(file_path)
-            metadata_file, parent_sha1 = self._process_metadata_file(rel_file_path)
+        self._sanity_check()
 
-            # add the file to the sha1_store
-            # TODO (Min): We don't add parent sha1 tracking to sha1 store due to
-            #             de-duplication & dependency tracking can create cycles.
-            #             We need to figure out a way to handle deletion.
-            sha1_hash = self._sha1_store.add(file_path)
+        # create the corresponding metadata file
+        file_path = Path(in_file_path)
+        rel_file_path = self._rel_file_path(file_path)
+        metadata_file, parent_sha1 = self._process_metadata_file(rel_file_path)
 
-            # write metadata to the metadata-file
-            self._write_metadata(metadata_file, file_path, sha1_hash)
-            self._pygit.add()  # add to the .wgit/.git repo
-        else:
-            sys.stderr.write("fatal: no wgit repo exists!\n")
-            sys.exit(1)
+        # add the file to the sha1_store
+        # TODO (Min): We don't add parent sha1 tracking to sha1 store due to
+        #             de-duplication & dependency tracking can create cycles.
+        #             We need to figure out a way to handle deletion.
+        sha1_hash = self._sha1_store.add(file_path)
+
+        # write metadata to the metadata-file
+        self._write_metadata(metadata_file, file_path, sha1_hash)
+        self._pygit.add()  # add to the .wgit/.git repo
 
     def commit(self, message: str) -> None:
         """Commits staged changes to the repo.
@@ -103,11 +110,9 @@ class Repo:
             message (str):
                 The commit message
         """
-        if self._weigit_repo_exists(self._wgit_parent):
-            self._pygit.commit(message)
-        else:
-            sys.stderr.write("fatal: no wgit repo exists!\n")
-            sys.exit(1)
+        self._sanity_check()
+
+        self._pygit.commit(message)
 
     def status(self) -> Dict:
         """Show the state of the weigit working tree.
@@ -122,25 +127,23 @@ class Repo:
             (dict):
                 A dict keyed with files and their status.
         """
-        if self._weigit_repo_exists(self._wgit_parent):
-            pygit_status = self._pygit.status()
-            status = self._get_metdata_files()
-            if status:
-                out_status = dict()
-                for metadata_file, is_modified in status.items():
-                    # if metadata_file is among the keys of pygit_status dict, it has not been commited to git yet.
-                    if is_modified:
-                        out_status[str(metadata_file)] = RepoStatus.CHANGES_NOT_ADDED
-                    elif not is_modified and metadata_file in pygit_status.keys():
-                        out_status[str(metadata_file)] = RepoStatus.CHANGES_ADDED_NOT_COMMITED
-                    elif not is_modified and metadata_file not in pygit_status.keys():
-                        out_status[str(metadata_file)] = RepoStatus.CLEAN
-                return out_status
-            else:  # if status dict is empty, nothing has been added so far.
-                return {"": RepoStatus.CLEAN}  # sub case of case-3, clean with an empty repo
-        else:
-            sys.stderr.write("fatal: no wgit repo exists!\n")
-            sys.exit(1)
+        self._sanity_check()
+
+        pygit_status = self._pygit.status()
+        status = self._get_metdata_files()
+        if status:
+            out_status = dict()
+            for metadata_file, is_modified in status.items():
+                # if metadata_file is among the keys of pygit_status dict, it has not been commited to git yet.
+                if is_modified:
+                    out_status[str(metadata_file)] = RepoStatus.CHANGES_NOT_ADDED
+                elif not is_modified and metadata_file in pygit_status.keys():
+                    out_status[str(metadata_file)] = RepoStatus.CHANGES_ADDED_NOT_COMMITED
+                elif not is_modified and metadata_file not in pygit_status.keys():
+                    out_status[str(metadata_file)] = RepoStatus.CLEAN
+            return out_status
+        else:  # if status dict is empty, nothing has been added so far.
+            return {"": RepoStatus.CLEAN}  # sub case of case-3, clean with an empty repo
 
     def log(self, file: str) -> None:
         """Returns the WeiGit log of commit history.
@@ -150,17 +153,12 @@ class Repo:
                 Show the log of the commit history of the repo. Optionally, show
                 the log history of a specific file.
         """
-        if self._weigit_repo_exists(self._wgit_parent):
-            if file:
-                print(f"wgit log of the file: {file}")
-            else:
-                print("wgit log")
-        else:
-            sys.stderr.write("fatal: no wgit repo exists!\n")
-            import pdb
+        self._sanity_check()
 
-            pdb.set_trace()
-            sys.exit(1)
+        if file:
+            print(f"wgit log of the file: {file}")
+        else:
+            print("wgit log")
 
     def checkout(self, sha1: str) -> None:
         """Checkout a previously commited version of the checkpoint.
@@ -169,14 +167,17 @@ class Repo:
             sha1 (str):
                The sha1 hash of the file version to checkout.
         """
+        self._sanity_check()
         raise NotImplementedError
 
     def compression(self) -> None:
         """Not Implemented: Compression functionalities"""
+        self._sanity_check()
         raise NotImplementedError
 
     def checkout_by_steps(self) -> None:
         """Not Implemented: Checkout by steps"""
+        self._sanity_check()
         raise NotImplementedError
 
     def _get_metdata_files(self) -> Dict:
