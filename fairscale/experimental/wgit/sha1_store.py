@@ -4,7 +4,6 @@
 # LICENSE file in the root directory of this source tree.
 
 
-from collections import OrderedDict
 import hashlib
 import json
 from pathlib import Path
@@ -161,7 +160,7 @@ class SHA1_Store:
         with open(self._metadata_file_path, "w", encoding="utf-8") as f:
             json.dump(self._json_dict, f, ensure_ascii=False, indent=4)
 
-    def add(self, file_or_obj: Union[Path, Tensor, OrderedDict], compress: bool = False) -> str:
+    def add(self, file_or_obj: Union[Path, Tensor, Dict], compress: bool = False) -> str:
         """ Adds a file/object to this store and the sha1 references accordingly.
 
         First, a sha1 hash is calculated. Utilizing the sha1 hash string, the actual file
@@ -172,9 +171,12 @@ class SHA1_Store:
         with a lot of zeros.
 
         Args:
-            file_or_obj (str or tensor or OrderedDict):
+            file_or_obj (str or tensor or Dict):
                 Path to the file to be added to the store or an in-memory object
-                that can be handled by torch.save.
+                that can be handled by torch.save. Note, OrderedDict is used when
+                you call `state_dict()` on a nn.Module, and it is an instance
+                of a Dict too. A model's state_dict can be a simple dict because
+                it may contain both model state_dict and other non-tensor info.
         """
         # Use `isinstance` not type() == Path since pathlib returns OS specific
         # Path types, which inherit from the Path class.
@@ -183,10 +185,10 @@ class SHA1_Store:
             torch.load(cast(Union[Path, str], file_or_obj))
             file_path = Path(file_or_obj)
             remove_tmp = False
-        elif isinstance(file_or_obj, (Tensor, OrderedDict)):
+        elif isinstance(file_or_obj, (Tensor, Dict)):
             # Serialize the object into a tmp file.
             file_path = self._get_tmp_file_path()
-            torch.save(cast(Union[Tensor, OrderedDict], file_or_obj), file_path)
+            torch.save(cast(Union[Tensor, Dict], file_or_obj), file_path)
             remove_tmp = True
         else:
             assert False, f"incorrect input {type(file_or_obj)}"
@@ -229,7 +231,7 @@ class SHA1_Store:
 
         return sha1_hash
 
-    def get(self, sha1: str) -> Union[Tensor, OrderedDict]:
+    def get(self, sha1: str) -> Union[Tensor, Dict]:
         """Get data from a SHA1
 
         Args:
@@ -237,7 +239,7 @@ class SHA1_Store:
                 SHA1 of the object to get.
 
         Returns:
-            (Tensor or OrderedDict):
+            (Tensor or Dict):
                 In-memory object.
 
         Throws:
