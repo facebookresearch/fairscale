@@ -503,7 +503,7 @@ def objects_are_equal(a: Any, b: Any, raise_exception: bool = False, dict_key: O
         return all(objects_are_equal(x, y, raise_exception) for x, y in zip(a, b))
     elif torch.is_tensor(a):
         try:
-            # assert_allclose doesn't strictly test shape, dtype and device
+            # assert_close doesn't strictly test shape, dtype and device
             shape_dtype_device_match = a.size() == b.size() and a.dtype == b.dtype and a.device == b.device
             if not shape_dtype_device_match:
                 if raise_exception:
@@ -513,8 +513,11 @@ def objects_are_equal(a: Any, b: Any, raise_exception: bool = False, dict_key: O
                     raise AssertionError(msg)
                 else:
                     return False
-            # assert_allclose.
-            torch.testing.assert_allclose(a, b)
+            # assert_close.
+            if torch_version() < (1, 12, 0):
+                torch.testing.assert_allclose(a, b)
+            else:
+                torch.testing.assert_close(a, b)
             return True
         except (AssertionError, RuntimeError) as e:
             if raise_exception:
