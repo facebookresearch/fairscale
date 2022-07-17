@@ -7,10 +7,14 @@ from enum import Enum
 import json
 from pathlib import Path
 import sys
-from typing import Dict, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 from .pygit import PyGit
 from .sha1_store import SHA1_Store
+
+# This is a fixed dir name we use for sha1_store. It should not be changed
+# for backward compatibility reasons.
+SHA1_STORE_DIR_NAME = "sha1_store"
 
 
 class Repo:
@@ -41,9 +45,7 @@ class Repo:
         if not parent_dir:
             parent_dir = Path.cwd()
         self.wgit_parent = Path(parent_dir)
-        self._repo_path: Union[None, Path] = None
-        self._wgit_git_path = Path(".wgit/.git")
-        self._sha1_store_path = Path(".wgit/sha1_store")
+        self._repo_path: Optional[Path] = None
 
         exists = self._exists(self.wgit_parent)
         if not exists and init:
@@ -53,23 +55,21 @@ class Repo:
             weigit_dir.mkdir(parents=False, exist_ok=True)
 
             # Initializing sha1_store only after wgit has been initialized!
-            self._sha1_store = SHA1_Store(weigit_dir, init=True)
+            self._sha1_store = SHA1_Store(weigit_dir.joinpath(SHA1_STORE_DIR_NAME), init=True)
 
-            # # Make the .wgit a git repo
-            gitignore_files = [
-                self._sha1_store_path.name,
-            ]
+            # Make the .wgit a git repo
+            gitignore_files = [SHA1_STORE_DIR_NAME]
             self._pygit = PyGit(weigit_dir, gitignore=gitignore_files)
 
         elif exists and init:
             # if weigit repo already exists and init is being called, wrap the existing
             # .wgit/.git repo with PyGit
-            self._sha1_store = SHA1_Store(self.path)
+            self._sha1_store = SHA1_Store(self.path.joinpath(SHA1_STORE_DIR_NAME))
             self._pygit = PyGit(self.path)
 
         elif exists and not init:
             # weigit exists and non-init commands are triggered
-            self._sha1_store = SHA1_Store(self.path)
+            self._sha1_store = SHA1_Store(self.path.joinpath(SHA1_STORE_DIR_NAME))
             self._pygit = PyGit(self.path)
 
         else:
