@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 from typing import Dict, Optional, Tuple, Union
 
+import torch
+
 from .pygit import PyGit
 from .sha1_store import SHA1_Store
 
@@ -117,12 +119,14 @@ class Repo:
             sys.stderr.write("fatal: no wgit repo exists!\n")
             sys.exit(1)
 
-    def add(self, in_file_path: str) -> None:
+    def add(self, in_file_path: str, per_tensor: bool = False) -> None:
         """Add a file to the wgit repo.
 
         Args:
             in_file_path (str):
-                Path to the file to be added to the weigit repo
+                Path to the file to be added.
+            per_tensor (bool):
+                Add a file in a per-tensor fashion.
         """
         self._sanity_check()
 
@@ -135,10 +139,19 @@ class Repo:
         # TODO (Min): We don't add parent sha1 tracking to sha1 store due to
         #             de-duplication & dependency tracking can create cycles.
         #             We need to figure out a way to handle deletion.
-        sha1_hash = self._sha1_store.add(file_path)
+        sha1_dict = {}
+        if per_tensor:
+            state_dict = torch.load(file_path)
+            for key, tensor in state_dict.items():
+                # TODO (Min): here we will do SST/DST and add those tensors for
+                #             sparsity. Don't forget to enable "compress=True"
+                #             for the add() below once the compression PR is in.
+                sha1_dict[key] = self._sha1_store.add(tensor)
+        else:
+            sha1_dict = {"__sha1_full__": self._sha1_store.add(file_path)}
 
         # write metadata to the metadata-file
-        self._write_metadata(metadata_file, file_path, sha1_hash)
+        self._write_metadata(metadata_file, file_path, sha1_dict)
         self._pygit.add()  # add to the .wgit/.git repo
 
     def commit(self, message: str) -> None:
@@ -279,13 +292,11 @@ class Repo:
             parent_sha1 = ref_data["SHA1"]["__sha1_full__"]
         return metadata_file, parent_sha1
 
-    def _write_metadata(self, metadata_file: Path, file_path: Path, sha1_hash: str) -> None:
+    def _write_metadata(self, metadata_file: Path, file_path: Path, sha1_dict: Dict) -> None:
         """Write metadata to the metadata file"""
         change_time = Path(file_path).stat().st_mtime
         metadata = {
-            "SHA1": {
-                "__sha1_full__": sha1_hash,
-            },
+            "SHA1": sha1_dict,
             "file_path": str(file_path),
             "last_modified_time_stamp": change_time,
         }

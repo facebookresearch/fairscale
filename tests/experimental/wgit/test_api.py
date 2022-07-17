@@ -33,7 +33,7 @@ def create_test_dir():
     # create random checkpoints
     size_list = [30e5, 35e5, 40e5, 40e5]
     for i, size in enumerate(size_list):
-        torch.save(nn.Linear(1, int(size)), f"checkpoint_{i}.pt")
+        torch.save(nn.Linear(1, int(size)).state_dict(), f"checkpoint_{i}.pt")
     return test_dir
 
 
@@ -55,10 +55,14 @@ def test_api_init(capsys, repo):
     assert Path(".wgit/.gitignore").exists()
 
 
-def test_api_add(capsys, repo):
+@pytest.mark.parametrize("per_tensor", [True, False])
+def test_api_add(capsys, repo, per_tensor):
     fnum = random.randint(0, 2)
     chkpt0 = f"checkpoint_{fnum}.pt"
-    repo.add(chkpt0)
+    repo.add(chkpt0, per_tensor)
+    if per_tensor:
+        # TODO (Min): test per_tensor add more.
+        return
     sha1_hash = repo._sha1_store._get_sha1_hash(chkpt0)
     metadata_path = repo._rel_file_path(Path(chkpt0))
 
