@@ -73,6 +73,44 @@ class Repo:
         # We are done init. Do a check.
         self._sanity_check()
 
+    def _recursive_search_and_may_init_dot_wgit_dir_path(self, check_dir: Path) -> bool:
+        """Search for a wgit repo top level dir from potentiall a subdir of a repo.
+
+            This may set the self._dot_wgit_dir_path if a repo is found.
+
+        Args:
+           check_dir (Path):
+               Path to the directory from where search is started.
+
+        Returns:
+           Returns True if a repo is found.
+        """
+        assert self._dot_wgit_dir_path is None, f"_dot_wgit_dir_path is already set to {self._dot_wgit_dir_path}"
+        if self._weigit_repo_exists(check_dir):
+            self._dot_wgit_dir_path = check_dir.joinpath(".wgit")
+        else:
+            root = Path(check_dir.parts[0])
+            while check_dir != root:
+                check_dir = check_dir.parent
+                if self._weigit_repo_exists(check_dir):
+                    self._dot_wgit_dir_path = check_dir.joinpath(".wgit")
+                    break
+        return True if self._dot_wgit_dir_path is not None else False
+
+    def _weigit_repo_exists(self, check_dir: Path) -> bool:
+        """Returns True if a valid WeiGit repo exists in the path: check_dir."""
+        wgit_exists, git_exists, gitignore_exists = self._weigit_repo_file_check(check_dir)
+        return wgit_exists and git_exists and gitignore_exists
+
+    def _weigit_repo_file_check(self, check_dir: Path) -> tuple:
+        """Returns a tuple of boolean corresponding to the existence of each
+        .wgit internally required files.
+        """
+        wgit_exists = check_dir.joinpath(".wgit").exists()
+        git_exists = check_dir.joinpath(".wgit/.git").exists()
+        gitignore_exists = check_dir.joinpath(".wgit/.gitignore").exists()
+        return wgit_exists, git_exists, gitignore_exists
+
     def _sanity_check(self) -> None:
         """Helper to check if on-disk state matches what we expect."""
         if not self._weigit_repo_exists(self._wgit_parent):
@@ -265,44 +303,6 @@ class Repo:
             pass
         # return the relative part (path not common to cwd)
         return Path(*filepath.parts[i:])
-
-    def _recursive_search_and_may_init_dot_wgit_dir_path(self, check_dir: Path) -> bool:
-        """Search for a wgit repo top level dir from potentiall a subdir of a repo.
-
-            This may set the self._dot_wgit_dir_path if a repo is found.
-
-        Args:
-           check_dir (Path):
-               Path to the directory from where search is started.
-
-        Returns:
-           Returns True if a repo is found.
-        """
-        assert self._dot_wgit_dir_path is None, f"_dot_wgit_dir_path is already set to {self._dot_wgit_dir_path}"
-        if self._weigit_repo_exists(check_dir):
-            self._dot_wgit_dir_path = check_dir.joinpath(".wgit")
-        else:
-            root = Path(check_dir.parts[0])
-            while check_dir != root:
-                check_dir = check_dir.parent
-                if self._weigit_repo_exists(check_dir):
-                    self._dot_wgit_dir_path = check_dir.joinpath(".wgit")
-                    break
-        return True if self._dot_wgit_dir_path is not None else False
-
-    def _weigit_repo_exists(self, check_dir: Path) -> bool:
-        """Returns True if a valid WeiGit repo exists in the path: check_dir."""
-        wgit_exists, git_exists, gitignore_exists = self._weigit_repo_file_check(check_dir)
-        return wgit_exists and git_exists and gitignore_exists
-
-    def _weigit_repo_file_check(self, check_dir: Path) -> tuple:
-        """Returns a tuple of boolean corresponding to the existence of each
-        .wgit internally required files.
-        """
-        wgit_exists = check_dir.joinpath(".wgit").exists()
-        git_exists = check_dir.joinpath(".wgit/.git").exists()
-        gitignore_exists = check_dir.joinpath(".wgit/.gitignore").exists()
-        return wgit_exists, git_exists, gitignore_exists
 
 
 class RepoStatus(Enum):
