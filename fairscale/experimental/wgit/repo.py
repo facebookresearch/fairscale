@@ -5,7 +5,6 @@
 
 from enum import Enum
 import json
-import pathlib
 from pathlib import Path
 import sys
 from typing import Dict, Tuple, Union
@@ -22,7 +21,7 @@ class Repo:
     track of the content.
 
     Args:
-        parent_dir (pathlib.Path, str):
+        parent_dir (Path, str):
             Parent dir in which to make or to load a .wgit dir.
             Default: "", which means CWD.
         init (bool, optional):
@@ -80,10 +79,10 @@ class Repo:
             sys.exit(1)
 
     def add(self, in_file_path: str) -> None:
-        """Adds a file to the wgit repo.
+        """Add a file to the wgit repo.
 
         Args:
-            file_path (str):
+            in_file_path (str):
                 Path to the file to be added to the weigit repo
         """
         if self._exists(self.wgit_parent):
@@ -298,12 +297,12 @@ class Repo:
                     break
         return True if self._repo_path is not None else False
 
-    def _weigit_repo_exists(self, check_dir: pathlib.Path) -> bool:
+    def _weigit_repo_exists(self, check_dir: Path) -> bool:
         """Returns True if a valid WeiGit repo exists in the path: check_dir."""
-        wgit_exists, git_exists, gitignore_exists = self._weight_repo_file_check(check_dir)
+        wgit_exists, git_exists, gitignore_exists = self._weigit_repo_file_check(check_dir)
         return wgit_exists and git_exists and gitignore_exists
 
-    def _weight_repo_file_check(self, check_dir: Path) -> tuple:
+    def _weigit_repo_file_check(self, check_dir: Path) -> tuple:
         """Returns a tuple of boolean corresponding to the existence of each
         .wgit internally required files.
         """
