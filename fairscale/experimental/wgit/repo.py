@@ -7,7 +7,7 @@ from enum import Enum
 import json
 from pathlib import Path
 import sys
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Union
 
 import torch
 
@@ -133,7 +133,7 @@ class Repo:
         # create the corresponding metadata file
         file_path = Path(in_file_path)
         rel_file_path = self._rel_file_path(file_path)
-        metadata_file, parent_sha1 = self._process_metadata_file(rel_file_path)
+        metadata_file = self._process_metadata_file(rel_file_path)
 
         # add the file to the sha1_store
         # TODO (Min): We don't add parent sha1 tracking to sha1 store due to
@@ -274,7 +274,7 @@ class Repo:
         curr_mod_timestamp = Path(data["file_path"]).stat().st_mtime
         return not curr_mod_timestamp == last_mod_timestamp
 
-    def _process_metadata_file(self, metadata_fname: Path) -> Tuple[Path, str]:
+    def _process_metadata_file(self, metadata_fname: Path) -> Path:
         """Create a metadata_file corresponding to the file to be tracked by weigit if
         the first version of the file is encountered. If a version already exists, open
         the file and get the sha1_hash of the last version as parent_sha1.
@@ -284,12 +284,10 @@ class Repo:
 
         if not metadata_file.exists() or not metadata_file.stat().st_size:
             metadata_file.touch()
-            parent_sha1 = "ROOT"
         else:
             with open(metadata_file, "r") as f:
                 ref_data = json.load(f)
-            parent_sha1 = ref_data["SHA1"]["__sha1_full__"]
-        return metadata_file, parent_sha1
+        return metadata_file
 
     def _write_metadata(self, metadata_file: Path, file_path: Path, sha1_dict: Dict) -> None:
         """Write metadata to the metadata file"""
