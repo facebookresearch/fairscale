@@ -34,43 +34,42 @@ class Repo:
               of a sha1_store in the ./<parent_dir>/.wgit directory, and makes the
               ./<parent_dir>/.wgit a git repository through git initialization.
             - If ``False``, a new WeiGit repo is not initialized and the existing repo is
-              wrapped, populating the `wgit_parent` and other internal attributes.
+              wrapped, populating the `_wgit_parent` and other internal attributes.
             - Default: False
     """
 
     def __init__(self, parent_dir: Union[Path, str] = "", init: bool = False) -> None:
-        # If repo does not exist, creates a new wgit repo object with self.repo.path
-        # pointing to the path of repo and notes all the internal files.
-        # Else, if repo already exists: create a pygit object from the .wgit/.git.
-        if not parent_dir:
-            parent_dir = Path.cwd()
-        self.wgit_parent = Path(parent_dir)
-        self._repo_path: Optional[Path] = None
+        # Set _wgit_parent.
+        self._wgit_parent = Path(parent_dir if parent_dir != "" else Path.cwd())
 
-        exists = self._exists(self.wgit_parent)
+        # Set _dot_wgit_dir_path.
+        self._dot_wgit_dir_path: Optional[Path] = None
+        exists = self._recursive_search_and_may_init_dot_wgit_dir_path(self._wgit_parent)
+
         if not exists and init:
             # No weigit repo exists and is being initialized with init=True
             # Make .wgit directory, create sha1_store
-            weigit_dir = self.wgit_parent.joinpath(".wgit")
-            weigit_dir.mkdir(parents=False, exist_ok=True)
+            self._dot_wgit_dir_path = self._wgit_parent.joinpath(".wgit")
+            self._dot_wgit_dir_path.mkdir(parents=False, exist_ok=True)
 
             # Initializing sha1_store only after wgit has been initialized!
-            self._sha1_store = SHA1_Store(weigit_dir.joinpath(SHA1_STORE_DIR_NAME), init=True)
+            self._sha1_store = SHA1_Store(self._dot_wgit_dir_path.joinpath(SHA1_STORE_DIR_NAME), init=True)
 
-            # Make the .wgit a git repo
-            gitignore_files = [SHA1_STORE_DIR_NAME]
-            self._pygit = PyGit(weigit_dir, gitignore=gitignore_files)
+            # Create a git repo for the metadata versioning.
+            self._pygit = PyGit(self._dot_wgit_dir_path, gitignore=[SHA1_STORE_DIR_NAME])
 
         elif exists and init:
             # if weigit repo already exists and init is being called, wrap the existing
             # .wgit/.git repo with PyGit
-            self._sha1_store = SHA1_Store(self.path.joinpath(SHA1_STORE_DIR_NAME))
-            self._pygit = PyGit(self.path)
+            assert self._dot_wgit_dir_path is not None
+            self._sha1_store = SHA1_Store(self._dot_wgit_dir_path.joinpath(SHA1_STORE_DIR_NAME))
+            self._pygit = PyGit(self._dot_wgit_dir_path)
 
         elif exists and not init:
             # weigit exists and non-init commands are triggered
-            self._sha1_store = SHA1_Store(self.path.joinpath(SHA1_STORE_DIR_NAME))
-            self._pygit = PyGit(self.path)
+            assert self._dot_wgit_dir_path is not None
+            self._sha1_store = SHA1_Store(self._dot_wgit_dir_path.joinpath(SHA1_STORE_DIR_NAME))
+            self._pygit = PyGit(self._dot_wgit_dir_path)
 
         else:
             # weigit doesn't exist and is not trying to be initialized (triggers
@@ -85,7 +84,7 @@ class Repo:
             in_file_path (str):
                 Path to the file to be added to the weigit repo
         """
-        if self._exists(self.wgit_parent):
+        if self._weigit_repo_exists(self._wgit_parent):
             # create the corresponding metadata file
             file_path = Path(in_file_path)
             rel_file_path = self._rel_file_path(file_path)
@@ -111,7 +110,7 @@ class Repo:
             message (str):
                 The commit message
         """
-        if self._exists(self.wgit_parent):
+        if self._weigit_repo_exists(self._wgit_parent):
             self._pygit.commit(message)
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
@@ -130,7 +129,7 @@ class Repo:
             (dict):
                 A dict keyed with files and their status.
         """
-        if self._exists(self.wgit_parent):
+        if self._weigit_repo_exists(self._wgit_parent):
             pygit_status = self._pygit.status()
             status = self._get_metdata_files()
             if status:
@@ -158,13 +157,16 @@ class Repo:
                 Show the log of the commit history of the repo. Optionally, show
                 the log history of a specific file.
         """
-        if self._exists(self.wgit_parent):
+        if self._weigit_repo_exists(self._wgit_parent):
             if file:
                 print(f"wgit log of the file: {file}")
             else:
                 print("wgit log")
         else:
             sys.stderr.write("fatal: no wgit repo exists!\n")
+            import pdb
+
+            pdb.set_trace()
             sys.exit(1)
 
     def checkout(self, sha1: str) -> None:
@@ -184,25 +186,18 @@ class Repo:
         """Not Implemented: Checkout by steps"""
         raise NotImplementedError
 
-    @property
-    def path(self) -> Path:
-        """Get the path to the WeiGit repo"""
-        if self._repo_path is None:
-            self._exists(self.wgit_parent)
-        return self._repo_path
-
     def _get_metdata_files(self) -> Dict:
         """Walk the directories that contain the metadata files and check the
         status of those files, whether they have been modified or not.
         """
         metadata_d = dict()
-        for file in self.path.iterdir():  # iterate over the .wgit directory
+        for file in self._dot_wgit_dir_path.iterdir():  # iterate over the .wgit directory
             # exlude all the .wgit files and directory
             if file.name not in {"sha1_store", ".git", ".gitignore"}:
                 # perform a directory walk on the metadata_file directories to find the metadata files
                 for path in file.rglob("*"):
                     if path.is_file():
-                        rel_path = str(path.relative_to(self.path))  # metadata path relative to .wgit dir
+                        rel_path = str(path.relative_to(self._dot_wgit_dir_path))  # metadata path relative to .wgit dir
                         metadata_d[rel_path] = self._is_file_modified(path)
         return metadata_d
 
@@ -240,7 +235,7 @@ class Repo:
         the first version of the file is encountered. If a version already exists, open
         the file and get the sha1_hash of the last version as parent_sha1.
         """
-        metadata_file = self.path.joinpath(metadata_fname)
+        metadata_file = self._dot_wgit_dir_path.joinpath(metadata_fname)
         metadata_file.parent.mkdir(parents=True, exist_ok=True)  # create parent dirs for metadata file
 
         if not metadata_file.exists() or not metadata_file.stat().st_size:
@@ -277,25 +272,29 @@ class Repo:
         # return the relative part (path not common to cwd)
         return Path(*filepath.parts[i:])
 
-    def _exists(self, check_dir: Path) -> bool:
-        """Returns True if a valid wgit exists within the cwd and iteratively
-            checks to the root directory and sets the self._repo_path attribute
-            to the wgit path.
+    def _recursive_search_and_may_init_dot_wgit_dir_path(self, check_dir: Path) -> bool:
+        """Search for a wgit repo top level dir from potentiall a subdir of a repo.
+
+            This may set the self._dot_wgit_dir_path if a repo is found.
 
         Args:
            check_dir (Path):
                Path to the directory from where search is started.
+
+        Returns:
+           Returns True if a repo is found.
         """
+        assert self._dot_wgit_dir_path is None, f"_dot_wgit_dir_path is already set to {self._dot_wgit_dir_path}"
         if self._weigit_repo_exists(check_dir):
-            self._repo_path = check_dir.joinpath(".wgit")
+            self._dot_wgit_dir_path = check_dir.joinpath(".wgit")
         else:
             root = Path(check_dir.parts[0])
             while check_dir != root:
                 check_dir = check_dir.parent
                 if self._weigit_repo_exists(check_dir):
-                    self._repo_path = check_dir.joinpath(".wgit")
+                    self._dot_wgit_dir_path = check_dir.joinpath(".wgit")
                     break
-        return True if self._repo_path is not None else False
+        return True if self._dot_wgit_dir_path is not None else False
 
     def _weigit_repo_exists(self, check_dir: Path) -> bool:
         """Returns True if a valid WeiGit repo exists in the path: check_dir."""
