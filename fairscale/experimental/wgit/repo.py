@@ -18,22 +18,29 @@ class Repo:
     """
     Represents the WeiGit repo for tracking neural network weights and their versions.
 
+    A WeiGit repo is like a git repo. It is a dir, in which a .wgit dir exists to keep
+    track of the content.
+
     Args:
-        parent_dir (pathlib.Path, str)
-            The path to the parent directory where a weigit repo will be created. In the case a repo already exists, it will be wrapped with this class.
-        init (bool, optional)
-            - If ``True``, initializes a new WeiGit repo in the parent_dir. Initialization creates a `.wgit` directory within the <parent_dir>, triggers an initialization
-                of a sha1_store in the ./<parent_dir>/.wgit directory, and makes the ./<parent_dir>/.wgit a git repository through git initialization.
-            - If ``False``, a new WeiGit repo is not initialized and the existing repo is simply wrapped, populating the `wgit_parent` and other internal attributes.
+        parent_dir (pathlib.Path, str):
+            Parent dir in which to make or to load a .wgit dir.
+            Default: "", which means CWD.
+        init (bool, optional):
+            - If ``True``, initializes a new WeiGit repo in the parent_dir. Initialization
+              creates a `.wgit` directory within the <parent_dir>, triggers an initialization.
+              of a sha1_store in the ./<parent_dir>/.wgit directory, and makes the
+              ./<parent_dir>/.wgit a git repository through git initialization.
+            - If ``False``, a new WeiGit repo is not initialized and the existing repo is
+              wrapped, populating the `wgit_parent` and other internal attributes.
             - Default: False
     """
 
-    def __init__(self, parent_dir: Union[Path, str] = Path.cwd(), init: bool = False) -> None:
-        """initialize a weigit repo: Subsequently, also initialize a sha1_store and a pygit git repo within as
-        part of the weigit initialization process"""
-        # If repo does not exist, creates a new wgit repo object with self.repo.path pointing to the path of repo
-        # and notes all the internal files.
-        # else, if repo already exists: create a pygit object from the .wgit/.git.
+    def __init__(self, parent_dir: Union[Path, str] = "", init: bool = False) -> None:
+        # If repo does not exist, creates a new wgit repo object with self.repo.path
+        # pointing to the path of repo and notes all the internal files.
+        # Else, if repo already exists: create a pygit object from the .wgit/.git.
+        if not parent_dir:
+            parent_dir = Path.cwd()
         self.wgit_parent = Path(parent_dir)
         self._repo_path: Union[None, Path] = None
         self._wgit_git_path = Path(".wgit/.git")
@@ -56,7 +63,8 @@ class Repo:
             self._pygit = PyGit(weigit_dir, gitignore=gitignore_files)
 
         elif exists and init:
-            # if weigit repo already exists and init is being called, wrap the existing .wgit/.git repo with PyGit
+            # if weigit repo already exists and init is being called, wrap the existing
+            # .wgit/.git repo with PyGit
             self._sha1_store = SHA1_Store(self.path)
             self._pygit = PyGit(self.path)
 
@@ -66,16 +74,16 @@ class Repo:
             self._pygit = PyGit(self.path)
 
         else:
-            # weigit doesn't exist and is not trying to be initialized (triggers during non-init commands)
+            # weigit doesn't exist and is not trying to be initialized (triggers
+            # during non-init commands)
             sys.stderr.write("fatal: not a wgit repository!\n")
             sys.exit(1)
 
     def add(self, in_file_path: str) -> None:
-        """
-        Adds a file to the wgit repo.
+        """Adds a file to the wgit repo.
 
         Args:
-            file_path (str)
+            file_path (str):
                 Path to the file to be added to the weigit repo
         """
         if self._exists(self.wgit_parent):
@@ -98,11 +106,10 @@ class Repo:
             sys.exit(1)
 
     def commit(self, message: str) -> None:
-        """
-        Commits staged changes to the repo.
+        """Commits staged changes to the repo.
 
         Args:
-            message (str)
+            message (str):
                 The commit message
         """
         if self._exists(self.wgit_parent):
@@ -112,10 +119,17 @@ class Repo:
             sys.exit(1)
 
     def status(self) -> Dict:
-        """Show the state of the weigit working tree. State can be
-        1. dirty with changes/modifications not added to weigit repo,
-        2. dirty with a file changes added but not committed
-        3. clean and tracking files after a change has been committed, or clean with with an empty repo.
+        """Show the state of the weigit working tree.
+
+        State can be
+          1. dirty with changes/modifications not added to weigit repo.
+          2. dirty with a file changes added but not committed.
+          3. clean and tracking files after a change has been committed,
+             or clean with with an empty repo.
+
+        Returns:
+            (dict):
+                A dict keyed with files and their status.
         """
         if self._exists(self.wgit_parent):
             pygit_status = self._pygit.status()
@@ -138,12 +152,12 @@ class Repo:
             sys.exit(1)
 
     def log(self, file: str) -> None:
-        """
-        Returns the WeiGit log of commit history.
+        """Returns the WeiGit log of commit history.
 
         Args:
-            file (str, optional)
-                Show the log of the commit history of the repo. Optionally, show the log history of a specific file.
+            file (str, optional):
+                Show the log of the commit history of the repo. Optionally, show
+                the log history of a specific file.
         """
         if self._exists(self.wgit_parent):
             if file:
@@ -155,11 +169,11 @@ class Repo:
             sys.exit(1)
 
     def checkout(self, sha1: str) -> None:
-        """
-        Checkout a previously commited version of the checkpoint.
+        """Checkout a previously commited version of the checkpoint.
 
         Args:
-            sha1 (str) The sha1 hash of the file version to checkout.
+            sha1 (str):
+               The sha1 hash of the file version to checkout.
         """
         raise NotImplementedError
 
@@ -179,8 +193,8 @@ class Repo:
         return self._repo_path
 
     def _get_metdata_files(self) -> Dict:
-        """Walk the directories that contain the metadata files and check the status of those files,
-        whether they have been modified or not.
+        """Walk the directories that contain the metadata files and check the
+        status of those files, whether they have been modified or not.
         """
         metadata_d = dict()
         for file in self.path.iterdir():  # iterate over the .wgit directory
@@ -194,8 +208,9 @@ class Repo:
         return metadata_d
 
     def _is_metadata_file(self, file: Path) -> bool:
-        """Checks whether a file is a valid metadata file by matching keys and checking if it has valid
-        json data."""
+        """Checks whether a file is a valid metadata file by matching keys and
+        checking if it has valid json data.
+        """
         try:
             with open(file) as f:
                 metadata = json.load(f)
@@ -209,18 +224,23 @@ class Repo:
         return is_metadata
 
     def _is_file_modified(self, file: Path) -> bool:
-        """Checks whether a file has been modified since its last recorded modification time recorded in the metadata_file"""
+        """Checks whether a file has been modified since its last recorded modification
+        time recorded in the metadata_file.
+        """
         with open(file) as f:
             data = json.load(f)
-        # get the last modified timestamp recorded by weigit and the current modified timestamp. If not the
-        # same, then file has been modified since last weigit updated metadata
+        # Get the last modified timestamp recorded by weigit and the current modified
+        # timestamp. If not the same, then file has been modified since last weigit
+        # updated metadata.
         last_mod_timestamp = data["last_modified_time_stamp"]
         curr_mod_timestamp = Path(data["file_path"]).stat().st_mtime
         return not curr_mod_timestamp == last_mod_timestamp
 
     def _process_metadata_file(self, metadata_fname: Path) -> Tuple[Path, str]:
-        """Create a metadata_file corresponding to the file to be tracked by weigit if the first version of the file
-        is encountered. If a version already exists, open the file and get the sha1_hash of the last version as parent_sha1"""
+        """Create a metadata_file corresponding to the file to be tracked by weigit if
+        the first version of the file is encountered. If a version already exists, open
+        the file and get the sha1_hash of the last version as parent_sha1.
+        """
         metadata_file = self.path.joinpath(metadata_fname)
         metadata_file.parent.mkdir(parents=True, exist_ok=True)  # create parent dirs for metadata file
 
@@ -247,7 +267,9 @@ class Repo:
             json.dump(metadata, f, ensure_ascii=False, indent=4)
 
     def _rel_file_path(self, filepath: Path) -> Path:
-        """Find the relative part to the filepath from the current working directory and return the relative path."""
+        """Find the relative part to the filepath from the current working
+        directory and return the relative path.
+        """
         # get the absolute path
         filepath = filepath.resolve()
         # using zipped loop we get the path common to the filepath and cwd
@@ -257,12 +279,13 @@ class Repo:
         return Path(*filepath.parts[i:])
 
     def _exists(self, check_dir: Path) -> bool:
-        """Returns True if a valid wgit exists within the cwd and iteratively checks to the root directory and
-        sets the self._repo_path attribute to the wgit path.
+        """Returns True if a valid wgit exists within the cwd and iteratively
+            checks to the root directory and sets the self._repo_path attribute
+            to the wgit path.
 
         Args:
-           check_dir (Path)
-               path to the directory from where search is started.
+           check_dir (Path):
+               Path to the directory from where search is started.
         """
         if self._weigit_repo_exists(check_dir):
             self._repo_path = check_dir.joinpath(".wgit")
@@ -276,12 +299,14 @@ class Repo:
         return True if self._repo_path is not None else False
 
     def _weigit_repo_exists(self, check_dir: pathlib.Path) -> bool:
-        """Returns True if a valid WeiGit repo exists in the path: check_dir"""
+        """Returns True if a valid WeiGit repo exists in the path: check_dir."""
         wgit_exists, git_exists, gitignore_exists = self._weight_repo_file_check(check_dir)
         return wgit_exists and git_exists and gitignore_exists
 
     def _weight_repo_file_check(self, check_dir: Path) -> tuple:
-        """Returns a tuple of boolean corresponding to the existence of each .wgit internally required files."""
+        """Returns a tuple of boolean corresponding to the existence of each
+        .wgit internally required files.
+        """
         wgit_exists = check_dir.joinpath(".wgit").exists()
         git_exists = check_dir.joinpath(".wgit/.git").exists()
         gitignore_exists = check_dir.joinpath(".wgit/.gitignore").exists()
