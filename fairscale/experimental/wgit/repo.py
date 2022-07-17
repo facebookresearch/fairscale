@@ -142,6 +142,7 @@ class Repo:
         sha1_dict = {}
         if per_tensor:
             state_dict = torch.load(file_path)
+            # FIXME: need to walk the state_dict and replace tensors with sha1 and then add it.
             for key, tensor in state_dict.items():
                 # TODO (Min): here we will optionally do SST/DST and add those
                 #             tensors with sparsity.
