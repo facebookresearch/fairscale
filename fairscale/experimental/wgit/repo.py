@@ -58,15 +58,8 @@ class Repo:
             # Create a git repo for the metadata versioning.
             self._pygit = PyGit(self._dot_wgit_dir_path, gitignore=[SHA1_STORE_DIR_NAME])
 
-        elif exists and init:
-            # if weigit repo already exists and init is being called, wrap the existing
-            # .wgit/.git repo with PyGit
-            assert self._dot_wgit_dir_path is not None
-            self._sha1_store = SHA1_Store(self._dot_wgit_dir_path.joinpath(SHA1_STORE_DIR_NAME))
-            self._pygit = PyGit(self._dot_wgit_dir_path)
-
-        elif exists and not init:
-            # weigit exists and non-init commands are triggered
+        elif exists:
+            # Weigit repo already exists, populate this object.
             assert self._dot_wgit_dir_path is not None
             self._sha1_store = SHA1_Store(self._dot_wgit_dir_path.joinpath(SHA1_STORE_DIR_NAME))
             self._pygit = PyGit(self._dot_wgit_dir_path)
