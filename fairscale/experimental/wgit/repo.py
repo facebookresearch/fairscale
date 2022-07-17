@@ -3,13 +3,15 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+from dataclasses import dataclass
 from enum import Enum
 import json
 from pathlib import Path
 import sys
-from typing import Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
+from torch import Tensor
 
 from .pygit import PyGit
 from .sha1_store import SHA1_Store
@@ -17,6 +19,40 @@ from .sha1_store import SHA1_Store
 # This is a fixed dir name we use for sha1_store. It should not be changed
 # for backward compatibility reasons.
 SHA1_STORE_DIR_NAME = "sha1_store"
+
+
+@dataclass
+class _SHA1_Tensor:
+    """Representing a tensor using sha1(s) from SHA1 store.
+
+    It can be either a dense one or 2 sparse one with SST and DST.
+    """
+
+    is_dense: bool = True
+    dense_sha1: str = ""
+    sst_sha1: str = ""
+    dst_sha1: str = ""
+
+
+def _recursive_apply_to_elements(data: Union[List[Any], Dict[str, Any]], fn: Any) -> None:
+    """Helper function to traverse a dict recursively and apply a function to leafs.
+
+    The input `data` is a dict or a list and it should only contain dict and list.
+    """
+    if isinstance(data, list):
+        for i, _ in enumerate(data):
+            if isinstance(data[i], (list, dict)):
+                _recursive_apply_to_elements(data[i], fn)
+            else:
+                data[i] = fn(data[i])
+    elif isinstance(data, dict):
+        for key in data.keys():
+            if isinstance(data[key], (list, dict)):
+                _recursive_apply_to_elements(data[key], fn)
+            else:
+                data[key] = fn(data[key])
+    else:
+        assert False, f"Unexpected data type: {type(data)}"
 
 
 class Repo:
@@ -141,12 +177,20 @@ class Repo:
         #             We need to figure out a way to handle deletion.
         sha1_dict = {}
         if per_tensor:
+
+            def fn(element: Any) -> Any:
+                """ Callback on each leaf object for _recursive_apply_to_elements below. """
+                if isinstance(element, Tensor):
+                    # TODO (Min): here we will optionally do SST/DST and add those
+                    #             tensors with sparsity.
+                    sha1 = self._sha1_store.add(element, compress=True)
+                    return _SHA1_Tensor(is_dense=True, dense_sha1=sha1)
+                else:
+                    return element
+
             state_dict = torch.load(file_path)
-            # FIXME: need to walk the state_dict and replace tensors with sha1 and then add it.
-            for key, tensor in state_dict.items():
-                # TODO (Min): here we will optionally do SST/DST and add those
-                #             tensors with sparsity.
-                sha1_dict[key] = self._sha1_store.add(tensor, compress=True)
+            _recursive_apply_to_elements(state_dict, fn)
+            sha1_dict = {"__sha1_full__": self._sha1_store.add(state_dict)}
         else:
             sha1_dict = {"__sha1_full__": self._sha1_store.add(file_path)}
 

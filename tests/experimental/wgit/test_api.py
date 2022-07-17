@@ -33,7 +33,10 @@ def create_test_dir():
     # create random checkpoints
     size_list = [30e5, 35e5, 40e5, 40e5]
     for i, size in enumerate(size_list):
-        torch.save(nn.Linear(1, int(size)).state_dict(), f"checkpoint_{i}.pt")
+        sd = {}
+        sd["model"] = nn.Linear(1, int(size)).state_dict()
+        sd["step"] = 100
+        torch.save(sd, f"checkpoint_{i}.pt")
     return test_dir
 
 
