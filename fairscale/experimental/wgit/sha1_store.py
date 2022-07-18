@@ -161,7 +161,7 @@ class SHA1_Store:
             json.dump(self._json_dict, f, ensure_ascii=False, indent=4)
 
     def add(self, file_or_obj: Union[Path, Tensor, Dict], compress: bool = False) -> str:
-        """ Adds a file/object to this store and the sha1 references accordingly.
+        """Adds a file/object to this store and the sha1 references accordingly.
 
         First, a sha1 hash is calculated. Utilizing the sha1 hash string, the actual file
         in <file_or_obj> is moved within the store and the reference file is updated.

@@ -179,7 +179,7 @@ class Repo:
         if per_tensor:
 
             def fn(element: Any) -> Any:
-                """ Callback on each leaf object for _recursive_apply_to_elements below. """
+                """Callback on each leaf object for _recursive_apply_to_elements below."""
                 if isinstance(element, Tensor):
                     # TODO (Min): here we will optionally do SST/DST and add those
                     #             tensors with sparsity.
