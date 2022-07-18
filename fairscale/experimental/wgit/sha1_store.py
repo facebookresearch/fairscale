@@ -12,8 +12,9 @@ import shutil
 import sys
 import tempfile
 import time
-from typing import Any, Dict, Union, cast
+from typing import Any, Dict, Optional, Union, cast
 
+import pgzip
 import torch
 from torch import Tensor
 
@@ -25,6 +26,7 @@ SHA1_STORE_DIR_NAME = "sha1_store"
 
 # Const string keys for json file. Do not change for backward compatibilities.
 RF_KEY = "ref_count"
+COMP_KEY = "compressed"
 
 
 def _get_json_entry(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -36,6 +38,28 @@ def _get_json_entry(d: Dict[str, Any]) -> Dict[str, Any]:
     if RF_KEY not in d.keys():
         d[RF_KEY] = 0
     return d
+
+
+def _copy_compressed(src: Path, dest: Path, thread: Optional[int], blocksize: int) -> None:
+    """Helper to copy a file and compress it at the same time."""
+    with open(str(src), "rb") as srcf:
+        with pgzip.open(str(dest), "wb", compresslevel=5, thread=thread, blocksize=blocksize) as destf:
+            while True:
+                buf = srcf.read(blocksize)
+                if len(buf) == 0:
+                    break
+                destf.write(buf)
+
+
+def _copy_uncompressed(src: Path, dest: Path, thread: Optional[int], blocksize: int) -> None:
+    """Helper to copy a file and uncompress it at the same time."""
+    with open(str(dest), "wb") as destf:
+        with pgzip.open(str(src), "rb", thread=thread, blocksize=blocksize) as srcf:
+            while True:
+                buf = srcf.read(blocksize)
+                if len(buf) == 0:
+                    break
+                destf.write(buf)
 
 
 class SHA1_Store:
@@ -61,6 +85,12 @@ class SHA1_Store:
     to delete in a version tracking graph. The lesson here is that content
     addressibility and dependency graphs do not mix well.
 
+    We support multicore compression for the data to be store on per-object basis.
+    The ``torch.save()`` API uses zip format to store the data, but it appears to
+    be uncompressed. Even if it can be made compressed, it is likely a single
+    threaded compression. Therefore, we use pgzip to do parallel
+    compression/decompression on top of it to use all the cores.
+
     Args:
         parent_path (Path):
             The parent path in which a SHA1_Store will be created.
@@ -75,16 +105,29 @@ class SHA1_Store:
         sha1_buf_size (int):
             Buffer size used for checksumming. Default: 100MB.
         tmp_dir (str):
-            Dir for temporary files if input is an in-memory object.
+            Dir for temporary files if input is an in-memory object or output data needs
+            to be decompressed first.
+        pgzip_threads (int, optional):
+            Number of threads (cores) used in compression. Default: None to use all cores.
+        pgzip_block_size (int):
+            Per-thread block size for compression. Default: 10MB.
     """
 
     def __init__(
-        self, parent_path: Path, init: bool = False, sha1_buf_size: int = 100 * 1024 * 1024, tmp_dir: str = ""
+        self,
+        parent_path: Path,
+        init: bool = False,
+        sha1_buf_size: int = 100 * 1024 * 1024,
+        tmp_dir: str = "",
+        pgzip_threads: Optional[int] = None,
+        pgzip_block_size: int = 10 * 1024 * 1024,
     ) -> None:
         """Create or wrap (if already exists) a sha1_store."""
         self._path = parent_path.joinpath(SHA1_STORE_DIR_NAME)
         self._ref_file_path = self._path.joinpath("ref_count.json")
         self._sha1_buf_size = sha1_buf_size
+        self._pgzip_threads = pgzip_threads
+        self._pgzip_block_size = pgzip_block_size
         self._json_dict: Dict[str, Any] = {"created_on": time.ctime()}
 
         # Initialize the sha1_store if not exist and init==True.
@@ -121,7 +164,7 @@ class SHA1_Store:
         with open(self._ref_file_path, "w", encoding="utf-8") as f:
             json.dump(self._json_dict, f, ensure_ascii=False, indent=4)
 
-    def add(self, file_or_obj: Union[Path, Tensor, OrderedDict]) -> str:
+    def add(self, file_or_obj: Union[Path, Tensor, OrderedDict], compress: bool = False) -> str:
         """
         Adds a file/object to the internal sha1_store and the sha1 references
         accordingly.
@@ -129,6 +172,9 @@ class SHA1_Store:
         First, a sha1 hash is calculated. Utilizing the sha1 hash string, the actual file
         in <file_or_obj> is moved within the sha1_store and the reference file is updated.
         If the input is an object, it will be store in the self._tmp_dir and then moved.
+
+        If compress is True, the stored file is also compressed, which is useful for tensors
+        with a lot of zeros.
 
         Args:
             file_or_obj (str or tensor or OrderedDict):
@@ -155,7 +201,7 @@ class SHA1_Store:
         sha1_hash = self._get_sha1_hash(file_path)
 
         # Add reference.
-        ref_count = self._add_ref(sha1_hash, True)
+        ref_count = self._add_ref(sha1_hash, True, compress)
 
         if ref_count == 1:
             # First time adding
@@ -172,12 +218,15 @@ class SHA1_Store:
             # Transfer the file to the internal sha1_store
             repo_fpath = repo_fdir.joinpath(sha1_hash)
             try:
-                shutil.copy2(file_path, repo_fpath)
+                if compress:
+                    _copy_compressed(file_path, repo_fpath, self._pgzip_threads, self._pgzip_block_size)
+                else:
+                    shutil.copy2(file_path, repo_fpath)
             except BaseException as error:
                 # Something went wrong, perhaps out of space, or race condition due to lack of locking.
                 # TODO (Min): proper handle the error and recover when we learn more here.
                 sys.stderr.write(f"An exception occured: {repr(error)}\n")
-                ref_count = self._add_ref(sha1_hash, False)
+                ref_count = self._add_ref(sha1_hash, False, compress)
 
         # Clean up if needed.
         if remove_tmp:
@@ -210,7 +259,18 @@ class SHA1_Store:
         #
         # TODO (Min): we could also keep a stats in the meta data on how many
         #             times the object is read. Will add if that's needed.
-        return torch.load(path)
+        self._load_json_dict()
+        if self._json_dict[sha1][COMP_KEY]:
+            # Compressed. Because pgzip doesn't support tell() yet, we need to
+            # uncompress into a temp file and return it.
+            tmp = self._get_tmp_file_path()
+            _copy_uncompressed(path, tmp, self._pgzip_threads, self._pgzip_block_size)
+            obj = torch.load(tmp)
+            tmp.unlink()
+            return obj
+        else:
+            # Uncompressed.
+            return torch.load(path)
 
     def delete(self, sha1: str) -> None:
         """Delete a SHA1
@@ -282,7 +342,7 @@ class SHA1_Store:
         part1, part2 = sha1[:2], sha1[2:4]
         return self._path.joinpath(part1, part2)
 
-    def _add_ref(self, current_sha1_hash: str, inc: bool) -> int:
+    def _add_ref(self, current_sha1_hash: str, inc: bool, compressed: bool) -> int:
         """
         Update the reference count.
 
@@ -311,6 +371,9 @@ class SHA1_Store:
         # Update the ref count.
         entry[RF_KEY] += 1 if inc else -1
         assert entry[RF_KEY] >= 0, "negative ref count"
+
+        # Update compressed flag.
+        entry[COMP_KEY] = compressed
 
         self._json_dict[current_sha1_hash] = entry
         self._store_json_dict()
