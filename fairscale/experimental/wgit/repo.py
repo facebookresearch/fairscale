@@ -143,10 +143,9 @@ class Repo:
         if per_tensor:
             state_dict = torch.load(file_path)
             for key, tensor in state_dict.items():
-                # TODO (Min): here we will do SST/DST and add those tensors for
-                #             sparsity. Don't forget to enable "compress=True"
-                #             for the add() below once the compression PR is in.
-                sha1_dict[key] = self._sha1_store.add(tensor)
+                # TODO (Min): here we will optionally do SST/DST and add those
+                #             tensors with sparsity.
+                sha1_dict[key] = self._sha1_store.add(tensor, compress=True)
         else:
             sha1_dict = {"__sha1_full__": self._sha1_store.add(file_path)}
 
