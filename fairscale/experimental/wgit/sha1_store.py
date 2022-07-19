@@ -4,7 +4,6 @@
 # LICENSE file in the root directory of this source tree.
 
 
-from collections import OrderedDict
 import hashlib
 import json
 from pathlib import Path
@@ -19,10 +18,6 @@ import torch
 from torch import Tensor
 
 from .utils import ExitCode
-
-# This is a fixed dir name we use for sha1_store. It should not be changed
-# for backward compatibility reasons.
-SHA1_STORE_DIR_NAME = "sha1_store"
 
 # Const string keys for json file. Do not change for backward compatibilities.
 RF_KEY = "ref_count"
@@ -92,15 +87,10 @@ class SHA1_Store:
     compression/decompression on top of it to use all the cores.
 
     Args:
-        parent_path (Path):
-            The parent path in which a SHA1_Store will be created.
+        path (Path):
+            The path in which a SHA1_Store will be created.
         init (bool, optional):
-            - If ``True``, initializes a new SHA1_Store in the parent_path. Initialization
-              creates a `sha1_store` directory in ./<parent_path>/,
-              and a `ref_count.json` within ./<parent_path>/.
-            - If ``False``, a new `sha1_store` dir is not initialized and the existing
-              `sha1_store` is used to init this class, populating `_json_dict`, and other
-              attributes.
+            - If ``True``, a new SHA1_Store in the path if not already exists.
             - Default: False
         sha1_buf_size (int):
             Buffer size used for checksumming. Default: 100MB.
@@ -115,22 +105,22 @@ class SHA1_Store:
 
     def __init__(
         self,
-        parent_path: Path,
+        path: Path,
         init: bool = False,
         sha1_buf_size: int = 100 * 1024 * 1024,
         tmp_dir: str = "",
         pgzip_threads: Optional[int] = None,
         pgzip_block_size: int = 10 * 1024 * 1024,
     ) -> None:
-        """Create or wrap (if already exists) a sha1_store."""
-        self._path = parent_path.joinpath(SHA1_STORE_DIR_NAME)
-        self._ref_file_path = self._path.joinpath("ref_count.json")
+        """Create or wrap (if already exists) a store."""
+        self._path = path
+        self._metadata_file_path = self._path.joinpath("metadata.json")
         self._sha1_buf_size = sha1_buf_size
         self._pgzip_threads = pgzip_threads
         self._pgzip_block_size = pgzip_block_size
         self._json_dict: Dict[str, Any] = {"created_on": time.ctime()}
 
-        # Initialize the sha1_store if not exist and init==True.
+        # Initialize the store if not exist and if init is True.
         if init and not self._path.exists():
             try:
                 Path.mkdir(self._path, parents=False, exist_ok=False)
@@ -141,7 +131,13 @@ class SHA1_Store:
             self._store_json_dict()
 
         # This is an internal error since caller of this our own wgit code.
-        assert self._path.exists(), "SHA1 store does not exist and init==False"
+        assert (
+            self._path.exists() and self._metadata_file_path.exists()
+        ), f"SHA1 store {self._path} does not exist and init is False"
+
+        # Make sure there is a valid metadata file.
+        self._load_json_dict()
+        assert "created_on" in self._json_dict, f"Invalid SHA1 Store in {self._path}"
 
         # Init temp dir.
         if tmp_dir:
@@ -156,30 +152,31 @@ class SHA1_Store:
 
     def _load_json_dict(self) -> None:
         """Loading json dict from disk."""
-        with open(self._ref_file_path, "r") as f:
+        with open(self._metadata_file_path, "r") as f:
             self._json_dict = json.load(f)
 
     def _store_json_dict(self) -> None:
         """Storing json dict to disk."""
-        with open(self._ref_file_path, "w", encoding="utf-8") as f:
+        with open(self._metadata_file_path, "w", encoding="utf-8") as f:
             json.dump(self._json_dict, f, ensure_ascii=False, indent=4)
 
-    def add(self, file_or_obj: Union[Path, Tensor, OrderedDict], compress: bool = False) -> str:
-        """
-        Adds a file/object to the internal sha1_store and the sha1 references
-        accordingly.
+    def add(self, file_or_obj: Union[Path, Tensor, Dict], compress: bool = False) -> str:
+        """Adds a file/object to this store and the sha1 references accordingly.
 
         First, a sha1 hash is calculated. Utilizing the sha1 hash string, the actual file
-        in <file_or_obj> is moved within the sha1_store and the reference file is updated.
+        in <file_or_obj> is moved within the store and the reference file is updated.
         If the input is an object, it will be store in the self._tmp_dir and then moved.
 
         If compress is True, the stored file is also compressed, which is useful for tensors
         with a lot of zeros.
 
         Args:
-            file_or_obj (str or tensor or OrderedDict):
-                Path to the file to be added to the sha1_store or an in-memory object
-                that can be handled by torch.save.
+            file_or_obj (str or tensor or Dict):
+                Path to the file to be added to the store or an in-memory object
+                that can be handled by torch.save. Note, OrderedDict is used when
+                you call `state_dict()` on a nn.Module, and it is an instance
+                of a Dict too. A model's state_dict can be a simple dict because
+                it may contain both model state_dict and other non-tensor info.
         """
         # Use `isinstance` not type() == Path since pathlib returns OS specific
         # Path types, which inherit from the Path class.
@@ -188,10 +185,10 @@ class SHA1_Store:
             torch.load(cast(Union[Path, str], file_or_obj))
             file_path = Path(file_or_obj)
             remove_tmp = False
-        elif isinstance(file_or_obj, (Tensor, OrderedDict)):
+        elif isinstance(file_or_obj, (Tensor, Dict)):
             # Serialize the object into a tmp file.
             file_path = self._get_tmp_file_path()
-            torch.save(cast(Union[Tensor, OrderedDict], file_or_obj), file_path)
+            torch.save(cast(Union[Tensor, Dict], file_or_obj), file_path)
             remove_tmp = True
         else:
             assert False, f"incorrect input {type(file_or_obj)}"
@@ -215,7 +212,7 @@ class SHA1_Store:
                     sys.stderr.write(f"An exception occured: {repr(error)}\n")
                     sys.exit(ExitCode.FILE_EXISTS_ERROR)
 
-            # Transfer the file to the internal sha1_store
+            # Transfer the file to the store.
             repo_fpath = repo_fdir.joinpath(sha1_hash)
             try:
                 if compress:
@@ -234,7 +231,7 @@ class SHA1_Store:
 
         return sha1_hash
 
-    def get(self, sha1: str) -> Union[Tensor, OrderedDict]:
+    def get(self, sha1: str) -> Union[Tensor, Dict]:
         """Get data from a SHA1
 
         Args:
@@ -242,7 +239,7 @@ class SHA1_Store:
                 SHA1 of the object to get.
 
         Returns:
-            (Tensor or OrderedDict):
+            (Tensor or Dict):
                 In-memory object.
 
         Throws:

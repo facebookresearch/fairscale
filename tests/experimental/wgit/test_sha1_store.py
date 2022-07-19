@@ -17,7 +17,7 @@ from fairscale.internal import torch_version
 
 # Get the absolute path of the parent at the beginning before any os.chdir(),
 # so that we can proper clean it up at any CWD.
-PARENT_DIR = Path("sha1_store_testing").resolve()
+TESTING_STORE_DIR = Path("sha1_store_testing").resolve()
 
 
 @pytest.fixture(scope="function")
@@ -32,8 +32,9 @@ def sha1_store(request):
     """
     # Attach a teardown function.
     def teardown():
-        os.chdir(PARENT_DIR.joinpath("..").resolve())
-        shutil.rmtree(PARENT_DIR, ignore_errors=True)
+        os.chdir(TESTING_STORE_DIR.joinpath("..").resolve())
+        if TESTING_STORE_DIR.exists():
+            shutil.rmtree(TESTING_STORE_DIR)
 
     request.addfinalizer(teardown)
 
@@ -41,15 +42,14 @@ def sha1_store(request):
     teardown()
 
     # Get an empty sha1 store.
-    PARENT_DIR.mkdir()
-    sha1_store = SHA1_Store(PARENT_DIR, init=True)
+    sha1_store = SHA1_Store(TESTING_STORE_DIR, init=True)
 
     return sha1_store
 
 
 @pytest.mark.parametrize("compress", [True, False])
 def test_sha1_add_file(sha1_store, compress):
-    os.chdir(PARENT_DIR)
+    os.chdir(TESTING_STORE_DIR)
 
     # Create random checkpoints
     size_list = [25e5, 27e5, 30e5, 35e5, 40e5]
@@ -89,7 +89,7 @@ def test_sha1_add_file(sha1_store, compress):
 
 @pytest.mark.parametrize("compress", [True, False])
 def test_sha1_add_state_dict(sha1_store, compress):
-    os.chdir(PARENT_DIR)
+    os.chdir(TESTING_STORE_DIR)
     # add once
     for i in range(3):
         sha1_store.add(nn.Linear(10, 10).state_dict(), compress)
@@ -107,7 +107,7 @@ def test_sha1_add_state_dict(sha1_store, compress):
 
 @pytest.mark.parametrize("compress", [True, False])
 def test_sha1_add_tensor(sha1_store, compress):
-    os.chdir(PARENT_DIR)
+    os.chdir(TESTING_STORE_DIR)
     sha1_store.add(torch.Tensor([1.0, 5.5, 3.4]), compress)
     sha1_store._load_json_dict()
     json_dict = sha1_store._json_dict
@@ -120,7 +120,7 @@ def test_sha1_add_tensor(sha1_store, compress):
 @pytest.mark.parametrize("compress", [True, False])
 def test_sha1_get(sha1_store, compress):
     """Testing the get() API: normal and exception cases."""
-    os.chdir(PARENT_DIR)
+    os.chdir(TESTING_STORE_DIR)
 
     # Add a file, a state dict and a tensor.
     file = "test_get.pt"
@@ -149,7 +149,7 @@ def test_sha1_get(sha1_store, compress):
 @pytest.mark.parametrize("compress", [True, False])
 def test_sha1_delete(sha1_store, compress):
     """Testing the delete() API: with ref counting behavior."""
-    os.chdir(PARENT_DIR)
+    os.chdir(TESTING_STORE_DIR)
 
     # Add once and delete, second delete should throw an exception.
     tensor = torch.ones(30, 50)

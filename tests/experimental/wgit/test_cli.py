@@ -56,7 +56,7 @@ def test_cli_add(create_test_dir, capsys):
     cli.main(["add", chkpt0])
 
     sha1_store = SHA1_Store(
-        Path.cwd().joinpath(".wgit"),
+        Path.cwd().joinpath(".wgit", "sha1_store"),
         init=False,
     )
     sha1_hash = sha1_store._get_sha1_hash(chkpt0)
