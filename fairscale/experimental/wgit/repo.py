@@ -155,14 +155,20 @@ class Repo:
             sys.stderr.write("fatal: no wgit repo exists!\n")
             sys.exit(1)
 
-    def add(self, in_file_path: str, per_tensor: bool = False) -> None:
+    def add(self, in_file_path: str, per_tensor: bool = False, gzip: bool = True) -> None:
         """Add a file to the wgit repo.
 
         Args:
             in_file_path (str):
                 Path to the file to be added.
-            per_tensor (bool):
-                Add a file in a per-tensor fashion.
+            per_tensor (bool, optional):
+                Add a file in a per-tensor fashion. This enables more deduplication
+                due to tensors being identical. Deduplication cannot be disabled
+                completely because we use a content addressable SHA1_Store class.
+                Default: False
+            gzip (bool, optional):
+                Enable gzip based lossless compression on the object being added.
+                Default: True
         """
         self._sanity_check()
 
@@ -183,7 +189,7 @@ class Repo:
                 if isinstance(element, Tensor):
                     # TODO (Min): here we will optionally do SST/DST and add those
                     #             tensors with sparsity.
-                    sha1 = self._sha1_store.add(element, compress=True)
+                    sha1 = self._sha1_store.add(element, compress=gzip)
                     return _SHA1_Tensor(is_dense=True, dense_sha1=sha1)
                 else:
                     return element
@@ -192,7 +198,7 @@ class Repo:
             _recursive_apply_to_elements(state_dict, fn)
             sha1_dict = {"__sha1_full__": self._sha1_store.add(state_dict)}
         else:
-            sha1_dict = {"__sha1_full__": self._sha1_store.add(file_path)}
+            sha1_dict = {"__sha1_full__": self._sha1_store.add(file_path, compress=gzip)}
 
         # write metadata to the metadata-file
         self._write_metadata(metadata_file, file_path, sha1_dict)
@@ -203,10 +209,12 @@ class Repo:
 
         Args:
             message (str):
-                The commit message
+                The commit message to be added.
         """
         self._sanity_check()
 
+        # TODO (Min): make commit message a json for better handling of metadata like step count,
+        #             LR, sparsity level, etc.
         self._pygit.commit(message)
 
     def status(self) -> Dict:
@@ -250,6 +258,8 @@ class Repo:
         """
         self._sanity_check()
 
+        # TODO (Min): this should return a list of sha1 for the history as well as
+        #             each commit's message, which could be a dict from json commit msg.
         if file:
             print(f"wgit log of the file: {file}")
         else:
@@ -265,13 +275,8 @@ class Repo:
         self._sanity_check()
         raise NotImplementedError
 
-    def compression(self) -> None:
-        """Not Implemented: Compression functionalities"""
-        self._sanity_check()
-        raise NotImplementedError
-
     def checkout_by_steps(self) -> None:
-        """Not Implemented: Checkout by steps"""
+        """Not Implemented: Checkout by step count of the train process"""
         self._sanity_check()
         raise NotImplementedError
 
