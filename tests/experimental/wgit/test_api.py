@@ -74,7 +74,7 @@ def test_api_add(capsys, repo, per_tensor, gzip):
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
-    assert json_data["SHA1"] == {"__sha1_full__": sha1_hash}
+    assert json_data["SHA1"] == sha1_hash
 
 
 def test_api_commit(capsys, repo):
