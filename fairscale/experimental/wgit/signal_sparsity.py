@@ -98,12 +98,18 @@ class SignalSparsity:
         Returns:
             Same shaped tensor, still in dense format but in frequency domain and has zeros.
         """
+        if self._sst_top_k_element is not None:
+            assert (
+                self._sst_top_k_element <= dense.shape[self._sst_top_k_dim]
+            ), f"top_k_element along dim {self._sst_top_k_dim} out of range for tensor of shape {dense.shape}."
+
         w_fft = torch.fft.fft(dense)  # type: ignore
         w_fft_abs = torch.abs(w_fft)  # get absolute FFT values
 
-        # Next, use the normalized real values for getting the topk mask
+        # Use the normalized real values for getting the topk mask. The threshold function handles both the cases
+        # of when top_k_element or top_k_percent is proviced by the caller.
         threshold = self.get_threshold(w_fft_abs, self._sst_top_k_element, self._sst_top_k_percent, self._sst_top_k_dim)
-        sps_mask = w_fft_abs > threshold
+        sps_mask = w_fft_abs >= threshold
         w_sst = w_fft * sps_mask  # but mask the actual complex FFT values topk
         return w_sst
 
@@ -160,13 +166,14 @@ class SignalSparsity:
         """
         abs_tensor = torch.abs(in_tensor)
 
-        if self._dst_top_k_percent or self._sst_top_k_percent:
-            if top_k_percent == 0.0:  # if sparsity is zero, we want a mask with all 1's
+        if self._dst_top_k_percent is not None or self._sst_top_k_percent is not None:
+            sparsity = 1 - top_k_percent  # target sparsity in the unit interval [0,1]
+            if sparsity == 0.0:  # if sparsity is zero, we want a mask with all 1's
                 threshold = torch.tensor(float("-Inf"), device=in_tensor.device).unsqueeze(dim)
             else:
-                threshold = torch.quantile(abs_tensor, top_k_percent, dim).unsqueeze(dim)  # type: ignore
+                threshold = torch.quantile(abs_tensor, sparsity, dim).unsqueeze(dim)  # type: ignore
 
-        elif self._dst_top_k_element or self._sst_top_k_element:
+        elif self._dst_top_k_element is not None or self._sst_top_k_element is not None:
             # top-k along only some dimension dim
             v, _ = torch.topk(in_tensor, top_k_element, dim)
             min_v, _ = torch.min(v, dim)
