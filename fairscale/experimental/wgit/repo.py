@@ -192,7 +192,7 @@ class Repo:
     def add(
         self,
         in_file_path: str,
-        per_tensor: bool = False,
+        per_tensor: bool = True,
         gzip: bool = True,
         sparsify: bool = False,
         sparsify_policy: Any = None,
@@ -209,7 +209,7 @@ class Repo:
                 Add a file in a per-tensor fashion. This enables more deduplication
                 due to tensors being identical. Deduplication cannot be disabled
                 completely because we use a content addressable SHA1_Store class.
-                Default: False
+                Default: True
             gzip (bool, optional):
                 Enable gzip based lossless compression on the object being added.
                 Default: True
