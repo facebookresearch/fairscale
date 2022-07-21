@@ -59,10 +59,10 @@ class SignalSparsity:
         algo: Algo = Algo.FFT,
         sst_top_k_dim: Optional[int] = -1,
         sst_top_k_element: Optional[int] = None,
-        sst_top_k_percent: Optional[float] = None,
+        sst_top_k_percent: Optional[float] = 0.1,
         dst_top_k_dim: Optional[int] = -1,
         dst_top_k_element: Optional[int] = None,
-        dst_top_k_percent: Optional[float] = None,
+        dst_top_k_percent: Optional[float] = 0.1,
     ) -> None:
 
         self._algo = algo
