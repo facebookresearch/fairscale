@@ -29,7 +29,7 @@ ENTRY_COMP_KEY = "compressed"  # bool, is compressed or not.
 ENTRY_OS_KEY = "original_size"  # int, original size for all identical objects mapped to this object.
 ENTRY_DS_KEY = "deduped_size"  # int, size after deduplication (always enabled).
 ENTRY_CS_KEY = "compressed_size"  # int, size after gzip compression, if enabled.
-ENTRY_NAMES_KEY = "names"  # list, names of objects mapped to this object.
+ENTRY_NAMES_KEY = "names"  # dict, names of objects and their count mapped to this object.
 
 # For the entire store in the metadata json file.
 STORE_CREATE_DATE_KEY = "created_on"  # str, when is the store created.
@@ -52,9 +52,9 @@ def _get_json_entry(d: Dict[str, Any]) -> Dict[str, Any]:
         if bool_key_init_false not in d.keys():
             d[bool_key_init_false] = False
 
-    for list_key_init_empty in [ENTRY_NAMES_KEY]:
-        if list_key_init_empty not in d.keys():
-            d[list_key_init_empty] = []
+    for dict_key_init_empty in [ENTRY_NAMES_KEY]:
+        if dict_key_init_empty not in d.keys():
+            d[dict_key_init_empty] = {}
 
     return d
 
@@ -269,8 +269,9 @@ class SHA1_Store:
                 sys.stderr.write(f"An exception occured: {repr(error)}\n")
                 ref_count = self._add_ref(sha1_hash, False, compress)
 
-        # Update the sizes for this entry.
         self._load_json_dict()
+
+        # Update the sizes for this entry.
         entry = _get_json_entry(self._json_dict[sha1_hash])
         o_diff = orig_size if ref_count == 1 else entry[ENTRY_OS_KEY]
         d_diff = orig_size if ref_count == 1 else 0
@@ -281,6 +282,14 @@ class SHA1_Store:
         self._json_dict[STORE_OS_KEY] += o_diff
         self._json_dict[STORE_DS_KEY] += d_diff
         self._json_dict[STORE_CS_KEY] += c_diff
+
+        # Update the name list for this entry.
+        if name:
+            if name not in entry[ENTRY_NAMES_KEY].keys():
+                entry[ENTRY_NAMES_KEY][name] = 1
+            else:
+                entry[ENTRY_NAMES_KEY][name] += 1
+
         self._store_json_dict()
 
         # Clean up if needed.
@@ -372,6 +381,14 @@ class SHA1_Store:
             entry = self._json_dict[sha1]
             return entry[ENTRY_OS_KEY], entry[ENTRY_DS_KEY], entry[ENTRY_CS_KEY]
         return self._json_dict[STORE_OS_KEY], self._json_dict[STORE_DS_KEY], self._json_dict[STORE_CS_KEY]
+
+    def names(self, sha1: str = None) -> Dict[str, int]:
+        """Return the names dict for an object."""
+        self._load_json_dict()
+        if sha1 not in self._json_dict.keys():
+            raise ValueError(f"SHA1 {sha1} not found")
+        entry = self._json_dict[sha1]
+        return entry[ENTRY_NAMES_KEY]
 
     def _get_sha1_hash(self, file_path: Union[str, Path]) -> str:
         """Return the sha1 hash of a file

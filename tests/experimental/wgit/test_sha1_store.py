@@ -174,13 +174,13 @@ def test_sha1_delete(sha1_store, compress):
 
 
 @pytest.mark.parametrize("compress", [True, False])
-def test_sha1_size_info(sha1_store, compress):
-    """Testing the size_info() API."""
+def test_sha1_size_info_and_names(sha1_store, compress):
+    """Testing the size_info() and names() APIs."""
     os.chdir(TESTING_STORE_DIR)
 
     # Add once & check.
     tensor = torch.ones(300, 500)
-    sha1 = sha1_store.add(tensor, compress)
+    sha1 = sha1_store.add(tensor, compress=compress, name="name1")
     orig, dedup, gzip = sha1_store.size_info(sha1)
     assert orig == dedup, "no dedup should happen"
     if not compress:
@@ -189,8 +189,14 @@ def test_sha1_size_info(sha1_store, compress):
         assert orig > gzip, "compression should be smaller"
     assert (orig, dedup, gzip) == sha1_store.size_info(), "store and entry sizes should match"
 
+    names = sha1_store.names(sha1)
+    assert names == {"name1": 1}, names
+
     # Add second time & check.
-    sha1 = sha1_store.add(tensor, compress)
+    sha1 = sha1_store.add(tensor, compress=compress, name="name2")
     orig2, dedup2, gzip2 = sha1_store.size_info(sha1)
     assert orig2 == orig * 2 == dedup2 * 2, "dedup not correct"
     assert gzip == gzip2, "compression shouldn't change"
+
+    names = sha1_store.names(sha1)
+    assert names == {"name1": 1, "name2": 1}, names
