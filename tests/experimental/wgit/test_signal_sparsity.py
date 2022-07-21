@@ -16,7 +16,7 @@ TENSOR_DIM_UPPER = 100
 
 def test_dense_to_sst_percent():
 
-    for i in range(TRIALS):
+    for _ in range(TRIALS):
         # random tensor creation
         size1 = random.randint(TENSOR_DIM_LOWER, TENSOR_DIM_UPPER)
         size2 = random.randint(TENSOR_DIM_LOWER, TENSOR_DIM_UPPER)
@@ -36,3 +36,40 @@ def test_dense_to_sst_percent():
         sps = 1 - abs_sst.count_nonzero() / abs_sst.numel()
         # assert that the sparsity of the returned sst is close to the target sparsity
         assert torch.isclose(sps, torch.tensor(1 - topk_percent, device=sps.device), atol=8e-2)
+
+
+def test_dense_to_sst_elements():
+    def test_dense_to_sst_topk_elem(tensor, topk_elem, dim):
+        sparser_2d = SignalSparsity(sst_top_k_element=topk_elem, sst_top_k_dim=dim)
+        sst = sparser_2d.dense_to_sst(tensor)
+
+        # Check to verify if the topk is returning k elements along the selected dim.
+        if dim is not None:
+            assert all((torch.abs(sst) > 0.0).sum(dim) == topk_elem)
+        else:
+            assert (torch.abs(sst) > 0.0).sum() == topk_elem
+
+        # verify if the topk values of the returned sst are the correct topk values.
+        # get the topk values from the returned SST tensor
+        def_v, _ = torch.abs(torch.fft.fft(tensor)).topk(k=topk_elem, dim=dim)
+        # get the topk values from default operations
+        sst_v, _ = torch.abs(sst).topk(k=topk_elem, dim=dim)
+        assert all((def_v == sst_v).flatten())
+
+        # NOTE: In lots of cases, the topk indices do not line up due to the
+        # presence of duplicate values in the tensors.
+
+    for _ in range(TRIALS):
+        # random tensor creation
+        size1 = random.randint(TENSOR_DIM_LOWER, TENSOR_DIM_UPPER)
+        size2 = random.randint(TENSOR_DIM_LOWER, TENSOR_DIM_UPPER)
+        tensor = torch.randn(size1, size2)
+
+        # Test topk_element along possible dims for 2D tensors
+        for dim in range(2):
+            topk_elem = random.randrange(0, tensor.shape[dim])
+            test_dense_to_sst_topk_elem(tensor, topk_elem, dim=dim)
+
+        # # Test topk_element when dim = None
+        # topk_elem = random.randrange(0, tensor.numel())
+        # test_dense_to_sst_topk_elem(topk_elem, dim=None)
