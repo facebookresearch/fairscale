@@ -11,7 +11,7 @@ import shutil
 import sys
 import tempfile
 import time
-from typing import Any, Dict, Optional, Union, cast
+from typing import Any, Dict, Optional, Tuple, Union, cast
 
 import pgzip
 import torch
@@ -19,9 +19,23 @@ from torch import Tensor
 
 from .utils import ExitCode
 
+#
 # Const string keys for json file. Do not change for backward compatibilities.
-RF_KEY = "ref_count"
-COMP_KEY = "compressed"
+#
+
+# For each object entry in the metadata json file.
+ENTRY_RF_KEY = "ref_count"  # int, reference count for this object.
+ENTRY_COMP_KEY = "compressed"  # bool, is compressed or not.
+ENTRY_OS_KEY = "original_size"  # int, original size for all identical objects mapped to this object.
+ENTRY_DS_KEY = "deduped_size"  # int, size after deduplication (always enabled).
+ENTRY_CS_KEY = "compressed_size"  # int, size after gzip compression, if enabled.
+ENTRY_NAMES_KEY = "names"  # dict, names of objects and their count mapped to this object.
+
+# For the entire store in the metadata json file.
+STORE_CREATE_DATE_KEY = "created_on"  # str, when is the store created.
+STORE_OS_KEY = "original_size"  # int, original size for all objects added.
+STORE_DS_KEY = "deduped_size"  # int, size after deduplication (always enabled).
+STORE_CS_KEY = "compressed_size"  # int, size after gzip compression, if enabled on any object within the store.
 
 
 def _get_json_entry(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -30,13 +44,28 @@ def _get_json_entry(d: Dict[str, Any]) -> Dict[str, Any]:
     This fills in any missing entries in case we load an older version
     json file from the disk.
     """
-    if RF_KEY not in d.keys():
-        d[RF_KEY] = 0
+    for int_key_init_zero in [ENTRY_RF_KEY, ENTRY_OS_KEY, STORE_DS_KEY, ENTRY_CS_KEY]:
+        if int_key_init_zero not in d.keys():
+            d[int_key_init_zero] = 0
+
+    for bool_key_init_false in [ENTRY_COMP_KEY]:
+        if bool_key_init_false not in d.keys():
+            d[bool_key_init_false] = False
+
+    for dict_key_init_empty in [ENTRY_NAMES_KEY]:
+        if dict_key_init_empty not in d.keys():
+            d[dict_key_init_empty] = {}
+
     return d
 
 
-def _copy_compressed(src: Path, dest: Path, thread: Optional[int], blocksize: int) -> None:
-    """Helper to copy a file and compress it at the same time."""
+def _copy_compressed(src: Path, dest: Path, thread: Optional[int], blocksize: int) -> Tuple[int, int]:
+    """Helper to copy a file and compress it at the same time.
+
+    Returns:
+        (int, int):
+            original size and compressed size in bytes.
+    """
     with open(str(src), "rb") as srcf:
         with pgzip.open(str(dest), "wb", compresslevel=5, thread=thread, blocksize=blocksize) as destf:
             while True:
@@ -44,6 +73,9 @@ def _copy_compressed(src: Path, dest: Path, thread: Optional[int], blocksize: in
                 if len(buf) == 0:
                     break
                 destf.write(buf)
+    orig, comp = Path(src).stat().st_size, Path(dest).stat().st_size
+    assert orig >= comp, f"Compressed size {comp} > original {orig}"
+    return orig, comp
 
 
 def _copy_uncompressed(src: Path, dest: Path, thread: Optional[int], blocksize: int) -> None:
@@ -118,7 +150,12 @@ class SHA1_Store:
         self._sha1_buf_size = sha1_buf_size
         self._pgzip_threads = pgzip_threads
         self._pgzip_block_size = pgzip_block_size
-        self._json_dict: Dict[str, Any] = {"created_on": time.ctime()}
+        self._json_dict: Dict[str, Any] = {
+            STORE_CREATE_DATE_KEY: time.ctime(),
+            STORE_OS_KEY: 0,
+            STORE_DS_KEY: 0,
+            STORE_CS_KEY: 0,
+        }
 
         # Initialize the store if not exist and if init is True.
         if init and not self._path.exists():
@@ -137,7 +174,7 @@ class SHA1_Store:
 
         # Make sure there is a valid metadata file.
         self._load_json_dict()
-        assert "created_on" in self._json_dict, f"Invalid SHA1 Store in {self._path}"
+        assert STORE_CREATE_DATE_KEY in self._json_dict, f"Invalid SHA1 Store in {self._path}"
 
         # Init temp dir.
         if tmp_dir:
@@ -160,7 +197,7 @@ class SHA1_Store:
         with open(self._metadata_file_path, "w", encoding="utf-8") as f:
             json.dump(self._json_dict, f, ensure_ascii=False, indent=4)
 
-    def add(self, file_or_obj: Union[Path, Tensor, Dict], compress: bool = False) -> str:
+    def add(self, file_or_obj: Union[Path, Tensor, Dict], compress: bool = True, name: str = None) -> str:
         """Adds a file/object to this store and the sha1 references accordingly.
 
         First, a sha1 hash is calculated. Utilizing the sha1 hash string, the actual file
@@ -177,6 +214,12 @@ class SHA1_Store:
                 you call `state_dict()` on a nn.Module, and it is an instance
                 of a Dict too. A model's state_dict can be a simple dict because
                 it may contain both model state_dict and other non-tensor info.
+            compress (bool, optional):
+                Use gzip compression on this object or not.
+                Default: True
+            name (str, optional):
+                Optional name for this object.
+                Default: None
         """
         # Use `isinstance` not type() == Path since pathlib returns OS specific
         # Path types, which inherit from the Path class.
@@ -200,9 +243,7 @@ class SHA1_Store:
         # Add reference.
         ref_count = self._add_ref(sha1_hash, True, compress)
 
-        if ref_count == 1:
-            # First time adding
-
+        if ref_count == 1:  # First time adding.
             # Create the file dir, if needed.
             repo_fdir = self._sha1_to_dir(sha1_hash)
             if not repo_fdir.exists():
@@ -216,14 +257,40 @@ class SHA1_Store:
             repo_fpath = repo_fdir.joinpath(sha1_hash)
             try:
                 if compress:
-                    _copy_compressed(file_path, repo_fpath, self._pgzip_threads, self._pgzip_block_size)
+                    orig_size, comp_size = _copy_compressed(
+                        file_path, repo_fpath, self._pgzip_threads, self._pgzip_block_size
+                    )
                 else:
                     shutil.copy2(file_path, repo_fpath)
+                    orig_size = comp_size = file_path.stat().st_size
             except BaseException as error:
                 # Something went wrong, perhaps out of space, or race condition due to lack of locking.
                 # TODO (Min): proper handle the error and recover when we learn more here.
                 sys.stderr.write(f"An exception occured: {repr(error)}\n")
                 ref_count = self._add_ref(sha1_hash, False, compress)
+
+        self._load_json_dict()
+
+        # Update the sizes for this entry.
+        entry = _get_json_entry(self._json_dict[sha1_hash])
+        o_diff = orig_size if ref_count == 1 else entry[ENTRY_OS_KEY]
+        d_diff = orig_size if ref_count == 1 else 0
+        c_diff = comp_size if ref_count == 1 else 0
+        entry[ENTRY_OS_KEY] += o_diff
+        entry[ENTRY_DS_KEY] += d_diff
+        entry[ENTRY_CS_KEY] += c_diff
+        self._json_dict[STORE_OS_KEY] += o_diff
+        self._json_dict[STORE_DS_KEY] += d_diff
+        self._json_dict[STORE_CS_KEY] += c_diff
+
+        # Update the name list for this entry.
+        if name:
+            if name not in entry[ENTRY_NAMES_KEY].keys():
+                entry[ENTRY_NAMES_KEY][name] = 1
+            else:
+                entry[ENTRY_NAMES_KEY][name] += 1
+
+        self._store_json_dict()
 
         # Clean up if needed.
         if remove_tmp:
@@ -257,7 +324,7 @@ class SHA1_Store:
         # TODO (Min): we could also keep a stats in the meta data on how many
         #             times the object is read. Will add if that's needed.
         self._load_json_dict()
-        if self._json_dict[sha1][COMP_KEY]:
+        if self._json_dict[sha1][ENTRY_COMP_KEY]:
             # Compressed. Because pgzip doesn't support tell() yet, we need to
             # uncompress into a temp file and return it.
             tmp = self._get_tmp_file_path()
@@ -290,9 +357,9 @@ class SHA1_Store:
         assert sha1 in self._json_dict.keys(), "internal error: sha1 not found in json"
         entry = _get_json_entry(self._json_dict[sha1])
 
-        assert entry[RF_KEY] > 0, f"ref count {entry[RF_KEY]} should be positive"
-        entry[RF_KEY] -= 1
-        if entry[RF_KEY] == 0:
+        assert entry[ENTRY_RF_KEY] > 0, f"ref count {entry[ENTRY_RF_KEY]} should be positive"
+        entry[ENTRY_RF_KEY] -= 1
+        if entry[ENTRY_RF_KEY] == 0:
             # Now, since ref count is 0 now deleting the object.
             path.unlink()  # We may leave behind an empty dir, which is OK.
             entry = {}  # Below, we remove the entry because of this.
@@ -304,6 +371,24 @@ class SHA1_Store:
             # empty entry, it means this sha1 is deleted.
             del self._json_dict[sha1]
         self._store_json_dict()
+
+    def size_info(self, sha1: Optional[str] = None) -> Tuple[int, int, int]:
+        """Return original, deduped, gzipped sizes for an entry or the store."""
+        self._load_json_dict()
+        if sha1:
+            if sha1 not in self._json_dict.keys():
+                raise ValueError(f"SHA1 {sha1} not found")
+            entry = self._json_dict[sha1]
+            return entry[ENTRY_OS_KEY], entry[ENTRY_DS_KEY], entry[ENTRY_CS_KEY]
+        return self._json_dict[STORE_OS_KEY], self._json_dict[STORE_DS_KEY], self._json_dict[STORE_CS_KEY]
+
+    def names(self, sha1: str = None) -> Dict[str, int]:
+        """Return the names dict for an object."""
+        self._load_json_dict()
+        if sha1 not in self._json_dict.keys():
+            raise ValueError(f"SHA1 {sha1} not found")
+        entry = self._json_dict[sha1]
+        return entry[ENTRY_NAMES_KEY]
 
     def _get_sha1_hash(self, file_path: Union[str, Path]) -> str:
         """Return the sha1 hash of a file
@@ -366,13 +451,13 @@ class SHA1_Store:
         entry = _get_json_entry(entry)
 
         # Update the ref count.
-        entry[RF_KEY] += 1 if inc else -1
-        assert entry[RF_KEY] >= 0, "negative ref count"
+        entry[ENTRY_RF_KEY] += 1 if inc else -1
+        assert entry[ENTRY_RF_KEY] >= 0, "negative ref count"
 
         # Update compressed flag.
-        entry[COMP_KEY] = compressed
+        entry[ENTRY_COMP_KEY] = compressed
 
         self._json_dict[current_sha1_hash] = entry
         self._store_json_dict()
 
-        return entry[RF_KEY]
+        return entry[ENTRY_RF_KEY]

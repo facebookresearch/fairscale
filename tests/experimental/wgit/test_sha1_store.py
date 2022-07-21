@@ -19,6 +19,9 @@ from fairscale.internal import torch_version
 # so that we can proper clean it up at any CWD.
 TESTING_STORE_DIR = Path("sha1_store_testing").resolve()
 
+# Used to filter metadata json keys.
+SHA1_KEY_STR_LEN = 40
+
 
 @pytest.fixture(scope="function")
 def sha1_store(request):
@@ -83,7 +86,7 @@ def test_sha1_add_file(sha1_store, compress):
         # torch 1.8 LTS doesn't produce deterministic checkpoint file from fixed tensors/state_dict.
         key = "da3e19590de8f77fcf7a09c888c526b0149863a0"
         assert key in json_dict.keys() and json_dict[key]["ref_count"] == 2, json_dict
-    del json_dict["created_on"]
+    json_dict = dict(filter(lambda item: len(item[0]) == SHA1_KEY_STR_LEN, json_dict.items()))
     assert sorted(map(lambda x: x["ref_count"], json_dict.values())) == [1, 1, 1, 1, 1, 2], json_dict
 
 
@@ -101,7 +104,7 @@ def test_sha1_add_state_dict(sha1_store, compress):
 
     sha1_store._load_json_dict()
     json_dict = sha1_store._json_dict
-    del json_dict["created_on"]
+    json_dict = dict(filter(lambda item: len(item[0]) == SHA1_KEY_STR_LEN, json_dict.items()))
     assert sorted(map(lambda x: x["ref_count"], json_dict.values())) == [1, 1, 1, 2, 2, 2], json_dict
 
 
@@ -168,3 +171,32 @@ def test_sha1_delete(sha1_store, compress):
         sha1_store.delete(sha1)
     with pytest.raises(ValueError):
         sha1_store.delete(sha1)
+
+
+@pytest.mark.parametrize("compress", [True, False])
+def test_sha1_size_info_and_names(sha1_store, compress):
+    """Testing the size_info() and names() APIs."""
+    os.chdir(TESTING_STORE_DIR)
+
+    # Add once & check.
+    tensor = torch.ones(300, 500)
+    sha1 = sha1_store.add(tensor, compress=compress, name="name1")
+    orig, dedup, gzip = sha1_store.size_info(sha1)
+    assert orig == dedup, "no dedup should happen"
+    if not compress:
+        assert orig == gzip, "no compression should happen"
+    else:
+        assert orig > gzip, "compression should be smaller"
+    assert (orig, dedup, gzip) == sha1_store.size_info(), "store and entry sizes should match"
+
+    names = sha1_store.names(sha1)
+    assert names == {"name1": 1}, names
+
+    # Add second time & check.
+    sha1 = sha1_store.add(tensor, compress=compress, name="name2")
+    orig2, dedup2, gzip2 = sha1_store.size_info(sha1)
+    assert orig2 == orig * 2 == dedup2 * 2, "dedup not correct"
+    assert gzip == gzip2, "compression shouldn't change"
+
+    names = sha1_store.names(sha1)
+    assert names == {"name1": 1, "name2": 1}, names

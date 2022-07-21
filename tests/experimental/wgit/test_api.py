@@ -59,10 +59,11 @@ def test_api_init(capsys, repo):
 
 
 @pytest.mark.parametrize("per_tensor", [True, False])
-def test_api_add(capsys, repo, per_tensor):
+@pytest.mark.parametrize("gzip", [True, False])
+def test_api_add(capsys, repo, per_tensor, gzip):
     fnum = random.randint(0, 2)
     chkpt0 = f"checkpoint_{fnum}.pt"
-    repo.add(chkpt0, per_tensor)
+    repo.add(chkpt0, per_tensor=per_tensor, gzip=gzip)
     if per_tensor:
         # TODO (Min): test per_tensor add more.
         return
@@ -73,7 +74,7 @@ def test_api_add(capsys, repo, per_tensor):
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
-    assert json_data["SHA1"] == {"__sha1_full__": sha1_hash}
+    assert json_data["SHA1"] == sha1_hash
 
 
 def test_api_commit(capsys, repo):
