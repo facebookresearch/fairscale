@@ -10,6 +10,60 @@ import torch
 from torch import Tensor
 
 
+# Helper Functions
+def get_k_for_topk(
+    tensor: Tensor, topk_percent: Optional[float], top_k_element: Optional[int], topk_dim: Optional[int]
+) -> int:
+    """Converts the top_k_percent to top_k_element when top_k_percent is provided
+    as the criterion for top-k calculation. When, top_k_element is used as the criterion,
+    simply returns the value for k. Also, ensures k is never 0 to avoid all sparse tensors.
+
+    Args:
+        tensor (Tensor):
+            Input tensor.
+        topk_percent (float, optional)
+            Percent of top-k elements to retain for SST. Default: 0.1
+
+    Returns:
+        k (int)
+            the value of k for use as top-k
+    """
+    if top_k_element is None:
+        dim_numel = tensor.numel() if topk_dim is None else tensor.shape[topk_dim]
+        k = int(dim_numel * topk_percent / 100.0)
+    else:
+        k = top_k_element
+
+    # ensure we never have 100% sparsity in tensor and always have 1 surviving element!
+    k = k if k != 0 else 1
+    return k
+
+
+def scatter_topk_to_sparse_tensor(src_tensor: Tensor, dest_tensor: Tensor, k: int, dim: Optional[int]) -> Tensor:
+    """Scatter the topk values of the dest_tensor to a zero tensor of the same shape
+    at the top-k indices of the src_tensor.
+
+    Args:
+        src_tensor (Tensor)
+            The source tensor whose top-k "indices" are taken and used to extract
+            the corresponding "values" from the dest_tensor.
+        dest_tensor (Tensor)
+            The tensor whose values are gathered according to the top-k indices
+            of the src_tensor, and a zero tensor of same shape is populated with these
+            values at those indices and creates the sparse_dest tensor.
+
+    Returns:
+        Returns a sparse_dest tensor with the values of the dest_tensor corresponding
+        to the top-k indices of the source tensor.
+
+    """
+    _, idx = src_tensor.topk(k, dim=dim)
+    sparse_dest = torch.zeros_like(dest_tensor)
+    # gather the values from the dest_tensor and scatter to a tensor of zeros
+    sparse_dest = sparse_dest.scatter_(dim, idx, dest_tensor.gather(dim, idx))
+    return sparse_dest
+
+
 class Algo(Enum):
     FFT = 0
     DCT = 1
@@ -59,13 +113,12 @@ class SignalSparsity:
         algo: Algo = Algo.FFT,
         sst_top_k_dim: Optional[int] = -1,
         sst_top_k_element: Optional[int] = None,
-        sst_top_k_percent: Optional[float] = 0.1,
+        sst_top_k_percent: Optional[float] = None,
         dst_top_k_dim: Optional[int] = -1,
         dst_top_k_element: Optional[int] = None,
-        dst_top_k_percent: Optional[float] = 0.1,
+        dst_top_k_percent: Optional[float] = None,
     ) -> None:
 
-        self._algo = algo
         self._sst_top_k_dim = sst_top_k_dim
         self._sst_top_k_element = sst_top_k_element
         self._sst_top_k_percent = sst_top_k_percent
@@ -74,49 +127,62 @@ class SignalSparsity:
         self._dst_top_k_percent = dst_top_k_percent
 
         self._validate_conf()
+        self._transform = torch.fft.fft if algo == Algo.FFT else self._dct_transform  # type: ignore
 
     def _validate_conf(self) -> None:
         """Validating the config is valid.
 
-        For example, not both top_k_element and top_k_percent is set.
+        This includes asserting the following:
+        1. validating that both top_k_element and top_k_percent is not set.
+        2. Asserting that if top_k_percent is not None, it is a valid number for percentage.
 
-        this should assert fail if checking fails.
+        This asserts fail if the checking fails.
         """
         # assert that both top_k_elements and top_k_percent aren't set for sst and dst
-        assert (
-            self._sst_top_k_element is None or self._sst_top_k_percent is None
-        ), "Both top-k element and top-k percent has been provided as argument"
-        assert (
-            self._dst_top_k_element is None or self._dst_top_k_percent is None
-        ), "Both top-k element and top-k percent has been provided as argument"
+        assert (self._sst_top_k_element is None) ^ (
+            self._sst_top_k_percent is None
+        ), "One and only one of sst_top_k_element and sst_top_k_percent has to be provided as argument"
+        assert (self._dst_top_k_element is None) ^ (
+            self._dst_top_k_percent is None
+        ), "One and only one of dst_top_k_element and dst_top_k_percent has to be provided as argument"
+
+        # assert, if top_k_percent is not None, it is a valid number for percentage.
+        assert self._sst_top_k_percent is None or (
+            0.0 < self._sst_top_k_percent <= 100.0
+        ), "The value for the argument sst_top_k_percent has to be in the interval (0, 100]"
+
+        assert self._dst_top_k_percent is None or (
+            0.0 < self._dst_top_k_percent <= 100.0
+        ), "The value for the argument dst_top_k_percent has to be in the interval (0, 100]"
 
     def dense_to_sst(self, dense: Tensor) -> Tensor:
         """Get SST from a tensor
 
         Dense -> fft -> top-k -> results.
 
-        For sparsification (or getting the topk) of the tensor in the transformed domain, the sparse
-        mask needs to be generated from the absolute values of the transformed tensors. However, using
-        the mask, we mask out the top_k values from the transformed tensor `w_fft` itself instead.
-        Note: the transformed tensor `w_fft` is a tensor of complex values, whereas `w_fft_abs` is a
-        tensor with real values from which we generate the sparse mask.
+        Generates a Signal Sparse Tensor (SST) from an input dense tensor. The input dense
+        tensor is transformed using a transform algorithm according to the `algo` initialization
+        argument. The SST is then generated from the top_k_elements (or the top_k_percentage) of
+        values from the transformed tensor along the 'sst_top_k_dim'.
+
+        Args:
+            dense (Tensor):
+                Input dense tensor (no zeros).
 
         Returns:
             Same shaped tensor, still in dense format but in frequency domain and has zeros.
         """
-        if self._sst_top_k_element is not None:
-            assert self._sst_top_k_dim is None or (
-                self._sst_top_k_element <= dense.shape[self._sst_top_k_dim]
-            ), f"top_k_element along dim {self._sst_top_k_dim} out of range for tensor of shape {dense.shape}."
+        k = get_k_for_topk(dense, self._sst_top_k_percent, self._sst_top_k_element, self._sst_top_k_dim)
+        dense_freq = self._transform(dense)
 
-        w_fft = self._transform(dense)
-        w_fft_abs = torch.abs(w_fft)  # get absolute FFT values
+        # NOTE: real_dense_freq can potentially be magnitude of complex frequency components
+        # or DCT transformed components when using DCT (currently not implemented).
+        # TODO: In case of the FFT, the imaginary part can perhaps be quantized or pruning can be
+        # done on the smaller phases.
+        real_dense_freq = dense_freq.real
 
-        # Use the normalized real values for getting the topk mask. The threshold function handles both the cases
-        # of when top_k_element or top_k_percent is proviced by the caller.
-        sps_mask = self._sparse_mask(w_fft_abs, self._sst_top_k_element, self._sst_top_k_percent, self._sst_top_k_dim)
-        w_sst = w_fft * sps_mask  # but mask the actual complex FFT values topk
-        return w_sst
+        sst = scatter_topk_to_sparse_tensor(real_dense_freq, dense_freq, k, dim=self._sst_top_k_dim)
+        return sst
 
     def dense_sst_to_dst(self, dense: Tensor, sst: Tensor) -> Tensor:
         """From dense and SST to a DST
@@ -155,74 +221,21 @@ class SignalSparsity:
         """
         pass
 
-    def _transform(self, dense: Tensor) -> Tensor:
-        """
-        Applies the transformation algorithm chosen by the caller to the input dense tensor.
-        Returns the transformed tensor.
-
-        Args:
-            dense (Tensor):
-                Input dense tensor.
-        """
-        if self._algo is Algo.FFT:
-            transform = torch.fft.fft  # type: ignore
-        elif self._algo is Algo.DCT:
-            raise NotImplementedError
-        return transform(dense)
-
-    def _sparse_mask(
-        self,
-        in_tensor: Tensor,
-        top_k_element: Optional[int] = None,
-        top_k_percent: Optional[float] = None,
-        dim: int = -1,
-    ) -> Tensor:
-        """Returns a mask for a tensor with a certain sparsity level corresponding to either
-        the top_k_percent or the top_k_element of the tensor.
-
-        Args:
-            in_tensor (Tensor)
-                input torch tensor for which sparse mask is generated.
-            top_k_element (float, optional)
-                Number of top-k elements to retain in the dense tensor corresponding to the mask.
-            top_k_percent (float, optional)
-                Percent of top-k elements to retain in the dense tensor corresponding to the mask.
-            dim (int, optional):
-                The dimension on which the top-k is done..
-                E.g. -1 is the last dim. None means flatten and top-k on all dims.
-                There is no way to specify multiple dims other than None.
-        """
-        abs_tensor = torch.abs(in_tensor)
-
-        # when the criterion is top_k_percent
-        if self._dst_top_k_percent is not None or self._sst_top_k_percent is not None:
-            sparsity = 1 - top_k_percent  # target sparsity in the unit interval [0,1]
-            if sparsity == 0.0:  # if sparsity is zero, we want a mask with all 1's
-                threshold = torch.tensor(float("-Inf"), device=in_tensor.device).unsqueeze(dim)
-            else:
-                threshold = torch.quantile(abs_tensor, sparsity, dim).unsqueeze(dim)  # type: ignore
-            sps_mask = in_tensor >= threshold
-
-        # when the criterion is top_k_elements
-        elif self._dst_top_k_element is not None or self._sst_top_k_element is not None:
-            # If dim is None, we flatten the tensor and get the topk for the whole tensor.
-            if dim is None:
-                vals, idx = in_tensor.flatten().topk(top_k_element)
-                flat_tensor = torch.zeros_like(in_tensor.flatten())
-                flat_tensor[idx] = vals
-                sps_mask = flat_tensor.reshape(in_tensor.shape) > 0.0
-            else:
-                # top-k along some dimension dim only
-                vals, idx = in_tensor.topk(top_k_element, dim=dim)
-                topk = torch.zeros_like(in_tensor)
-                sps_mask = topk.scatter(dim, idx, vals) > 0.0
-
-        return sps_mask
-
     def sst_or_dst_to_mask(self) -> None:
         # we shouldn't need this function since going from SST/DST to mask should be a
         # trivial call in pytorch. Maybe I am missing something.
         pass
+
+    def _dct_transform(self, dense: Tensor) -> Tensor:
+        """Should take a tensor and perform a Discrete Cosine Transform on the tensor.
+
+        Args:
+            dense (Tensor):
+                Input dense tensor (no zeros).
+        Returns:
+            transformed dense tensor DCT components
+        """
+        raise NotImplementedError()
 
 
 # We could separate have helper functions that work on state_dict instead of a tensor.
