@@ -11,7 +11,7 @@ import shutil
 import sys
 import tempfile
 import time
-from typing import Any, Dict, Optional, Union, cast
+from typing import Any, Dict, Optional, Tuple, Union, cast
 
 import pgzip
 import torch
@@ -24,18 +24,18 @@ from .utils import ExitCode
 #
 
 # For each object entry in the metadata json file.
-ENTRY_RF_KEY = "ref_count"
-ENTRY_COMP_KEY = "compressed"
-ENTRY_OS_KEY = "original_size"
-STORE_DS_KEY = "deduped_size"
-ENTRY_CS_KEY = "compressed_size"
-ENTRY_NAMES_KEY = "names"
+ENTRY_RF_KEY = "ref_count"  # int, reference count for this object.
+ENTRY_COMP_KEY = "compressed"  # bool, is compressed or not.
+ENTRY_OS_KEY = "original_size"  # int, original size for all identical objects mapped to this object.
+ENTRY_DS_KEY = "deduped_size"  # int, size after deduplication (always enabled).
+ENTRY_CS_KEY = "compressed_size"  # int, size after gzip compression, if enabled.
+ENTRY_NAMES_KEY = "names"  # list, names of objects mapped to this object.
 
 # For the entire store in the metadata json file.
-STORE_CREATE_DATE_KEY = "created_on"
-STORE_OS_KEY = "original_size"
-STORE_DS_KEY = "deduped_size"
-STORE_CS_KEY = "compressed_size"
+STORE_CREATE_DATE_KEY = "created_on"  # str, when is the store created.
+STORE_OS_KEY = "original_size"  # int, original size for all objects added.
+STORE_DS_KEY = "deduped_size"  # int, size after deduplication (always enabled).
+STORE_CS_KEY = "compressed_size"  # int, size after gzip compression, if enabled on any object within the store.
 
 
 def _get_json_entry(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -44,13 +44,28 @@ def _get_json_entry(d: Dict[str, Any]) -> Dict[str, Any]:
     This fills in any missing entries in case we load an older version
     json file from the disk.
     """
-    if ENTRY_RF_KEY not in d.keys():
-        d[ENTRY_RF_KEY] = 0
+    for int_key_init_zero in [ENTRY_RF_KEY, ENTRY_OS_KEY, STORE_DS_KEY, ENTRY_CS_KEY]:
+        if int_key_init_zero not in d.keys():
+            d[int_key_init_zero] = 0
+
+    for bool_key_init_false in [ENTRY_COMP_KEY]:
+        if bool_key_init_false not in d.keys():
+            d[bool_key_init_false] = False
+
+    for list_key_init_empty in [ENTRY_NAMES_KEY]:
+        if list_key_init_empty not in d.keys():
+            d[list_key_init_empty] = []
+
     return d
 
 
-def _copy_compressed(src: Path, dest: Path, thread: Optional[int], blocksize: int) -> None:
-    """Helper to copy a file and compress it at the same time."""
+def _copy_compressed(src: Path, dest: Path, thread: Optional[int], blocksize: int) -> Tuple[int, int]:
+    """Helper to copy a file and compress it at the same time.
+
+    Returns:
+        (int, int):
+            original size and compressed size in bytes.
+    """
     with open(str(src), "rb") as srcf:
         with pgzip.open(str(dest), "wb", compresslevel=5, thread=thread, blocksize=blocksize) as destf:
             while True:
@@ -58,6 +73,9 @@ def _copy_compressed(src: Path, dest: Path, thread: Optional[int], blocksize: in
                 if len(buf) == 0:
                     break
                 destf.write(buf)
+    orig, comp = Path(src).stat().st_size, Path(dest).stat().st_size
+    assert orig >= comp, f"Compressed size {comp} > original {orig}"
+    return orig, comp
 
 
 def _copy_uncompressed(src: Path, dest: Path, thread: Optional[int], blocksize: int) -> None:
@@ -225,9 +243,7 @@ class SHA1_Store:
         # Add reference.
         ref_count = self._add_ref(sha1_hash, True, compress)
 
-        if ref_count == 1:
-            # First time adding
-
+        if ref_count == 1:  # First time adding.
             # Create the file dir, if needed.
             repo_fdir = self._sha1_to_dir(sha1_hash)
             if not repo_fdir.exists():
@@ -241,14 +257,31 @@ class SHA1_Store:
             repo_fpath = repo_fdir.joinpath(sha1_hash)
             try:
                 if compress:
-                    _copy_compressed(file_path, repo_fpath, self._pgzip_threads, self._pgzip_block_size)
+                    orig_size, comp_size = _copy_compressed(
+                        file_path, repo_fpath, self._pgzip_threads, self._pgzip_block_size
+                    )
                 else:
                     shutil.copy2(file_path, repo_fpath)
+                    orig_size = comp_size = file_path.stat().st_size
             except BaseException as error:
                 # Something went wrong, perhaps out of space, or race condition due to lack of locking.
                 # TODO (Min): proper handle the error and recover when we learn more here.
                 sys.stderr.write(f"An exception occured: {repr(error)}\n")
                 ref_count = self._add_ref(sha1_hash, False, compress)
+
+        # Update the sizes for this entry.
+        self._load_json_dict()
+        entry = _get_json_entry(self._json_dict[sha1_hash])
+        o_diff = orig_size if ref_count == 1 else entry[ENTRY_OS_KEY]
+        d_diff = orig_size if ref_count == 1 else 0
+        c_diff = comp_size if ref_count == 1 else 0
+        entry[ENTRY_OS_KEY] += o_diff
+        entry[ENTRY_DS_KEY] += d_diff
+        entry[ENTRY_CS_KEY] += c_diff
+        self._json_dict[STORE_OS_KEY] += o_diff
+        self._json_dict[STORE_DS_KEY] += d_diff
+        self._json_dict[STORE_CS_KEY] += c_diff
+        self._store_json_dict()
 
         # Clean up if needed.
         if remove_tmp:
@@ -329,6 +362,16 @@ class SHA1_Store:
             # empty entry, it means this sha1 is deleted.
             del self._json_dict[sha1]
         self._store_json_dict()
+
+    def size_info(self, sha1: Optional[str] = None) -> Tuple[int, int, int]:
+        """Return original, deduped, gzipped sizes for an entry or the store."""
+        self._load_json_dict()
+        if sha1:
+            if sha1 not in self._json_dict.keys():
+                raise ValueError(f"SHA1 {sha1} not found")
+            entry = self._json_dict[sha1]
+            return entry[ENTRY_OS_KEY], entry[ENTRY_DS_KEY], entry[ENTRY_CS_KEY]
+        return self._json_dict[STORE_OS_KEY], self._json_dict[STORE_DS_KEY], self._json_dict[STORE_CS_KEY]
 
     def _get_sha1_hash(self, file_path: Union[str, Path]) -> str:
         """Return the sha1 hash of a file

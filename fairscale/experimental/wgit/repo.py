@@ -292,6 +292,15 @@ class Repo:
     def size_info(self, path: Optional[str] = None) -> SizeInfo:
         """Get size info for a file or the whole repo.
 
+        For the whole repo, just call size_info from sha1_store.
+
+        For a file, needs to open the metadata and find the sha1 and then
+        for per_tensor state_dict, collect size_info on all objects.
+
+        TODO (Min): not exactly clear it is easy to compute this with
+                    delta encoding, deduplication between objects, this
+                    is possible to compute precisely.
+
         Args:
             path (str, optional):
                 File path for the query. If None, return whole repo's info.
