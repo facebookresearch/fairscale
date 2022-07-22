@@ -38,6 +38,7 @@ STORE_CREATE_DATE_KEY = "created_on"  # str, when is the store created.
 STORE_OS_KEY = "original_size"  # int, original size for all objects added.
 STORE_DS_KEY = "deduped_size"  # int, size after deduplication (always enabled).
 STORE_CS_KEY = "compressed_size"  # int, size after gzip compression, if enabled on any object within the store.
+STORE_TO_KEY = "top_level_objects"  # int, number of top level objects added.
 
 
 def _get_json_entry(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -197,6 +198,7 @@ class SHA1_Store:
                     STORE_OS_KEY: 0,
                     STORE_DS_KEY: 0,
                     STORE_CS_KEY: 0,
+                    STORE_TO_KEY: 0,
                 }
 
         # This is an internal error since caller of this our own wgit code.
@@ -308,9 +310,12 @@ class SHA1_Store:
             entry[ENTRY_OS_KEY] += o_diff
             entry[ENTRY_DS_KEY] += d_diff
             entry[ENTRY_CS_KEY] += c_diff
+
+            # Update whole store's stats.
             self._json_dict[STORE_OS_KEY] += o_diff
             self._json_dict[STORE_DS_KEY] += d_diff
             self._json_dict[STORE_CS_KEY] += c_diff
+            self._json_dict[STORE_TO_KEY] += 1
 
             # Update the name list for this entry.
             if name:
