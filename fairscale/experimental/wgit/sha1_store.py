@@ -273,7 +273,10 @@ class SHA1_Store:
 
         # Update the sizes for this entry.
         entry = _get_json_entry(self._json_dict[sha1_hash])
-        o_diff = orig_size if ref_count == 1 else entry[ENTRY_OS_KEY]
+        assert (
+            ref_count == 1 or entry[ENTRY_OS_KEY] % (ref_count - 1) == 0
+        ), f"incorrect size: {entry[ENTRY_OS_KEY]} and {ref_count}"
+        o_diff = orig_size if ref_count == 1 else (entry[ENTRY_OS_KEY] // (ref_count - 1))
         d_diff = orig_size if ref_count == 1 else 0
         c_diff = comp_size if ref_count == 1 else 0
         entry[ENTRY_OS_KEY] += o_diff

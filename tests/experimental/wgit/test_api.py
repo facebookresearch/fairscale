@@ -85,7 +85,8 @@ def test_api_commit(capsys, repo):
     assert line[0].rstrip().split()[-1] == commit_msg
 
 
-def test_api_status(capsys, repo):
+@pytest.mark.parametrize("per_tensor", [True, False])
+def test_api_status(capsys, repo, per_tensor):
     # delete the repo and initialize a new one:
     shutil.rmtree(".wgit")
     repo = Repo(Path.cwd(), init=True)
@@ -96,7 +97,7 @@ def test_api_status(capsys, repo):
 
     # check status before after a file is added but not committed
     chkpt0 = f"checkpoint_{random.randint(0, 1)}.pt"
-    repo.add(chkpt0)
+    repo.add(chkpt0, per_tensor=per_tensor)
     out = repo.status()
     key_list = list(repo._get_metdata_files().keys())
     assert out == {key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED}
@@ -107,18 +108,18 @@ def test_api_status(capsys, repo):
     assert out == {key_list[0]: RepoStatus.CLEAN}
 
     # check status after a new change has been made to the file
-    torch.save(nn.Linear(1, int(15e5)), chkpt0)
+    torch.save(nn.Linear(1, int(15e5)).state_dict(), chkpt0)
     out = repo.status()
     assert out == {key_list[0]: RepoStatus.CHANGES_NOT_ADDED}
 
     # add the new changes made to weigit
-    repo.add(chkpt0)
+    repo.add(chkpt0, per_tensor=per_tensor)
     out = repo.status()
     assert out == {key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED}
 
     # check status after a new different file is added to be tracked by weigit
     chkpt3 = "checkpoint_3.pt"
-    repo.add(chkpt3)
+    repo.add(chkpt3, per_tensor=per_tensor)
     key_list = list(repo._get_metdata_files().keys())
     out = repo.status()
     assert out == {
