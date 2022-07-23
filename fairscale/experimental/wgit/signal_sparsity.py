@@ -41,7 +41,7 @@ def _scatter_topk_to_sparse_tensor(
             values at those indices and creates the sparse_tensor tensor.
         k (int)
             the value of k for top-k
-        dim (int)
+        dim (int, optional)
             dimension for top-k
 
     Returns:
@@ -53,13 +53,12 @@ def _scatter_topk_to_sparse_tensor(
         top_k_tensor.shape == to_be_sparsify_tensor.shape
     ), "top_k_tensor and to_be_sparsify_tensor have different shapes!"
 
+    sparse_tensor = torch.zeros_like(to_be_sparsify_tensor)
     if dim is None:
         _, idx = top_k_tensor.flatten().topk(k)
-        sparse_tensor = torch.zeros_like(to_be_sparsify_tensor)
         sparse_tensor.flatten()[idx] = to_be_sparsify_tensor.flatten()[idx]
     else:
         _, idx = top_k_tensor.topk(k, dim=dim)
-        sparse_tensor = torch.zeros_like(to_be_sparsify_tensor)
         # gather the values from the to_be_sparsify_tensor and scatter to a tensor of zeros
         sparse_tensor = sparse_tensor.scatter_(dim, idx, to_be_sparsify_tensor.gather(dim, idx))
     return sparse_tensor
