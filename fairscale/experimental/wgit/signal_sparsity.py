@@ -4,14 +4,14 @@
 # LICENSE file in the root directory of this source tree.
 
 from enum import Enum
-from typing import Optional, Union
+from typing import Optional
 
 import torch
 from torch import Tensor
 
 
 # Helper Functions
-def _get_k_for_topk(topk_percent: float, top_k_element: int, top_k_total_size: int) -> int:
+def _get_k_for_topk(topk_percent: Optional[float], top_k_element: Optional[int], top_k_total_size: int) -> int:
     """Converts the top_k_percent to top_k_element when top_k_percent is provided
     as the criterion for top-k calculation. When, top_k_element is used as the criterion,
     simply returns the value for k. Also, ensures k is never 0 to avoid all sparse tensors.
@@ -64,7 +64,7 @@ def _scatter_topk_to_sparse_tensor(
     return sparse_tensor
 
 
-def _top_k_total_size(tensor: Tensor, topk_dim: Union[int, None]) -> int:
+def _top_k_total_size(tensor: Tensor, topk_dim: Optional[int]) -> int:
     """Get the total size of the input tensor along the topk_dim dimension. When, the
     dimension is None, get the number of elements in the tensor.
     """
