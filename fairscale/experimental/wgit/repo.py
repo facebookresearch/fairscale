@@ -91,7 +91,7 @@ def _recursive_apply_to_elements(data: Union[List[Any], Dict[str, Any]], fn: Any
             names.pop()
     elif isinstance(data, dict):
         for key in data.keys():
-            names.append(key)
+            names.append(str(key))
             if isinstance(data[key], (list, dict)):
                 _recursive_apply_to_elements(data[key], fn, names)
             else:
