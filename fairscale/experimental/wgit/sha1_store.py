@@ -207,7 +207,7 @@ class SHA1_Store:
         ), f"SHA1 store {self._path} does not exist and init is False"
 
         # Make sure there is a valid metadata file.
-        with self._json_ctx:
+        with self._readonly_json_ctx:
             assert STORE_CREATE_DATE_KEY in self._json_dict, f"Invalid SHA1 Store in {self._path}"
 
         # Init temp dir.
