@@ -36,6 +36,11 @@ def main(argv: List[str] = None) -> None:
         metavar="FILE_PATH",
         help="add a file to the staged changeset (default: none)",
     )
+    add_parser.add_argument(
+        "--no_per_tensor",
+        action="store_true",
+        help="Disable per-tensor adding of a file",
+    )
 
     commit_parser = subparsers.add_parser("commit", description="Commits the staged changes")
     commit_parser.add_argument("commit", action="store_true", help="Commit the staged changes")
@@ -76,7 +81,7 @@ def main(argv: List[str] = None) -> None:
 
     if args.command == "add":
         repo = Repo(Path.cwd())
-        repo.add(args.add)
+        repo.add(args.add, per_tensor=not args.no_per_tensor)
 
     if args.command == "status":
         repo = Repo(Path.cwd())

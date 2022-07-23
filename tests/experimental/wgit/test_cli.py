@@ -35,7 +35,7 @@ def create_test_dir():
     # create random checkpoints
     size_list = [30e5, 35e5, 40e5]
     for i, size in enumerate(size_list):
-        torch.save(nn.Linear(1, int(size)), f"checkpoint_{i}.pt")
+        torch.save(nn.Linear(1, int(size)).state_dict(), f"checkpoint_{i}.pt")
 
     # Test init.
     cli.main(["init"])
@@ -53,7 +53,7 @@ def test_cli_init(create_test_dir, capsys):
 
 def test_cli_add(create_test_dir, capsys):
     chkpt0 = "checkpoint_0.pt"
-    cli.main(["add", chkpt0])
+    cli.main(["add", "--no_per_tensor", chkpt0])
 
     sha1_store = SHA1_Store(
         Path.cwd().joinpath(".wgit", "sha1_store"),
@@ -64,7 +64,7 @@ def test_cli_add(create_test_dir, capsys):
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
-    assert json_data["SHA1"] == {"__sha1_full__": sha1_hash}
+    assert json_data["SHA1"] == sha1_hash
 
 
 def test_cli_commit(capsys):
