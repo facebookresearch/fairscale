@@ -9,6 +9,7 @@
 
 from typing import List
 
-from . import nn, optim, wgit
+# Don't import sub-modules to avoid experimental stuff gets imported directly
+# when user does an `import fairscale`
 
 __all__: List[str] = []
