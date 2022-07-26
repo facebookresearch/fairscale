@@ -30,18 +30,19 @@ def sst_and_default_sps():
         k = _get_k_for_topk(percent, element, top_k_total_size)
         default_sst = torch.zeros_like(dense_freq)
 
-        # create sst from default pytorch operations
-        if dim is None:
+        orig_shape = dense_freq.shape
+        if dim is None and len(orig_shape) > 1:
             default_sst = default_sst.reshape(-1)
-            _, idx = real_dense_freq.abs().flatten().topk(k)
-            default_sst[idx] = dense_freq.flatten()[idx]
-            default_sst = default_sst.reshape(dense_freq.shape)
-            assert default_sst.abs().count_nonzero() == k  # top-k verification
-        else:
-            _, i = real_dense_freq.abs().topk(k, dim=dim)
-            default_sst = default_sst.scatter(dim, i, dense_freq.gather(dim, i))
-            # verify if sst only has top-k values across the right dim
-            assert all((default_sst.abs().count_nonzero(dim) == k).flatten())
+            real_dense_freq = real_dense_freq.reshape(-1)
+            dense_freq = dense_freq.reshape(-1)
+            dim = -1
+
+        _, i = real_dense_freq.abs().topk(k, dim=dim)
+        default_sst = default_sst.scatter(dim, i, dense_freq.gather(dim, i)).reshape(orig_shape)
+
+        # verify if sst only has top-k values across the right dim
+        dim = None if (dim == -1) else dim
+        assert all((default_sst.abs().count_nonzero(dim) == k).flatten())
 
         sst = sparser_2d.dense_to_sst(tensor)
         assert all((default_sst == sst).flatten())
@@ -70,7 +71,7 @@ def test_validate_conf():
     # Validate assertion error is raised when, either
     # 1. One and only one of sst (or dst) percent and element is not provided a value (not None).
     # 2. Both of sst (or dst) percent and element is set to None.
-    # 3. top_k_percent and top_k_element are in valid range (elem > 0) and for 0 < percent <= 100.
+    # 3. top_k_percent and top_k_element are not in valid range (elem > 0) and for 0 < percent <= 100.
     element = 10
     percent = 50
     dim = 0
