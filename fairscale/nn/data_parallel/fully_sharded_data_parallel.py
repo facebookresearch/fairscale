@@ -2533,40 +2533,48 @@ def _post_state_dict_hook(
         state_dict.clear()
         return state_dict
 
-    def apply_to_tensor(obj: torch.Tensor, move_to_state_dict_device: bool = True) -> torch.Tensor:
+    def apply_to_tensor(obj: torch.Tensor) -> torch.Tensor:
         """Apply needed operations on a tensor."""
         assert isinstance(obj, torch.Tensor), f"Expect a tensor, got {type(obj)}"
-        # Move to right device.
+
+        # Already applied?
+        if getattr(obj, "_has_been_cloned", False):
+            return obj
+
         if obj.device.type != module.state_dict_device.type:
+            # Move to right device. This is often used to save GPU memory.
             obj = obj.to(device=module.state_dict_device)
 
-        # If we are in a ``summon_full_params()`` context, we need to clone
-        # each tensor so that it does not get freed (in-place) when the context
-        # exits. At the same time, this hook can be called multiple times
-        # recursively, so we need to make sure that we only clone each tensor at
-        # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
-        # which keeps track of tensors that are no longer at risk of being freed.
-        if module.training_state == TrainingState.SUMMON_FULL_PARAMS and getattr(obj, "_has_been_cloned", False):
-            # We copy the state_dict since full param will be freed after we
-            # exit the ``summon_full_params()`` context.
+        elif module.training_state == TrainingState.SUMMON_FULL_PARAMS:
+            # If we are in a ``summon_full_params()`` context, we need to clone
+            # each tensor so that it does not get freed (in-place) when the context
+            # exits. At the same time, this hook can be called multiple times
+            # recursively, so we need to make sure that we only clone each tensor at
+            # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
+            # which keeps track of tensors that are no longer at risk of being freed.
+            #
+            # "elif" because .to() clones the object too.
             obj = obj.clone()
-            obj._has_been_cloned = True
+
+        # Both .to() and .clone() copies a new object. So we set this flag.
+        obj._has_been_cloned = True
 
         return obj
 
+    # State_dict is supposed to be a flat dict (not nested). The
+    # keys are encoded with hierarchy. Therefore, we can loop
+    # over the dict here. (See else case below for additional notes.)
     for key in state_dict.keys():
         # Skip keys without right prefix.
         if not key.startswith(prefix):
             continue
-        if isinstance(state_dict[key], dict):
-            # EMA module from data2vec, for example, is a dict of tensors.
-            for k, v in cast(Dict, state_dict[key]).items():
-                assert isinstance(v, torch.Tensor), f"Unexpected type {k} {type(v)}"
-                state_dict[key][k] = apply_to_tensor(v, move_to_state_dict_device=False)
         elif isinstance(state_dict[key], torch.Tensor):
             state_dict[key] = apply_to_tensor(state_dict[key])
         else:
-            assert False, f"Unexpected type {type(state_dict[key])}"
+            # For example, EMA module from data2vec is a dict of tensors.
+            logging.warning(
+                f"Got an unexpected data type in state_dict" f"key={key} value_type={type(state_dict[key])}"
+            )
 
     # Remove "_fsdp_wrapped_module." prefix
     replace_by_prefix_(state_dict, prefix + "_fsdp_wrapped_module.", prefix)
