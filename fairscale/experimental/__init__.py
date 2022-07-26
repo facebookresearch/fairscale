@@ -9,7 +9,7 @@
 
 from typing import List
 
-# Don't import sub-modules to avoid experimental stuff gets imported directly
+# Don't import sub-modules as experimental stuff otherwise gets imported directly
 # when user does an `import fairscale`. This can cause experimental code's import
 # dependencies (like pygit2) to be leaked into the fairscale main code.
 
