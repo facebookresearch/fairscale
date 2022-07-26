@@ -275,7 +275,7 @@ class FullyShardedDataParallel(nn.Module):
             Default: False
         state_dict_device (torch.device, Optional):
             device for parameters returned by :func:`state_dict`. If not given,
-            this will default to ``compute_dtype``. Note that only the device
+            this will default to ``compute_device``. Note that only the device
             type will be respected (e.g., "cuda:0" and "cuda:1" are the same).
         clear_autocast_cache (bool):
             When using mixed precision training with `torch.amp.autocast`, if the model weights
@@ -2532,23 +2532,41 @@ def _post_state_dict_hook(
     if state_dict_on_rank_0_only and dist.get_rank() != 0:
         state_dict.clear()
         return state_dict
-    # Assuming we are in a ``summon_full_params()`` context, we need to clone
-    # each tensor so that it does not get freed (in-place) when the context
-    # exits. At the same time, this hook can be called multiple times
-    # recursively, so we need to make sure that we only clone each tensor at
-    # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
-    # which keeps track of tensors that are no longer at risk of being freed.
-    for key in state_dict.keys():
-        if not key.startswith(prefix) or getattr(state_dict[key], "_has_been_cloned", False):
-            continue
-        if state_dict[key].device.type != module.state_dict_device.type:
-            state_dict[key] = state_dict[key].to(device=module.state_dict_device)
-            state_dict[key]._has_been_cloned = True
-        elif module.training_state == TrainingState.SUMMON_FULL_PARAMS:
+
+    def apply_to_tensor(obj: torch.Tensor, move_to_state_dict_device: bool = True) -> torch.Tensor:
+        """Apply needed operations on a tensor."""
+        assert isinstance(obj, torch.Tensor), f"Expect a tensor, got {type(obj)}"
+        # Move to right device.
+        if obj.device.type != module.state_dict_device.type:
+            obj = obj.to(device=module.state_dict_device)
+
+        # If we are in a ``summon_full_params()`` context, we need to clone
+        # each tensor so that it does not get freed (in-place) when the context
+        # exits. At the same time, this hook can be called multiple times
+        # recursively, so we need to make sure that we only clone each tensor at
+        # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
+        # which keeps track of tensors that are no longer at risk of being freed.
+        if module.training_state == TrainingState.SUMMON_FULL_PARAMS and getattr(obj, "_has_been_cloned", False):
             # We copy the state_dict since full param will be freed after we
             # exit the ``summon_full_params()`` context.
-            state_dict[key] = state_dict[key].clone()
-            state_dict[key]._has_been_cloned = True
+            obj = obj.clone()
+            obj._has_been_cloned = True
+
+        return obj
+
+    for key in state_dict.keys():
+        # Skip keys without right prefix.
+        if not key.startswith(prefix):
+            continue
+        if isinstance(state_dict[key], dict):
+            # EMA module from data2vec, for example, is a dict of tensors.
+            for k, v in cast(Dict, state_dict[key]).items():
+                assert isinstance(v, torch.Tensor), f"Unexpected type {k} {type(v)}"
+                state_dict[key][k] = apply_to_tensor(v, move_to_state_dict_device=False)
+        elif isinstance(state_dict[key], torch.Tensor):
+            state_dict[key] = apply_to_tensor(state_dict[key])
+        else:
+            assert False, f"Unexpected type {type(state_dict[key])}"
 
     # Remove "_fsdp_wrapped_module." prefix
     replace_by_prefix_(state_dict, prefix + "_fsdp_wrapped_module.", prefix)
