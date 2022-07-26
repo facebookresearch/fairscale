@@ -80,8 +80,8 @@ def test_sha1_add_file(sha1_store, compress):
     sha1_store.add(zeros_file, compress)
 
     # Assert the ref counts are 1,1,1,1,1 and 2
-    sha1_store._load_json_dict()
-    json_dict = sha1_store._json_dict
+    with sha1_store._readonly_json_ctx:
+        json_dict = sha1_store._json_dict
     if torch_version() >= (1, 9, 0):
         # torch 1.8 LTS doesn't produce deterministic checkpoint file from fixed tensors/state_dict.
         key = "da3e19590de8f77fcf7a09c888c526b0149863a0"
@@ -102,8 +102,8 @@ def test_sha1_add_state_dict(sha1_store, compress):
         sha1_store.add(sd, compress)
         sha1_store.add(sd, compress)
 
-    sha1_store._load_json_dict()
-    json_dict = sha1_store._json_dict
+    with sha1_store._readonly_json_ctx:
+        json_dict = sha1_store._json_dict
     json_dict = dict(filter(lambda item: len(item[0]) == SHA1_KEY_STR_LEN, json_dict.items()))
     assert sorted(map(lambda x: x["ref_count"], json_dict.values())) == [1, 1, 1, 2, 2, 2], json_dict
 
@@ -112,8 +112,8 @@ def test_sha1_add_state_dict(sha1_store, compress):
 def test_sha1_add_tensor(sha1_store, compress):
     os.chdir(TESTING_STORE_DIR)
     sha1_store.add(torch.Tensor([1.0, 5.5, 3.4]), compress)
-    sha1_store._load_json_dict()
-    json_dict = sha1_store._json_dict
+    with sha1_store._readonly_json_ctx:
+        json_dict = sha1_store._json_dict
     if torch_version() >= (1, 9, 0):
         # torch 1.8 LTS doesn't produce deterministic checkpoint file from fixed tensors/state_dict.
         key = "71df4069a03a766eacf9f03eea50968e87eae9f8"

@@ -28,7 +28,7 @@ REL_PATH_KEY = "file_path"  # this will be removed from the json since it is red
 
 
 class RepoStatus(Enum):
-    """Collections of Repo Statuses"""
+    """Repo Statuses"""
 
     CLEAN = 1
     CHANGES_NOT_ADDED = 2
@@ -39,7 +39,7 @@ class RepoStatus(Enum):
 class SizeInfo:
     """Size info for a file or the repo in bytes.
 
-    Deduped size can't be disabled. So it will always be there.
+    Deduped size can't be disabled. So it is always performed.
 
     Both sparsified and gzipped are optional. They are applied in the following
     order if both are enabled:
@@ -59,7 +59,7 @@ class SizeInfo:
 class _SHA1_Tensor:
     """Representing a tensor using sha1(s) from SHA1 store.
 
-    It can be either a dense one or 2 sparse one with SST and DST.
+    It can be either a dense one or two sparse one (SST and DST).
     """
 
     is_dense: bool = True
@@ -68,23 +68,35 @@ class _SHA1_Tensor:
     dst_sha1: str = ""
 
 
-def _recursive_apply_to_elements(data: Union[List[Any], Dict[str, Any]], fn: Any) -> None:
+def _recursive_apply_to_elements(data: Union[List[Any], Dict[str, Any]], fn: Any, names: List[str]) -> None:
     """Helper function to traverse a dict recursively and apply a function to leafs.
 
-    The input `data` is a dict or a list and it should only contain dict and list.
+
+    Args:
+        data (dict or list):
+            A dict or a list and it should only contain dict and list.
+        fn (Any):
+            A call back function on each element. Signature:
+                fn(element: Any, names: List[str]) -> Any
+        names (list):
+            Stack of names for making the element path.
     """
     if isinstance(data, list):
         for i, _ in enumerate(data):
+            names.append(str(i))
             if isinstance(data[i], (list, dict)):
-                _recursive_apply_to_elements(data[i], fn)
+                _recursive_apply_to_elements(data[i], fn, names)
             else:
-                data[i] = fn(data[i])
+                data[i] = fn(data[i], names)
+            names.pop()
     elif isinstance(data, dict):
         for key in data.keys():
+            names.append(str(key))
             if isinstance(data[key], (list, dict)):
-                _recursive_apply_to_elements(data[key], fn)
+                _recursive_apply_to_elements(data[key], fn, names)
             else:
-                data[key] = fn(data[key])
+                data[key] = fn(data[key], names)
+            names.pop()
     else:
         assert False, f"Unexpected data type: {type(data)}"
 
@@ -250,7 +262,7 @@ class Repo:
         #             yet. Need to figure out a method for delta tracking.
         if per_tensor:
 
-            def fn(element: Any) -> Any:
+            def fn(element: Any, names: List[str]) -> Any:
                 """Callback on each leaf object for _recursive_apply_to_elements below."""
                 if isinstance(element, Tensor):
                     if sparsify:
@@ -258,13 +270,13 @@ class Repo:
                         #             tensors with sparsity.
                         #             Remember to update ret_state_dict
                         raise NotImplementedError()
-                    sha1 = self._sha1_store.add(element, compress=gzip)
+                    sha1 = self._sha1_store.add(element, compress=gzip, name=".".join(names))
                     return _SHA1_Tensor(is_dense=True, dense_sha1=sha1)
                 else:
                     return element
 
             state_dict = torch.load(file_path)
-            _recursive_apply_to_elements(state_dict, fn)
+            _recursive_apply_to_elements(state_dict, fn, [])
             file_path_or_state_dict = state_dict
 
         # Add this top-level object.
