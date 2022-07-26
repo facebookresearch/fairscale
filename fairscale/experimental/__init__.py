@@ -11,5 +11,6 @@ from typing import List
 
 # Don't import sub-modules to avoid experimental stuff gets imported directly
 # when user does an `import fairscale`
+from . import wgit
 
 __all__: List[str] = []

@@ -273,6 +273,10 @@ jobs:
       - <<: *check_test_list
       - <<: *setup_venv
 
+      # Do this first to test repo dependencies. Basic import should work after this
+      # installation. See issue #1042 for an example.
+      - <<: *install_repo
+
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
@@ -284,7 +288,6 @@ jobs:
             - ~/venv
           key: cache-key-cpu-py38-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_repo
       - <<: *run_unittests
       - <<: *run_doc_build
 
@@ -301,6 +304,10 @@ jobs:
       - <<: *check_test_list
       - <<: *setup_venv
 
+      # Do this first to test repo dependencies. Basic import should work after this
+      # installation. See issue #1042 for an example.
+      - <<: *install_repo
+
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
@@ -313,7 +320,6 @@ jobs:
             - ~/venv
           key: cache-key-cpu-py39-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_repo
       - <<: *run_unittests
       - <<: *run_doc_build
 
@@ -330,6 +336,10 @@ jobs:
       - <<: *check_test_list
       - <<: *setup_venv
 
+      # Do this first to test repo dependencies. Basic import should work after this
+      # installation. See issue #1042 for an example.
+      - <<: *install_repo
+
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
@@ -342,7 +352,6 @@ jobs:
             - ~/venv
           key: cache-key-cpu-py310-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_repo
       - <<: *run_unittests
       - <<: *run_doc_build
 
@@ -540,6 +549,11 @@ jobs:
 
       - <<: *setup_venv
 
+      # Do this first to test an issue like #1042. We keep benchmark_1 doing it
+      # after requirements-dev.txt, but change benchmark_2 to do this earlier to
+      # ensure both cases are tested.
+      - <<: *install_repo
+
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
@@ -557,8 +571,6 @@ jobs:
           paths:
             - ~/venv
           key: cache-key-py-3-9-7-benchmarks-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-
-      - <<: *install_repo
 
       - <<: *run_oss_benchmark
 
