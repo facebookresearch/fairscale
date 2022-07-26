@@ -10,6 +10,7 @@
 from typing import List
 
 # Don't import sub-modules to avoid experimental stuff gets imported directly
-# when user does an `import fairscale`
+# when user does an `import fairscale`. This can cause experimental code's import
+# dependencies (like pygit2) to be leaked into the fairscale main code.
 
 __all__: List[str] = []
