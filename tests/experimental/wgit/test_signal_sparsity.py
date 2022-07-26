@@ -3,19 +3,52 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
-import random
-
 import pytest
 import torch
 
 from fairscale.experimental.wgit.signal_sparsity import SignalSparsity, _get_k_for_topk, _top_k_total_size
 
 TRIALS = 5
-TENSOR_DIM_LOWER = 40
-TENSOR_DIM_UPPER = 100
-DIM_LIST = [None, 0, 1]
+DIM_LIST = [None, 0, 1, 2]
 SPARSITY_ATOL = 8e-2
 FFT_RECONS_ATOL = 2e-3
+
+
+@pytest.fixture
+def sst_and_default_sps():
+    """A fixture returning a function that calculates the sst from pytorch operations
+    and compares it with the sst from dense_to_sst method."""
+
+    def assert_and_get_sps_sst(tensor, percent, element, dim):
+        dense_freq = torch.fft.fft(tensor)
+
+        real_dense_freq = dense_freq.real
+        sparser_2d = SignalSparsity(
+            sst_top_k_percent=percent, sst_top_k_element=element, sst_top_k_dim=dim, dst_top_k_percent=100
+        )
+        top_k_total_size = _top_k_total_size(tensor, dim)
+        k = _get_k_for_topk(percent, element, top_k_total_size)
+        default_sst = torch.zeros_like(dense_freq)
+
+        # create sst from default pytorch operations
+        if dim is None:
+            default_sst = default_sst.reshape(-1)
+            _, idx = real_dense_freq.abs().flatten().topk(k)
+            default_sst[idx] = dense_freq.flatten()[idx]
+            default_sst = default_sst.reshape(dense_freq.shape)
+            assert default_sst.abs().count_nonzero() == k  # top-k verification
+        else:
+            _, i = real_dense_freq.abs().topk(k, dim=dim)
+            default_sst = default_sst.scatter(dim, i, dense_freq.gather(dim, i))
+            # verify if sst only has top-k values across the right dim
+            assert all((default_sst.abs().count_nonzero(dim) == k).flatten())
+
+        sst = sparser_2d.dense_to_sst(tensor)
+        assert all((default_sst == sst).flatten())
+        assert sst.shape == tensor.shape
+        return default_sst, sst
+
+    return assert_and_get_sps_sst
 
 
 def test_validate_conf():
@@ -35,108 +68,63 @@ def test_validate_conf():
         return dict(zip(arg_key_list, vals_list))
 
     # Validate assertion error is raised when, either
-    # 1. both of sst (or dst) percent and element is set to values (not None).
-    # 2. both of sst (or dst) percent and element is set to None.
-    element = random.randint(0, TENSOR_DIM_UPPER)
-    percent = random.uniform(0, 100)
-    dim = random.randint(-1, 3)
-
-    pytest.raises(AssertionError, SignalSparsity, **kwargs([element, percent, dim, element, None, dim]))
-    pytest.raises(AssertionError, SignalSparsity, **kwargs([element, None, dim, element, percent, dim]))
-    pytest.raises(AssertionError, SignalSparsity, **kwargs([None, None, dim, element, None, dim]))
-    pytest.raises(AssertionError, SignalSparsity, **kwargs([element, None, dim, None, None, dim]))
-
-
-def test_sst_sparsity_level():
-    """Tests the dense_to_sst method of SignalSparsity in terms of generating SST at the correct
-    sparsity level.
-    """
-
-    def get_sst(sst_top_k_percent, dst_top_k_percent=100):
-        sparser_2d = SignalSparsity(sst_top_k_percent=sst_top_k_percent, dst_top_k_percent=100)
-        sst = sparser_2d.dense_to_sst(tensor)
-        return sst
-
-    for _ in range(TRIALS):
-        # random tensor creation
-        size1 = random.randint(TENSOR_DIM_LOWER, TENSOR_DIM_UPPER)
-        size2 = random.randint(TENSOR_DIM_LOWER, TENSOR_DIM_UPPER)
-        tensor = torch.randn(size1, size2)
-
-        # at no sparsity: we expect almost total reconstruction
-        sst = get_sst(100)
-        w_prime = torch.fft.ifft(sst)
-        assert torch.isclose(w_prime.real, tensor, atol=FFT_RECONS_ATOL).sum() == tensor.numel()
-
-        # tests at random sparsity level
-        topk_percent = random.uniform(0, 100)
-        sst = get_sst(topk_percent)
-        abs_sst = torch.abs(sst)
-
-        # sparsity of the returned tensor
-        sps = 1 - abs_sst.count_nonzero() / abs_sst.numel()
-
-        # assert that the sparsity of the returned sst is close to the target sparsity
-        target_sps = torch.tensor(100 - topk_percent, device=sps.device) / 100
-        assert torch.isclose(sps, target_sps, atol=SPARSITY_ATOL)  # sparsity values can be coarsely close.
+    # 1. One and only one of sst (or dst) percent and element is not provided a value (not None).
+    # 2. Both of sst (or dst) percent and element is set to None.
+    # 3. top_k_percent and top_k_element are in valid range (elem > 0) and for 0 < percent <= 100.
+    element = 10
+    percent = 50
+    dim = 0
+    args_list = [
+        [element, percent, dim, element, None, dim],  # case 1.
+        [element, None, dim, element, percent, dim],
+        [None, None, dim, element, None, dim],  # case 2.
+        [element, None, dim, None, None, dim],
+        [0, None, dim, None, None, dim],  # case 3.
+        [None, 0, dim, None, None, dim],
+        [element, None, dim, 0, None, dim],
+        [element, None, dim, None, 0, dim],
+    ]
+    for args in args_list:
+        pytest.raises(ValueError, SignalSparsity, **kwargs(args))
 
 
-def test_dense_to_sst_topk_values():
-    """Tests the dense_to_sst method of SignalSparsity in terms of correct top-k value extraction in the SST."""
+def test_dense_to_sst(sst_and_default_sps):
+    """Tests the dense_to_sst method with fixed inputs"""
+    tensors = list()
+    tensors.append(torch.arange(20).reshape(4, 5))
+    tensors.append(torch.arange(80).reshape(4, 5, 4))
 
-    def test_dense_to_sst_topk_elem(tensor, topk_elem, topk_percent, dim):
-        sparser_2d = SignalSparsity(
-            sst_top_k_element=topk_elem, sst_top_k_percent=topk_percent, sst_top_k_dim=dim, dst_top_k_percent=100
-        )
-        sst = sparser_2d.dense_to_sst(tensor)
+    def elem_percent_equality(tensor, percent, element, dim):
+        """verifies if the topk element and top k percent returns the same results
+        for same sparsity in a fixed tensor along some dim.
+        """
+        _, sst_percent = sst_and_default_sps(tensor, percent, None, dim=dim)
+        _, sst_elem = sst_and_default_sps(tensor, None, element, dim=dim)
+        assert all((sst_percent == sst_elem).flatten())
 
-        # when testing with percentage, get the corresponding top-k number.
-        if topk_percent is not None:
-            topk_elem = _get_k_for_topk(topk_percent, topk_elem, _top_k_total_size(tensor, dim))
+    for tensor in tensors:
+        dim_list = [None] + list(range(tensor.dim()))
+        for dim in dim_list:
+            # Should return the FFT transformed tensor with top_100_percent for sst
+            sparser_2d = SignalSparsity(sst_top_k_percent=100, sst_top_k_dim=dim, dst_top_k_percent=100)
+            assert all((sparser_2d.dense_to_sst(tensor) == torch.fft.fft(tensor)).flatten())
 
-        # the output of the dense_to_sst is compared with default transfrom from pytorch
-        # NOTE: the following block of code depends on whether we are using the absolute value
-        # (complex magnitudes) or only the real part for selecting the topk in
-        # dense_to_sst method. Change in this criterion should result in a change below.
+            # Test for different sparsity levels using top_k_percent and top_k_elements
+            for percent, element in zip([20, 40, 60, 80], [1, 2, 3, 4]):
+                sst_and_default_sps(tensor, percent=percent, element=None, dim=dim)
+                sst_and_default_sps(tensor, percent=None, element=element, dim=dim)
 
-        # get the topk value tensor from default transform and topk operations
-        default_freq = torch.fft.fft(tensor)
-        default_real_freq = torch.abs(default_freq.real)  # modify default_freq.real -> torch.abs(default_freq)
-
-        if dim is None:
-            assert (torch.abs(sst) > 0.0).sum() == topk_elem
-            # compare sst topk with topk gathered from default computation
-            _, i = default_real_freq.flatten().topk(topk_elem)
-            assert all(sst.flatten()[i] == default_freq.flatten()[i])
-        else:
-            # verify if sst only has top-k values in the right dim
-            sst_nonzero_along_dim = (torch.abs(sst) > 0.0).sum(dim)
-
-            # when topk_elem is 0, we explicitly ensure that SignalSparsity class ensures we get top-1 element.
-            assert all(sst_nonzero_along_dim == topk_elem) if (topk_elem != 0) else all(sst_nonzero_along_dim == 1)
-
-            # use the topk values' indices from the default_real_freq and gather default_freq vals
-            # The  values from the freq tensor as per this index should match the same index values
-            # from the returned SST tensor.
-            _, idx = default_real_freq.topk(k=topk_elem, dim=dim)
-            def_vals = default_freq.gather(dim, idx)
-
-            sst_vals = sst.gather(dim, idx)
-            assert all((def_vals == sst_vals).flatten())
-
-    for _ in range(TRIALS):
-        # random tensor creation
-        size1 = random.randint(TENSOR_DIM_LOWER, TENSOR_DIM_UPPER)
-        size2 = random.randint(TENSOR_DIM_LOWER, TENSOR_DIM_UPPER)
-        tensor = torch.randn(size1, size2)
-
-        # Test topk_element along possible dims for 2D tensors
-        for dim in DIM_LIST:
-            # with topk element
-            max_elem_in_dim = tensor.numel() if (dim is None) else tensor.shape[dim]
-            topk_elem = random.randrange(0, max_elem_in_dim)  # sample a k for topk
-            test_dense_to_sst_topk_elem(tensor, topk_elem, None, dim=dim)
-
-            # with topk percent
-            topk_percent = random.uniform(0, 100)
-            test_dense_to_sst_topk_elem(tensor, None, topk_percent, dim=dim)
+            # Test that both top_k_percent and top_k_element returns same results
+            if dim is None:
+                percent_l = [25, 50, 75]
+                elem_l = [
+                    tensor.numel() * percent_l[0] / 100,
+                    tensor.numel() * percent_l[1] / 100,
+                    tensor.numel() * percent_l[2] / 100,
+                ]
+                elem_l = map(int, elem_l)
+                for percent, elem in zip(percent_l, elem_l):
+                    elem_percent_equality(tensor, percent, elem, dim)
+            else:
+                for percent, elem in zip([25, 50, 75], [1, 2, 3]):
+                    elem_percent_equality(tensor, percent, elem, dim)
