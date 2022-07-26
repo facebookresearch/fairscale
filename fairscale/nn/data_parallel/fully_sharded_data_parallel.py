@@ -962,6 +962,11 @@ class FullyShardedDataParallel(nn.Module):
         so the resulting state_dict can only be loaded after the Module has been
         wrapped with FSDP.
         """
+        # Check state, specifically, we shouldn't be in SUMMON_FULL_PARAMS since
+        # that will produce full state, not sharded state.
+        self.assert_state(
+            [TrainingState.IDLE, TrainingState.FORWARD, TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST]
+        )
         with contextlib.ExitStack() as stack:
             # Tell any nested FSDP instances not to auto summon full params.
             for module in self.modules():  # includes self
@@ -1025,6 +1030,11 @@ class FullyShardedDataParallel(nn.Module):
         self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
     ) -> NamedTuple:
         """Load a local (sharded) state_dict."""
+        # Check state, specifically, we shouldn't be in SUMMON_FULL_PARAMS since
+        # that will load full state, not sharded state.
+        self.assert_state(
+            [TrainingState.IDLE, TrainingState.FORWARD, TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST]
+        )
         with contextlib.ExitStack() as stack:
             # Tell any nested FSDP instances not to auto summon full params.
             for module in self.modules():  # includes self
