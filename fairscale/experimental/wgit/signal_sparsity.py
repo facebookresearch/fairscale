@@ -45,7 +45,7 @@ def _scatter_topk_to_sparse_tensor(
             dimension for top-k
 
     Returns:
-        (Tensor)
+        (Tensor):
             Returns a sparse_tensor with the same shape as the top_k_tensor and to_be_sparsify_tensor,
             and populated with the values of the to_be_sparsify_tensor at the indices corresponding
             to the top-k indices of the source tensor.
@@ -55,17 +55,15 @@ def _scatter_topk_to_sparse_tensor(
     ), "top_k_tensor and to_be_sparsify_tensor have different shapes!"
 
     sparse_tensor = torch.zeros_like(to_be_sparsify_tensor)
-    shape = top_k_tensor.shape
     orig_shape = sparse_tensor.shape
-    if dim is None and len(shape) > 1:
+    if dim is None and len(orig_shape) > 1:
         sparse_tensor = sparse_tensor.reshape(-1)
         to_be_sparsify_tensor = to_be_sparsify_tensor.reshape(-1)
         top_k_tensor = top_k_tensor.reshape(-1)
         dim = -1
 
     _, i = top_k_tensor.topk(k, dim=dim)
-    sparse_tensor = sparse_tensor.scatter(dim, i, to_be_sparsify_tensor.gather(dim, i)).reshape(orig_shape)
-    return sparse_tensor
+    return sparse_tensor.scatter(dim, i, to_be_sparsify_tensor.gather(dim, i)).reshape(orig_shape)
 
 
 def _top_k_total_size(tensor: Tensor, topk_dim: Optional[int]) -> int:
@@ -84,7 +82,7 @@ def _dct_transform(dense: Tensor) -> Tensor:
         dense (Tensor):
             Input dense tensor (no zeros).
     Returns:
-        (Tensor)
+        (Tensor):
             transformed dense tensor DCT components
     """
     raise NotImplementedError("Support for DCT has not been implemented yet!")
@@ -220,7 +218,7 @@ class SignalSparsity:
                 Input dense tensor (no zeros).
 
         Returns:
-            (Tensor)
+            (Tensor):
                 Same shaped tensor as the input dense tensor, still in dense format but in frequency
                 domain (complex valued) and has zeros.
         """
@@ -249,7 +247,7 @@ class SignalSparsity:
                 Input SST tensor (has zeros).
 
         Returns:
-            (Tensor)
+            (Tensor):
                 Same shaped tensor, still dense format but has zeros. Non-zeros are top-k delta values.
         """
         pass
@@ -269,7 +267,7 @@ class SignalSparsity:
                 Delta sparse tensor, optional.
 
         Returns:
-            (Tensor)
+            (Tensor):
                 A dense tensor in real number domain from the SST.
         """
         pass
