@@ -17,7 +17,7 @@ def _get_k_for_topk(topk_percent: Optional[float], top_k_element: Optional[int],
     simply returns the value for k. Also, ensures k is never 0 to avoid all sparse tensors.
     """
     if top_k_element is not None and top_k_element > top_k_total_size:
-        raise ValueError("top_k_element for sst or dst is larger than max number of" "elements along top_k_dim")
+        raise ValueError("top_k_element for sst or dst is larger than max number of elements along top_k_dim")
 
     if top_k_element is None:
         top_k_element = int(top_k_total_size * topk_percent / 100.0)
@@ -176,7 +176,7 @@ class SignalSparsity:
             and one_and_only(self._dst_top_k_element, self._dst_top_k_percent)
         ):
             raise ValueError(
-                "One and only one of top_k_element and top_k_percent for"
+                "One and only one of top_k_element and top_k_percent for "
                 "each of sst and dst must be provided as an argument."
             )
 
