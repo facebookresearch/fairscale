@@ -6,6 +6,7 @@
 import pytest
 import torch
 
+from fair_dev.testing.testing import objects_are_equal
 from fairscale.experimental.wgit.signal_sparsity import SignalSparsity
 
 
@@ -132,7 +133,7 @@ def test_dense_to_sst_fixed(tensor, expected, dim, percent, k):
     """Tests for fixed input dense tensor and fixed expected output SST tensor for top-2 elements."""
     sparser_2d = SignalSparsity(sst_top_k_percent=None, sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_percent=100)
     sst = sparser_2d.dense_to_sst(tensor)
-    torch.testing.assert_close(sst, expected)
+    objects_are_equal(sst, expected, raise_exception=True)
 
 
 @pytest.mark.parametrize("tensor, expected, dim, percent, k", get_test_params())
@@ -145,4 +146,4 @@ def test_percent_element(tensor, expected, dim, percent, k):
         sst_top_k_percent=percent, sst_top_k_element=None, sst_top_k_dim=dim, dst_top_k_percent=100
     )
     sst_percent = sparser_2d.dense_to_sst(tensor)
-    torch.testing.assert_close(sst_element, sst_percent)
+    objects_are_equal(sst_element, sst_percent, raise_exception=True)
