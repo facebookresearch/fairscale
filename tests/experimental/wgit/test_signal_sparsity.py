@@ -82,7 +82,7 @@ def get_valid_conf_arg_list():
         ]
         return dict(zip(arg_key_list, vals_list))
 
-    # Validate value error is raised when, either
+    # Validate value error is raised when, either:
     # 1. One and only one of sst (or dst) percent and element is not provided a value (not None).
     # 2. Both of sst (or dst) percent and element is set to None.
     # 3. top_k_percent and top_k_element are not in valid range (elem > 0) and for 0 < percent <= 100.
