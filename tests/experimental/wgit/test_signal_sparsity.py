@@ -9,12 +9,15 @@ import torch
 from fairscale.experimental.wgit.signal_sparsity import SignalSparsity
 
 
-def expected_io_vals():
+def get_test_params():
     """Helper function to create and return a list of tuples of the form:
-    (in_tensor, expected_tensor, dim, percent) to be used as parameters for tests. The top-k
-    value for the expected SST was set at 2.
+    (in_tensor, expected_tensor, dim, percent, top_k_element) to be used as parameters for tests.
     """
-    # Expected SST output for 4x3 tensor of ascending ints
+    # input in_tensors
+    tensor_4x3 = torch.arange(12).reshape(4, 3)
+    tensor_2x2x3 = torch.arange(12).reshape(3, 2, 2)
+
+    # Expected SST output tensors for 4x3 tensor of ascending ints
     expected_4x3_None = torch.tensor(
         [
             [0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],  # with dim=None, top-2
@@ -45,23 +48,20 @@ def expected_io_vals():
         dtype=torch.complex64,
     )
 
-    expected_2x2x3 = torch.tensor(
+    expected_2x2x3_1 = torch.tensor(
         [
-            [[1.0 + 0.0j, -1.0 + 0.0j], [5.0 + 0.0j, -1.0 + 0.0j]],
+            [[1.0 + 0.0j, -1.0 + 0.0j], [5.0 + 0.0j, -1.0 + 0.0j]],  # with dim=1, top-2
             [[9.0 + 0.0j, -1.0 + 0.0j], [13.0 + 0.0j, -1.0 + 0.0j]],
             [[17.0 + 0.0j, -1.0 + 0.0j], [21.0 + 0.0j, -1.0 + 0.0j]],
         ],
         dtype=torch.complex64,
     )
 
-    tensor_4x3 = torch.arange(12).reshape(4, 3)
-    tensor_2x2x3 = torch.arange(12).reshape(3, 2, 2)
-
     return [
-        (tensor_4x3, expected_4x3_None, None, 20),
-        (tensor_4x3, expected_4x3_0, 0, 50),
-        (tensor_4x3, expected_4x3_1, 1, 70),
-        (tensor_2x2x3, expected_2x2x3, 1, 100),
+        (tensor_4x3, expected_4x3_None, None, 20, 2),
+        (tensor_4x3, expected_4x3_0, 0, 50, 2),
+        (tensor_4x3, expected_4x3_1, 1, 70, 2),
+        (tensor_2x2x3, expected_2x2x3_1, 1, 100, 2),
     ]
 
 
@@ -122,18 +122,18 @@ def test_dense_to_sst_perfect_recons(tensor, dim):
     assert all((sparser_2d.dense_to_sst(tensor) == torch.fft.fft(tensor)).flatten())
 
 
-@pytest.mark.parametrize("tensor, expected, dim, percent", expected_io_vals())
-def test_dense_to_sst_fixed(tensor, expected, dim, percent):
+@pytest.mark.parametrize("tensor, expected, dim, percent, k", get_test_params())
+def test_dense_to_sst_fixed(tensor, expected, dim, percent, k):
     """Tests for fixed input dense tensor and fixed expected output SST tensor for top-2 elements."""
-    sparser_2d = SignalSparsity(sst_top_k_percent=None, sst_top_k_element=2, sst_top_k_dim=dim, dst_top_k_percent=100)
+    sparser_2d = SignalSparsity(sst_top_k_percent=None, sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_percent=100)
     sst = sparser_2d.dense_to_sst(tensor)
     torch.testing.assert_close(sst, expected)
 
 
-@pytest.mark.parametrize("tensor, expected, dim, percent", expected_io_vals())
-def test_percent_element(tensor, expected, dim, percent):
+@pytest.mark.parametrize("tensor, expected, dim, percent, k", get_test_params())
+def test_percent_element(tensor, expected, dim, percent, k):
     """Tests whether comparative values for top_k_element and top_k_percent returns same outputs"""
-    sparser_2d = SignalSparsity(sst_top_k_percent=None, sst_top_k_element=2, sst_top_k_dim=dim, dst_top_k_percent=100)
+    sparser_2d = SignalSparsity(sst_top_k_percent=None, sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_percent=100)
     sst_element = sparser_2d.dense_to_sst(tensor)
 
     sparser_2d = SignalSparsity(
