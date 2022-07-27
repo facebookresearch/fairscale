@@ -65,8 +65,8 @@ def get_test_params():
     ]
 
 
-def test_validate_conf():
-    """Tests the config validation for the Signal Sparsity class."""
+def get_valid_conf_arg_list():
+    """Returns a map object of keyword arguments (as dicts) to be used as parameters for test_validate_conf."""
 
     def kwargs(vals_list):
         """Maps the values in input vals_list to the keys in arg_key_list"""
@@ -81,7 +81,7 @@ def test_validate_conf():
         ]
         return dict(zip(arg_key_list, vals_list))
 
-    # Validate assertion error is raised when, either
+    # Validate value error is raised when, either
     # 1. One and only one of sst (or dst) percent and element is not provided a value (not None).
     # 2. Both of sst (or dst) percent and element is set to None.
     # 3. top_k_percent and top_k_element are not in valid range (elem > 0) and for 0 < percent <= 100.
@@ -98,8 +98,13 @@ def test_validate_conf():
         [element, None, dim, 0, None, dim],
         [element, None, dim, None, 0, dim],
     ]
-    for args in args_list:
-        pytest.raises(ValueError, SignalSparsity, **kwargs(args))
+    return map(kwargs, args_list)
+
+
+@pytest.mark.parametrize("kwargs", get_valid_conf_arg_list())
+def test_validate_conf(kwargs):
+    """Validate value error is raised with each kwargs returned by get_valid_conf_arg_list"""
+    pytest.raises(ValueError, SignalSparsity, **kwargs)
 
 
 @pytest.mark.parametrize(
