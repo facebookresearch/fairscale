@@ -268,7 +268,7 @@ class SignalSparsity:
         return _scatter_topk_to_sparse_tensor(delta.abs(), delta, k, dim=self._dst_top_k_dim)
 
     def sst_dst_to_dense(self, sst: Tensor, dst: Optional[Tensor] = None) -> Tensor:
-        """From SST and DST returns a dense reconstruction. When argument dst = None, simply returns
+        """From SST and DST returns a dense reconstruction. When argument dst=None, simply returns
         the inverse transform of the SST tensor.
 
         Args:

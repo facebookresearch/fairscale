@@ -16,8 +16,8 @@ def get_test_params():
     to be used as parameters for tests.
     """
     # input in_tensors
-    tensor_4x3 = torch.arange(12).reshape(4, 3)
-    tensor_2x2x3 = torch.arange(12).reshape(3, 2, 2)
+    tensor_4x3 = torch.arange(12).reshape(4, 3).float()
+    tensor_2x2x3 = torch.arange(12).reshape(3, 2, 2).float()
 
     # Expected SST output tensors for 4x3 tensor of ascending ints
     expd_sst_4x3_None = torch.tensor(
@@ -30,9 +30,13 @@ def get_test_params():
         dtype=torch.complex64,
     )
 
-    expd_dst_4x3_None = torch.tensor([[0.0, 0.0, 0.0], [0.0, 4.0, 5.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    expd_dst_4x3_None = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 4.0, 5.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float32
+    )  # with dim=None, top-2
 
-    expd_wr_4x3_None = torch.tensor([[0.0, 0.0, 0.0], [0.0, 4.0, 5.0], [7.0, 7.0, 7.0], [10.0, 10.0, 10.0]])
+    expd_wr_4x3_None = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 4.0, 5.0], [7.0, 7.0, 7.0], [10.0, 10.0, 10.0]], dtype=torch.float32
+    )
 
     expd_sst_4x3_0 = torch.tensor(
         [
@@ -44,9 +48,13 @@ def get_test_params():
         dtype=torch.complex64,
     )
 
-    expd_dst_4x3_0 = torch.tensor([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    expd_dst_4x3_0 = torch.tensor(
+        [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float32
+    )  # with dim=0, top-2
 
-    expd_wr_4x3_0 = torch.tensor([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0, 7.0, 8.0], [9.0, 10.0, 11.0]])
+    expd_wr_4x3_0 = torch.tensor(
+        [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0, 7.0, 8.0], [9.0, 10.0, 11.0]], dtype=torch.float32
+    )
 
     expd_sst_4x3_1 = torch.tensor(
         [
@@ -59,10 +67,13 @@ def get_test_params():
     )
 
     expd_dst_4x3_1 = torch.tensor(
-        [[-0.5000, 0.0000, 0.5000], [-0.5000, 0.0000, 0.5000], [-0.5000, 0.0000, 0.5000], [-0.5000, 0.0000, 0.5000]]
+        [[-0.5000, 0.0000, 0.5000], [-0.5000, 0.0000, 0.5000], [-0.5000, 0.0000, 0.5000], [-0.5000, 0.0000, 0.5000]],
+        dtype=torch.float32,  # with dim=1, top-2
     )
 
-    expd_wr_4x3_1 = torch.tensor([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0, 7.0, 8.0], [9.0, 10.0, 11.0]])
+    expd_wr_4x3_1 = torch.tensor(
+        [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0, 7.0, 8.0], [9.0, 10.0, 11.0]], dtype=torch.float32
+    )
 
     expd_sst_2x2x3_1 = torch.tensor(
         [
@@ -78,10 +89,18 @@ def get_test_params():
             [[0.5000, 0.5000], [0.0000, 0.0000]],  # with dim=1, top-1
             [[4.5000, 4.5000], [0.0000, 0.0000]],
             [[8.5000, 8.5000], [0.0000, 0.0000]],
-        ]
+        ],
+        dtype=torch.float32,
     )
 
-    expd_wr_2x2x3_1 = torch.tensor([[[0.0, 1.0, 2.0], [4.0, 4.0, 4.0]], [[6.0, 7.0, 8.0], [10.0, 10.0, 10.0]]])
+    expd_wr_2x2x3_1 = torch.tensor(
+        [
+            [[0.0000, 1.0000], [2.5000, 2.5000]],
+            [[4.0000, 5.0000], [6.5000, 6.5000]],
+            [[8.0000, 9.0000], [10.5000, 10.5000]],
+        ],
+        dtype=torch.float32,
+    )
 
     return [
         (tensor_4x3, expd_sst_4x3_None, expd_dst_4x3_None, expd_wr_4x3_None, None, 20, 2),
@@ -185,13 +204,13 @@ def test_dense_sst_to_dst(tensor, sst, expd_dst, expd_wr, dim, percent, k):
 @pytest.mark.parametrize(
     "dense, k, dim",
     [
-        (torch.arange(12).reshape(4, 3), 12, None),  # top-12, dim=None
-        (torch.arange(12).reshape(4, 3), 4, 0),  # top-4, dim=0
-        (torch.arange(12).reshape(4, 3), 3, 1),  # top-3, dim=1
-        (torch.arange(60).reshape(10, 6), 60, None),  # top-60, dim=None
-        (torch.arange(60).reshape(10, 6), 10, 0),  # top-10, dim=0
-        (torch.arange(60).reshape(10, 6), 6, 1),  # top-6, dim=1
-        (torch.arange(60).reshape(2, 5, 6), 5, 1),  # top-5, dim=1
+        (torch.arange(12).float().reshape(4, 3), 12, None),  # top-12, dim=None
+        (torch.arange(12).float().reshape(4, 3), 4, 0),  # top-4, dim=0
+        (torch.arange(12).float().reshape(4, 3), 3, 1),  # top-3, dim=1
+        (torch.arange(60).float().reshape(10, 6), 60, None),  # top-60, dim=None
+        (torch.arange(60).float().reshape(10, 6), 10, 0),  # top-10, dim=0
+        (torch.arange(60).float().reshape(10, 6), 6, 1),  # top-6, dim=1
+        (torch.arange(60).float().reshape(2, 5, 6), 5, 1),  # top-5, dim=1
     ],
 )
 def test_sst_dst_to_dense_reconstruction(dense, k, dim):
@@ -202,7 +221,7 @@ def test_sst_dst_to_dense_reconstruction(dense, k, dim):
     sst = sparser.dense_to_sst(dense)
     dst = sparser.dense_sst_to_dst(dense, sst)
     dense_recons = sparser.sst_dst_to_dense(sst, dst)
-    objects_are_equal(dense, dense_recons)
+    objects_are_equal(dense, dense_recons, raise_exception=True)
 
 
 @pytest.mark.parametrize("tensor, sst, dst, expd_wr, dim, percent, k", get_test_params())
@@ -210,4 +229,4 @@ def test_sst_dst_to_dense(tensor, sst, dst, expd_wr, dim, percent, k):
     """Tests the correct expected reconstruction from frozen sst and dst tensors."""
     sparser = SignalSparsity(sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_element=k, dst_top_k_dim=dim)
     dense_recons = sparser.sst_dst_to_dense(sst, dst)
-    objects_are_equal(dense_recons, expd_wr)
+    objects_are_equal(dense_recons, expd_wr, raise_exception=True)
