@@ -250,7 +250,7 @@ class SignalSparsity:
     def dense_sst_to_dst(self, dense: Tensor, sst: Tensor) -> Tensor:
         """Calculates DST from input dense and SST tensors.
 
-        dense - ifft(sst)[using sst_dst_to_dense method] -> top-k -> dst
+        dense - inverse_transform(sst)[using sst_dst_to_dense method] -> top-k -> dst
 
         Args:
             dense (Tensor):
@@ -262,14 +262,14 @@ class SignalSparsity:
             (Tensor):
                 Same shaped tensor, still dense format but has zeros. Non-zeros are top-k delta values.
         """
-        delta = dense - self.sst_dst_to_dense(sst)  # sst_dst_to_dense(sst) returns the IFFT in this case
+        delta = dense - self.sst_dst_to_dense(sst)  # sst_dst_to_dense(sst) returns the inverse transform here
         top_k_total_size = _top_k_total_size(dense, self._dst_top_k_dim)
         k = _get_k_for_topk(self._dst_top_k_percent, self._dst_top_k_element, top_k_total_size)
         return _scatter_topk_to_sparse_tensor(delta.abs(), delta, k, dim=self._dst_top_k_dim)
 
     def sst_dst_to_dense(self, sst: Tensor, dst: Optional[Tensor] = None) -> Tensor:
         """From SST and DST returns a dense reconstruction. When argument dst = None, simply returns
-        the iFFT of the SST tensor.
+        the inverse transform of the SST tensor.
 
         Args:
             sst (Tensor):
