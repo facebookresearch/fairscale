@@ -310,7 +310,7 @@ class FullyShardedDataParallel(nn.Module):
         module: nn.Module,
         process_group: Optional[ProcessGroup] = None,
         # The type for the process_group_reduce_scatter only can be either ProcessGroup or ProcessGroupName
-        process_group_reduce_scatter: Any = ProcessGroupName.default,
+        process_group_reduce_scatter: Any = ProcessGroupName.reduce_scatter,
         reshard_after_forward: bool = True,
         disable_reshard_on_root: bool = True,
         mixed_precision: bool = False,
@@ -1162,7 +1162,7 @@ class FullyShardedDataParallel(nn.Module):
         self._is_root: Optional[bool] = None
         self._streams: Dict[str, torch.cuda.Stream] = {}
         self._reducer: Optional[ReduceScatterBucketer] = None
-        self._fsdp_forward_ordering: List[nn.Module] = []
+        self._fsdp_forward_ordering: List[FullyShardedDataParallel] = []
         self._my_fsdp_instance_idx: Optional[int] = None
         for p in self.params:
             if hasattr(p, "_fp32_shard"):
@@ -1412,11 +1412,10 @@ class FullyShardedDataParallel(nn.Module):
 
         if (
             self._fsdp_forward_ordering is not None
-            and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx < len(self._fsdp_forward_ordering) - 1
+            and self._my_fsdp_instance_idx is not None
+            and self._my_fsdp_instance_idx < len(self._fsdp_forward_ordering) - 1
         ):
-            self._fsdp_forward_ordering[self._my_fsdp_instance_idx + 1]._rebuild_full_params(
-                wait_for_all_gather=False
-            )
+            self._fsdp_forward_ordering[self._my_fsdp_instance_idx + 1]._rebuild_full_params(wait_for_all_gather=False)
 
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
@@ -1509,9 +1508,12 @@ class FullyShardedDataParallel(nn.Module):
                 if (
                     self.reshard_after_forward
                     and self._fsdp_forward_ordering is not None
-                    and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
+                    and self._my_fsdp_instance_idx is not None
+                    and self._my_fsdp_instance_idx > 0
                 ):
-                    self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params(wait_for_all_gather=False)
+                    self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params(
+                        wait_for_all_gather=False
+                    )
             else:
                 self._use_full_params()
 
@@ -1875,7 +1877,9 @@ class FullyShardedDataParallel(nn.Module):
                     self._output_pre_backward_hook_registered.clear()
 
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False, wait_for_all_gather = True) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(
+        self, force_full_precision: bool = False, wait_for_all_gather: bool = True
+    ) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -1946,8 +1950,6 @@ class FullyShardedDataParallel(nn.Module):
 
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
-            if wait_for_all_gather:
-                torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
             for p in self.params:
                 update_p_data()
             return output_tensors
