@@ -344,10 +344,10 @@ def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type, bn
     # computation interact correctly.
     combinations = []
     for with_fsdp in [False, True]:
-        for with_checkpoint in [False, True]:
+        for with_checkpoint in [False]:
             if not with_fsdp and with_checkpoint:
                 continue
-            for with_bucketing in [False, True]:
+            for with_bucketing in [False]:
                 if not with_fsdp and with_bucketing:
                     continue
                 combinations.append((with_fsdp, with_checkpoint, with_bucketing))

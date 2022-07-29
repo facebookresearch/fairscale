@@ -1388,6 +1388,9 @@ class FullyShardedDataParallel(nn.Module):
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self._lazy_init()
 
+        # if (self.rank == 0):
+        #     print("forward size = " + str(len(self._fsdp_forward_ordering)) + " idx = " + str(self._my_fsdp_instance_idx))
+
         # Start of a forward pass.
         self.training_state = TrainingState.FORWARD
 
@@ -1415,7 +1418,11 @@ class FullyShardedDataParallel(nn.Module):
             and self._my_fsdp_instance_idx is not None
             and self._my_fsdp_instance_idx < len(self._fsdp_forward_ordering) - 1
         ):
-            self._fsdp_forward_ordering[self._my_fsdp_instance_idx + 1]._rebuild_full_params(wait_for_all_gather=False)
+            t = self._fsdp_forward_ordering[self._my_fsdp_instance_idx + 1]
+            if not t._pre_backward_hook_has_run:
+                # if (self.rank == 0):
+                #     print("fetching idx = " + str(self._my_fsdp_instance_idx + 1))
+                t._rebuild_full_params(wait_for_all_gather=False)
 
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
@@ -1486,6 +1493,9 @@ class FullyShardedDataParallel(nn.Module):
             # that final backward callback is attached to the outer most
             # backward graph task and called after all the backward
             # calls are completed.
+            # if (self.rank == 0):
+            #     print("pre-backward size = " + str(len(self._fsdp_forward_ordering)) + " idx = " + str(self._my_fsdp_instance_idx))
+
             if self._is_root:
                 self._queue_wait_for_post_backward()
 
@@ -1950,6 +1960,8 @@ class FullyShardedDataParallel(nn.Module):
 
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
+            if wait_for_all_gather:
+                torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
             for p in self.params:
                 update_p_data()
             return output_tensors
