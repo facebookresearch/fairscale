@@ -169,8 +169,7 @@ class SignalSparsity:
 
         self._validate_conf()
         # TODO (Min): Type checking for the following
-        self._transform = torch.fft.fft if algo is Algo.FFT else _dct_transform  # type: ignore
-        self._inverse_transform = torch.fft.ifft if algo is Algo.FFT else _inverse_dct_transform  # type: ignore
+        self._transform, self._inverse_transform = (torch.fft.fft, torch.fft.ifft) if algo is Algo.FFT else (_dct_transform, _inverse_dct_transform)  # type: ignore
 
     def _validate_conf(self) -> None:
         """Validating if the config is valid.
