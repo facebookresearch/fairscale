@@ -1511,9 +1511,9 @@ class FullyShardedDataParallel(nn.Module):
                     and self._my_fsdp_instance_idx is not None
                     and self._my_fsdp_instance_idx > 0
                 ):
-                    self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params(
-                        wait_for_all_gather=False
-                    )
+                    t = self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]
+                    if id(t) in self._output_pre_backward_hook_registered:
+                        t._rebuild_full_params(wait_for_all_gather=False)
             else:
                 self._use_full_params()
 
