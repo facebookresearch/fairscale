@@ -37,7 +37,7 @@ def get_test_params():
         [[0.0, 0.0, 0.0], [0.0, 4.0, 5.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float32
     )
 
-    # with dim=None, top-2 for both sst and dst
+    # expected_reconstructed_tensor with dim=None and top-2 for both sst and dst
     expd_rt_4x3_None = torch.tensor(
         [[0.0, 0.0, 0.0], [0.0, 4.0, 5.0], [7.0, 7.0, 7.0], [10.0, 10.0, 10.0]], dtype=torch.float32
     )
@@ -58,7 +58,7 @@ def get_test_params():
         [[0.5000, 0.5100, 0.5200], [0.5400, 0.5400, 0.5400], [0.0000, 0.0000, 0.0000], [0.0000, 0.0000, 0.0000]]
     )
 
-    # with dim=0, top-2 for both sst and dst
+    # expected_reconstructed_tensor with dim=0 and top-2 for both sst and dst
     expd_rt_4x3_0 = torch.tensor(
         [[0.5000, 0.5100, 0.5200], [0.5300, 0.5400, 0.5500], [0.5700, 0.5700, 0.5700], [0.5900, 0.6000, 0.6100]]
     )
@@ -82,7 +82,7 @@ def get_test_params():
         ]
     )
 
-    # with dim=1, top-2 for both sst and dst
+    # expected_reconstructed_tensor with dim=1 and top-2 for both sst and dst
     expd_rt_3x3_1 = torch.tensor([[-5.0000, -3.7500, -2.5000], [-1.2500, 0.0000, 1.2500], [2.5000, 3.7500, 5.0000]])
 
     # with dim=1, top-1
@@ -105,7 +105,7 @@ def get_test_params():
         dtype=torch.float32,
     )
 
-    # with dim=1, top-1 for both sst and dst
+    # expected_reconstructed_tensor with dim=1 and top-1 for both sst and dst
     expd_rt_2x2x3_1 = torch.tensor(
         [
             [[0.0000, 1.0000], [2.5000, 2.5000]],
@@ -237,9 +237,9 @@ def test_sst_dst_to_perfect_dense_reconstruction(dense, k, dim):
     objects_are_equal(dense, dense_recons, raise_exception=True)
 
 
-@pytest.mark.parametrize("unused1, sst, dst, expd_wr, dim, unused2, k", get_test_params())
-def test_sst_dst_to_dense(unused1, sst, dst, expd_wr, dim, unused2, k):
+@pytest.mark.parametrize("unused1, sst, dst, expd_rt, dim, unused2, k", get_test_params())
+def test_sst_dst_to_dense(unused1, sst, dst, expd_rt, dim, unused2, k):
     """Tests the correct expected reconstruction from frozen sst and dst tensors."""
     sparser = SignalSparsity(sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_element=k, dst_top_k_dim=dim)
     dense_recons = sparser.sst_dst_to_dense(sst, dst)
-    objects_are_equal(dense_recons, expd_wr, raise_exception=True)
+    objects_are_equal(dense_recons, expd_rt, raise_exception=True)

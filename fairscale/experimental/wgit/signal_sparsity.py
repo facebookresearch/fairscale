@@ -271,7 +271,7 @@ class SignalSparsity:
         return _scatter_topk_to_sparse_tensor(delta.abs(), delta, k, dim=self._dst_top_k_dim)
 
     def sst_dst_to_dense(self, sst: Tensor, dst: Optional[Tensor] = None) -> Tensor:
-        """From SST and DST returns a dense reconstruction RT. When argument dst=None, simply returns
+        """From SST and DST returns a dense reconstructed tensor (RT). When argument dst=None, simply returns
         the inverse transform of the SST tensor.
 
         Args:
@@ -284,10 +284,10 @@ class SignalSparsity:
             (Tensor):
                 A dense tensor in real number domain from the SST.
         """
-        dense_recons = torch.real(self._inverse_transform(sst))
+        dense_rt = torch.real(self._inverse_transform(sst))
         if dst is not None:
-            dense_recons += dst
-        return dense_recons
+            dense_rt += dst
+        return dense_rt
 
 
 # We could separate have helper functions that work on state_dict instead of a tensor.
