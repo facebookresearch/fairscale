@@ -80,34 +80,34 @@ setup_venv: &setup_venv
         pip install --upgrade pip
 
 # most recent LTS version
-install_dep_1_8_2: &install_dep_1_8_2
+install_dep_pytorch_lts: &install_dep_pytorch_lts
   - run:
       name: Install Dependencies with torch 1.8.2 (LTS)
       command: |
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.8 && exit 0; fi
         # start installing
-        pip install --progress-bar off torch==1.8.2+cu102 torchvision==0.9.2+cu102 -f https://download.pytorch.org/whl/lts/1.8/torch_lts.html
+        pip install --progress-bar off torch==1.8.2+cu111 torchvision==0.9.2+cu111 --extra-index-url https://download.pytorch.org/whl/lts/1.8/cu111
         pip install --progress-bar off -r requirements-dev.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
-        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "8"], "wrong torch version"'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "8"], f"wrong torch version {torch.__version__}"'
         python -m torch.utils.collect_env
         wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
 # most recent stable version
-install_dep_1_11_0: &install_dep_1_11_0
+install_dep_pytorch_stable: &install_dep_pytorch_stable
   - run:
-      name: Install Dependencies with torch 1.11.0
+      name: Install Dependencies with torch 1.12.0
       command: |
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.11 && exit 0; fi
         # start installing
-        pip install --progress-bar off torch==1.11.0+cu115 torchvision==0.12.0+cu115 -f https://download.pytorch.org/whl/torch_stable.html
+        pip install --progress-bar off torch==1.12.0+cu113 torchvision==0.13.0+cu113 --extra-index-url https://download.pytorch.org/whl/cu113
         pip install --progress-bar off -r requirements-dev.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
-        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "11"], "wrong torch version"'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "12"], f"wrong torch version {torch.__version__}"'
         python -m torch.utils.collect_env
         wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
@@ -118,11 +118,11 @@ install_dep_pytorch_nightly: &install_dep_pytorch_nightly
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.12 && exit 0; fi
         # start installing
-        pip install --progress-bar off --pre torch==1.13.0.dev20220625+cu113 torchvision==0.14.0.dev20220625+cu113 -f https://download.pytorch.org/whl/nightly/cu113/torch_nightly.html
+        pip install --pre torch==1.13.0.dev20220625+cu113 torchvision==0.14.0.dev20220625+cu113 --extra-index-url https://download.pytorch.org/whl/nightly/cu113
         pip install --progress-bar off -r requirements-dev.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
-        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "13"], "wrong torch version"'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "13"], f"wrong torch version {torch.__version__}"'
         python -m torch.utils.collect_env
         wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
@@ -273,18 +273,21 @@ jobs:
       - <<: *check_test_list
       - <<: *setup_venv
 
+      # Do this first to test repo dependencies. Basic import should work after this
+      # installation. See issue #1042 for an example.
+      - <<: *install_repo
+
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
             - cache-key-cpu-py38-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-      - <<: *install_dep_1_11_0
+      - <<: *install_dep_pytorch_stable
 
       - save_cache:
           paths:
             - ~/venv
           key: cache-key-cpu-py38-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_repo
       - <<: *run_unittests
       - <<: *run_doc_build
 
@@ -301,19 +304,22 @@ jobs:
       - <<: *check_test_list
       - <<: *setup_venv
 
+      # Do this first to test repo dependencies. Basic import should work after this
+      # installation. See issue #1042 for an example.
+      - <<: *install_repo
+
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
             - cache-key-cpu-py39-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_1_11_0
+      - <<: *install_dep_pytorch_stable
 
       - save_cache:
           paths:
             - ~/venv
           key: cache-key-cpu-py39-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_repo
       - <<: *run_unittests
       - <<: *run_doc_build
 
@@ -330,19 +336,22 @@ jobs:
       - <<: *check_test_list
       - <<: *setup_venv
 
+      # Do this first to test repo dependencies. Basic import should work after this
+      # installation. See issue #1042 for an example.
+      - <<: *install_repo
+
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
             - cache-key-cpu-py310-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_1_11_0
+      - <<: *install_dep_pytorch_stable
 
       - save_cache:
           paths:
             - ~/venv
           key: cache-key-cpu-py310-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_repo
       - <<: *run_unittests
       - <<: *run_doc_build
 
@@ -375,7 +384,7 @@ jobs:
           keys:
             - cache-key-py-3-9-7-gpu-torch-1-8-2-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_1_8_2
+      - <<: *install_dep_pytorch_lts
 
       - save_cache:
           paths:
@@ -418,7 +427,7 @@ jobs:
           keys:
             - cache-key-py-3-9-7-gpu-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_1_11_0
+      - <<: *install_dep_pytorch_stable
 
       - save_cache:
           paths:
@@ -499,7 +508,7 @@ jobs:
           keys:
             - cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION}}-{{checksum "benchmarks/datasets/mnist.py"}}
 
-      - <<: *install_dep_1_11_0
+      - <<: *install_dep_pytorch_stable
 
       - save_cache:
           paths:
@@ -540,6 +549,11 @@ jobs:
 
       - <<: *setup_venv
 
+      # Do this first to test an issue like #1042. We keep benchmark_1 doing it
+      # after requirements-dev.txt, but change benchmark_2 to do this earlier to
+      # ensure both cases are tested.
+      - <<: *install_repo
+
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
@@ -551,14 +565,12 @@ jobs:
           keys:
             - cache-key-benchmark-MNIST-{{.Environment.CACHE_VERSION}}-{{checksum "benchmarks/datasets/mnist.py"}}
 
-      - <<: *install_dep_1_11_0
+      - <<: *install_dep_pytorch_stable
 
       - save_cache:
           paths:
             - ~/venv
           key: cache-key-py-3-9-7-benchmarks-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-
-      - <<: *install_repo
 
       - <<: *run_oss_benchmark
 
