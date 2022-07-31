@@ -88,6 +88,19 @@ def _dct_transform(dense: Tensor) -> Tensor:
     raise NotImplementedError("Support for DCT has not been implemented yet!")
 
 
+def _inverse_dct_transform(sst: Tensor) -> Tensor:
+    """Should take a tensor and perform an inverse Discrete Cosine Transform and return a new tensor.
+
+    Args:
+        sst (Tensor):
+            Input sst tensor (may have zeros) in frequency domain.
+    Returns:
+        (Tensor):
+            A new, transformed dense tensor with real domain values.
+    """
+    raise NotImplementedError("Support for iDCT has not been implemented yet!")
+
+
 class Algo(Enum):
     FFT = 0
     DCT = 1
@@ -156,7 +169,7 @@ class SignalSparsity:
 
         self._validate_conf()
         # TODO (Min): Type checking for the following
-        self._transform = torch.fft.fft if algo is Algo.FFT else _dct_transform  # type: ignore
+        self._transform, self._inverse_transform = (torch.fft.fft, torch.fft.ifft) if algo is Algo.FFT else (_dct_transform, _inverse_dct_transform)  # type: ignore
 
     def _validate_conf(self) -> None:
         """Validating if the config is valid.
@@ -230,15 +243,13 @@ class SignalSparsity:
         # or DCT transformed components when using DCT (currently not implemented).
         # TODO: In case of the FFT, the imaginary part can perhaps be quantized or pruning can be
         # done on the smaller phases.
-        real_dense_freq = dense_freq.real.abs()
+        real_dense_freq = torch.real(dense_freq).abs()
         return _scatter_topk_to_sparse_tensor(real_dense_freq, dense_freq, k, dim=self._sst_top_k_dim)
 
     def dense_sst_to_dst(self, dense: Tensor, sst: Tensor) -> Tensor:
-        """From dense and SST to a DST
+        """Calculates DST from input dense and SST tensors.
 
-        This will use sst_dst_to_dense below but with dst=None.
-
-        dense - ifft(sst)[using sst_dst_to_dense below) -> top-k -> result
+        dense - inverse_transform(sst)[using sst_dst_to_dense method] -> top-k -> dst
 
         Args:
             dense (Tensor):
@@ -250,32 +261,33 @@ class SignalSparsity:
             (Tensor):
                 Same shaped tensor, still dense format but has zeros. Non-zeros are top-k delta values.
         """
-        pass
+        if not (dense.shape == sst.shape):
+            raise ValueError("dense and sst have different shapes!")
 
-    def sst_dst_to_dense(self, sst: Tensor, dst: Tensor = None) -> Tensor:
-        """From SST and dst back to a dense
+        top_k_total_size = _top_k_total_size(dense, self._dst_top_k_dim)
+        k = _get_k_for_topk(self._dst_top_k_percent, self._dst_top_k_element, top_k_total_size)
+        delta = dense - self.sst_dst_to_dense(sst)  # sst_dst_to_dense(sst) returns the inverse transform here
+        del dense
+        return _scatter_topk_to_sparse_tensor(delta.abs(), delta, k, dim=self._dst_top_k_dim)
 
-        result = ifft(sst)
-        if dst is not None:
-            result += dst
-        return result
+    def sst_dst_to_dense(self, sst: Tensor, dst: Optional[Tensor] = None) -> Tensor:
+        """From SST and DST returns a dense reconstructed tensor (RT). When argument dst=None, simply returns
+        the inverse transform of the SST tensor.
 
         Args:
             sst (Tensor):
                 Singal sparse tensor. Required argument.
-            dst (Tensor, optinoal):
+            dst (Tensor, optional):
                 Delta sparse tensor, optional.
 
         Returns:
             (Tensor):
                 A dense tensor in real number domain from the SST.
         """
-        pass
-
-    def sst_or_dst_to_mask(self) -> None:
-        # we shouldn't need this function since going from SST/DST to mask should be a
-        # trivial call in pytorch. Maybe I am missing something.
-        pass
+        dense_rt = torch.real(self._inverse_transform(sst))
+        if dst is not None:
+            dense_rt += dst
+        return dense_rt
 
 
 # We could separate have helper functions that work on state_dict instead of a tensor.
