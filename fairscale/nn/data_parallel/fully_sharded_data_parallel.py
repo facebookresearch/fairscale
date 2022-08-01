@@ -51,7 +51,7 @@ from fairscale.internal.parallel import (
 from fairscale.internal.params import calc_grad_norm, recursive_copy_to_device
 from fairscale.internal.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.internal.state_dict import replace_by_prefix_
-from fairscale.nn.misc import FlattenParamsWrapper
+from fairscale.nn.misc import FlattenParamsWrapper, _enable_pre_load_state_dict_hook
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 
 from . import fsdp_optim_utils as ou
@@ -762,6 +762,7 @@ class FullyShardedDataParallel(nn.Module):
                     self.numel_padded_per_param.append(0)
                     continue
             p._is_sharded = True
+            # TODO (Min): broadcast from rank 0 to avoid each rank need to init with the same seed?
 
             # Replace p.data with the relevant shard.
             orig_data = p.data
@@ -2581,10 +2582,24 @@ def _post_state_dict_hook(
     return state_dict
 
 
+@contextlib.contextmanager
+def no_pre_load_state_dict_hook() -> Generator:
+    """Disable the pre-load hook.
+
+    This is needed if we are loading a state_dict that was not produced by
+    a root FSDP instance.
+    """
+    global _enable_pre_load_state_dict_hook
+    bak = _enable_pre_load_state_dict_hook
+    _enable_pre_load_state_dict_hook = False
+    yield
+    _enable_pre_load_state_dict_hook = bak
+
 def _pre_load_state_dict_hook(
     state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], prefix: str, *args: Any
 ) -> None:
-    replace_by_prefix_(state_dict, prefix, prefix + "_fsdp_wrapped_module.")
+    if _enable_pre_load_state_dict_hook:
+        replace_by_prefix_(state_dict, prefix, prefix + "_fsdp_wrapped_module.")
 
 
 def _clean_path(path: str) -> str:

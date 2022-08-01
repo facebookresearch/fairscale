@@ -5,7 +5,7 @@
 
 from typing import List
 
-from .fully_sharded_data_parallel import FullyShardedDataParallel, OffloadConfig, TrainingState, auto_wrap_bn
+from .fully_sharded_data_parallel import FullyShardedDataParallel, OffloadConfig, TrainingState, auto_wrap_bn, no_pre_load_state_dict_hook
 from .sharded_ddp import ShardedDataParallel
 
 __all__: List[str] = []
