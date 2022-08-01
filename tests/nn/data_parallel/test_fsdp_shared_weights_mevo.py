@@ -62,7 +62,7 @@ class Model(nn.Module):
             # Shared layers must be un-flatten.
             self.l0 = FSDP(self.l0, flatten_parameters=False, mixed_precision=False, compute_dtype=torch.float16)
             self.l1 = FSDP(self.l1, flatten_parameters=False, mixed_precision=False, compute_dtype=torch.float16)
-            self.l1.append_shared_param(self.l0.module.weight)
+            self.l1.append_shared_param(self.l0.module.weight, self.l0)
             # These are for debugging.
             # print(id(self.l0), "is emb")
             # print(id(self.l1), "is out")

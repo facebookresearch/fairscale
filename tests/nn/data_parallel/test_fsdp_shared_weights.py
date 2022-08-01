@@ -46,9 +46,9 @@ class Model(Module):
             self.l3 = FSDP(self.l3, flatten_parameters=False)
 
             if sharing in ["share_only_weights"]:
-                self.l3.append_shared_param(self.l1.module.weight)
+                self.l3.append_shared_param(self.l1.module.weigh, self.l1)
             if sharing in ["share_only_bias"]:
-                self.l3.append_shared_param(self.l1.module.bias)
+                self.l3.append_shared_param(self.l1.module.bias, self.l1)
 
     def forward(self, x):
         x = self.l0(x)
