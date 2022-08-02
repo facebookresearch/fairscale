@@ -549,7 +549,7 @@ class FullyShardedDataParallel(nn.Module):
         assert isinstance(self._fsdp_wrapped_module, FlattenParamsWrapper)
         return self._fsdp_wrapped_module
 
-    def append_shared_param(self, p: Parameter, original_module: "FullyShardedDataParallel") -> None:
+    def append_shared_param(self, p: Parameter) -> None:
         """Add a param that's already owned by another FSDP wrapper.
 
             .. warning:: This is experimental!
@@ -576,7 +576,6 @@ class FullyShardedDataParallel(nn.Module):
         ), "Must have at least 1 non-shared param."
         self.params.append(p)
         self._has_shared_params = True
-        original_module._has_shared_params = True
 
     def non_shared_params(self) -> List[nn.Parameter]:
         """Return the list of non-shared parameters."""
@@ -1404,21 +1403,6 @@ class FullyShardedDataParallel(nn.Module):
         if self.force_input_to_fp32 and not self.mixed_precision:
             args, kwargs = cast_floats_to_right_precision(False, False, *args, **kwargs)
 
-        if self not in self._forward_ordering:
-            self._forward_ordering.append(self)
-        forward_idx = self._forward_ordering.index(self)
-        if self.rank == 0:
-            print(
-                "forward size = "
-                + str(len(self._forward_ordering))
-                + " idx = "
-                + str(forward_idx)
-                + " has shared = "
-                + str(self._has_shared_params)
-                + " has full params = "
-                + str(self.has_full_params)
-            )
-
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
         self._rebuild_full_params()
@@ -1437,6 +1421,21 @@ class FullyShardedDataParallel(nn.Module):
         self._register_post_backward_hooks()
 
         outputs = self.module(*args, **kwargs)
+
+        if self not in self._forward_ordering:
+            self._forward_ordering.append(self)
+        forward_idx = self._forward_ordering.index(self)
+        if self.rank == 0:
+            print(
+                "forward size = "
+                + str(len(self._forward_ordering))
+                + " idx = "
+                + str(forward_idx)
+                + " has shared = "
+                + str(self._has_shared_params)
+                + " has full params = "
+                + str(self.has_full_params)
+            )
 
         # if(self.rank == 0):
         #     print(str(self.reshard_after_forward) + " forward_idx = " + str(self._forward_ordering.index(self)))
@@ -1988,13 +1987,21 @@ class FullyShardedDataParallel(nn.Module):
             # Therefore, we update the flag accordingly here.
             self.has_full_params = not any(p._full_param_padded.storage().size() == 0 for p in self.params)
 
-        # Early exit if we already have full params and don't need full precision.
-        if self.has_full_params and not force_full_precision:
-            if wait_for_all_gather:
-                torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
-            for p in self.params:
-                update_p_data()
-            return output_tensors
+        # Early exit if we already have full params.
+        if self.has_full_params:
+            assert (
+                force_full_precision and wait_for_all_gather
+            ) or not force_full_precision, (
+                "If you require full_precision, you need to wait for all_gather to be completed"
+            )
+            if not wait_for_all_gather:
+                return None
+            torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
+
+            if not force_full_precision:
+                for p in self.params:
+                    update_p_data()
+                return output_tensors
 
         self.has_full_params = True
 
@@ -2054,8 +2061,9 @@ class FullyShardedDataParallel(nn.Module):
 
                     if self.move_params_to_cpu and (self.params[0].dtype == self.compute_dtype):
                         self._free_fp16_param_shard([p])
-        if wait_for_all_gather:
-            torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
+        if not wait_for_all_gather:
+            return None
+        torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
         return output_tensors
 
     @torch.no_grad()
@@ -2104,6 +2112,13 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
         """Free up storage for full parameters."""
+        if self.rank == 0:
+            print(
+                "free full params "
+                + str(self.training_state)
+                + " fetching idx = "
+                + str(self._forward_ordering.index(self))
+            )
         if params is None:
             params = self.params
         self.has_full_params = False
@@ -2133,17 +2148,20 @@ class FullyShardedDataParallel(nn.Module):
         ordering = self._forward_ordering
         if self.training_state == TrainingState.BACKWARD_POST:
             ordering = self._backward_ordering
-        next_idx = len(ordering)
         if self in ordering:
             next_idx = ordering.index(self) + 1
-        while next_idx < len(ordering):
-            next_module = ordering[next_idx]
-            if not next_module._pre_backward_hook_has_run and not next_module.has_full_params:
-                if self.rank == 0:
-                    print(str(self.training_state) + " fetching idx = " + str(next_idx))
-                next_module._rebuild_full_params(wait_for_all_gather=False)
-                break
-            next_idx = next_idx + 1
+            if next_idx < len(ordering):
+                next_module = ordering[next_idx]
+                # _pre_backward_hook_has_run prevents us from kicking off all-gather on a forward happening due to activation
+                # checkpointing. In these scenarios, forward only runs up until the module that already ran through the backward pass.
+                # If both modules have shared params, there is a potential race condition where params for current module are freed
+                # and all gather for the next module is happening, which may cause multiple all-gathers to be scheduled. So we just
+                # do not schedule all gathers if both modules have shared params.
+                if not next_module._pre_backward_hook_has_run and not next_module._has_shared_params:
+                    if self.rank == 0:
+                        print(str(self.training_state) + " fetching idx = " + str(next_idx))
+                    next_module._rebuild_full_params(wait_for_all_gather=False)
+        # Wait for computation kernels to finish running.
         torch.cuda.current_stream().synchronize()
 
     def local_metadata_dict(self) -> Dict[str, Any]:
