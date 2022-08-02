@@ -1407,38 +1407,19 @@ class FullyShardedDataParallel(nn.Module):
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
         self._rebuild_full_params()
 
-        # if (
-        #     forward_idx < len(self._forward_ordering) - 1
-        # ):
-        #     t = self._forward_ordering[forward_idx + 1]
-        #     if not t._pre_backward_hook_has_run:
-        #         if (self.rank == 0):
-        #             print("fetching idx = " + str(forward_idx + 1))
-        #         t._rebuild_full_params(wait_for_all_gather=False)
-
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
         self._register_post_backward_hooks()
 
         outputs = self.module(*args, **kwargs)
 
+        # In the first forward pass, track the order that modules are computed.
+        # In the following passes, we assume that the order remains the same to
+        # to kick off the all-gather for the next module in the list, in case we
+        # are waiting for the computation to finish.
         if self not in self._forward_ordering:
             self._forward_ordering.append(self)
-        forward_idx = self._forward_ordering.index(self)
-        if self.rank == 0:
-            print(
-                "forward size = "
-                + str(len(self._forward_ordering))
-                + " idx = "
-                + str(forward_idx)
-                + " has shared = "
-                + str(self._has_shared_params)
-                + " has full params = "
-                + str(self.has_full_params)
-            )
 
-        # if(self.rank == 0):
-        #     print(str(self.reshard_after_forward) + " forward_idx = " + str(self._forward_ordering.index(self)))
         if self.reshard_after_forward:
             self._free_full_params()
             if self.mixed_precision or self.move_params_to_cpu:
@@ -1521,36 +1502,14 @@ class FullyShardedDataParallel(nn.Module):
             # idempotent.  So in case they are called unnecessarily, they don't incur much
             # overhead.
             if self.reshard_after_forward:
-                if self not in self._backward_ordering:
-                    self._backward_ordering.append(self)
-                backward_idx = self._backward_ordering.index(self)
-                if self.rank == 0:
-                    print(
-                        "pre-backward size = "
-                        + str(len(self._backward_ordering))
-                        + " idx = "
-                        + str(backward_idx)
-                        + " forward_idx = "
-                        + str(self._forward_ordering.index(self))
-                        + "has shared = "
-                        + str(self._has_shared_params)
-                        + " has full params = "
-                        + str(self.has_full_params)
-                    )
-
                 self._rebuild_full_params()
 
-                # if (
-                #     backward_idx < len(self._backward_ordering) - 1
-                # ):
-                #     t = self._backward_ordering[backward_idx + 1]
-                #     # is_hook_registered = id(t) in self._output_pre_backward_hook_registered
-                #     # # if (self.rank == 0):
-                #     # #     print("is_hook_registered = " + str(is_hook_registered) + " id = " + str(id(t)) + " len = " + str(len(self._output_pre_backward_hook_registered)))
-                #     # if not is_hook_registered:
-                #     if (self.rank == 0):
-                #         print("fetching backward idx = " + str(backward_idx + 1) + " forward_idx = " + str(self._forward_ordering.index(t)))
-                #     t._rebuild_full_params(wait_for_all_gather=False)
+                # Similar to _forward_ordering, in the first backward pass we track the order
+                # that weights were gathered for modules in the backward pass. Then, we use
+                # this order in future passes to kick off the all-gather for the next module
+                # in case we are waiting for the computation of the current module to finish.
+                if self not in self._backward_ordering:
+                    self._backward_ordering.append(self)
             else:
                 self._use_full_params()
 
@@ -1678,8 +1637,6 @@ class FullyShardedDataParallel(nn.Module):
         """
         # First hook callback will see PRE state. If we have multiple params,
         # then subsequent hook callbacks will see POST state.
-        # if (self.rank == 0):
-        #     print("post backward forward_idx = " + str(self._forward_ordering.index(self)))
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         self.training_state = TrainingState.BACKWARD_POST
         if param.grad is None:
@@ -1987,21 +1944,14 @@ class FullyShardedDataParallel(nn.Module):
             # Therefore, we update the flag accordingly here.
             self.has_full_params = not any(p._full_param_padded.storage().size() == 0 for p in self.params)
 
-        # Early exit if we already have full params.
-        if self.has_full_params:
-            assert (
-                force_full_precision and wait_for_all_gather
-            ) or not force_full_precision, (
-                "If you require full_precision, you need to wait for all_gather to be completed"
-            )
+        # Early exit if we already have full params and don't need full precision.
+        if self.has_full_params and not force_full_precision:
             if not wait_for_all_gather:
                 return None
             torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
-
-            if not force_full_precision:
-                for p in self.params:
-                    update_p_data()
-                return output_tensors
+            for p in self.params:
+                update_p_data()
+            return output_tensors
 
         self.has_full_params = True
 
@@ -2112,13 +2062,6 @@ class FullyShardedDataParallel(nn.Module):
     @torch.no_grad()
     def _free_full_params(self, params: Optional[List[Parameter]] = None) -> None:
         """Free up storage for full parameters."""
-        if self.rank == 0:
-            print(
-                "free full params "
-                + str(self.training_state)
-                + " fetching idx = "
-                + str(self._forward_ordering.index(self))
-            )
         if params is None:
             params = self.params
         self.has_full_params = False
@@ -2138,9 +2081,16 @@ class FullyShardedDataParallel(nn.Module):
             # Storage object and unshard it in-place. For now, just resize
             # the Storage to 0 to save memory.
             free_storage_(p._full_param_padded)
+
+        # When we are memory bound (which is the case here as we are freeing up
+        # params), we are not able to let the CPU run completely free because
+        # it will end up scheduling GPU operations required to compute all
+        # future modules. This causes significant increases in GPU reserved
+        # memory and potential thrashing.
+        # So instead, we simply schedule the all-gather for the next module
+        # to be executed and wait for the computations of the current module
+        # to finish before moving forward.
         self._schedule_next_all_gather_and_synchronize()
-        # if(self.rank == 0):
-        #     print(str(self.training_state) + " forward_idx = " + str(self._forward_ordering.index(self)))
 
     @torch.no_grad()
     def _schedule_next_all_gather_and_synchronize(self) -> None:
@@ -2148,18 +2098,18 @@ class FullyShardedDataParallel(nn.Module):
         ordering = self._forward_ordering
         if self.training_state == TrainingState.BACKWARD_POST:
             ordering = self._backward_ordering
+        # With activation checkpointing, we may have modules in the backward pass that are
+        # not part of _backward_ordering. So this check is required.
         if self in ordering:
             next_idx = ordering.index(self) + 1
             if next_idx < len(ordering):
                 next_module = ordering[next_idx]
-                # _pre_backward_hook_has_run prevents us from kicking off all-gather on a forward happening due to activation
-                # checkpointing. In these scenarios, forward only runs up until the module that already ran through the backward pass.
-                # If both modules have shared params, there is a potential race condition where params for current module are freed
-                # and all gather for the next module is happening, which may cause multiple all-gathers to be scheduled. So we just
-                # do not schedule all gathers if both modules have shared params.
+                # _pre_backward_hook_has_run prevents us from kicking off all-gather on a forward pass happening due to activation
+                # checkpointing. In these scenarios, forward only runs up until the module that already went through the backward pass.
+                # In addition, if the module to be scheduled has a shared param, there is a potential race condition where params for
+                # the current module are freed and all gather for the next module is happening. So we just skip such modules.
                 if not next_module._pre_backward_hook_has_run and not next_module._has_shared_params:
-                    if self.rank == 0:
-                        print(str(self.training_state) + " fetching idx = " + str(next_idx))
+                    # Kick-off all gather for the next module without waiting.
                     next_module._rebuild_full_params(wait_for_all_gather=False)
         # Wait for computation kernels to finish running.
         torch.cuda.current_stream().synchronize()
