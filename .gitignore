@@ -12,10 +12,6 @@
 *.egg-info/
 .testmondata
 
-# experimental weigit
-fairscale/experimental/wgit/dev
-.wgit
-
 # Build and release
 build/
 dist/

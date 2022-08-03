@@ -9,13 +9,18 @@ from pathlib import Path
 import shutil
 
 import pytest
+import torch
+from torch import nn
 
 import fairscale.experimental.wgit.cli as cli
-from fairscale.experimental.wgit.sha1_store import SHA1_store
+from fairscale.experimental.wgit.sha1_store import SHA1_Store
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def create_test_dir():
+    """This setup function runs once per test of this module and
+    it creates a repo, in the process, testing the init function.
+    """
     curr_dir = Path.cwd()
     parent_dir = "experimental"
     test_dir = curr_dir.joinpath(parent_dir, "wgit_testing/")
@@ -30,29 +35,28 @@ def create_test_dir():
     # create random checkpoints
     size_list = [30e5, 35e5, 40e5]
     for i, size in enumerate(size_list):
-        with open(f"checkpoint_{i}.pt", "wb") as f:
-            f.write(os.urandom(int(size)))
+        torch.save(nn.Linear(1, int(size)).state_dict(), f"checkpoint_{i}.pt")
+
+    # Test init.
+    cli.main(["init"])
+    assert str(test_dir.stem) == "wgit_testing"
+
     return test_dir
 
 
-def test_setup(create_test_dir):
-    cli.main(["init"])
-    assert str(create_test_dir.stem) == "wgit_testing"
-
-
-def test_cli_init(capsys):
+def test_cli_init(create_test_dir, capsys):
     # Check if the json and other files have been created by the init
-    assert Path(".wgit/sha1_refs.json").is_file()
+    assert Path(".wgit/sha1_store").is_dir()
     assert Path(".wgit/.gitignore").is_file()
     assert Path(".wgit/.git").exists()
 
 
-def test_cli_add(capsys):
+def test_cli_add(create_test_dir, capsys):
     chkpt0 = "checkpoint_0.pt"
-    cli.main(["add", "checkpoint_0.pt"])
+    cli.main(["add", "--no_per_tensor", chkpt0])
 
-    sha1_store = SHA1_store(
-        Path.cwd().joinpath(".wgit"),
+    sha1_store = SHA1_Store(
+        Path.cwd().joinpath(".wgit", "sha1_store"),
         init=False,
     )
     sha1_hash = sha1_store._get_sha1_hash(chkpt0)
@@ -60,7 +64,7 @@ def test_cli_add(capsys):
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
-    assert json_data["SHA1"] == {"__sha1_full__": sha1_hash}
+    assert json_data["SHA1"] == sha1_hash
 
 
 def test_cli_commit(capsys):

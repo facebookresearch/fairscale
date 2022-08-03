@@ -10,9 +10,10 @@ import random
 import shutil
 
 import pytest
+import torch
+from torch import nn
 
-from fairscale.experimental.wgit import repo as api
-from fairscale.experimental.wgit.repo import RepoStatus
+from fairscale.experimental.wgit.repo import Repo, RepoStatus
 
 
 @pytest.fixture
@@ -32,14 +33,16 @@ def create_test_dir():
     # create random checkpoints
     size_list = [30e5, 35e5, 40e5, 40e5]
     for i, size in enumerate(size_list):
-        with open(f"checkpoint_{i}.pt", "wb") as f:
-            f.write(os.urandom(int(size)))
+        sd = {}
+        sd["model"] = nn.Linear(1, int(size)).state_dict()
+        sd["step"] = 100
+        torch.save(sd, f"checkpoint_{i}.pt")
     return test_dir
 
 
 @pytest.fixture
 def repo():
-    repo = api.Repo(Path.cwd(), init=True)
+    repo = Repo(Path.cwd(), init=True)
     return repo
 
 
@@ -48,17 +51,22 @@ def test_setup(create_test_dir):
 
 
 def test_api_init(capsys, repo):
-    repo = api.Repo(Path.cwd(), init=True)
-    assert Path(".wgit/sha1_refs.json").is_file()
+    repo = Repo(Path.cwd(), init=True)
+    assert Path(".wgit/sha1_store").is_dir()
     assert Path(".wgit/.gitignore").is_file()
     assert Path(".wgit/.git").exists()
     assert Path(".wgit/.gitignore").exists()
 
 
-def test_api_add(capsys, repo):
+@pytest.mark.parametrize("per_tensor", [True, False])
+@pytest.mark.parametrize("gzip", [True, False])
+def test_api_add(capsys, repo, per_tensor, gzip):
     fnum = random.randint(0, 2)
     chkpt0 = f"checkpoint_{fnum}.pt"
-    repo.add(chkpt0)
+    repo.add(chkpt0, per_tensor=per_tensor, gzip=gzip)
+    if per_tensor:
+        # TODO (Min): test per_tensor add more.
+        return
     sha1_hash = repo._sha1_store._get_sha1_hash(chkpt0)
     metadata_path = repo._rel_file_path(Path(chkpt0))
 
@@ -66,7 +74,7 @@ def test_api_add(capsys, repo):
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
-    assert json_data["SHA1"] == {"__sha1_full__": sha1_hash}
+    assert json_data["SHA1"] == sha1_hash
 
 
 def test_api_commit(capsys, repo):
@@ -77,10 +85,11 @@ def test_api_commit(capsys, repo):
     assert line[0].rstrip().split()[-1] == commit_msg
 
 
-def test_api_status(capsys, repo):
+@pytest.mark.parametrize("per_tensor", [True, False])
+def test_api_status(capsys, repo, per_tensor):
     # delete the repo and initialize a new one:
     shutil.rmtree(".wgit")
-    repo = api.Repo(Path.cwd(), init=True)
+    repo = Repo(Path.cwd(), init=True)
 
     # check status before any file is added
     out = repo.status()
@@ -88,7 +97,7 @@ def test_api_status(capsys, repo):
 
     # check status before after a file is added but not committed
     chkpt0 = f"checkpoint_{random.randint(0, 1)}.pt"
-    repo.add(chkpt0)
+    repo.add(chkpt0, per_tensor=per_tensor)
     out = repo.status()
     key_list = list(repo._get_metdata_files().keys())
     assert out == {key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED}
@@ -99,19 +108,18 @@ def test_api_status(capsys, repo):
     assert out == {key_list[0]: RepoStatus.CLEAN}
 
     # check status after a new change has been made to the file
-    with open(chkpt0, "wb") as f:
-        f.write(os.urandom(int(15e5)))
+    torch.save(nn.Linear(1, int(15e5)).state_dict(), chkpt0)
     out = repo.status()
     assert out == {key_list[0]: RepoStatus.CHANGES_NOT_ADDED}
 
     # add the new changes made to weigit
-    repo.add(chkpt0)
+    repo.add(chkpt0, per_tensor=per_tensor)
     out = repo.status()
     assert out == {key_list[0]: RepoStatus.CHANGES_ADDED_NOT_COMMITED}
 
     # check status after a new different file is added to be tracked by weigit
     chkpt3 = "checkpoint_3.pt"
-    repo.add(chkpt3)
+    repo.add(chkpt3, per_tensor=per_tensor)
     key_list = list(repo._get_metdata_files().keys())
     out = repo.status()
     assert out == {

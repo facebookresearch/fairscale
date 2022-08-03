@@ -34,5 +34,8 @@ numpy == 1.22.0
 # For layerwise gradient scaler
 sklearn >= 0.0
 
-# For weigit
+# For weigit. These are actually user requirements, not developer requirements.
+# However, due to the experimental nature of weigit, we don't expose to the
+# general users of fairscale yet. We check for them in weigit's init code.
 pygit2==1.9.2
+pgzip==0.3.1
