@@ -3,6 +3,7 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+import copy
 from dataclasses import dataclass
 from enum import Enum
 import json
@@ -276,6 +277,7 @@ class Repo:
                     return element
 
             state_dict = torch.load(file_path)
+            ret_state_dict = copy.deepcopy(state_dict)
             _recursive_apply_to_elements(state_dict, fn, [])
             file_path_or_state_dict = state_dict
 
