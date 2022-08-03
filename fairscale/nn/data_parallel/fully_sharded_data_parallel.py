@@ -1163,7 +1163,7 @@ class FullyShardedDataParallel(nn.Module):
         self._streams: Dict[str, torch.cuda.Stream] = {}
         self._reducer: Optional[ReduceScatterBucketer] = None
         self._forward_ordering: List[FullyShardedDataParallel] = []
-        self._backward_ordering: List[FullyShardedDataParallel] = []
+        self._backward_rebuild_ordering: List[FullyShardedDataParallel] = []
         for p in self.params:
             if hasattr(p, "_fp32_shard"):
                 del p._fp32_shard  # reset _init_param_attributes
@@ -1337,7 +1337,7 @@ class FullyShardedDataParallel(nn.Module):
                     (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
                 )
                 m._forward_ordering = self._forward_ordering
-                m._backward_ordering = self._backward_ordering
+                m._backward_rebuild_ordering = self._backward_rebuild_ordering
 
     def _setup_streams(self) -> None:
         """Create streams to overlap data transfer and computation."""
@@ -1508,8 +1508,8 @@ class FullyShardedDataParallel(nn.Module):
                 # that weights were gathered for modules in the backward pass. Then, we use
                 # this order in future passes to kick off the all-gather for the next module
                 # in case we are waiting for the computation of the current module to finish.
-                if self not in self._backward_ordering:
-                    self._backward_ordering.append(self)
+                if self not in self._backward_rebuild_ordering:
+                    self._backward_rebuild_ordering.append(self)
             else:
                 self._use_full_params()
 
@@ -2067,6 +2067,9 @@ class FullyShardedDataParallel(nn.Module):
         self.has_full_params = False
         current_stream = torch.cuda.current_stream()
         for p in params:
+            # Shared params are not owned by this FSDP instance.
+            if hasattr(p, "_is_shared") and p._is_shared:
+                continue
             if not p._is_sharded:  # e.g., world_size == 1
                 if self.mixed_precision or self.move_params_to_cpu:
                     self._free_fp16_param_shard([p])
@@ -2097,15 +2100,14 @@ class FullyShardedDataParallel(nn.Module):
         self.assert_state([TrainingState.FORWARD, TrainingState.BACKWARD_POST])
         ordering = self._forward_ordering
         if self.training_state == TrainingState.BACKWARD_POST:
-            ordering = self._backward_ordering
-        # With activation checkpointing, we may have modules in the backward pass that are
-        # not part of _backward_ordering. So this check is required.
+            ordering = self._backward_rebuild_ordering
+        # Not all modules require rebuilding in backward pass, so this check is required.
         if self in ordering:
             next_idx = ordering.index(self) + 1
             if next_idx < len(ordering):
                 next_module = ordering[next_idx]
                 # _pre_backward_hook_has_run prevents us from kicking off all-gather on a forward pass happening due to activation
-                # checkpointing. In these scenarios, forward only runs up until the module that already went through the backward pass.
+                # checkpointing. In these scenarios, forward only runs up until the module that already ran their backward hook.
                 # In addition, if the module to be scheduled has a shared param, there is a potential race condition where params for
                 # the current module are freed and all gather for the next module is happening. So we just skip such modules.
                 if not next_module._pre_backward_hook_has_run and not next_module._has_shared_params:

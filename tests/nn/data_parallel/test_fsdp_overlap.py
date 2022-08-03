@@ -112,8 +112,6 @@ def _distributed_worker(
 
         # We run 20 iterations but only collect timing data from the minimal 10
         # data points because nondeterministic system events can disturb the timing.
-        cpu_iter = Min10()
-        cpu_wait = Min10()
         gpu_compute = Min10()
         gpu_total = Min10()
         for _ in range(20):
@@ -165,12 +163,7 @@ def _distributed_worker(
             else:
                 for p in model.parameters():
                     p.grad = None
-
-            cpu_iter_time = time.process_time() - cpu_start
-
-            # wait for gpu
             out.item()
-            cpu_wait_for_gpu_time = time.process_time() - cpu_start - cpu_iter_time
 
             # get sum of the compute time
             times = []
@@ -182,15 +175,11 @@ def _distributed_worker(
             # get gpu compute + all_gather time
             overall_gpu_time = e1.elapsed_time(e2)
 
-            cpu_iter.add(cpu_iter_time)
-            cpu_wait.add(cpu_wait_for_gpu_time)
             gpu_compute.add(sum(times))
             gpu_total.add(overall_gpu_time)
 
         del model
         return {
-            "cpu_iter": cpu_iter.avg(),
-            "cpu_wait": cpu_wait.avg(),
             "gpu_compute": gpu_compute.avg(),
             "gpu_total": gpu_total.avg(),
         }
@@ -204,33 +193,17 @@ def _distributed_worker(
     debug_string = f"\nrank{rank}:\n  e1: {e1}\n  e2: {e2}\n  e3: {e3}\n  e4: {e4}"
     print(debug_string)
 
-    # Check the cpu/gpu timing. CPU should run ahead of GPU. Therefore, cpu-gpu
-    # wait should be long, except when there is no real work on GPU.
-    #
-    # If the assertions fail below, we likely have a cpu-gpu wait in the forward/backward pass.
-    short = [e1["cpu_iter"], e2["cpu_iter"], e3["cpu_iter"], e4["cpu_iter"], e1["cpu_wait"]]
-    long = [e3["cpu_wait"], e4["cpu_wait"]]
-    if world_size == 1:
-        short.append(e2["cpu_wait"])  # all gather should not be happening.
-    else:
-        long.append(e2["cpu_wait"])  # all gather should happen and prolong the cpu-gpu wait.
-    for s in short:
-        for l in long:
-            # 5X longer is a safe margin, since the GPU work timing is around 100X more
-            # of that of the CPU.
-            assert s * 5 < l, f"{s} * 5 < {l} in " + debug_string
-
     # Check the GPU timing.
     short = [e1["gpu_compute"], e1["gpu_total"], e2["gpu_compute"]]
     long = [e3["gpu_compute"], e3["gpu_total"], e4["gpu_compute"], e4["gpu_total"]]
     if world_size == 1:
         short.append(e2["gpu_total"])  # all gather should not be happening.
     else:
-        long.append(e2["gpu_total"])  # all gather should happen and prolong the cpu-gpu wait.
+        long.append(e2["gpu_total"])  # all gather should happen and prolong the gpu wait.
     for s in short:
         for l in long:
             # 10X longer is a safe margin, since the time is around 100X longer
-            # when there is work on GPU vs. no work.
+            # when there is compute work on GPU vs. no work.
             assert s * 10 < l, f"{s} * 10 < {l} in " + debug_string
 
     # Check the GPU overlapping when there is all-gather.
