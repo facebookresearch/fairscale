@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from enum import Enum
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -73,6 +73,17 @@ def _top_k_total_size(tensor: Tensor, topk_dim: Optional[int]) -> int:
     top_k_total_size = tensor.numel() if topk_dim is None else tensor.shape[topk_dim]
     assert top_k_total_size > 0, "Total size of input tensor along the topk_dim has to be greater than 0."
     return top_k_total_size
+
+
+def _is_sparsity_zero(
+    dense: Tensor, topk_percent: Optional[float], topk_element: Optional[int], top_k_dim: Optional[int]
+) -> bool:
+    """Returns True when a given value of topk_percent or topk_element along a particular top_k_dim
+    for an input tensor results in sparsity=0% (or top-100-percent). Otherwise, returns False.
+    """
+    top_k_total_size = _top_k_total_size(dense, top_k_dim)
+    k = _get_k_for_topk(topk_percent, topk_element, top_k_total_size)
+    return k == top_k_total_size
 
 
 def _dct_transform(dense: Tensor) -> Tensor:
@@ -288,6 +299,35 @@ class SignalSparsity:
         if dst is not None:
             dense_rt += dst
         return dense_rt
+
+    def lossy_compress(self, dense: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+        """From dense tensor to lossy reconstruction of dense tensor with the help of SST and DST
+        tensor calculation. If requested sparsity is zero (or top_100_percent) then simply returns
+        the input dense tensor as the reconstruction.
+
+        Args:
+            dense (Tensor):
+                Input dense tensor (no zeros).
+
+        Returns:
+            (Tuple[Tensor, Tensor, Tensor]):
+                A tuple of the form (lossy_reconstruction, sst, dst) with three tensors of the same
+                shape as the dense tensor.
+        """
+
+        if _is_sparsity_zero(
+            dense, self._sst_top_k_percent, self._sst_top_k_element, self._sst_top_k_dim
+        ) and _is_sparsity_zero(dense, self._dst_top_k_percent, self._dst_top_k_element, self._dst_top_k_dim):
+            # when sparsity is 0% for both sst and dst, the dense tensor itself is returned as the reconstructed
+            # tensor, sst is returned as None and dst as the dense tensor. This choice is made because with the
+            # returned sst=None and dst=dense, we should be able to recombine them if needed to retrieve the
+            # dense tensor again as: dense = inv_transform(sst) + dst, where inv_transform(sst=None) = zero_tensor
+            # of the same size as dense.
+            return dense, None, dense
+        else:
+            sst = self.dense_to_sst(dense)
+            dst = self.dense_sst_to_dst(dense, sst)
+            return self.sst_dst_to_dense(sst, dst), sst, dst
 
 
 # We could separate have helper functions that work on state_dict instead of a tensor.

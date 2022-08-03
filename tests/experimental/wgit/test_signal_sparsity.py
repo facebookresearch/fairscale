@@ -243,3 +243,32 @@ def test_sst_dst_to_dense(unused1, sst, dst, expd_rt, dim, unused2, k):
     sparser = SignalSparsity(sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_element=k, dst_top_k_dim=dim)
     dense_recons = sparser.sst_dst_to_dense(sst, dst)
     objects_are_equal(dense_recons, expd_rt, raise_exception=True)
+
+
+@pytest.mark.parametrize("tensor, expd_sst, expd_dst, expd_rt, dim, unused, k", get_test_params())
+def test_lossy_compress(tensor, expd_sst, expd_dst, expd_rt, dim, unused, k):
+    """Tests the lossy_compress method against expected sst, dst and reconstruced tensor."""
+    sparser = SignalSparsity(sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_element=k, dst_top_k_dim=dim)
+    lossy_dense, sst, dst = sparser.lossy_compress(tensor)
+    objects_are_equal(lossy_dense, expd_rt, raise_exception=True)
+    objects_are_equal(sst, expd_sst, raise_exception=True)
+    objects_are_equal(dst, expd_dst, raise_exception=True)
+
+
+@pytest.mark.parametrize(
+    "tensor, dim, top_k_percent",
+    [
+        (torch.linspace(0.01, 0.06, 40).reshape(5, 8), 0, 100),
+        (torch.linspace(-0.01, 0.06, 42).reshape(7, 6), 0, 100),
+        (torch.linspace(-10, 15, 36).reshape(6, 6), 1, 100),
+    ],
+)
+def test_lossy_compress_sparsity_0(tensor, dim, top_k_percent):
+    """Tests whether lossy_compress method simply returns dense tensor when sparsity is 0."""
+    sparser = SignalSparsity(
+        sst_top_k_percent=top_k_percent, sst_top_k_dim=dim, dst_top_k_percent=top_k_percent, dst_top_k_dim=dim
+    )
+    lossy_dense, sst, dst = sparser.lossy_compress(tensor)
+    objects_are_equal(lossy_dense, tensor, raise_exception=True)
+    objects_are_equal(sst, None, raise_exception=True)
+    objects_are_equal(dst, tensor, raise_exception=True)
