@@ -314,10 +314,15 @@ class SignalSparsity:
                 A tuple of the form (lossy_reconstruction, sst, dst) with three tensors of the same
                 shape as the dense tensor.
         """
-        # when sparsity is 0% for both sst and dst the dense tensor itself is returned
+
         if _is_sparsity_zero(
             dense, self._sst_top_k_percent, self._sst_top_k_element, self._sst_top_k_dim
         ) and _is_sparsity_zero(dense, self._dst_top_k_percent, self._dst_top_k_element, self._dst_top_k_dim):
+            # when sparsity is 0% for both sst and dst, the dense tensor itself is returned as the reconstructed
+            # tensor, sst is returned as None and dst as the dense tensor. This choice is made because with the
+            # returned sst=None and dst=dense, we should be able to recombine them if needed to retrieve the
+            # dense tensor again as: dense = inv_transform(sst) + dst, where inv_transform(sst=None) = zero_tensor
+            # of the same size as dense.
             return dense, None, dense
         else:
             sst = self.dense_to_sst(dense)

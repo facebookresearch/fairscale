@@ -277,7 +277,7 @@ class Repo:
                     return element
 
             state_dict = torch.load(file_path)
-            ret_state_dict = copy.deepcopy(state_dict)
+            ret_state_dict = copy.deepcopy(state_dict)  # This is only a temporary addition for testing.
             _recursive_apply_to_elements(state_dict, fn, [])
             file_path_or_state_dict = state_dict
 
