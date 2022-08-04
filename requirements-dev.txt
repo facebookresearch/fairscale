@@ -19,6 +19,7 @@ pytest-cov == 3.0.0
 pytest-timeout == 2.1.0
 remote-pdb >= 2.1.0
 parameterized >= 0.8.1
+pyhamcrest >= 2.0.3
 
 # Tools for testing docs
 docutils == 0.17
