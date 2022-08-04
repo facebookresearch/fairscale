@@ -57,7 +57,10 @@ class WhenCalledMatcher(BaseMatcher[Callable[..., Any]]):
 
     def describe_to(self, description: Description) -> None:
         call_params = ", ".join(
-            tuple([repr(a) for a in self.args] + [f"{k}={repr(v)}" for k, v in self.kwargs.items()])
+            (
+                *(repr(a) for a in self.args),
+                *(f"{k}={repr(v)}" for k, v in self.kwargs.items()),
+            )
         )
 
         if self.method is None:
@@ -68,7 +71,11 @@ class WhenCalledMatcher(BaseMatcher[Callable[..., Any]]):
         description.append_text(f"{f}({call_params}) => ")
         description.append_description_of(self.matcher)
 
-    def describe_mismatch(self, item: Callable, mismatch_description: Description) -> None:
+    def describe_mismatch(
+        self,
+        item: Callable,
+        mismatch_description: Description,
+    ) -> None:
         val = self._call_item(item)
         mismatch_description.append_text("was =>").append_description_of(val)
 

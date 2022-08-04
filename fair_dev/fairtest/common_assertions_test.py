@@ -21,11 +21,17 @@ class WhenCalledTest(unittest.TestCase):
         def example(a, b, c):
             return dict(a=a, b=b, c=c)
 
-        hamcrest.assert_that(example, common_assertions.when_called(1, 2, c=3).matches(dict(a=1, b=2, c=3)))
+        hamcrest.assert_that(
+            example,
+            common_assertions.when_called(1, 2, c=3).matches(dict(a=1, b=2, c=3)),
+        )
 
         common_assertions.assert_raises(
             lambda: hamcrest.assert_that(
-                example, common_assertions.when_called(1, 2, c=3).matches(dict(a=1, b=2, c=4))
+                example,
+                common_assertions.when_called(1, 2, c=3).matches(
+                    dict(a=1, b=2, c=4),
+                ),
             ),
             AssertionError,
             (
@@ -40,11 +46,19 @@ class WhenCalledTest(unittest.TestCase):
             def foo(self, a, b, c):
                 return dict(a=a, b=b, c=c)
 
-        hamcrest.assert_that(Example(), common_assertions.calling_method("foo", 1, 2, c=3).matches(dict(a=1, b=2, c=3)))
+        hamcrest.assert_that(
+            Example(),
+            common_assertions.calling_method("foo", 1, 2, c=3).matches(
+                dict(a=1, b=2, c=3),
+            ),
+        )
 
         common_assertions.assert_raises(
             lambda: hamcrest.assert_that(
-                Example(), common_assertions.calling_method("foo", 1, 2, c=3).matches(dict(a=1, b=2, c=4))
+                Example(),
+                common_assertions.calling_method("foo", 1, 2, c=3).matches(
+                    dict(a=1, b=2, c=4),
+                ),
             ),
             AssertionError,
             (
@@ -83,7 +97,10 @@ class AssertTruthTest(unittest.TestCase):
         )
 
         hamcrest.assert_that(
-            typing.cast(Any, lambda: common_assertions.assert_true("", reason="meh")),
+            typing.cast(
+                Any,
+                lambda: common_assertions.assert_true("", reason="meh"),
+            ),
             hamcrest.raises(
                 AssertionError,
                 "meh",
@@ -106,7 +123,10 @@ class AssertFalseTest(unittest.TestCase):
         )
 
         hamcrest.assert_that(
-            typing.cast(Any, lambda: common_assertions.assert_false("abc", reason="meh")),
+            typing.cast(
+                Any,
+                lambda: common_assertions.assert_false("abc", reason="meh"),
+            ),
             hamcrest.raises(
                 AssertionError,
                 "meh",
@@ -121,7 +141,11 @@ class AssertRaisesTest(unittest.TestCase):
             ValueError,
         )
 
-        common_assertions.assert_raises(lambda: _throw(ValueError("abc")), ValueError, "abc")
+        common_assertions.assert_raises(
+            lambda: _throw(ValueError("abc")),
+            ValueError,
+            "abc",
+        )
 
         # No exception.
         hamcrest.assert_that(
@@ -153,7 +177,11 @@ class AssertRaisesTest(unittest.TestCase):
         )
 
     def test_regex(self) -> None:
-        common_assertions.assert_raises(lambda: _throw(ValueError("abc 123")), ValueError, "abc [0-9]+")
+        common_assertions.assert_raises(
+            lambda: _throw(ValueError("abc 123")),
+            ValueError,
+            "abc [0-9]+",
+        )
 
         hamcrest.assert_that(
             typing.cast(

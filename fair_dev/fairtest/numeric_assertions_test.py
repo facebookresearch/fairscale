@@ -16,5 +16,5 @@ class AssertCloseToTest(unittest.TestCase):
                 12.499,
             ),
             AssertionError,
-            (r"a numeric value within <0.000125> of <12.499>" r"\s*" r"but: <12.5> differed by <0.0009"),
+            r"within <0.000125> of <12.499>\s*but: <12.5> differed by <0.0009",
         )
