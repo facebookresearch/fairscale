@@ -2119,8 +2119,13 @@ class FullyShardedDataParallel(nn.Module):
                 # _pre_backward_hook_has_run prevents us from kicking off all-gather on a forward pass happening due to activation
                 # checkpointing. In these scenarios, forward only runs up until the module that already ran their backward hook.
                 # In addition, if the module to be scheduled has a shared param, there is a potential race condition where params for
-                # the current module are freed and all gather for the next module is happening. So we just skip such modules.
-                if not next_module._pre_backward_hook_has_run and not next_module._has_shared_params:
+                # the current module are freed and all gather for the next module is happening. Similarly, modules with ssd_offload
+                # are not supported because ssd_offload happens before every all-gather call. So we just skip such modules.
+                if (
+                    not next_module._pre_backward_hook_has_run
+                    and not next_module._has_shared_params
+                    and not next_module.ssd_offload
+                ):
                     # Kick-off all gather for the next module without waiting.
                     next_module._rebuild_full_params(wait_for_all_gather=False)
         # Wait for computation kernels to finish running.
