@@ -2,7 +2,8 @@ from typing import Any, Optional, SupportsFloat
 
 import hamcrest
 
-from fair_dev.fairtest import assert_match, hide_module_tracebacks
+from fair_dev.fairtest.common_assertions import assert_match
+from fair_dev.fairtest.tracebacks import hide_module_tracebacks
 
 
 def hide_tracebacks(mode: bool = True) -> None:
