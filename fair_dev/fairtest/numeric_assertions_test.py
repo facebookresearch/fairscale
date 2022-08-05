@@ -4,7 +4,7 @@ from fair_dev.fairtest import common_assertions, numeric_assertions
 
 
 class AssertCloseToTest(unittest.TestCase):
-    def test(self):
+    def test(self) -> None:
         numeric_assertions.assert_close_to(
             12.5,
             12.49999,

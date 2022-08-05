@@ -1,5 +1,5 @@
 import typing
-from typing import Any, NoReturn
+from typing import Any, Dict, NoReturn
 import unittest
 
 import hamcrest
@@ -18,7 +18,7 @@ def _throw(exception: Exception) -> NoReturn:
 
 class WhenCalledTest(unittest.TestCase):
     def test_when_called(self) -> None:
-        def example(a, b, c):
+        def example(a: Any, b: Any, c: Any) -> Dict[str, Any]:
             return dict(a=a, b=b, c=c)
 
         hamcrest.assert_that(
@@ -43,7 +43,7 @@ class WhenCalledTest(unittest.TestCase):
 
     def test_calling_method(self) -> None:
         class Example:
-            def foo(self, a, b, c):
+            def foo(self, a: Any, b: Any, c: Any) -> Dict[str, Any]:
                 return dict(a=a, b=b, c=c)
 
         hamcrest.assert_that(
