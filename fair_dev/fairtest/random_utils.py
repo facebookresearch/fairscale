@@ -10,7 +10,7 @@ def with_random_seed(seed_or_state: Union[int | torch.ByteTensor]) -> Iterator:
     Context manager which resets the global random number generator,
     and restores it on exit.
 
-    :param seed_or_state: the seed (an int) or .get_rng_state() (a Tensor)
+    :param seed_or_state: the seed (an int) or .get_rng_state() (a ByteTensor)
     """
     old_state = torch.get_rng_state()
 
