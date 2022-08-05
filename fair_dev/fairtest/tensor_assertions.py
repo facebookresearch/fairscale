@@ -1,5 +1,4 @@
-import numbers
-from typing import Any, Optional, Sequence, SupportsFloat, Union
+from typing import Any, Optional, Sequence, Union
 
 import hamcrest
 from hamcrest.core.base_matcher import BaseMatcher
@@ -8,14 +7,15 @@ import torch
 
 from fair_dev.fairtest import common_assertions, tracebacks
 
+# TensorConvertible is difficult to express in mypy
+# This is a broken attempt that doesn't quite get there:
+#
 # int is not a Number?
 # https://github.com/python/mypy/issues/3186
 # https://stackoverflow.com/questions/69334475/how-to-hint-at-number-types-i-e-subclasses-of-number-not-numbers-themselv/69383462#69383462kk
-
-NumberLike = Union[numbers.Number, numbers.Complex, SupportsFloat]
-
-TensorConvertable = Any
-
+#
+# NumberLike = Union[numbers.Number, numbers.Complex, SupportsFloat]
+#
 # TensorConvertable = Union[
 #    torch.Tensor,
 #    NumberLike,
@@ -24,6 +24,9 @@ TensorConvertable = Any
 #    Tuple,
 #    npNDArray,
 # ]
+#
+# Instead, we punt:
+TensorConvertable = Any
 "Types which torch.as_tensor(T) can convert."
 
 
@@ -74,6 +77,13 @@ class TensorStorageMatcher(BaseMatcher[torch.Tensor]):
         description.append_text(
             f"same storage as {self._data_ptr(self.expected)} <{self.expected}>",
         )
+
+    def describe_match(
+        self,
+        item: torch.Tensor,
+        match_description: Description,
+    ) -> None:
+        match_description.append_text(f"was {self._data_ptr(item)} <{item}>")
 
     def describe_mismatch(
         self,
@@ -168,30 +178,28 @@ class TensorStructureMatcher(BaseMatcher[torch.Tensor]):
 
         self.layout = layout
 
-    def _matches(self, item: Any) -> bool:
+    def _matches(
+        self,
+        item: Any,
+    ) -> bool:
         hamcrest.assert_that(
             item,
             hamcrest.instance_of(torch.Tensor),
         )
 
-        if self.size is not None and self.size != item.size():
-            return False
+        return all(
+            (
+                self.size is None or self.size == item.size(),
+                self.dtype is None or self.dtype == item.dtype,
+                self.device is None or self.device == item.device,
+                self.layout is None or self.layout == item.layout,
+            ),
+        )
 
-        if self.dtype is not None and self.dtype != item.dtype:
-            return False
-
-        if self.device is not None and self.device != item.device:
-            return False
-
-        if self.layout is not None and self.layout != item.layout:
-            return False
-
-        return True
-
-    def describe_to(self, description: Description) -> None:
+    def _describe_expected_structure(self, description: Description) -> str:
         parts = []
         if self.size is not None:
-            parts.append(f"size={tuple(self.size)}")
+            parts.append(f"size={list(self.size)}")
 
         if self.dtype is not None:
             parts.append(f"dtype={self.dtype}")
@@ -202,52 +210,55 @@ class TensorStructureMatcher(BaseMatcher[torch.Tensor]):
         if self.layout is not None:
             parts.append(f"layout={self.layout}")
 
-        description.append_text(f"tensor({', '.join(parts)})")
+        return f"tensor(..., {', '.join(parts)})"
+
+    def describe_to(self, description: Description) -> None:
+        description.append_text("tensor matching structure::\n")
+        description.append_text(self._describe_expected_structure(description))
+
+    def _describe_structure_mismatch(
+        self,
+        item: torch.Tensor,
+        *,
+        filter_match_fields: bool = True,
+    ) -> str:
+
+        parts = []
+
+        if self.size is not None and (not filter_match_fields or item.size() != self.size):
+            parts.append(f"size={list(item.size())}")
+
+        if self.dtype is not None and (not filter_match_fields or item.dtype != self.dtype):
+            parts.append(f"dtype={item.dtype}")
+
+        if self.device is not None and (not filter_match_fields or item.device != self.device):
+            parts.append(f"device='{item.device}'")
+
+        if self.layout is not None and (not filter_match_fields or item.layout != self.layout):
+            parts.append(f"layout={item.layout}")
+
+        return f"tensor(..., {', '.join(parts)})"
+
+    def describe_match(
+        self,
+        item: torch.Tensor,
+        match_description: Description,
+    ) -> None:
+        match_description.append_text("tensor structure matched::\n")
+        match_description.append_text(
+            self._describe_structure_mismatch(
+                item,
+                filter_match_fields=False,
+            ),
+        )
 
     def describe_mismatch(
         self,
         item: torch.Tensor,
         mismatch_description: Description,
     ) -> None:
-        def emphasize(test: bool, desc: str) -> str:
-            if test:
-                return f"[{desc}]"
-            return desc
-
-        parts = []
-        if self.size is not None:
-            parts.append(
-                emphasize(
-                    item.size() != self.size,
-                    f"size={tuple(item.size())}",
-                )
-            )
-
-        if self.dtype is not None:
-            parts.append(
-                emphasize(
-                    item.dtype != self.dtype,
-                    f"dtype={item.dtype}",
-                )
-            )
-
-        if self.device is not None:
-            parts.append(
-                emphasize(
-                    item.device != self.device,
-                    f"device='{item.device}'",
-                )
-            )
-
-        if self.layout is not None:
-            parts.append(
-                emphasize(
-                    item.layout != self.layout,
-                    f"layout={item.layout}",
-                )
-            )
-
-        mismatch_description.append_text(f"tensor({', '.join(parts)})")
+        mismatch_description.append_text("tensor structure did not match::\n")
+        mismatch_description.append_text(self._describe_structure_mismatch(item))
 
 
 def tensor_with_structure(
@@ -353,4 +364,152 @@ def tensor_with_layout(
     """
     return TensorStructureMatcher(
         layout=layout,
+    )
+
+
+class TensorMatcher(TensorStructureMatcher):
+    """
+    Matcher for comparing the structure and values of a Tensor.
+    """
+
+    expected: torch.Tensor
+    close: bool
+
+    def __init__(
+        self,
+        expected: TensorConvertable,
+        *,
+        close: bool = True,
+        ignore_device: bool = True,
+        ignore_layout: bool = False,
+    ):
+        self.expected = torch.as_tensor(expected)
+
+        self.close = close
+
+        device = self.expected.device
+        if ignore_device:
+            device = None
+
+        layout = self.expected.layout
+        if ignore_layout:
+            layout = None
+
+        super().__init__(
+            size=self.expected.size(),
+            dtype=self.expected.dtype,
+            device=device,
+            layout=layout,
+        )
+
+    def _matches(self, item: torch.Tensor) -> bool:
+        if not super()._matches(item):
+            return False
+
+        if item.device != self.expected.device:
+            # honor the ignore_device semantics from the base class.
+            item = item.clone().detach().to(device=self.expected.device)
+
+        if self.close:
+            try:
+                torch.testing.assert_close(
+                    item,
+                    self.expected,
+                    equal_nan=True,
+                )
+                return True
+            except AssertionError:
+                return False
+
+        else:
+            # TODO: handle is_sparse.
+            # torch.equal(item, self.expected) does not support nan.
+            try:
+                torch.testing.assert_close(
+                    item,
+                    self.expected,
+                    rtol=0,
+                    atol=0,
+                    equal_nan=True,
+                )
+            except AssertionError:
+                return False
+            return True
+
+    def describe_to(self, description: Description) -> None:
+        description.append_text("tensor matching structure and values::\n")
+        description.append_text(self._describe_expected_structure(description))
+        description.append_text("\n")
+        description.append_text(self.expected.cpu().numpy())
+        description.append_text("\n")
+
+    # describe_match() fall-through.
+
+    def describe_mismatch(
+        self,
+        item: torch.Tensor,
+        mismatch_description: Description,
+    ) -> None:
+        if not super(TensorMatcher, self)._matches(item):
+            super(TensorMatcher, self).describe_mismatch(
+                item,
+                mismatch_description,
+            )
+            return
+
+        mismatch_description.append_text("tensor values did not match::\n")
+        mismatch_description.append_text(item.cpu().numpy())
+
+        # TODO: structural value diff
+
+
+def matches_tensor(
+    expected: TensorConvertable,
+    *,
+    close: bool = True,
+    ignore_device: bool = True,
+    ignore_layout: bool = False,
+) -> TensorMatcher:
+    """
+    Construct a tensor structure and value matcher.
+
+    :param expected: the expected values.
+    :param close: should we do "close" matching, or exact?
+    :param ignore_device: Should we ignore the device of the expected Tensor?
+    :param ignore_layout: Should we ignore the layout of the expected Tensor?
+    :return: a TensorMatcher.
+    """
+    return TensorMatcher(
+        expected=expected,
+        close=close,
+        ignore_device=ignore_device,
+        ignore_layout=ignore_layout,
+    )
+
+
+def assert_matches_tensor(
+    actual: torch.Tensor,
+    expected: TensorConvertable,
+    *,
+    close: bool = True,
+    ignore_device: bool = True,
+    ignore_layout: bool = False,
+) -> None:
+    """
+    Assert that a Tensor matches expected values and structure.
+
+    :param actual: the Tensor.
+    :param expected: the expected values.
+    :param close: should we do "close" matching, or exact?
+    :param ignore_device: Should we ignore the device of the expected Tensor?
+    :param ignore_layout: Should we ignore the layout of the expected Tensor?
+    """
+    common_assertions.assert_match(
+        actual,
+        matches_tensor(
+            expected=expected,
+            close=close,
+            ignore_device=ignore_device,
+            ignore_layout=ignore_layout,
+        ),
     )

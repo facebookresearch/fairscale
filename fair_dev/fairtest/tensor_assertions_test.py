@@ -1,6 +1,7 @@
 import unittest
 
 import hamcrest
+from hamcrest.core.string_description import StringDescription
 import torch
 
 from fair_dev.fairtest import common_assertions, tensor_assertions
@@ -73,6 +74,16 @@ class AssertTensorStorageDiffersTest(unittest.TestCase):
 
 
 class MatchesTensorStructureTest(unittest.TestCase):
+    def test_match_description(self) -> None:
+        desc = StringDescription()
+        tensor_assertions.tensor_with_structure(size=[2]).describe_match(torch.ones(2), desc)
+        hamcrest.assert_that(
+            str(desc),
+            hamcrest.matches_regexp(
+                r"tensor structure matched::\ntensor\(..., size=\[2\]\)",
+            ),
+        )
+
     def test_bad_type(self) -> None:
         common_assertions.assert_raises(
             lambda: hamcrest.assert_that(
@@ -105,24 +116,16 @@ class MatchesTensorStructureTest(unittest.TestCase):
             ),
         )
 
-        common_assertions.assert_raises(
-            lambda: hamcrest.assert_that(
-                a,
-                tensor_assertions.tensor_with_structure(
-                    size=(5, 3),
-                ),
-            ),
-            AssertionError,
-            r"(?ms)Expected: tensor\(size=\(5, 3\)\).*but: tensor\(\[size=\(2, 3\)\]\)",
-        )
-        common_assertions.assert_raises(
-            lambda: hamcrest.assert_that(
-                a,
-                tensor_assertions.tensor_with_size((5, 3)),
-            ),
-            AssertionError,
-            r"(?ms)Expected: tensor\(size=\(5, 3\)\).*but: tensor\(\[size=\(2, 3\)\]\)",
-        )
+        for matcher in [
+            tensor_assertions.tensor_with_structure(size=(5, 3)),
+            tensor_assertions.tensor_with_size((5, 3)),
+        ]:
+            common_assertions.assert_raises(
+                lambda: hamcrest.assert_that(a, matcher),
+                AssertionError,
+                r"(?ms)matching structure::.*\(..., size=\[5, 3\]\)"
+                + r".*structure did not match::.*\(..., size=\[2, 3\]\)",
+            )
 
     def test_dtype(self) -> None:
         a = torch.ones(2, 3, dtype=torch.int64)
@@ -138,33 +141,23 @@ class MatchesTensorStructureTest(unittest.TestCase):
             tensor_assertions.tensor_with_dtype(torch.int64),
         )
 
-        common_assertions.assert_raises(
-            lambda: hamcrest.assert_that(
-                a,
-                tensor_assertions.tensor_with_structure(
-                    dtype=torch.float16,
-                ),
-            ),
-            AssertionError,
-            r"(?ms)Expected: tensor\(dtype=torch.float16\).*but: tensor\(\[dtype=torch.int64\]\)",
-        )
-        common_assertions.assert_raises(
-            lambda: hamcrest.assert_that(
-                a,
-                tensor_assertions.tensor_with_dtype(torch.float16),
-            ),
-            AssertionError,
-            r"(?ms)Expected: tensor\(dtype=torch.float16\).*but: tensor\(\[dtype=torch.int64\]\)",
-        )
+        for matcher in [
+            tensor_assertions.tensor_with_structure(dtype=torch.float16),
+            tensor_assertions.tensor_with_dtype(torch.float16),
+        ]:
+            common_assertions.assert_raises(
+                lambda: hamcrest.assert_that(a, matcher),
+                AssertionError,
+                r"(?ms)matching structure::.*\(..., dtype=torch.float16\)"
+                + r".*structure did not match::.*\(..., dtype=torch.int64\)",
+            )
 
     def test_device(self) -> None:
         a = torch.ones(2, 3)
 
         hamcrest.assert_that(
             a,
-            tensor_assertions.tensor_with_structure(
-                device="cpu",
-            ),
+            tensor_assertions.tensor_with_structure(device="cpu"),
         )
         hamcrest.assert_that(
             a,
@@ -172,62 +165,42 @@ class MatchesTensorStructureTest(unittest.TestCase):
         )
         hamcrest.assert_that(
             a,
-            tensor_assertions.tensor_with_structure(
-                device=torch.device("cpu"),
-            ),
+            tensor_assertions.tensor_with_structure(device=torch.device("cpu")),
         )
 
-        common_assertions.assert_raises(
-            lambda: hamcrest.assert_that(
-                a,
-                tensor_assertions.tensor_with_structure(
-                    device="cuda",
-                ),
-            ),
-            AssertionError,
-            r"(?ms)Expected: tensor\(device='cuda'\).*but: tensor\(\[device='cpu'\]\)",
-        )
-        common_assertions.assert_raises(
-            lambda: hamcrest.assert_that(
-                a,
-                tensor_assertions.tensor_with_device("cuda"),
-            ),
-            AssertionError,
-            r"(?ms)Expected: tensor\(device='cuda'\).*but: tensor\(\[device='cpu'\]\)",
-        )
+        for matcher in [
+            tensor_assertions.tensor_with_structure(device="cuda"),
+            tensor_assertions.tensor_with_device("cuda"),
+        ]:
+            common_assertions.assert_raises(
+                lambda: hamcrest.assert_that(a, matcher),
+                AssertionError,
+                r"(?ms)matching structure::.*\(..., device='cuda'\)"
+                + r".*structure did not match::.*\(..., device='cpu'\)",
+            )
 
     def test_layout(self) -> None:
         a = torch.ones(2, 3)
 
         hamcrest.assert_that(
             a,
-            tensor_assertions.tensor_with_structure(
-                layout=torch.strided,
-            ),
+            tensor_assertions.tensor_with_structure(layout=torch.strided),
         )
         hamcrest.assert_that(
             a,
             tensor_assertions.tensor_with_layout(torch.strided),
         )
 
-        common_assertions.assert_raises(
-            lambda: hamcrest.assert_that(
-                a,
-                tensor_assertions.tensor_with_structure(
-                    layout=torch.sparse_coo,  # type: ignore
-                ),
-            ),
-            AssertionError,
-            r"(?ms)Expected: tensor\(layout=torch.sparse_coo\).*but: tensor\(\[layout=torch.strided\]\)",
-        )
-        common_assertions.assert_raises(
-            lambda: hamcrest.assert_that(
-                a,
-                tensor_assertions.tensor_with_layout(torch.sparse_coo),  # type: ignore
-            ),
-            AssertionError,
-            r"(?ms)Expected: tensor\(layout=torch.sparse_coo\).*but: tensor\(\[layout=torch.strided\]\)",
-        )
+        for matcher in [
+            tensor_assertions.tensor_with_layout(torch.sparse_coo),  # type: ignore
+            tensor_assertions.tensor_with_structure(layout=torch.sparse_coo),  # type: ignore
+        ]:
+            common_assertions.assert_raises(
+                lambda: hamcrest.assert_that(a, matcher),
+                AssertionError,
+                r"(?ms)matching structure::.*\(..., layout=torch.sparse_coo\)"
+                + r".*structure did not match::.*\(..., layout=torch.strided\)",
+            )
 
     def test_everything(self) -> None:
         a = torch.ones(2, 3, dtype=torch.int64)
@@ -271,9 +244,137 @@ class MatchesTensorStructureTest(unittest.TestCase):
                 ),
             ),
             AssertionError,
-            (
-                r"(?ms)Expected: tensor\(size=\(5, 3\), dtype=torch.float16, device='cpu', layout=torch.strided\)"
-                + r".*"
-                + r"but: tensor\(\[size=\(2, 3\)\], \[dtype=torch.int64\], device='cpu', layout=torch.strided\)"
+            r"(?ms)matching structure::"
+            + r".*\(..., size=\[5, 3\], dtype=torch.float16, device='cpu', layout=torch.strided\)"
+            + r".*structure did not match::.*\(..., size=\[2, 3\], dtype=torch.int64\)",
+        )
+
+
+class TensorMatcherTest(unittest.TestCase):
+    def test_match_description(self) -> None:
+        desc = StringDescription()
+        tensor_assertions.matches_tensor([1, 1]).describe_match(torch.ones(2), desc)
+        hamcrest.assert_that(
+            str(desc),
+            hamcrest.matches_regexp(
+                r"tensor structure matched::\n"
+                + r"tensor\(..., size=\[2\], dtype=torch.float32, layout=torch.strided\)",
             ),
         )
+
+    def test_bad_type(self) -> None:
+        for bad in [
+            lambda: hamcrest.assert_that(7, tensor_assertions.matches_tensor([1, 1])),
+            lambda: tensor_assertions.assert_matches_tensor(7, [1, 1]),  # type: ignore
+        ]:
+            common_assertions.assert_raises(
+                bad,
+                AssertionError,
+                "(?ms)Expected: an instance of Tensor.* but: was <7>",
+            )
+
+    def test_everything(self) -> None:
+        a = torch.ones(2, dtype=torch.int64)
+        hamcrest.assert_that(
+            a,
+            tensor_assertions.matches_tensor(
+                [1, 1],
+            ),
+        )
+
+    def test_structure(self) -> None:
+        a = torch.ones(2)
+        # bad size
+        expected = [1.0, 1.0, 1.0]
+        for bad in [
+            lambda: hamcrest.assert_that(a, tensor_assertions.matches_tensor(expected)),
+            lambda: tensor_assertions.assert_matches_tensor(a, expected),
+        ]:
+            common_assertions.assert_raises(
+                bad,
+                AssertionError,
+                r"(?ms)matching structure and values::.*\(..., size=\[3\], dtype=torch.float32, layout=torch.strided\)"
+                + r".*structure did not match::.*\(..., size=\[2\]\)",
+            )
+
+        # bad dtype
+        expected = [1, 1]
+        for bad in [
+            lambda: hamcrest.assert_that(a, tensor_assertions.matches_tensor(expected)),
+            lambda: tensor_assertions.assert_matches_tensor(a, expected),
+        ]:
+            common_assertions.assert_raises(
+                bad,
+                AssertionError,
+                r"(?ms)matching structure and values::.*\(..., size=\[2\], dtype=torch.int64, layout=torch.strided\)"
+                + r".*structure did not match::.*\(..., dtype=torch.float32\)",
+            )
+
+        b = a.to_sparse()
+        for bad in [
+            lambda: hamcrest.assert_that(b, tensor_assertions.matches_tensor(a)),
+            lambda: tensor_assertions.assert_matches_tensor(b, a),
+        ]:
+            common_assertions.assert_raises(
+                bad,
+                AssertionError,
+                r"(?ms)matching structure and values::.*\(..., size=\[2\], dtype=torch.float32, layout=torch.strided\)"
+                + r".*structure did not match::.*\(..., layout=torch.sparse_coo\)",
+            )
+
+    def test_structure_cuda(self) -> None:
+        # bad device
+        a = torch.ones(2)
+        b = a.to(device="cuda")
+        expected = [1.0, 1.0]
+
+        hamcrest.assert_that(
+            b,
+            tensor_assertions.matches_tensor(expected, ignore_device=True),
+        )
+
+        for bad in [
+            lambda: hamcrest.assert_that(
+                b,
+                tensor_assertions.matches_tensor(
+                    expected,
+                    ignore_device=False,
+                ),
+            ),
+            lambda: tensor_assertions.assert_matches_tensor(
+                b,
+                expected,
+                ignore_device=False,
+            ),
+        ]:
+            common_assertions.assert_raises(
+                bad,
+                AssertionError,
+                r"(?ms)matching structure and values::.*\(..., size=\[2\], dtype=torch.float32, device='cpu', layout=torch.strided\)"
+                + r".*structure did not match::.*\(..., device='cuda:.'\)",
+            )
+
+    def test_values(self) -> None:
+        a = torch.ones(3, 2)
+        expected = torch.zeros(3, 2)
+        for bad in [
+            lambda: hamcrest.assert_that(
+                a,
+                tensor_assertions.matches_tensor(
+                    expected,
+                ),
+            ),
+            lambda: tensor_assertions.assert_matches_tensor(
+                a,
+                expected,
+            ),
+        ]:
+            common_assertions.assert_raises(
+                bad,
+                AssertionError,
+                r"(?ms)matching structure and values::\n"
+                + r".*\(..., size=\[3, 2\], dtype=torch.float32, layout=torch.strided\)"
+                + r".*\[\[0"
+                + r".*tensor values did not match::\n"
+                + r".*\[\[1",
+            )
