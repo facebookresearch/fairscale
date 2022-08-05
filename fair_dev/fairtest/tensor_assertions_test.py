@@ -7,6 +7,17 @@ import torch
 from fair_dev.fairtest import common_assertions, tensor_assertions
 
 
+def test_example() -> None:
+    a = torch.ones(3)
+    hamcrest.assert_that(
+        a.split([1, 2]),
+        hamcrest.contains_exactly(
+            tensor_assertions.tensor_with_structure(size=[1], device="cpu"),
+            tensor_assertions.tensor_with_structure(size=[2], device="cpu"),
+        ),
+    )
+
+
 class SameTensorStorageTest(unittest.TestCase):
     def test(self) -> None:
         a = torch.ones(2)
