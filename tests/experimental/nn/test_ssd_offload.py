@@ -79,9 +79,7 @@ def test_ssd_handle_dispatch_bwd():
         assert torch.equal(ssd_handle.grad, orig_copy.grad)
 
 
-pytest.mark.skip("broken at head")
-
-
+@pytest.mark.skip("broken at head")
 def test_ssd_handle_dispatch_bwd_hook():
     _init()
 
