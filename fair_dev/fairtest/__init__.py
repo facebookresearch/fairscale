@@ -9,7 +9,7 @@ from fair_dev.fairtest.common_assertions import (
     when_called,
 )
 from fair_dev.fairtest.numeric_assertions import assert_close_to, close_to
-from fair_dev.fairtest.random_utils import with_random_seed
+from fair_dev.fairtest.random_utils import CommonRngState, set_random_seed, with_random_seed
 from fair_dev.fairtest.tensor_assertions import (
     assert_matches_tensor,
     assert_tensor_storage_differs,
@@ -40,6 +40,10 @@ __all__ = [
     # numeric_assertions
     "assert_close_to",
     "close_to",
+    # random_utils
+    "CommonRngState",
+    "set_random_seed",
+    "with_random_seed",
     # tensor_assertions
     "assert_matches_tensor",
     "assert_tensor_storage_differs",
@@ -57,6 +61,4 @@ __all__ = [
     "hide_module_tracebacks",
     # warnings
     "ignore_warnings",
-    # random_utils
-    "with_random_seed",
 ]
