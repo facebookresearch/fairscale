@@ -29,13 +29,9 @@ class WithRandomSeedTest(unittest.TestCase):
             n = random.random()
 
         with random_utils.with_random_seed(0):
-            torch_state = torch.get_rng_state()
-            np_state = np.random.get_state()
+            state = random_utils.CommonRngState.get_state()
 
-        with random_utils.with_random_seed(
-            torch_rng_state=torch_state,
-            np_rng_state=np_state,
-        ):
+        with random_utils.with_random_seed(state=state):
             c = torch.rand(2, 3)
             z = np.random.rand(2, 3)
             o = random.random()
