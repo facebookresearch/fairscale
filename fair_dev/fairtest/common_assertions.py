@@ -119,7 +119,7 @@ def when_called(*args: Any, **kwargs: Any) -> WhenCalledBuilder:
     return WhenCalledBuilder(args, kwargs)
 
 
-def calling_method(_method: str, *args: Any, **kwargs: Any) -> WhenCalledBuilder:
+def calling_method(method: str, /, *args: Any, **kwargs: Any) -> WhenCalledBuilder:
     """
     Build a matcher that asserts that calling a given method on an object,
     when called with the supplied arguments, will yield a result matching the
@@ -137,11 +137,12 @@ def calling_method(_method: str, *args: Any, **kwargs: Any) -> WhenCalledBuilder
     >>>         .matches(dict(a=1, b=2, c=3))
     >>> )
 
+    :param method: the method name.
     :param args: the arguments to the function.
     :param kwargs: the keyword arguments to the function.
     :return: the builder (needs to have `.matches(<Matcher>)` called).
     """
-    return WhenCalledBuilder(args, kwargs, method=_method)
+    return WhenCalledBuilder(args, kwargs, method=method)
 
 
 def _as_matcher(matcher: Any) -> Matcher:
