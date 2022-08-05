@@ -15,7 +15,13 @@ class WithRandomSeedTest(unittest.TestCase):
         with random_utils.with_random_seed(0):
             b = torch.rand(2, 3)
 
+        with random_utils.with_random_seed(0):
+            state = torch.get_rng_state()
+        with random_utils.with_random_seed(state):
+            c = torch.rand(2, 3)
+
         tensor_assertions.assert_matches_tensor(a, b)
+        tensor_assertions.assert_matches_tensor(a, c)
 
         tensor_assertions.assert_matches_tensor(
             torch.get_rng_state(),
