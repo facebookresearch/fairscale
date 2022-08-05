@@ -1,7 +1,7 @@
 from fair_dev.fairtest import common_assertions, tracebacks
 
 
-def test_hide_tracebacks():
+def test_hide_tracebacks() -> None:
     # we can verify the behavior of setting the flags here,
     # but we can't easily trigger the behavior of stripping tracebacks.
 
