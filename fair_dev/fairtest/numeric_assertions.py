@@ -1,6 +1,7 @@
 from typing import Any, Optional, SupportsFloat
 
 import hamcrest
+from hamcrest.core.matcher import Matcher
 
 from fair_dev.fairtest.common_assertions import assert_match
 from fair_dev.fairtest.tracebacks import hide_module_tracebacks
@@ -27,7 +28,7 @@ def close_to(
     *,
     rtol: SupportsFloat = 1e-05,
     atol: SupportsFloat = 1e-08,
-):
+) -> Matcher:
     """
     `close_to()` variant matcher with a default dynamic delta, based on `numpy.isclose()`,
 
