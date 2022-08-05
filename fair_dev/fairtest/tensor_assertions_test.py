@@ -1,3 +1,4 @@
+import logging
 import unittest
 
 import hamcrest
@@ -334,6 +335,11 @@ class TensorMatcherTest(unittest.TestCase):
             )
 
     def test_structure_cuda(self) -> None:
+        if not torch.cuda.is_available():
+            # TODO: conditional fixture.
+            logging.info("No torch.cuda.is_available() == False, skipping test")
+            return
+
         # bad device
         a = torch.ones(2)
         b = a.to(device="cuda")
