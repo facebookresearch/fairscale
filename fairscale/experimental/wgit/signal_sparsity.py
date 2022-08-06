@@ -128,6 +128,9 @@ class SignalSparsity:
     `sst_top_k_element` or `sst_top_k_percent` and also requires a
     value for one of `dst_top_k_element` or `dst_top_k_percent`.
 
+    This class only handles tensor inputs and outputs. We leave
+    state_dict type of data handling to upper layer functions.
+
     Args:
         algo (Algo):
             The algorithm used. Default: FFT
@@ -153,11 +156,11 @@ class SignalSparsity:
     Example:
         .. code-block:: python
 
-            2d_sparser = SignalSparsity()
-            sst, dst = 2d_sparser.get_sst_dst(linear.weight.data)
+            2d_sparser = SignalSparsity(sst_top_k_element=10, dst_top_k_element=1)
+            sst = 2d_sparser.dense_to_sst(linear.weight.data)
 
-            3d_sparser = SingalSparsity(algo=Algo.DCT, sst_top_k_dim=None, dst_top_k_dim=-1, sst_top_k_percent=10, dst_top_k_element=100)
-            conv.weight.data = 3d_sparser.get_sst_dst_weight(conv.weight.data)
+            3d_sparser = SingalSparsity(algo=Algo.FFT, sst_top_k_dim=None, dst_top_k_dim=-1, sst_top_k_percent=10, dst_top_k_element=100)
+            conv.weight.data, _, _ = 3d_sparser.lossy_compress(conv.weight.data)
     """
 
     def __init__(
@@ -328,9 +331,3 @@ class SignalSparsity:
             sst = self.dense_to_sst(dense)
             dst = self.dense_sst_to_dst(dense, sst)
             return self.sst_dst_to_dense(sst, dst), sst, dst
-
-
-# We could separate have helper functions that work on state_dict instead of a tensor.
-# One option is to extend the above class to handle state_dict as well as tensor
-# but we may want to filter on the keys in the state_dict, so maybe that option isn't
-# the best. We need to have further discussions on this.
