@@ -86,12 +86,73 @@ def _is_sparsity_zero(
     return k == top_k_total_size
 
 
-def _dct_transform(dense: Tensor) -> Tensor:
+def _fft_transform(dense: Tensor, dim: int) -> Tensor:
+    """Wrapper of torch.fft.fft with more flexibility on dimensions.
+
+    TODO (Min): figure out if we need to change other args like frequency length, n, or
+                the normalization flag.
+
+    For our use case, we use fft not rfft since we want big magnitute components from
+    both positive and negative frequencies.
+
+    Args:
+        dense (Tensor):
+            Input dense tensor (no zeros).
+        dim (int):
+            Which dimension to transform.
+    Returns:
+        (Tensor, complex):
+            transformed dense tensor FFT components.
+    """
+    orig_shape = None
+    if dim is None:
+        orig_shape = dense.shape
+        dense = dense.reshape(-1)
+        dim = -1
+
+    ret = torch.fft.fft(dense, dim=dim)
+
+    if orig_shape is not None:
+        ret = ret.reshape(orig_shape)
+
+    return ret
+
+
+def _ifft_transform(sst: Tensor, dim: int) -> Tensor:
+    """Wrapper of torch.fft.ifft with more flexibility on dimensions.
+
+    Args:
+        sst (Tensor):
+            Input sst tensor (may have zeros) in frequency domain.
+        dim (int):
+            Which dimension to transform.
+    Returns:
+        (Tensor):
+            A new, transformed dense tensor with real domain values.
+    """
+    assert sst.is_complex()
+    orig_shape = None
+    if dim is None:
+        orig_shape = sst.shape
+        sst = sst.reshape(-1)
+        dim = -1
+
+    ret = torch.fft.ifft(sst, dim=dim)
+
+    if orig_shape is not None:
+        ret = ret.reshape(orig_shape)
+
+    return ret
+
+
+def _dct_transform(dense: Tensor, dim: int) -> Tensor:
     """Should take a tensor and perform a Discrete Cosine Transform on the tensor.
 
     Args:
         dense (Tensor):
             Input dense tensor (no zeros).
+        dim (int):
+            Which dimension to transform.
     Returns:
         (Tensor):
             transformed dense tensor DCT components
@@ -99,12 +160,14 @@ def _dct_transform(dense: Tensor) -> Tensor:
     raise NotImplementedError("Support for DCT has not been implemented yet!")
 
 
-def _inverse_dct_transform(sst: Tensor) -> Tensor:
+def _idct_transform(sst: Tensor, dim: int) -> Tensor:
     """Should take a tensor and perform an inverse Discrete Cosine Transform and return a new tensor.
 
     Args:
         sst (Tensor):
             Input sst tensor (may have zeros) in frequency domain.
+        dim (int):
+            Which dimension to transform.
     Returns:
         (Tensor):
             A new, transformed dense tensor with real domain values.
@@ -183,7 +246,9 @@ class SignalSparsity:
 
         self._validate_conf()
         # TODO (Min): Type checking for the following
-        self._transform, self._inverse_transform = (torch.fft.fft, torch.fft.ifft) if algo is Algo.FFT else (_dct_transform, _inverse_dct_transform)  # type: ignore
+        self._transform, self._inverse_transform = (
+            (_fft_transform, _ifft_transform) if algo is Algo.FFT else (_dct_transform, _idct_transform)
+        )
 
     def _validate_conf(self) -> None:
         """Validating if the config is valid.
@@ -251,13 +316,13 @@ class SignalSparsity:
         """
         top_k_total_size = _top_k_total_size(dense, self._sst_top_k_dim)
         k = _get_k_for_topk(self._sst_top_k_percent, self._sst_top_k_element, top_k_total_size)
-        dense_freq = self._transform(dense)
+        dense_freq = self._transform(dense, dim=self._sst_top_k_dim)
 
         # NOTE: real_dense_freq can potentially be magnitude of complex frequency components
         # or DCT transformed components when using DCT (currently not implemented).
         # TODO: In case of the FFT, the imaginary part can perhaps be quantized or pruning can be
         # done on the smaller phases.
-        real_dense_freq = torch.real(dense_freq).abs()
+        real_dense_freq = dense_freq.real.abs()
         return _scatter_topk_to_sparse_tensor(real_dense_freq, dense_freq, k, dim=self._sst_top_k_dim)
 
     def dense_sst_to_dst(self, dense: Tensor, sst: Tensor) -> Tensor:
@@ -298,7 +363,7 @@ class SignalSparsity:
             (Tensor):
                 A dense tensor in real number domain from the SST.
         """
-        dense_rt = torch.real(self._inverse_transform(sst))
+        dense_rt = torch.real(self._inverse_transform(sst, dim=self._sst_top_k_dim))
         if dst is not None:
             dense_rt += dst
         return dense_rt
