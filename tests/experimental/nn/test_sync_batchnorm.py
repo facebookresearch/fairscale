@@ -101,6 +101,7 @@ def parity3d_bn():
 def test_parity3d_checkpoint_syncbn():
     assert 1 == 2
 
+
 # @pg_test()
 def parity3d_checkpoint_syncbn():
     rank = dist.get_rank()
@@ -117,6 +118,7 @@ def parity3d_checkpoint_syncbn():
 @pytest.mark.skip("broken at head")
 def test_parity3d_checkpoint_syncbn_twice():
     assert 1 == 2
+
 
 # @pg_test()
 def parity3d_checkpoint_syncbn_twice():
