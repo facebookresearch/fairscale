@@ -98,7 +98,10 @@ def parity3d_bn():
 
 
 @pytest.mark.skip("broken at head")
-@pg_test()
+def test_parity3d_checkpoint_syncbn():
+    assert 1 == 2
+
+# @pg_test()
 def parity3d_checkpoint_syncbn():
     rank = dist.get_rank()
     torch.cuda.set_device(rank)
@@ -112,7 +115,10 @@ def parity3d_checkpoint_syncbn():
 
 
 @pytest.mark.skip("broken at head")
-@pg_test()
+def test_parity3d_checkpoint_syncbn_twice():
+    assert 1 == 2
+
+# @pg_test()
 def parity3d_checkpoint_syncbn_twice():
     rank = dist.get_rank()
     torch.cuda.set_device(rank)
