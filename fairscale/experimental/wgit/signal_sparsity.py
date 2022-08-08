@@ -17,7 +17,7 @@ def _get_k_for_topk(topk_percent: Optional[float], top_k_element: Optional[int],
     simply returns the value for k. Also, ensures k is never 0 to avoid all-zero tensors.
     """
     if top_k_element is None:
-        top_k_element = int(top_k_total_size * topk_percent / 100.0)
+        top_k_element = round(top_k_total_size * topk_percent / 100.0)
     elif top_k_element > top_k_total_size:
         raise ValueError("top_k_element for sst or dst is larger than max number of elements along top_k_dim")
     # ensure we never have 100% sparsity in tensor and always have 1 surviving element!
