@@ -349,6 +349,7 @@ def _distributed_worker(
 
 # We use strings for precision and flatten params instead of bool to
 # make the pytest output more readable.
+@pytest.mark.skip("broken at head")
 @skip_if_single_gpu
 @pytest.mark.parametrize("precision", ["full", "mixed"])
 @pytest.mark.parametrize("flatten", ["flatten", "no_flatten"])

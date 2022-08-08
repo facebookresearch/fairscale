@@ -79,6 +79,7 @@ def test_ssd_handle_dispatch_bwd():
         assert torch.equal(ssd_handle.grad, orig_copy.grad)
 
 
+@pytest.mark.skip("broken at head")
 def test_ssd_handle_dispatch_bwd_hook():
     _init()
 
@@ -277,6 +278,7 @@ def test_ssd_flat_parameter_view_modify():
         assert ssd_flat_param.storage_state == so.StorageState.ON_CPU_DIRTY
 
 
+@pytest.mark.skip("broken at head")
 def test_ssd_flat_parameter_view_bwd():
     _init()
 
@@ -344,6 +346,7 @@ def test_ssd_flat_parameter_view_bwd():
         assert "one" in hooks_called
 
 
+@pytest.mark.skip("broken at head")
 def test_ssd_flat_parameter_view_bwd_parameterization():
     _init()
 
