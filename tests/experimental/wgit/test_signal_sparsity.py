@@ -368,6 +368,9 @@ def test_sst_dst_to_dense(unused1, sst, dst, expd_rt, dim, unused2, unused3):
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_lossy_compress(tensor, expd_sst, expd_dst, expd_rt, dim, unused, k, device):
     """Tests the lossy_compress method against expected sst, dst and reconstruced tensor."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("no GPU")
+
     sparser = SignalSparsity(sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_element=k, dst_top_k_dim=dim)
     lossy_dense, sst, dst = sparser.lossy_compress(tensor.to(device))
     objects_are_equal(sst.to(device), expd_sst.to(device), raise_exception=True, rtol=RTOL, atol=ATOL)
@@ -386,6 +389,9 @@ def test_lossy_compress(tensor, expd_sst, expd_dst, expd_rt, dim, unused, k, dev
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_lossy_compress_sparsity_0(tensor, dim, top_k_percent, device):
     """Tests whether lossy_compress method simply returns dense tensor when sparsity is 0."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("no GPU")
+
     sparser = SignalSparsity(
         sst_top_k_percent=top_k_percent, sst_top_k_dim=dim, dst_top_k_percent=top_k_percent, dst_top_k_dim=dim
     )
