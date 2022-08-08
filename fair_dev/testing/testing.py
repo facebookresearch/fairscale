@@ -477,7 +477,14 @@ class GPT2(Base):
         return self.clf_head(h), logits
 
 
-def objects_are_equal(a: Any, b: Any, raise_exception: bool = False, dict_key: Optional[str] = None) -> bool:
+def objects_are_equal(
+    a: Any,
+    b: Any,
+    raise_exception: bool = False,
+    dict_key: Optional[str] = None,
+    rtol: Optional[float] = None,
+    atol: Optional[float] = None,
+) -> bool:
     """
     Test that two objects are equal. Tensors are compared to ensure matching
     size, dtype, device and values.
@@ -515,9 +522,9 @@ def objects_are_equal(a: Any, b: Any, raise_exception: bool = False, dict_key: O
                     return False
             # assert_close.
             if torch_version() < (1, 12, 0):
-                torch.testing.assert_allclose(a, b)
+                torch.testing.assert_allclose(a, b, rtol=rtol, atol=atol)
             else:
-                torch.testing.assert_close(a, b)
+                torch.testing.assert_close(a, b, rtol=rtol, atol=atol)
             return True
         except (AssertionError, RuntimeError) as e:
             if raise_exception:

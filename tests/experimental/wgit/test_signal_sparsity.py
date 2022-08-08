@@ -9,6 +9,10 @@ import torch
 from fair_dev.testing.testing import objects_are_equal
 from fairscale.experimental.wgit.signal_sparsity import SignalSparsity
 
+# Our own tolerance
+ATOL = 1e-6
+RTOL = 1e-5
+
 # enable this for debugging.
 # torch.set_printoptions(precision=20)
 
@@ -33,7 +37,7 @@ def test_sst_dst_to_perfect_dense_reconstruction(dense, k, dim):
     sst = sparser.dense_to_sst(dense)
     dst = sparser.dense_sst_to_dst(dense, sst)
     dense_recons = sparser.sst_dst_to_dense(sst, dst)
-    objects_are_equal(dense, dense_recons, raise_exception=True)
+    objects_are_equal(dense, dense_recons, raise_exception=True, rtol=RTOL, atol=ATOL)
 
 
 def get_valid_conf_arg_list():
@@ -328,7 +332,7 @@ def test_dense_to_sst(tensor, expd_sst, unused1, unused2, dim, unused3, k):
     """Tests for fixed input dense tensor and fixed expected output SST tensor."""
     sparser_2d = SignalSparsity(sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_percent=100)
     sst = sparser_2d.dense_to_sst(tensor)
-    objects_are_equal(sst, expd_sst, raise_exception=True)
+    objects_are_equal(sst, expd_sst, raise_exception=True, rtol=RTOL, atol=ATOL)
 
 
 @pytest.mark.parametrize("tensor, unused1, unused2, unused3, dim, percent, k", get_test_params())
@@ -341,7 +345,7 @@ def test_percent_element(tensor, unused1, unused2, unused3, dim, percent, k):
         sst_top_k_percent=percent, sst_top_k_element=None, sst_top_k_dim=dim, dst_top_k_percent=100
     )
     sst_percent = sparser_2d.dense_to_sst(tensor)
-    objects_are_equal(sst_element, sst_percent, raise_exception=True)
+    objects_are_equal(sst_element, sst_percent, raise_exception=True, rtol=RTOL, atol=ATOL)
 
 
 @pytest.mark.parametrize("tensor, sst, expd_dst, unused1, dim, unused2, k", get_test_params())
@@ -349,7 +353,7 @@ def test_dense_sst_to_dst(tensor, sst, expd_dst, unused1, dim, unused2, k):
     """Tests fixed expected output DST tensor with fixed input dense and SST tensors."""
     sparser_2d = SignalSparsity(sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_element=k, dst_top_k_dim=dim)
     dst = sparser_2d.dense_sst_to_dst(tensor, sst)
-    objects_are_equal(dst, expd_dst, raise_exception=True)
+    objects_are_equal(dst, expd_dst, raise_exception=True, rtol=RTOL, atol=ATOL)
 
 
 @pytest.mark.parametrize("unused1, sst, dst, expd_rt, dim, unused2, unused3", get_test_params())
@@ -357,7 +361,7 @@ def test_sst_dst_to_dense(unused1, sst, dst, expd_rt, dim, unused2, unused3):
     """Tests the correct expected reconstruction from frozen sst and dst tensors."""
     sparser = SignalSparsity(sst_top_k_element=1, sst_top_k_dim=dim, dst_top_k_element=1, dst_top_k_dim=dim)
     dense_recons = sparser.sst_dst_to_dense(sst, dst)
-    objects_are_equal(dense_recons, expd_rt, raise_exception=True)
+    objects_are_equal(dense_recons, expd_rt, raise_exception=True, rtol=RTOL, atol=ATOL)
 
 
 @pytest.mark.parametrize("tensor, expd_sst, expd_dst, expd_rt, dim, unused, k", get_test_params())
@@ -366,9 +370,9 @@ def test_lossy_compress(tensor, expd_sst, expd_dst, expd_rt, dim, unused, k, dev
     """Tests the lossy_compress method against expected sst, dst and reconstruced tensor."""
     sparser = SignalSparsity(sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_element=k, dst_top_k_dim=dim)
     lossy_dense, sst, dst = sparser.lossy_compress(tensor.to(device))
-    objects_are_equal(sst.to(device), expd_sst.to(device), raise_exception=True)
-    objects_are_equal(dst.to(device), expd_dst.to(device), raise_exception=True)
-    objects_are_equal(lossy_dense.to(device), expd_rt.to(device), raise_exception=True)
+    objects_are_equal(sst.to(device), expd_sst.to(device), raise_exception=True, rtol=RTOL, atol=ATOL)
+    objects_are_equal(dst.to(device), expd_dst.to(device), raise_exception=True, rtol=RTOL, atol=ATOL)
+    objects_are_equal(lossy_dense.to(device), expd_rt.to(device), raise_exception=True, rtol=RTOL, atol=ATOL)
 
 
 @pytest.mark.parametrize(
@@ -386,6 +390,6 @@ def test_lossy_compress_sparsity_0(tensor, dim, top_k_percent, device):
         sst_top_k_percent=top_k_percent, sst_top_k_dim=dim, dst_top_k_percent=top_k_percent, dst_top_k_dim=dim
     )
     lossy_dense, sst, dst = sparser.lossy_compress(tensor.to(device))
-    objects_are_equal(lossy_dense.to(device), tensor.to(device), raise_exception=True)
-    objects_are_equal(sst, None, raise_exception=True)
-    objects_are_equal(dst.to(device), tensor.to(device), raise_exception=True)
+    objects_are_equal(lossy_dense.to(device), tensor.to(device), raise_exception=True, rtol=RTOL, atol=ATOL)
+    objects_are_equal(sst, None, raise_exception=True, rtol=RTOL, atol=ATOL)
+    objects_are_equal(dst.to(device), tensor.to(device), raise_exception=True, rtol=RTOL, atol=ATOL)
