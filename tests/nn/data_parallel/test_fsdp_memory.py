@@ -159,6 +159,7 @@ def _distributed_worker(
 
 
 @skip_if_single_gpu
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("ckpt", ["no_ckpt", "ckpt"])
 @pytest.mark.parametrize("fsdp", ["ddp", "fsdp", "fsdp_amp_default", "fsdp_amp_compute_dtype32"])
 def test_fsdp_memory(fsdp, ckpt):
