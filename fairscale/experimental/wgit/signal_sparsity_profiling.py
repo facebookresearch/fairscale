@@ -8,8 +8,9 @@ from typing import List
 import torch
 from torch import Tensor
 
+
 class EnergyConcentrationProfile:
-    """ Compute "energy" concentration level for a tensor
+    """Compute "energy" concentration level for a tensor
 
     Args:
         dim (int):
@@ -20,11 +21,12 @@ class EnergyConcentrationProfile:
             concentrated on that top-K percent of values in the dimension
             to measure.
     """
+
     def __init__(self, dim: int, top_k_percents: List[float]) -> None:
         assert isinstance(dim, int)
         self.dim = dim
         self.percents = []
-        last_p = 0.
+        last_p = 0.0
         for p in top_k_percents:
             assert isinstance(p, float)
             assert p > 0, p
@@ -33,7 +35,7 @@ class EnergyConcentrationProfile:
             last_p = p
 
     def measure(self, in_tensor: Tensor) -> List[Tensor]:
-        """ Compute the return the results
+        """Compute the return the results
 
             Note, we want this function to be nonblocking and async.
 
@@ -56,5 +58,4 @@ class EnergyConcentrationProfile:
 
     def measure_fft(self, in_tensor: Tensor) -> List[Tensor]:
         """Like measure, but do it in FFT frequency domain."""
-        # XXX: remove type ignore once the fft_fix branch is merged
-        return self.measure(torch.fft.fft(in_tensor, dim=self.dim).real)  # type: ignore
+        return self.measure(torch.fft.fft(in_tensor, dim=self.dim).real)
