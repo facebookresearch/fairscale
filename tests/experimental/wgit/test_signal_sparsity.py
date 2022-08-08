@@ -361,13 +361,14 @@ def test_sst_dst_to_dense(unused1, sst, dst, expd_rt, dim, unused2, unused3):
 
 
 @pytest.mark.parametrize("tensor, expd_sst, expd_dst, expd_rt, dim, unused, k", get_test_params())
-def test_lossy_compress(tensor, expd_sst, expd_dst, expd_rt, dim, unused, k):
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_lossy_compress(tensor, expd_sst, expd_dst, expd_rt, dim, unused, k, device):
     """Tests the lossy_compress method against expected sst, dst and reconstruced tensor."""
     sparser = SignalSparsity(sst_top_k_element=k, sst_top_k_dim=dim, dst_top_k_element=k, dst_top_k_dim=dim)
-    lossy_dense, sst, dst = sparser.lossy_compress(tensor)
-    objects_are_equal(sst, expd_sst, raise_exception=True)
-    objects_are_equal(dst, expd_dst, raise_exception=True)
-    objects_are_equal(lossy_dense, expd_rt, raise_exception=True)
+    lossy_dense, sst, dst = sparser.lossy_compress(tensor.to(device))
+    objects_are_equal(sst.to(device), expd_sst.to(device), raise_exception=True)
+    objects_are_equal(dst.to(device), expd_dst.to(device), raise_exception=True)
+    objects_are_equal(lossy_dense.to(device), expd_rt.to(device), raise_exception=True)
 
 
 @pytest.mark.parametrize(
@@ -378,12 +379,13 @@ def test_lossy_compress(tensor, expd_sst, expd_dst, expd_rt, dim, unused, k):
         (torch.linspace(-10, 15, 36).reshape(6, 6), 1, 100),
     ],
 )
-def test_lossy_compress_sparsity_0(tensor, dim, top_k_percent):
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_lossy_compress_sparsity_0(tensor, dim, top_k_percent, device):
     """Tests whether lossy_compress method simply returns dense tensor when sparsity is 0."""
     sparser = SignalSparsity(
         sst_top_k_percent=top_k_percent, sst_top_k_dim=dim, dst_top_k_percent=top_k_percent, dst_top_k_dim=dim
     )
-    lossy_dense, sst, dst = sparser.lossy_compress(tensor)
-    objects_are_equal(lossy_dense, tensor, raise_exception=True)
+    lossy_dense, sst, dst = sparser.lossy_compress(tensor.to(device))
+    objects_are_equal(lossy_dense.to(device), tensor.to(device), raise_exception=True)
     objects_are_equal(sst, None, raise_exception=True)
-    objects_are_equal(dst, tensor, raise_exception=True)
+    objects_are_equal(dst.to(device), tensor.to(device), raise_exception=True)
