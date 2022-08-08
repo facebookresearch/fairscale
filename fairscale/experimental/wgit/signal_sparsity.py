@@ -17,7 +17,7 @@ def _get_k_for_topk(topk_percent: Optional[float], top_k_element: Optional[int],
     simply returns the value for k. Also, ensures k is never 0 to avoid all-zero tensors.
     """
     if top_k_element is None:
-        top_k_element = int(top_k_total_size * topk_percent / 100.0)
+        top_k_element = round(top_k_total_size * topk_percent / 100.0)
     elif top_k_element > top_k_total_size:
         raise ValueError("top_k_element for sst or dst is larger than max number of elements along top_k_dim")
     # ensure we never have 100% sparsity in tensor and always have 1 surviving element!
@@ -86,12 +86,73 @@ def _is_sparsity_zero(
     return k == top_k_total_size
 
 
-def _dct_transform(dense: Tensor) -> Tensor:
+def _fft_transform(dense: Tensor, dim: int) -> Tensor:
+    """Wrapper of torch.fft.fft with more flexibility on dimensions.
+
+    TODO (Min): figure out if we need to change other args like frequency length, n, or
+                the normalization flag.
+
+    For our use case, we use fft not rfft since we want big magnitute components from
+    both positive and negative frequencies.
+
+    Args:
+        dense (Tensor):
+            Input dense tensor (no zeros).
+        dim (int):
+            Which dimension to transform.
+    Returns:
+        (Tensor, complex):
+            transformed dense tensor FFT components.
+    """
+    orig_shape = None
+    if dim is None:
+        orig_shape = dense.shape
+        dense = dense.reshape(-1)
+        dim = -1
+
+    ret = torch.fft.fft(dense, dim=dim)
+
+    if orig_shape is not None:
+        ret = ret.reshape(orig_shape)
+
+    return ret
+
+
+def _ifft_transform(sst: Tensor, dim: int) -> Tensor:
+    """Wrapper of torch.fft.ifft with more flexibility on dimensions.
+
+    Args:
+        sst (Tensor):
+            Input sst tensor (may have zeros) in frequency domain.
+        dim (int):
+            Which dimension to transform.
+    Returns:
+        (Tensor):
+            A new, transformed dense tensor with real domain values.
+    """
+    assert sst.is_complex()
+    orig_shape = None
+    if dim is None:
+        orig_shape = sst.shape
+        sst = sst.reshape(-1)
+        dim = -1
+
+    ret = torch.fft.ifft(sst, dim=dim)
+
+    if orig_shape is not None:
+        ret = ret.reshape(orig_shape)
+
+    return ret
+
+
+def _dct_transform(dense: Tensor, dim: int) -> Tensor:
     """Should take a tensor and perform a Discrete Cosine Transform on the tensor.
 
     Args:
         dense (Tensor):
             Input dense tensor (no zeros).
+        dim (int):
+            Which dimension to transform.
     Returns:
         (Tensor):
             transformed dense tensor DCT components
@@ -99,12 +160,14 @@ def _dct_transform(dense: Tensor) -> Tensor:
     raise NotImplementedError("Support for DCT has not been implemented yet!")
 
 
-def _inverse_dct_transform(sst: Tensor) -> Tensor:
+def _idct_transform(sst: Tensor, dim: int) -> Tensor:
     """Should take a tensor and perform an inverse Discrete Cosine Transform and return a new tensor.
 
     Args:
         sst (Tensor):
             Input sst tensor (may have zeros) in frequency domain.
+        dim (int):
+            Which dimension to transform.
     Returns:
         (Tensor):
             A new, transformed dense tensor with real domain values.
@@ -127,6 +190,9 @@ class SignalSparsity:
     During initialization, this class requires a value for one of
     `sst_top_k_element` or `sst_top_k_percent` and also requires a
     value for one of `dst_top_k_element` or `dst_top_k_percent`.
+
+    This class only handles tensor inputs and outputs. We leave
+    state_dict type of data handling to upper layer functions.
 
     Args:
         algo (Algo):
@@ -153,11 +219,11 @@ class SignalSparsity:
     Example:
         .. code-block:: python
 
-            2d_sparser = SignalSparsity()
-            sst, dst = 2d_sparser.get_sst_dst(linear.weight.data)
+            2d_sparser = SignalSparsity(sst_top_k_element=10, dst_top_k_element=1)
+            sst = 2d_sparser.dense_to_sst(linear.weight.data)
 
-            3d_sparser = SingalSparsity(algo=Algo.DCT, sst_top_k_dim=None, dst_top_k_dim=-1, sst_top_k_percent=10, dst_top_k_element=100)
-            conv.weight.data = 3d_sparser.get_sst_dst_weight(conv.weight.data)
+            3d_sparser = SingalSparsity(algo=Algo.FFT, sst_top_k_dim=None, dst_top_k_dim=-1, sst_top_k_percent=10, dst_top_k_element=100)
+            conv.weight.data, _, _ = 3d_sparser.lossy_compress(conv.weight.data)
     """
 
     def __init__(
@@ -180,7 +246,9 @@ class SignalSparsity:
 
         self._validate_conf()
         # TODO (Min): Type checking for the following
-        self._transform, self._inverse_transform = (torch.fft.fft, torch.fft.ifft) if algo is Algo.FFT else (_dct_transform, _inverse_dct_transform)  # type: ignore
+        self._transform, self._inverse_transform = (
+            (_fft_transform, _ifft_transform) if algo is Algo.FFT else (_dct_transform, _idct_transform)
+        )
 
     def _validate_conf(self) -> None:
         """Validating if the config is valid.
@@ -248,13 +316,13 @@ class SignalSparsity:
         """
         top_k_total_size = _top_k_total_size(dense, self._sst_top_k_dim)
         k = _get_k_for_topk(self._sst_top_k_percent, self._sst_top_k_element, top_k_total_size)
-        dense_freq = self._transform(dense)
+        dense_freq = self._transform(dense, dim=self._sst_top_k_dim)
 
         # NOTE: real_dense_freq can potentially be magnitude of complex frequency components
         # or DCT transformed components when using DCT (currently not implemented).
         # TODO: In case of the FFT, the imaginary part can perhaps be quantized or pruning can be
         # done on the smaller phases.
-        real_dense_freq = torch.real(dense_freq).abs()
+        real_dense_freq = dense_freq.real.abs()
         return _scatter_topk_to_sparse_tensor(real_dense_freq, dense_freq, k, dim=self._sst_top_k_dim)
 
     def dense_sst_to_dst(self, dense: Tensor, sst: Tensor) -> Tensor:
@@ -295,7 +363,7 @@ class SignalSparsity:
             (Tensor):
                 A dense tensor in real number domain from the SST.
         """
-        dense_rt = torch.real(self._inverse_transform(sst))
+        dense_rt = torch.real(self._inverse_transform(sst, dim=self._sst_top_k_dim))
         if dst is not None:
             dense_rt += dst
         return dense_rt
@@ -328,9 +396,3 @@ class SignalSparsity:
             sst = self.dense_to_sst(dense)
             dst = self.dense_sst_to_dst(dense, sst)
             return self.sst_dst_to_dense(sst, dst), sst, dst
-
-
-# We could separate have helper functions that work on state_dict instead of a tensor.
-# One option is to extend the above class to handle state_dict as well as tensor
-# but we may want to filter on the keys in the state_dict, so maybe that option isn't
-# the best. We need to have further discussions on this.
