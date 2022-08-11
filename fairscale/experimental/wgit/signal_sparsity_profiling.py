@@ -19,7 +19,7 @@ class EnergyConcentrationProfile:
             List of percentage values. For each value, the `measure`
             function will compute and return the percentage of "energy"
             concentrated on that top-K percent of values in the dimension
-            to measure.
+            to measure. Note, this is the opposite of the sparsity percentage.
     """
 
     def __init__(self, dim: int, top_k_percents: List[float]) -> None:
@@ -51,7 +51,7 @@ class EnergyConcentrationProfile:
         full_energy = abs_tensor.sum()
         return_tensors = []
         for p in self.percents:
-            k = max(1, int(p * dim_size))
+            k = max(1, round(p * dim_size))
             abs_top_k_values, _ = abs_tensor.topk(k, dim=self.dim)
             return_tensors.append(abs_top_k_values.sum() / full_energy)
         return return_tensors
