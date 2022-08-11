@@ -28,3 +28,4 @@ tests/experimental/wgit/test_api.py
 tests/experimental/wgit/test_pygit.py
 tests/experimental/wgit/test_sha1_store.py
 tests/experimental/wgit/test_signal_sparsity.py
+tests/experimental/wgit/test_signal_sparsity_profiling.py

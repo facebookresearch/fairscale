@@ -22,6 +22,7 @@ except ImportError:
 
 from .repo import Repo
 from .signal_sparsity import Algo, SignalSparsity
+from .signal_sparsity_profiling import EnergyConcentrationProfile
 from .version import __version_tuple__
 
 __version__ = ".".join([str(x) for x in __version_tuple__])
