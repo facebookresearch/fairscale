@@ -28,10 +28,11 @@ class EnergyConcentrationProfile:
         self.percents = []
         last_p = 0.0
         for p in top_k_percents:
-            assert isinstance(p, float)
+            assert isinstance(p, (int, float))
             assert p > 0, p
+            assert p <= 100, p
             assert p > last_p, f"p {p} should be larger than last_p {last_p}"
-            self.percents.append(p)
+            self.percents.append(float(p))
             last_p = p
 
     def measure(self, in_tensor: Tensor) -> List[Tensor]:
@@ -51,7 +52,7 @@ class EnergyConcentrationProfile:
         full_energy = abs_tensor.sum()
         return_tensors = []
         for p in self.percents:
-            k = max(1, round(p * dim_size))
+            k = max(1, round(p / 100 * dim_size))
             abs_top_k_values, _ = abs_tensor.topk(k, dim=self.dim)
             return_tensors.append(abs_top_k_values.sum() / full_energy)
         return return_tensors
