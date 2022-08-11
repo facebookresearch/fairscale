@@ -8,7 +8,7 @@ import time
 import pytest
 import torch
 
-from fair_dev.testing.testing import objects_are_equal
+from fair_dev.testing.testing import objects_are_equal, skip_if_no_cuda
 from fairscale.experimental.wgit.signal_sparsity_profiling import EnergyConcentrationProfile as ECP
 
 # Our own tolerance
@@ -19,6 +19,7 @@ RTOL = 1e-5
 # torch.set_printoptions(precision=20)
 
 
+@skip_if_no_cuda
 def test_nonblocking():
     """Tests cpu runs ahead of the GPU in the measuring process."""
     big = torch.rand(10, 1000, 1000).cuda()
