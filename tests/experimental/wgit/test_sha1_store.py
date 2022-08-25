@@ -13,7 +13,6 @@ from torch import nn
 
 from fair_dev.testing.testing import objects_are_equal
 from fairscale.experimental.wgit.sha1_store import SHA1_Store
-from fairscale.internal import torch_version
 
 # Get the absolute path of the parent at the beginning before any os.chdir(),
 # so that we can proper clean it up at any CWD.
@@ -65,7 +64,7 @@ def test_sha1_add_file(sha1_store, compress):
     ]
 
     for file, size in zip(chkpts, size_list):
-        torch.save(nn.Linear(1, int(size)), file)
+        torch.save(nn.Linear(1, int(size)).state_dict(), file)
 
     # Add those 5 random files.
     for c in chkpts:
@@ -82,10 +81,8 @@ def test_sha1_add_file(sha1_store, compress):
     # Assert the ref counts are 1,1,1,1,1 and 2
     with sha1_store._readonly_json_ctx:
         json_dict = sha1_store._json_dict
-    if torch_version() >= (1, 9, 0):
-        # torch 1.8 LTS doesn't produce deterministic checkpoint file from fixed tensors/state_dict.
-        key = "da3e19590de8f77fcf7a09c888c526b0149863a0"
-        assert key in json_dict.keys() and json_dict[key]["ref_count"] == 2, json_dict
+    key = "3c06179202606573a4982d91c2829a1a675362b3"
+    assert key in json_dict.keys() and json_dict[key]["ref_count"] == 2, json_dict
     json_dict = dict(filter(lambda item: len(item[0]) == SHA1_KEY_STR_LEN, json_dict.items()))
     assert sorted(map(lambda x: x["ref_count"], json_dict.values())) == [1, 1, 1, 1, 1, 2], json_dict
 
@@ -95,10 +92,10 @@ def test_sha1_add_state_dict(sha1_store, compress):
     os.chdir(TESTING_STORE_DIR)
     # add once
     for i in range(3):
-        sha1_store.add(nn.Linear(10, 10).state_dict(), compress)
+        sha1_store.add(nn.Linear(100, 100).state_dict(), compress)
     # add twice
     for i in range(3):
-        sd = nn.Linear(8, 8).state_dict()
+        sd = nn.Linear(80, 80).state_dict()
         sha1_store.add(sd, compress)
         sha1_store.add(sd, compress)
 
@@ -111,13 +108,11 @@ def test_sha1_add_state_dict(sha1_store, compress):
 @pytest.mark.parametrize("compress", [True, False])
 def test_sha1_add_tensor(sha1_store, compress):
     os.chdir(TESTING_STORE_DIR)
-    sha1_store.add(torch.Tensor([1.0, 5.5, 3.4]), compress)
+    sha1_store.add(torch.Tensor([1.0, 5.5, 3.4]).repeat(100), compress)
     with sha1_store._readonly_json_ctx:
         json_dict = sha1_store._json_dict
-    if torch_version() >= (1, 9, 0):
-        # torch 1.8 LTS doesn't produce deterministic checkpoint file from fixed tensors/state_dict.
-        key = "71df4069a03a766eacf9f03eea50968e87eae9f8"
-        assert key in json_dict.keys() and json_dict[key]["ref_count"] == 1, json_dict
+    key = "81cb2a3f823cfb78da8dd390e29e685720974cc7"
+    assert key in json_dict.keys() and json_dict[key]["ref_count"] == 1, json_dict
 
 
 @pytest.mark.parametrize("compress", [True, False])

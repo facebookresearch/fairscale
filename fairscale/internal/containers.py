@@ -6,17 +6,20 @@
 from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
+import numpy as np
 import torch
 from torch.nn.utils.rnn import PackedSequence
 
 """Useful functions to deal with tensor types with other python container types."""
 
 
-def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
-    """Recursively apply to all tensor in different kinds of container types."""
+def apply_to_type(
+    type_fn: Callable, fn: Callable, container: Union[torch.Tensor, np.ndarray, Dict, List, Tuple, Set]
+) -> Any:
+    """Recursively apply to all objects in different kinds of container types that matches a type function."""
 
-    def _apply(x: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
-        if torch.is_tensor(x):
+    def _apply(x: Union[torch.Tensor, np.ndarray, Dict, List, Tuple, Set]) -> Any:
+        if type_fn(x):
             return fn(x)
         elif isinstance(x, OrderedDict):
             od = x.__class__()
@@ -38,6 +41,21 @@ def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tu
             return x
 
     return _apply(container)
+
+
+def apply_to_tensors(fn: Callable, container: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
+    """Recursively apply to all tensor in different kinds of container types."""
+    return apply_to_type(torch.is_tensor, fn, container)
+
+
+def to_np(tensor_or_container: Union[torch.Tensor, Dict, List, Tuple, Set]) -> Any:
+    """Convert a tensor or a container to numpy."""
+    return apply_to_type(torch.is_tensor, lambda x: x.cpu().numpy(), tensor_or_container)
+
+
+def from_np(ndarray_or_container: Union[np.ndarray, Dict, List, Tuple, Set]) -> Any:
+    """Convert a ndarray or a container to tensor."""
+    return apply_to_type(lambda x: isinstance(x, np.ndarray), lambda x: torch.from_numpy(x), ndarray_or_container)
 
 
 def pack_kwargs(*args: Any, **kwargs: Any) -> Tuple[Tuple[str, ...], Tuple[Any, ...]]:
