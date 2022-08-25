@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import pickle
 import shutil
 import sys
 import tempfile
@@ -18,6 +19,8 @@ from typing import Any, Dict, Optional, Tuple, Union, cast
 import pgzip
 import torch
 from torch import Tensor
+
+from fairscale.internal.containers import from_np, to_np
 
 from .utils import ExitCode
 
@@ -76,7 +79,7 @@ def _copy_compressed(src: Path, dest: Path, thread: Optional[int], blocksize: in
                     break
                 destf.write(buf)
     orig, comp = Path(src).stat().st_size, Path(dest).stat().st_size
-    assert orig >= comp, f"Compressed size {comp} > original {orig}"
+    assert orig >= comp or comp < 1 * 1024 * 1024, f"Compressed size {comp} > original {orig} for large data"
     return orig, comp
 
 
@@ -127,7 +130,7 @@ class SHA1_Store:
     To make things easier for the callers, this class accept input data
     as files, state_dict or tensors. This class always returns in-memory
     data, not on-disk files. This class doesn't really care or know the actually
-    data types. It uses torch.save() and torch.load() to do serialization.
+    data types.
 
     A key issue is dealing with content deletion. We use a reference counting
     algorithm, which means the caller must have symmetrical add/remove calls
@@ -140,10 +143,8 @@ class SHA1_Store:
     addressibility and dependency graphs do not mix well.
 
     We support multicore compression for the data to be store on per-object basis.
-    The ``torch.save()`` API uses zip format to store the data, but it appears to
-    be uncompressed. Even if it can be made compressed, it is likely a single
-    threaded compression. Therefore, we use pgzip to do parallel
-    compression/decompression on top of it to use all the cores.
+    We use pgzip to do parallel compression/decompression on top of it to use all
+    the cores.
 
     Args:
         path (Path):
@@ -229,10 +230,14 @@ class SHA1_Store:
         If compress is True, the stored file is also compressed, which is useful for tensors
         with a lot of zeros.
 
+        We use pickle and numpy for saving, loading because it is more deterministic
+        in terms of serialized bytes. They do lose info on device and dtype of
+        tensors. Will handle those later.
+
         Args:
             file_or_obj (str or tensor or Dict):
                 Path to the file to be added to the store or an in-memory object
-                that can be handled by torch.save. Note, OrderedDict is used when
+                that can be handled by pickle. Note, OrderedDict is used when
                 you call `state_dict()` on a nn.Module, and it is an instance
                 of a Dict too. A model's state_dict can be a simple dict because
                 it may contain both model state_dict and other non-tensor info.
@@ -244,18 +249,30 @@ class SHA1_Store:
                 Default: None
         """
         start = time.time()
+        is_pickle_file = None
 
-        # Use `isinstance` not type() == Path since pathlib returns OS specific
+        # Use `isinstance` not `type() == Path` since pathlib returns OS specific
         # Path types, which inherit from the Path class.
         if isinstance(file_or_obj, (Path, str)):
             # Make sure it is a valid file.
-            torch.load(cast(Union[Path, str], file_or_obj))
+            try:
+                pickle.load(open(file_or_obj, "rb"))
+                is_pickle_file = True
+            except Exception as e:
+                is_pickle_file = False
+                pass
             file_path = Path(file_or_obj)
             remove_tmp = False
-        elif isinstance(file_or_obj, (Tensor, Dict)):
+
+        if is_pickle_file is False:
+            # Continue to support torch.save()'ed files too by loading it
+            # in memory and the next if condition will pickle it.
+            file_or_obj = torch.load(cast(Union[Path, str], file_or_obj))
+
+        if isinstance(file_or_obj, (Tensor, Dict)):
             # Serialize the object into a tmp file.
             file_path = self._get_tmp_file_path()
-            torch.save(cast(Union[Tensor, Dict], file_or_obj), file_path)
+            pickle.dump(to_np(file_or_obj), open(file_path, "wb"))
             remove_tmp = True
         else:
             assert False, f"incorrect input {type(file_or_obj)}"
@@ -361,12 +378,12 @@ class SHA1_Store:
                 # uncompress into a temp file and return it.
                 tmp = self._get_tmp_file_path()
                 _copy_uncompressed(path, tmp, self._pgzip_threads, self._pgzip_block_size)
-                obj = torch.load(tmp)
+                obj = pickle.load(open(tmp, "rb"))
                 tmp.unlink()
-                return obj
             else:
                 # Uncompressed.
-                return torch.load(path)
+                obj = pickle.load(open(path, "rb"))
+        return from_np(obj)
 
     def delete(self, sha1: str) -> None:
         """Delete a SHA1
