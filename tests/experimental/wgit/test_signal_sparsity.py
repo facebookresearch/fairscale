@@ -57,18 +57,15 @@ def get_valid_conf_arg_list():
         return dict(zip(arg_key_list, vals_list))
 
     # Validate value error is raised when, either:
-    # 1. One and only one of sst (or dst) percent and element is not provided a value (not None).
-    # 2. Both of sst (or dst) percent and element is set to None.
-    # 3. top_k_percent and top_k_element are not in valid range (elem > 0) and for 0 < percent <= 100.
+    # 1. both sst (or dst) percent and element is not provided a value (not None).
+    # 2. top_k_percent and top_k_element are not in valid range (elem > 0) and for 0 < percent <= 100.
     element = 10
     percent = 50
     dim = 0
     args_list = [
         [element, percent, dim, element, None, dim],  # case 1.
         [element, None, dim, element, percent, dim],
-        [None, None, dim, element, None, dim],  # case 2.
-        [element, None, dim, None, None, dim],
-        [0, None, dim, None, None, dim],  # case 3.
+        [0, None, dim, None, None, dim],  # case 2.
         [None, 0, dim, None, None, dim],
         [element, None, dim, 0, None, dim],
         [element, None, dim, None, 0, dim],
