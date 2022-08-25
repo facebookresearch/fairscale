@@ -81,6 +81,9 @@ def _is_sparsity_zero(
     """Returns True when a given value of topk_percent or topk_element along a particular top_k_dim
     for an input tensor results in sparsity=0% (or top-100-percent). Otherwise, returns False.
     """
+    if topk_percent is None and topk_element is None:
+        return False  # 100% sparse
+
     top_k_total_size = _top_k_total_size(dense, top_k_dim)
     k = _get_k_for_topk(topk_percent, topk_element, top_k_total_size)
     return k == top_k_total_size
@@ -356,7 +359,7 @@ class SignalSparsity:
             return None
 
         if sst is None:
-            sst = torch.zeros_like(dense)
+            sst = torch.zeros_like(dense, dtype=torch.complex64)
 
         if not (dense.shape == sst.shape):
             raise ValueError("dense and sst have different shapes!")

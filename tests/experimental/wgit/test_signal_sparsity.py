@@ -396,3 +396,34 @@ def test_lossy_compress_sparsity_0(tensor, dim, top_k_percent, device):
     objects_are_equal(lossy_dense.to(device), tensor.to(device), raise_exception=True, rtol=RTOL, atol=ATOL)
     objects_are_equal(sst, None, raise_exception=True, rtol=RTOL, atol=ATOL)
     objects_are_equal(dst.to(device), tensor.to(device), raise_exception=True, rtol=RTOL, atol=ATOL)
+
+
+def test_sst_disabled():
+    """Tests the case where SST is disabled."""
+    dense = torch.tensor([0.5000, 0.6000, 0.7000, 0.8000])
+    result = torch.tensor([0.0, 0.0, 0.7000, 0.8000])
+    sparser = SignalSparsity(dst_top_k_element=2, dst_top_k_dim=0)
+    rt, sst, dst = sparser.lossy_compress(dense)
+    objects_are_equal(rt, result, raise_exception=True, rtol=RTOL, atol=ATOL)
+    objects_are_equal(dst, result, raise_exception=True, rtol=RTOL, atol=ATOL)
+    assert sst is None
+
+
+def test_dst_disabled():
+    """Tests the case where DST is disabled."""
+    dense = torch.tensor([0.5000, 0.6000, 0.7000, 0.8000, 0.9000])
+    result_rt = torch.tensor([0.6000, 0.7618, 0.7000, 0.6382, 0.8000])
+    result_sst = torch.tensor(
+        [
+            3.50000000000000000000 + 0.00000000000000000000j,
+            0.00000000000000000000 + 0.00000000000000000000j,
+            -0.25000002980232238770 + 0.08122986555099487305j,
+            -0.25000002980232238770 - 0.08122986555099487305j,
+            0.00000000000000000000 + 0.00000000000000000000j,
+        ]
+    )
+    sparser = SignalSparsity(sst_top_k_element=3, sst_top_k_dim=0)
+    rt, sst, dst = sparser.lossy_compress(dense)
+    objects_are_equal(rt, result_rt, raise_exception=True, rtol=RTOL, atol=ATOL)
+    objects_are_equal(sst, result_sst, raise_exception=True, rtol=RTOL, atol=ATOL)
+    assert dst is None
