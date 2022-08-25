@@ -64,7 +64,8 @@ def test_cli_add(create_test_dir, capsys):
         json_data = json.load(f)
 
     sha1_dir_0 = f"{sha1_hash[:2]}/" + f"{sha1_hash[2:]}"
-    assert json_data["SHA1"] == sha1_hash
+    # The sha1 are different because add internally use a different pickle method.
+    assert json_data["SHA1"] != sha1_hash
 
 
 def test_cli_commit(capsys):
