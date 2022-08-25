@@ -79,7 +79,7 @@ def _copy_compressed(src: Path, dest: Path, thread: Optional[int], blocksize: in
                     break
                 destf.write(buf)
     orig, comp = Path(src).stat().st_size, Path(dest).stat().st_size
-    assert orig >= comp, f"Compressed size {comp} > original {orig}"
+    assert orig >= comp or comp < 1 * 1024 * 1024, f"Compressed size {comp} > original {orig} for large data"
     return orig, comp
 
 
