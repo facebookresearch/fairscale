@@ -81,6 +81,9 @@ def _is_sparsity_zero(
     """Returns True when a given value of topk_percent or topk_element along a particular top_k_dim
     for an input tensor results in sparsity=0% (or top-100-percent). Otherwise, returns False.
     """
+    if topk_percent is None and topk_element is None:
+        return False  # 100% sparse
+
     top_k_total_size = _top_k_total_size(dense, top_k_dim)
     k = _get_k_for_topk(topk_percent, topk_element, top_k_total_size)
     return k == top_k_total_size
@@ -245,10 +248,19 @@ class SignalSparsity:
         self._dst_top_k_percent = dst_top_k_percent
 
         self._validate_conf()
-        # TODO (Min): Type checking for the following
         self._transform, self._inverse_transform = (
             (_fft_transform, _ifft_transform) if algo is Algo.FFT else (_dct_transform, _idct_transform)
         )
+
+    @property
+    def _sst_enabled(self) -> bool:
+        """True if SST is enabled."""
+        return self._sst_top_k_element is not None or self._sst_top_k_percent is not None
+
+    @property
+    def _dst_enabled(self) -> bool:
+        """True if DST is enabled."""
+        return self._dst_top_k_element is not None or self._dst_top_k_percent is not None
 
     def _validate_conf(self) -> None:
         """Validating if the config is valid.
@@ -262,16 +274,14 @@ class SignalSparsity:
                 If validation fails.
         """
         # assert that both top_k_elements and top_k_percent aren't set for sst and dst
-        def one_and_only(a: Optional[int], b: Optional[float]) -> bool:
-            return (a is None) ^ (b is None)
+        def both_set(a: Optional[int], b: Optional[float]) -> bool:
+            return (a is not None) and (b is not None)
 
-        if not (
-            one_and_only(self._sst_top_k_element, self._sst_top_k_percent)
-            and one_and_only(self._dst_top_k_element, self._dst_top_k_percent)
+        if both_set(self._sst_top_k_element, self._sst_top_k_percent) or both_set(
+            self._dst_top_k_element, self._dst_top_k_percent
         ):
             raise ValueError(
-                "One and only one of top_k_element and top_k_percent for "
-                "each of sst and dst must be provided as an argument.\n"
+                "top_k_element and top_k_percent can't be both set\n"
                 f"Input values are: sst element={self._sst_top_k_element}, sst percent={self._sst_top_k_percent}, "
                 f"dst element={self._dst_top_k_element}, dst percent={self._dst_top_k_percent}"
             )
@@ -296,7 +306,7 @@ class SignalSparsity:
                 f"and dst element={self._dst_top_k_element}"
             )
 
-    def dense_to_sst(self, dense: Tensor) -> Tensor:
+    def dense_to_sst(self, dense: Tensor) -> Optional[Tensor]:
         """Get Signal Sparse Tensor (SST) from a dense tensor
 
         Dense -> fft -> top-k -> results.
@@ -310,10 +320,14 @@ class SignalSparsity:
                 Input dense tensor (no zeros).
 
         Returns:
-            (Tensor):
+            (Tensor, optional):
                 Same shaped tensor as the input dense tensor, still in dense format but in frequency
                 domain (complex valued) and has zeros.
         """
+        if not self._sst_enabled:
+            # Special case, SST is simply None, which represents an all-zero tensor.
+            return None
+
         top_k_total_size = _top_k_total_size(dense, self._sst_top_k_dim)
         k = _get_k_for_topk(self._sst_top_k_percent, self._sst_top_k_element, top_k_total_size)
         dense_freq = self._transform(dense, dim=self._sst_top_k_dim)
@@ -325,7 +339,7 @@ class SignalSparsity:
         real_dense_freq = dense_freq.real.abs()
         return _scatter_topk_to_sparse_tensor(real_dense_freq, dense_freq, k, dim=self._sst_top_k_dim)
 
-    def dense_sst_to_dst(self, dense: Tensor, sst: Tensor) -> Tensor:
+    def dense_sst_to_dst(self, dense: Tensor, sst: Optional[Tensor]) -> Optional[Tensor]:
         """Calculates DST from input dense and SST tensors.
 
         dense - inverse_transform(sst)[using sst_dst_to_dense method] -> top-k -> dst
@@ -340,6 +354,13 @@ class SignalSparsity:
             (Tensor):
                 Same shaped tensor, still dense format but has zeros. Non-zeros are top-k delta values.
         """
+        if not self._dst_enabled:
+            # Special case, DST is simply None, which represents an all-zero tensor.
+            return None
+
+        if sst is None:
+            sst = torch.zeros_like(dense, dtype=torch.complex64)
+
         if not (dense.shape == sst.shape):
             raise ValueError("dense and sst have different shapes!")
 
@@ -349,7 +370,7 @@ class SignalSparsity:
         del dense
         return _scatter_topk_to_sparse_tensor(delta.abs(), delta, k, dim=self._dst_top_k_dim)
 
-    def sst_dst_to_dense(self, sst: Tensor, dst: Optional[Tensor] = None) -> Tensor:
+    def sst_dst_to_dense(self, sst: Optional[Tensor], dst: Optional[Tensor] = None) -> Tensor:
         """From SST and DST returns a dense reconstructed tensor (RT). When argument dst=None, simply returns
         the inverse transform of the SST tensor.
 
@@ -363,12 +384,19 @@ class SignalSparsity:
             (Tensor):
                 A dense tensor in real number domain from the SST.
         """
+        assert not (sst is None and dst is None), "both-None-case is not useful"
+
+        if sst is None:
+            # Simply the delta is the reconstruction.
+            return dst
+
+        # Now, ifft and then add the delta.
         dense_rt = torch.real(self._inverse_transform(sst, dim=self._sst_top_k_dim))
         if dst is not None:
             dense_rt += dst
         return dense_rt
 
-    def lossy_compress(self, dense: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+    def lossy_compress(self, dense: Tensor) -> Tuple[Tensor, Optional[Tensor], Optional[Tensor]]:
         """From dense tensor to lossy reconstruction of dense tensor with the help of SST and DST
         tensor calculation. If requested sparsity is zero (or top_100_percent) then simply returns
         the input dense tensor as the reconstruction.
@@ -393,6 +421,8 @@ class SignalSparsity:
             # of the same size as dense.
             return dense, None, dense
         else:
+            # depending on whether self._sst_enabled and self._dst_enabled, None SST/DST tensors can be returned
+            # below as well.
             sst = self.dense_to_sst(dense)
             dst = self.dense_sst_to_dst(dense, sst)
             return self.sst_dst_to_dense(sst, dst), sst, dst
