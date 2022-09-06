@@ -2595,6 +2595,7 @@ def no_pre_load_state_dict_hook() -> Generator:
     yield
     _enable_pre_load_state_dict_hook = bak
 
+
 def _pre_load_state_dict_hook(
     state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], prefix: str, *args: Any
 ) -> None:

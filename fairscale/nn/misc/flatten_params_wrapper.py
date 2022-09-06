@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 # See no_pre_load_state_dict_hook context manager function in FSDP for more details.
 _enable_pre_load_state_dict_hook = True
 
+
 class FlatParameter(nn.Parameter):
     """A parameter that is initialized from a list of parameters and can be
     turned into a list of views as needed.
