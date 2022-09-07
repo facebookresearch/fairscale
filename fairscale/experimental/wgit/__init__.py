@@ -21,7 +21,7 @@ except ImportError:
 
 
 from .repo import Repo
-from .signal_sparsity import Algo, SignalSparsity
+from .signal_sparsity import Algo, SignalSparsity, random_sparse_mask
 from .signal_sparsity_profiling import EnergyConcentrationProfile
 from .version import __version_tuple__
 
