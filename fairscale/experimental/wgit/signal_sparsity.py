@@ -435,11 +435,11 @@ def random_sparse_mask(dense: Tensor, percent: float, dim: int) -> Tensor:
         dense (Tensor):
             Input dense tensor (no zeros).
         percent (float):
-            Percent of non-zeros.
+            Percent of non-zeros (0, 100].
         dim (int):
             Dimension on which the random sparse mask is computed.
     """
-    assert percent > 0, percent
+    assert percent > 0 and percent <= 100, percent
     rand = torch.rand_like(dense)
     ones = torch.ones_like(dense)
     k = _get_k_for_topk(percent, None, dense.shape[dim])
