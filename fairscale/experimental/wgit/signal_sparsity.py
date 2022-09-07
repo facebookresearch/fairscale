@@ -426,3 +426,21 @@ class SignalSparsity:
             sst = self.dense_to_sst(dense)
             dst = self.dense_sst_to_dst(dense, sst)
             return self.sst_dst_to_dense(sst, dst), sst, dst
+
+
+def random_sparse_mask(dense: Tensor, percent: float, dim: int) -> Tensor:
+    """Get a random sparse mask
+
+    Args:
+        dense (Tensor):
+            Input dense tensor (no zeros).
+        percent (float):
+            Percent of non-zeros.
+        dim (int):
+            Dimension on which the random sparse mask is computed.
+    """
+    assert percent > 0, percent
+    rand = torch.rand_like(dense)
+    ones = torch.ones_like(dense)
+    k = _get_k_for_topk(percent, None, dense.shape[dim])
+    return _scatter_topk_to_sparse_tensor(rand, ones, k, dim)
