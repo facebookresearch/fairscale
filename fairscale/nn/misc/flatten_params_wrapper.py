@@ -49,6 +49,9 @@ from fairscale.internal.state_dict import replace_by_prefix_
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
 
+# See no_pre_load_state_dict_hook context manager function in FSDP for more details.
+_enable_pre_load_state_dict_hook = True
+
 
 class FlatParameter(nn.Parameter):
     """A parameter that is initialized from a list of parameters and can be
@@ -543,6 +546,8 @@ def _post_state_dict_hook(
 def _pre_load_state_dict_hook(
     state_dict: Union[Dict[str, Tensor], "OrderedDict[str, Tensor]"], prefix: str, *args: Any
 ) -> None:
+    if not _enable_pre_load_state_dict_hook:
+        return
     # Push everything down to ._fpw_module level.
     replace_by_prefix_(state_dict, prefix, prefix + "_fpw_module.")
     # The flat_param_* keys actually needs to move one level up.
