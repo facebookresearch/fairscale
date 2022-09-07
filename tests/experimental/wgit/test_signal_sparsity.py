@@ -436,10 +436,10 @@ def test_random_sparse_mask(device):
         pytest.skip("no GPU")
 
     dense = torch.tensor([0.5000, 0.6000, 0.7000, 0.8000, 0.9000]).to(device)
-    mask = random_sparse_mask(dense, 0.2, 0)
+    mask = random_sparse_mask(dense, 20, 0)
     assert mask.sum() == 1
     for d in [0, 1]:
         dense = torch.rand(100, 100).to(device)
-        mask = random_sparse_mask(dense, 0.01, d)
+        mask = random_sparse_mask(dense, 1, d)
         assert objects_are_equal(mask.sum(dim=d), torch.ones(100).to(device), raise_exception=True)
         assert mask.sum() == 100
