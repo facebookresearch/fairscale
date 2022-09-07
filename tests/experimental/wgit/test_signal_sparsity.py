@@ -432,6 +432,9 @@ def test_dst_disabled():
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_random_sparse_mask(device):
     """Tests random_sparse_mask API."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("no GPU")
+
     dense = torch.tensor([0.5000, 0.6000, 0.7000, 0.8000, 0.9000]).to(device)
     mask = random_sparse_mask(dense, 0.2, 0)
     assert mask.sum() == 1
