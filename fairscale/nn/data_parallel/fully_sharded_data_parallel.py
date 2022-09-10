@@ -475,6 +475,12 @@ class FullyShardedDataParallel(nn.Module):
         self._num_flatten_params = len(self._fsdp_wrapped_module.flat_params)
         self._param_name_groups = param_name_groups
 
+        # Check to see if the mixed precision setting is correct.
+        if self.compute_dtype is torch.float16 and self.mixed_precision is False:
+            for p in self.params:
+                if p.dtype is not torch.float16:
+                    raise ValueError("Expecting FP16 param type in pure FP16 mode.")
+
         # Shard module parameters in place
         self._shard_parameters_()
 
