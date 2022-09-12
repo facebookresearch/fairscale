@@ -9,7 +9,7 @@
 
 """ Test utility classes from containers.py. """
 
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 import random
 
 import pytest
@@ -42,13 +42,21 @@ def test_apply_to_tensors(devices):
         return t
 
     # create a mixed bag of data.
-    data = [1, "str"]
+    data = [1, "str"]  # list
+    # dict
     data.append({"key1": get_a_tensor(), "key2": {1: get_a_tensor()}, "key3": 3})
+    # set
     data.insert(0, set(["x", get_a_tensor(), get_a_tensor()]))
+    # tuple
     data.append(([1], get_a_tensor(), 1, [get_a_tensor()], set((1, 2))))
+    # OrderedDict
     od = OrderedDict()
     od["k"] = "value"
     data.append(od)
+    # namedtuple
+    NT = namedtuple("NT", ["key1", "key2"])
+    nt = NT(key1=1, key2=get_a_tensor())
+    data.append(nt)
 
     total = 0
 
