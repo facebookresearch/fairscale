@@ -879,6 +879,11 @@ class FullyShardedDataParallel(nn.Module):
 
         If you want the full param to be returned, you should call this function
         under a `summon_full_params` context when using flattened or original params.
+
+        .. warning:: This overloaded method will *not* be called in the case of a parent module
+                     containing a FSDP-wrapped child module. Calling parent.named_parameters()
+                     *will* return original *unclean* key strings, i.e. _fsdp_wrapped_module and
+                     _fpw_module are included the key string.
         """
         named_param = super().named_parameters(*args, **kwargs)
         for name, param in named_param:
