@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple, Union, cast
 
 import numpy as np
 import torch
@@ -14,7 +14,7 @@ from torch.nn.utils.rnn import PackedSequence
 
 
 def apply_to_type(
-    type_fn: Callable, fn: Callable, container: Union[torch.Tensor, np.ndarray, Dict, List, Tuple, Set]
+    type_fn: Callable, fn: Callable, container: Union[torch.Tensor, np.ndarray, Dict, List, Tuple, Set, NamedTuple]
 ) -> Any:
     """Recursively apply to all objects in different kinds of container types that matches a type function."""
 
@@ -34,7 +34,16 @@ def apply_to_type(
         elif isinstance(x, list):
             return [_apply(x) for x in x]
         elif isinstance(x, tuple):
-            return tuple(_apply(x) for x in x)
+            f = getattr(x, "_fields", None)
+            if f is None:
+                return tuple(_apply(x) for x in x)
+            else:
+                assert isinstance(f, tuple), "This needs to be a namedtuple"
+                # convert the namedtuple to a dict and _apply().
+                x = cast(NamedTuple, x)
+                _dict: Dict[str, Any] = x._asdict()
+                _dict = {key: _apply(value) for key, value in _dict.items()}
+                return type(x)(**_dict)  # make a copy of the namedtuple
         elif isinstance(x, set):
             return {_apply(x) for x in x}
         else:
