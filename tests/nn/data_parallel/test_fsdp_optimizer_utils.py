@@ -158,9 +158,9 @@ class TestOptimizerUtils(DistributedTest):
         unwrapped_sd = optim_unwrapped.state_dict()
 
         if not transformer and not expert_group:
-            no_broadcast_children = [x for x in fsdp._fsdp_instances if x.no_broadcast_optim_state]
+            no_broadcast_children = [x for x in fsdp._fsdp_instances() if x.no_broadcast_optim_state]
             assert len(no_broadcast_children) == 1, f"Length of non shared params {len(no_broadcast_children)}"
-            assert fsdp._fsdp_instances[-1].no_broadcast_optim_state
+            assert fsdp._fsdp_instances()[-1].no_broadcast_optim_state
         torch.cuda.empty_cache()
         cuda_gb_before = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024**3
         tstart = time()

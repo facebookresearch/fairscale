@@ -2300,7 +2300,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # Non-empty FSDP instance and sd_state item number must match.
         fsdp_instances = self._fsdp_instances(skip_empty=True)
-        assert len(fsdp_instances) == len(sd_state), f"{len(fsdp_instances)} vs. {len(sd_state)}"
+        assert len(fsdp_instances) >= len(sd_state), f"{len(fsdp_instances)} vs. {len(sd_state)}"
 
         for k, v in sd_state.items():
             gathered_state[k] = {}
