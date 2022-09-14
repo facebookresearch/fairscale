@@ -480,6 +480,10 @@ class FullyShardedDataParallel(nn.Module):
             for p in self.params:
                 if p.dtype is not torch.float16:
                     raise ValueError("Expecting FP16 param type in pure FP16 mode.")
+        else:
+            for p in self.params:
+                if p.dtype is not torch.float32:
+                    raise ValueError("Expecting FP16 param type in FP32 & MP modes.")
 
         # Shard module parameters in place
         self._shard_parameters_()
@@ -812,12 +816,12 @@ class FullyShardedDataParallel(nn.Module):
                 f"compute_dtype={self.compute_dtype}, "
                 f"buffer_dtype={self.buffer_dtype}, "
                 f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
-                f"compute_device={self.compute_device}"
+                f"compute_device={self.compute_device}, "
                 f"move_params_to_cpu={self.move_params_to_cpu}, "
                 f"move_grads_to_cpu={self.move_grads_to_cpu}, "
                 f"bucket_cap_mb={self.bucket_cap_mb}, "
-                f"clear_autocast_cache={self.clear_autocast_cache}"
-                f"force_input_to_fp32={self.force_input_to_fp32}"
+                f"clear_autocast_cache={self.clear_autocast_cache}, "
+                f"force_input_to_fp32={self.force_input_to_fp32}, "
             )
         return repr
 
@@ -1259,9 +1263,9 @@ class FullyShardedDataParallel(nn.Module):
         p._fp32_shard = p.data
 
         if self.mixed_precision:
-            assert p._fp32_shard.dtype == torch.float32
+            assert p._fp32_shard.dtype == torch.float32, self
         if self.move_params_to_cpu:
-            assert p._fp32_shard.device == torch.device("cpu")
+            assert p._fp32_shard.device == torch.device("cpu"), self
 
             # We don't pin memory when using ssd_offload since that results in OOM when
             # the memory requirements of a model are larger than host memory.
@@ -1809,6 +1813,16 @@ class FullyShardedDataParallel(nn.Module):
 
         def _finalize_parameters(fsdp_module: FullyShardedDataParallel) -> None:
             """Helper used below on all fsdp modules."""
+            # We make sure to switch to fp32 shards here because there might be
+            # params linger in full_param mode, if the following firing order happens:
+            #   pre-bwd: rebuild and use full for p1 and p2
+            #   post-bwd for p1: free and switch to fp32 shard for p1
+            #   pre-bwd: rebuild again for p1 and p2
+            #   post-bwd for p2: free and switch to fp32 shard for p2
+            # In the end, p1 will be left in full param mode. We don't call free
+            # full param here since it may or may not be the right thing. We will let
+            # the next fwd iter to clean that up.
+            fsdp_module._use_fp32_param_shard()
             for p in fsdp_module.params:
                 if not p.requires_grad:
                     continue
@@ -1832,6 +1846,10 @@ class FullyShardedDataParallel(nn.Module):
                     p_assert(
                         p.device == p._saved_grad_shard.device,
                         f"WFPB: incorrect saved_grad_shard device {p.device} vs {p._saved_grad_shard.device}",
+                    )
+                    p_assert(
+                        p.shape == p._saved_grad_shard.shape,
+                        f"WFPB: incorrect saved_grad_shard shape {p.shape} vs {p._saved_grad_shard.shape}",
                     )
                     p.grad = p._saved_grad_shard
 
@@ -1971,10 +1989,15 @@ class FullyShardedDataParallel(nn.Module):
                 if not p._is_sharded:  # e.g., when world_size == 1
                     update_p_data()
                 else:
-                    # Skip if already built. Only shared param can be rebuilt multiple times.
+                    # Skip if already built.
+                    #
+                    # case 1: shared param can be rebuilt multiple times.
                     # A corner case is p._orig_size = (1,), which means the shape equality is
                     # not a perfect check. But we assume we don't share a param with shape (1,).
-                    if p.data.shape == p._orig_size and hasattr(p, "_is_shared") and p._is_shared:
+                    # case 2: with multiple params (like non-flatten, or multiple flatten groups)
+                    # we may have pre & post bwd firing order issues. See comments in the
+                    # _finalize_parameters function for such case.
+                    if p.data.shape == p._orig_size:
                         continue
                     # If self.move_params_to_cpu and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
