@@ -535,9 +535,8 @@ class FullyShardedDataParallel(nn.Module):
 
         # Free all params at the end of initialization.
         if self.ssd_offload:
-            for m in self.modules():  # includes self
-                if isinstance(m, FullyShardedDataParallel):
-                    m._free_ssd_offload()
+            for m in fsdp_instances(self):
+                m._free_ssd_offload()
 
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
@@ -993,9 +992,8 @@ class FullyShardedDataParallel(nn.Module):
         )
         with contextlib.ExitStack() as stack:
             # Tell any nested FSDP instances not to auto summon full params.
-            for module in self.modules():  # includes self
-                if isinstance(module, FullyShardedDataParallel):
-                    stack.enter_context(module._no_return_full_state_dict())
+            for module in fsdp_instances(self):
+                stack.enter_context(module._no_return_full_state_dict())
             # We need to specially call FSDP's state_dict function in case
             # self.state_dict is a function from a child class of FSDP.
             return FullyShardedDataParallel.state_dict(self, *args, **kwargs)
@@ -1061,9 +1059,8 @@ class FullyShardedDataParallel(nn.Module):
         )
         with contextlib.ExitStack() as stack:
             # Tell any nested FSDP instances not to auto summon full params.
-            for module in self.modules():  # includes self
-                if isinstance(module, FullyShardedDataParallel):
-                    stack.enter_context(module._no_return_full_state_dict())
+            for module in fsdp_instances(self):
+                stack.enter_context(module._no_return_full_state_dict())
             output = self._load_state_dict(state_dict, strict)
         return output
 
@@ -1089,10 +1086,9 @@ class FullyShardedDataParallel(nn.Module):
         # This instance may wrap other FSDP instances and we
         # need to set all of them to accumulate gradients.
         old_flags = []
-        for m in self.modules():  # includes self
-            if isinstance(m, FullyShardedDataParallel):
-                old_flags.append((m, m._require_backward_grad_sync))
-                m._require_backward_grad_sync = False
+        for m in fsdp_instances(self):
+            old_flags.append((m, m._require_backward_grad_sync))
+            m._require_backward_grad_sync = False
         try:
             yield
         finally:
@@ -1893,40 +1889,39 @@ class FullyShardedDataParallel(nn.Module):
                     delattr(p, "_saved_grad_shard")
 
         # Update root and nested FSDP's hooks and flags.
-        for m in self.modules():  # includes self
-            if isinstance(m, FullyShardedDataParallel):
-                _finalize_parameters(m)
-                m._free_ssd_offload()
-                m._pre_backward_hook_has_run = False
-                if any(p.requires_grad for p in m.parameters()):
-                    # Check if the module has params and if any of them has
-                    # the `requires_grad` field set. If `requires_grad=False` for
-                    # all the params, the post_backward hook will not fire and the
-                    # state will remain in `TrainingState.BACKWARD_PRE`.
-                    if any([p.requires_grad for p in m.params]):
-                        m.assert_state(TrainingState.BACKWARD_POST)
-                    else:
-                        m.assert_state(TrainingState.BACKWARD_PRE)
+        for m in fsdp_instances(self):
+            _finalize_parameters(m)
+            m._free_ssd_offload()
+            m._pre_backward_hook_has_run = False
+            if any(p.requires_grad for p in m.parameters()):
+                # Check if the module has params and if any of them has
+                # the `requires_grad` field set. If `requires_grad=False` for
+                # all the params, the post_backward hook will not fire and the
+                # state will remain in `TrainingState.BACKWARD_PRE`.
+                if any([p.requires_grad for p in m.params]):
+                    m.assert_state(TrainingState.BACKWARD_POST)
                 else:
-                    # When `m` and its children has no params or has params but
-                    # none with `requires_grad==True`, there are two cases:
-                    # 1. output tensors are `requires_grad==True`. In this case,
-                    # pre-backward hook is still registered, so it is in BACKWARD_PRE state.
-                    # 2. output tensors are `requires_grad==False`. In this case,
-                    # pre-backward hook is not registered, so it is in IDLE state.
-                    m.assert_state([TrainingState.BACKWARD_PRE, TrainingState.IDLE])
-                m.training_state = TrainingState.IDLE
+                    m.assert_state(TrainingState.BACKWARD_PRE)
+            else:
+                # When `m` and its children has no params or has params but
+                # none with `requires_grad==True`, there are two cases:
+                # 1. output tensors are `requires_grad==True`. In this case,
+                # pre-backward hook is still registered, so it is in BACKWARD_PRE state.
+                # 2. output tensors are `requires_grad==False`. In this case,
+                # pre-backward hook is not registered, so it is in IDLE state.
+                m.assert_state([TrainingState.BACKWARD_PRE, TrainingState.IDLE])
+            m.training_state = TrainingState.IDLE
 
-                if m._is_root:
-                    # reset this flag for cases like "one forward pass + multiple backward passes"
-                    self._post_backward_callback_queued = False
-                    # clear this list for next iteration
-                    p_assert(
-                        self._output_pre_backward_hook_registered is not None,
-                        "WFPB: self._output_pre_backward_hook_registered should not be None",
-                    )
-                    assert self._output_pre_backward_hook_registered is not None  # make mypy happy
-                    self._output_pre_backward_hook_registered.clear()
+            if m._is_root:
+                # reset this flag for cases like "one forward pass + multiple backward passes"
+                self._post_backward_callback_queued = False
+                # clear this list for next iteration
+                p_assert(
+                    self._output_pre_backward_hook_registered is not None,
+                    "WFPB: self._output_pre_backward_hook_registered should not be None",
+                )
+                assert self._output_pre_backward_hook_registered is not None  # make mypy happy
+                self._output_pre_backward_hook_registered.clear()
 
     @torch.no_grad()
     def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
@@ -2450,7 +2445,7 @@ class FullyShardedDataParallel(nn.Module):
 
     def _fsdp_instances(self, skip_empty: bool = False) -> List["FullyShardedDataParallel"]:
         """Returns all fsdp modules in self.modules() including self."""
-        result = [m for m in self.modules() if isinstance(m, FullyShardedDataParallel)]
+        result = fsdp_instances(self)
         if skip_empty:
             result = list(filter(lambda x: len(cast(FullyShardedDataParallel, x).non_shared_params()) > 0, result))
         return result
@@ -2779,3 +2774,12 @@ def auto_wrap_bn(
         enable_wrap(config_auto_wrap_policy, wrapper_cls=FullyShardedDataParallel) if wrap_it else contextlib.suppress()
     ):
         return auto_wrap(module)
+
+
+def fsdp_instances(mod: nn.Module) -> List[FullyShardedDataParallel]:
+    """Return, a list, if any, of the module/submodule is wrapped by FSDP."""
+    ret: List[FullyShardedDataParallel] = []
+    for m in mod.modules():  # including mod itself
+        if isinstance(m, FullyShardedDataParallel):
+            ret.append(m)
+    return ret
