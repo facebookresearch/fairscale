@@ -303,6 +303,12 @@ class FullyShardedDataParallel(nn.Module):
             rank 0 and return empty dict non-rank 0, which allow FullyShardedDataParallel to
             skip the GPU -> CPU copy on non-rank 0 altogether and prevent OOM.
             Default: False
+        gradient_predivide_factor (float, optional):
+            If supplied, pre-divide the gradients before scatter-reduce.
+            Default: None
+        allow_reset_parameters (bool):
+            If True, allow ``reset_parameters`` API to be proxied to the wrapped module.
+            Default: False
     """
 
     def __init__(
@@ -331,6 +337,7 @@ class FullyShardedDataParallel(nn.Module):
         offload_config: Optional[OffloadConfig] = None,
         state_dict_on_rank_0_only: bool = False,
         gradient_predivide_factor: Optional[float] = None,
+        allow_reset_parameters: bool = False,
     ):
         try:
             import torch._C
@@ -407,6 +414,7 @@ class FullyShardedDataParallel(nn.Module):
             self.world_size
         )
         self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
+        self.allow_reset_parameters = allow_reset_parameters
 
         self.numel_padded_per_param: List[int] = []
         self._tstart = time.time()
@@ -1091,6 +1099,34 @@ class FullyShardedDataParallel(nn.Module):
             for m, old_flag in old_flags:
                 assert m._require_backward_grad_sync is False
                 m._require_backward_grad_sync = old_flag
+
+    def reset_parameters(self) -> None:
+        """Special reset_parameters API handling.
+
+        We don't by default allow this API because it has at least 2 issues:
+
+        1. calling it after wrapping can crash due to unexpected tensor size
+           and dimensions due to flattening and sharding. So summon_full_params
+           context might be required.
+        2. calling it after wrapping can result in incorrect init values due
+           to flattening.
+
+           See this gist for an example of the init issue when parameters are
+           flatten.
+
+           https://gist.github.com/407bb158f0d0612e157c2cbcf5c8b76a
+
+           Or, like in 1, init function can silently init the weight differently
+           because of the dimensions.
+
+         Finally, be advised that init on CPU vs. on GPU can have different
+         values. If models are originally on CPU and after wrapping it is moved
+         to GPU, calling this will again be problematic.
+        """
+        if self.allow_reset_parameters:
+            self.module.reset_parameters()
+        else:
+            raise RuntimeError("reset parameters after FSDP wrapping is not allowed")
 
     @contextlib.contextmanager
     def summon_full_params(self, recurse: bool = True, volatile: bool = False) -> Generator:

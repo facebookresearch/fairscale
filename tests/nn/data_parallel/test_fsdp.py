@@ -658,6 +658,25 @@ class TestModuleProperties(DistributedTest):
                 torch.testing.assert_allclose(before_nm[1].shape, after_nm_original[1].cpu().shape)
 
 
+class TestResetParameters(DistributedTest):
+    def test_reset_parameters(self):
+        """Ensure that reduce_scatter_process_group same size with the world size."""
+        test_fn = functools.partial(self._test_reset, config={})
+        spawn_and_init(test_fn, world_sizes=[2])
+
+    @classmethod
+    def _test_reset(self, rank, group, config):
+        model = self._get_model(group, config)
+        with model.summon_full_params():
+            model.reset_parameters()
+
+    @classmethod
+    def _get_model(self, group, config):
+        with torch.no_grad():  # required for multiprocessing
+            model = nn.Linear(10, 10)
+            return FullyShardedDataParallel(model, group, allow_reset_parameters=True, **config)
+
+
 class TransformerWithSharedParams(nn.Module):
     def __init__(self, group, *unused_args, d_vocab=23, d_model=16, add_bn=True, **unused_kwargs):
         super().__init__()
