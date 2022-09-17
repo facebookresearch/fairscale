@@ -1851,10 +1851,13 @@ class FullyShardedDataParallel(nn.Module):
             #   post-bwd for p1: free and switch to fp32 shard for p1
             #   pre-bwd: rebuild again for p1 and p2
             #   post-bwd for p2: free and switch to fp32 shard for p2
-            # In the end, p1 will be left in full param mode. We don't call free
-            # full param here since it may or may not be the right thing. We will let
-            # the next fwd iter to clean that up.
+            # In the end, p1 will be left in full param mode.
+            #
+            # We need switch to fp32 *and* free full params. If we don't free,
+            # we end up reusing potentially *stale* full param (after the fp32
+            # shard is updated (e.g. by optimizer.step()).
             fsdp_module._use_fp32_param_shard()
+            fsdp_module._free_full_params()
             for p in fsdp_module.params:
                 if not p.requires_grad:
                     continue
@@ -2029,7 +2032,9 @@ class FullyShardedDataParallel(nn.Module):
                     # we may have pre & post bwd firing order issues. See comments in the
                     # _finalize_parameters function for such case.
                     if p.data.shape == p._orig_size:
+                        assert p.data.storage().data_ptr() == p._full_param_padded.storage().data_ptr()
                         continue
+
                     # If self.move_params_to_cpu and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
                     p_data = p.data.to(p._full_param_padded.device, non_blocking=True)

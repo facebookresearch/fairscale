@@ -500,7 +500,7 @@ class LayerwiseMemoryTracker:
         Indicate if x and y share the same storage, meaning that one of them
         is a view, reshape or stride of the other or from a common tensor
         """
-        return x.storage().data_ptr() == y.storage().data_ptr()  # type: ignore
+        return x.storage().data_ptr() == y.storage().data_ptr()
 
     @staticmethod
     def _collect_tensors(module_io_tensors: Union[torch.Tensor, Sequence[torch.Tensor]]) -> List[torch.Tensor]:
