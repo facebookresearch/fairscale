@@ -535,7 +535,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # Free all params at the end of initialization.
         if self.ssd_offload:
-            for m in fsdp_instances(self):
+            for m in get_fsdp_instances(self):
                 m._free_ssd_offload()
 
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
@@ -992,7 +992,7 @@ class FullyShardedDataParallel(nn.Module):
         )
         with contextlib.ExitStack() as stack:
             # Tell any nested FSDP instances not to auto summon full params.
-            for module in fsdp_instances(self):
+            for module in get_fsdp_instances(self):
                 stack.enter_context(module._no_return_full_state_dict())
             # We need to specially call FSDP's state_dict function in case
             # self.state_dict is a function from a child class of FSDP.
@@ -1059,7 +1059,7 @@ class FullyShardedDataParallel(nn.Module):
         )
         with contextlib.ExitStack() as stack:
             # Tell any nested FSDP instances not to auto summon full params.
-            for module in fsdp_instances(self):
+            for module in get_fsdp_instances(self):
                 stack.enter_context(module._no_return_full_state_dict())
             output = self._load_state_dict(state_dict, strict)
         return output
@@ -1086,7 +1086,7 @@ class FullyShardedDataParallel(nn.Module):
         # This instance may wrap other FSDP instances and we
         # need to set all of them to accumulate gradients.
         old_flags = []
-        for m in fsdp_instances(self):
+        for m in get_fsdp_instances(self):
             old_flags.append((m, m._require_backward_grad_sync))
             m._require_backward_grad_sync = False
         try:
@@ -1892,7 +1892,7 @@ class FullyShardedDataParallel(nn.Module):
                     delattr(p, "_saved_grad_shard")
 
         # Update root and nested FSDP's hooks and flags.
-        for m in fsdp_instances(self):
+        for m in get_fsdp_instances(self):
             _finalize_parameters(m)
             m._free_ssd_offload()
             m._pre_backward_hook_has_run = False
@@ -2335,10 +2335,10 @@ class FullyShardedDataParallel(nn.Module):
             raise ValueError(msg)
 
     def _broadcast_pad_info_to_r0(self) -> List[List[List[int]]]:
-        """Collect [x.numel_padded_per_param for x in self._fsdp_instances()] from each rank."""
+        """Collect [x.numel_padded_per_param for x in get_fsdp_instances(self)] from each rank."""
         world_pad_info: List[List[List[int]]] = []  # this will contain values from the whole world.
         my_pad_info: List[List[int]] = [
-            cast(List[int], m.numel_padded_per_param) for m in self._fsdp_instances(skip_empty=True)
+            cast(List[int], m.numel_padded_per_param) for m in get_fsdp_instances(self, skip_empty=True)
         ]
         for rank in range(self.world_size):
             if rank == self.rank:
@@ -2358,7 +2358,7 @@ class FullyShardedDataParallel(nn.Module):
         singleton_state: Dict[int, Dict[str, List[Any]]] = {}  # Dimensionless tensor
 
         # Non-empty FSDP instance and sd_state item number must match.
-        fsdp_instances = self._fsdp_instances(skip_empty=True)
+        fsdp_instances = get_fsdp_instances(self, skip_empty=True)
         assert len(fsdp_instances) >= len(sd_state), f"{len(fsdp_instances)} vs. {len(sd_state)}"
 
         for k, v in sd_state.items():
@@ -2437,7 +2437,7 @@ class FullyShardedDataParallel(nn.Module):
             return None
         # Unify the shard states by concatenating tensors and unflattening params
         new_state_dict = ou.build_unflat_state_dict(
-            self._fsdp_instances(skip_empty=True),
+            get_fsdp_instances(self, skip_empty=True),
             pad_info,
             state,
             singleton_state,
@@ -2447,13 +2447,6 @@ class FullyShardedDataParallel(nn.Module):
         self.uncollected_opt_state = {}
         assert "uncollected_local_ids" in new_state_dict
         return new_state_dict
-
-    def _fsdp_instances(self, skip_empty: bool = False) -> List["FullyShardedDataParallel"]:
-        """Returns all fsdp modules in self.modules() including self."""
-        result = fsdp_instances(self)
-        if skip_empty:
-            result = list(filter(lambda x: len(cast(FullyShardedDataParallel, x).non_shared_params()) > 0, result))
-        return result
 
     def _remove_uncollectable_params_from_optim_state_dict(self, osd: Dict) -> Dict:
         """Return a new state dict filtering out the ones like MoE layers, which has
@@ -2470,7 +2463,7 @@ class FullyShardedDataParallel(nn.Module):
                 if ou.is_singleton_tensor(bufs["step"]):
                     bufs["step"] = bufs["step"].item()
         # Get uncollected_ids.
-        uncollected_ids = [i for i, m in enumerate(self._fsdp_instances()) if m.no_broadcast_optim_state]
+        uncollected_ids = [i for i, m in enumerate(get_fsdp_instances(self)) if m.no_broadcast_optim_state]
         new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
         if self.rank == 0:
             # Save placeholders for uncollected opt state to keep the same unflat OSD format, and move them to CPU.
@@ -2497,7 +2490,7 @@ class FullyShardedDataParallel(nn.Module):
             (dict): a shard of the optimizer state.
         """
         # Assert nesting is the same as it was at save time
-        instance_list = self._fsdp_instances()
+        instance_list = get_fsdp_instances(self, skip_empty=True)
         ou.check_param_counts_before_sharding(full_optim_state_dict, len(instance_list))
         ids_not_to_shard = copy.deepcopy(full_optim_state_dict["uncollected_local_ids"])
         if self.flatten_parameters:
@@ -2781,10 +2774,20 @@ def auto_wrap_bn(
         return auto_wrap(module)
 
 
-def fsdp_instances(mod: nn.Module) -> List[FullyShardedDataParallel]:
-    """Return, a list, if any, of the module/submodule is wrapped by FSDP."""
+def get_fsdp_instances(mod: nn.Module, skip_empty: bool = False) -> List[FullyShardedDataParallel]:
+    """Return, a list, if any, of the module/submodule is wrapped by FSDP within another module.
+
+    Args:
+        mod (nn.Module):
+            A nn.Module module to be scanned.
+        skip_empty (bool):
+            If True, skip wrappers without any parameters.
+            Default: False
+    """
     ret: List[FullyShardedDataParallel] = []
     for m in mod.modules():  # including mod itself
         if isinstance(m, FullyShardedDataParallel):
             ret.append(m)
+    if skip_empty:
+        ret = list(filter(lambda x: len(cast(FullyShardedDataParallel, x).non_shared_params()) > 0, ret))
     return ret

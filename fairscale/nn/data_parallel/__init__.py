@@ -10,7 +10,7 @@ from .fully_sharded_data_parallel import (
     OffloadConfig,
     TrainingState,
     auto_wrap_bn,
-    fsdp_instances,
+    get_fsdp_instances,
     no_pre_load_state_dict_hook,
 )
 from .sharded_ddp import ShardedDataParallel

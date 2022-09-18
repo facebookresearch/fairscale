@@ -13,7 +13,7 @@ from torch.optim import SGD, Adadelta, Adam  # type: ignore
 
 from fair_dev.testing.testing import dist_init, objects_are_equal, spawn_for_all_world_sizes
 from fairscale.internal.params import recursive_copy_to_device
-from fairscale.nn import FullyShardedDataParallel
+from fairscale.nn.data_parallel import FullyShardedDataParallel, get_fsdp_instances
 from fairscale.nn.data_parallel.fsdp_optim_utils import is_singleton_tensor
 
 from .test_fsdp import (
@@ -158,9 +158,9 @@ class TestOptimizerUtils(DistributedTest):
         unwrapped_sd = optim_unwrapped.state_dict()
 
         if not transformer and not expert_group:
-            no_broadcast_children = [x for x in fsdp._fsdp_instances() if x.no_broadcast_optim_state]
+            no_broadcast_children = [x for x in get_fsdp_instances(fsdp) if x.no_broadcast_optim_state]
             assert len(no_broadcast_children) == 1, f"Length of non shared params {len(no_broadcast_children)}"
-            assert fsdp._fsdp_instances()[-1].no_broadcast_optim_state
+            assert get_fsdp_instances(fsdp)[-1].no_broadcast_optim_state
         torch.cuda.empty_cache()
         cuda_gb_before = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024**3
         tstart = time()
