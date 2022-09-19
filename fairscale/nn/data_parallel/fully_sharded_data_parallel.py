@@ -213,7 +213,7 @@ class FullyShardedDataParallel(nn.Module):
             Backward pass may not start immediate after the FSDP root module finishes its forward.
             So, reshard the parameters for the FSDP root modules can help to save memory in this case.
             In certain cases, the performance is not even slower, because the cached full param
-            state may be stale due to load_local_dict_dict() calls anyway.
+            state may be stale due to load_local_state_dict() calls anyway.
             Default: True.
         mixed_precision (bool, Optional):
             if ``True``, inputs, activations and gradients will be kept in FP16;
@@ -1139,6 +1139,57 @@ class FullyShardedDataParallel(nn.Module):
             self.module.reset_parameters()
         else:
             raise RuntimeError("reset parameters after FSDP wrapping is not allowed")
+
+    def _apply(self, fn: Callable[[nn.Module], None]) -> "FullyShardedDataParallel":
+        """Hook into model conversion, like .half() and .float()
+
+        When users call module.half() or module.float() after FSDP wrapping,
+        we need to update some internal states here.
+
+        Args:
+            fn (Callable):
+                same as nn.Module's _apply.
+
+        Returns:
+            (Any):
+                same as nn.Module's _apply.
+        """
+        # Just a pre-caution. Conversion happens while IDLE is the safest.
+        self.assert_state(TrainingState.IDLE)
+
+        # In order to determine how to change compute_dtype, we need to
+        # remember the dtype before this call.
+        if len(self.params):
+            dtype_before = self.params[0].dtype
+
+        # Call nn.Module's _apply.
+        ret = super()._apply(fn)
+
+        # Make sure we update p._full_param_padded according to the new dtype.
+        for p in self.params:
+            if hasattr(p, "_full_param_padded"):
+                allocated = False
+                if p._full_param_padded.storage().size() == 0:
+                    allocated = True
+                    alloc_storage_(p._full_param_padded, size=p._full_param_padded.size())
+                p._full_param_padded = p._full_param_padded.to(dtype=p.data.dtype, device=p.data.device)
+                if allocated:
+                    free_storage_(p._full_param_padded)
+
+        # Update compute_dtype because otherwise, p._full_param_padded will
+        # still be in that dtype.
+        if len(self.params):
+            dtype_after = self.params[0].dtype
+            if dtype_before != dtype_after:
+                # There are 4 cases below. Only 2 result in compute_dtype change
+                # to the dtype_after.
+                #            16 -> 32, 32 -> 16
+                # mixed       n/a      no change
+                # not mixed   change   change
+                if not self.mixed_precision:
+                    self.compute_dtype = dtype_after
+
+        return ret
 
     @contextlib.contextmanager
     def summon_full_params(self, recurse: bool = True, volatile: bool = False) -> Generator:
