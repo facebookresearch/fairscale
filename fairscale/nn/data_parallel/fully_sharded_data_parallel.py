@@ -212,6 +212,8 @@ class FullyShardedDataParallel(nn.Module):
             save memory. Consider a case that an FSDP root module is a submodule of a model.
             Backward pass may not start immediate after the FSDP root module finishes its forward.
             So, reshard the parameters for the FSDP root modules can help to save memory in this case.
+            In certain cases, the performance is not even slower, because the cached full param
+            state may be stale due to load_local_dict_dict() calls anyway.
             Default: True.
         mixed_precision (bool, Optional):
             if ``True``, inputs, activations and gradients will be kept in FP16;
@@ -225,6 +227,7 @@ class FullyShardedDataParallel(nn.Module):
             which improves training speed.
         move_params_to_cpu (bool, Optional):
             if ``True``, offload params to CPU.
+            Default: False
         compute_dtype (torch.dtype, Optional):
             dtype for full parameters for computation. This defaults to
             ``torch.float32`` unless *``mixed_precision``* is set, in which case
@@ -1062,6 +1065,19 @@ class FullyShardedDataParallel(nn.Module):
             for module in get_fsdp_instances(self):
                 stack.enter_context(module._no_return_full_state_dict())
             output = self._load_state_dict(state_dict, strict)
+        # After loading the local state, if the a FSDP wrapper has the full
+        # params built, it will not use the updated value. Therefore we call
+        # _free_full_params() here to force it get updated on the next time when
+        # it needs to be built.
+        #
+        # There are 2 cases why this can happen:
+        #   1. in training, outermost wrapper may have reshrad_after_forward to
+        #      False. (_is_root is True); therefore, full param is built and kept.
+        #   2. in eval, inner modules may get called directly, hence having multiple
+        #      "root" instance, therefore, we need to loop over all instances
+        #      below to free full params.
+        for module in get_fsdp_instances(self):
+            module._free_full_params()
         return output
 
     @contextlib.contextmanager
@@ -1166,8 +1182,7 @@ class FullyShardedDataParallel(nn.Module):
             torch.cuda.synchronize()
             self._lazy_init()
             self.assert_state(TrainingState.IDLE)
-            # Set the state so that we assert when trying to go into
-            # forward/backward.
+            # Set the state so that we assert when trying to go into fwd/bwd.
             self.training_state = TrainingState.SUMMON_FULL_PARAMS
             full_tensors = self._rebuild_full_params(force_full_precision=True)
             assert full_tensors is not None
@@ -1845,19 +1860,24 @@ class FullyShardedDataParallel(nn.Module):
 
         def _finalize_parameters(fsdp_module: FullyShardedDataParallel) -> None:
             """Helper used below on all fsdp modules."""
-            # We make sure to switch to fp32 shards here because there might be
-            # params linger in full_param mode, if the following firing order happens:
-            #   pre-bwd: rebuild and use full for p1 and p2
-            #   post-bwd for p1: free and switch to fp32 shard for p1
-            #   pre-bwd: rebuild again for p1 and p2
-            #   post-bwd for p2: free and switch to fp32 shard for p2
-            # In the end, p1 will be left in full param mode.
-            #
-            # We need switch to fp32 *and* free full params. If we don't free,
-            # we end up reusing potentially *stale* full param (after the fp32
-            # shard is updated (e.g. by optimizer.step()).
-            fsdp_module._use_fp32_param_shard()
-            fsdp_module._free_full_params()
+            if not fsdp_module._is_root:
+                # We make sure to switch to fp32 shards here because there might be
+                # params linger in full_param mode, if the following firing order happens:
+                #   pre-bwd: rebuild and use full for p1 and p2
+                #   post-bwd for p1: free and switch to fp32 shard for p1
+                #   pre-bwd: rebuild again for p1 and p2
+                #   post-bwd for p2: free and switch to fp32 shard for p2
+                # In the end, p1 will be left in full param mode.
+                #
+                # We need switch to fp32 *and* free full params. If we don't free,
+                # we end up reusing potentially *stale* full param (after the fp32
+                # shard is updated (e.g. by optimizer.step()).
+                #
+                # We skip the root because it may have reshard=False, which means
+                # we want to keep the speed benefit of that. I haven't seen a case
+                # where this is needed on the root module.
+                fsdp_module._free_full_params()
+                fsdp_module._use_fp32_param_shard()
             for p in fsdp_module.params:
                 if not p.requires_grad:
                     continue
@@ -2039,16 +2059,16 @@ class FullyShardedDataParallel(nn.Module):
                     # the FP32 CPU param to CUDA for the all-gather.
                     p_data = p.data.to(p._full_param_padded.device, non_blocking=True)
 
-                    p_size = p._full_param_padded.size()
-                    assert p_size.numel() % self.world_size == 0
+                    full_p_size = p._full_param_padded.size()
+                    assert full_p_size.numel() % self.world_size == 0
                     if self.mixed_precision and force_full_precision:
                         # Allocate fresh tensor in full precision since we are in
                         # mixed precision and full precision rebuild is asked.
-                        output_tensor = p_data.new_zeros(p_size)
+                        output_tensor = p_data.new_zeros(full_p_size)
                     else:
-                        if p._full_param_padded.storage().size() != p_size.numel():
+                        if p._full_param_padded.storage().size() != full_p_size.numel():
                             # Allocate based on full size from all shards.
-                            alloc_storage_(p._full_param_padded, size=p_size)
+                            alloc_storage_(p._full_param_padded, size=full_p_size)
                         output_tensor = p._full_param_padded
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
