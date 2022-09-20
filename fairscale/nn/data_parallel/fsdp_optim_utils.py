@@ -14,9 +14,6 @@ from fairscale.nn.misc import FlattenParamsWrapper
 if TYPE_CHECKING:
     from fairscale.nn.data_parallel import FullyShardedDataParallel
 
-# These return keys are used by fairseq. To change, add @sshleifer as a reviewer.
-UNFLAT_RETURN_KEYS = {"state", "param_groups", "uncollected_local_ids", "param_id_map"}
-
 # This function helps shard a full optimizer state dict
 def flatten_optim_state_dict(sd: Dict) -> Dict:
     """Shard a full optimizer state dict (called by FSDP.get_shard_from_optim_state_dict)"""
@@ -52,20 +49,21 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
             new_state[local_id][buffer_name] = torch.cat(tensors)
         new_state[local_id].update(non_tensor_state)
         new_state[local_id].update(singleton_state[local_id])
-    new_sd = {"state": new_state, "param_groups": copy.deepcopy(sd["param_groups"])}
-    for k in sd.keys():  # if there are extra keys, like loss_scale, don't delete them
-        if k not in UNFLAT_RETURN_KEYS:
-            new_sd[k] = copy.deepcopy(sd[k])
 
+    # Now make a new param_groups copy and update it.
+    new_sd_pg = copy.deepcopy(sd["param_groups"])
     # add pointers from the `params` dict.
     for pg_id, _ in enumerate(sd["param_groups"]):
         # The values() list may look like [0,0,None,None,2,2]. We use
         # groupby to remove the duplicates and then count the length of
         # resulting iter.
         num_local_params = sum(1 for _ in groupby(param_id_map.values()))
-        new_sd["param_groups"][pg_id]["params"] = list(range(num_local_params))
+        new_sd_pg[pg_id]["params"] = list(range(num_local_params))
 
-    return new_sd
+    # update the original sd so that we don't lose extra keys, like loss_scale.
+    sd["state"] = new_state
+    sd["param_groups"] = new_sd_pg
+    return sd
 
 
 def check_param_counts_before_sharding(full_optim_state_dict: Dict, n_instances: int) -> None:
@@ -202,7 +200,7 @@ def build_unflat_state_dict(
     state: Dict[int, Dict[str, List[torch.Tensor]]],
     singleton_state: Dict[int, Dict[str, List[torch.Tensor]]],
     uncollected_opt_state: Dict[int, Dict],
-    param_groups: List[Dict],
+    original_sd: Dict,
 ) -> Dict:
     """Build an unflattened optimizer state dict given a list of flattened optimizer state dicts
     from each rank. This is only called on rank 0.
@@ -213,7 +211,7 @@ def build_unflat_state_dict(
         state: all-gathered combined/local/flatten state_dict
         singleton_state: all-gathered singleton_state (dimensionless tensors)
         uncollected_opt_state: non-tensor and not-gathered state
-        param_groups: the original rank 0's sd["param_groups"]
+        original_sd: the original rank 0's sd
 
     Returns:
         dict: an unflattened, nonsharded optimizer state, as if FSDP was not there.
@@ -228,19 +226,19 @@ def build_unflat_state_dict(
         singleton_state[local_id] = {buffer_name: [x] for buffer_name, x in v.items() if is_singleton_tensor(x)}
     # local ids are in the current state, global_ids will be in returned state.
     unflat_state, global_to_local_id = _unflatten_optim_state(state, instance_list, world_pad_info, singleton_state)
+
     # Since there are no tensors in param_groups, deepcopy is fine.
-    param_groups = copy.deepcopy(param_groups)
+    param_groups = copy.deepcopy(original_sd["param_groups"])
     # Casting needed only for mypy.
     num_params = sum([cast(int, m.num_params_managed) for m in instance_list])
     param_groups[0]["params"] = list(range(num_params))
-    unflat_optim_state_dict = {
-        "state": dict(sorted(unflat_state.items())),  # NOTE: this is probably already sorted
-        "param_id_map": global_to_local_id,
-        "param_groups": param_groups,
-        "uncollected_local_ids": list(uncollected_opt_state.keys()),
-    }
-    assert set(unflat_optim_state_dict.keys()) == UNFLAT_RETURN_KEYS
-    return unflat_optim_state_dict
+
+    # Update the original sd so we don't loss extra state like loss_scale.
+    original_sd["state"] = dict(sorted(unflat_state.items()))  # NOTE: this is probably already sorted
+    original_sd["param_id_map"] = global_to_local_id
+    original_sd["param_groups"] = param_groups
+    original_sd["uncollected_local_ids"] = list(uncollected_opt_state.keys())
+    return original_sd
 
 
 def is_singleton_tensor(x: Any) -> bool:

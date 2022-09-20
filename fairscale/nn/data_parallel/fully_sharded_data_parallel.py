@@ -2499,7 +2499,9 @@ class FullyShardedDataParallel(nn.Module):
 
         self._lazy_init()
         sd = self._remove_uncollectable_params_from_optim_state_dict(optim.state_dict())
-        assert set(sd.keys()) == {"param_groups", "state"}, f'{set(sd.keys())} != {"param_groups", "state"}'
+        assert {"param_groups", "state"}.issubset(
+            set(sd.keys())
+        ), f'{set(sd.keys())} not a superset of {"param_groups", "state"}'
         assert len(sd["param_groups"]) == 1, "Param groups are not supported"
         # We use all_gather to consolidate OSD['state'] and broadcast to consolidate the other keys (like param_groups)
         state, singleton_state = self._gather_optim_state(sd.pop("state"))
@@ -2513,7 +2515,7 @@ class FullyShardedDataParallel(nn.Module):
             state,
             singleton_state,
             self.uncollected_opt_state,
-            sd["param_groups"],
+            sd,
         )
         self.uncollected_opt_state = {}
         assert "uncollected_local_ids" in new_state_dict
@@ -2524,6 +2526,14 @@ class FullyShardedDataParallel(nn.Module):
         ``no_broadcast_optim_state`` flag set.
 
         We also make rooms for the optimizer state on rank 0.
+
+        Args:
+            osd (Dict):
+                Optimizer state dict from a rank. osd["state"] is what we mainly
+                care. Osd may contain other keys and values, we need to keep. Therefore,
+                we only change osd["state"] and not returning a new copy of osd
+                which is slower and may also lose extra fields, like "loss_scale"
+                used by fairseq.
         """
         # In PyTorch version 1.12, Adam's `step` state changed from an int to a singleton
         # tensor. We convert it back here. Otherwise, the step counter will be treated
@@ -2535,7 +2545,7 @@ class FullyShardedDataParallel(nn.Module):
                     bufs["step"] = bufs["step"].item()
         # Get uncollected_ids.
         uncollected_ids = [i for i, m in enumerate(get_fsdp_instances(self)) if m.no_broadcast_optim_state]
-        new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
+        new_state_value = {k: v for k, v in osd["state"].items() if k not in uncollected_ids}
         if self.rank == 0:
             # Save placeholders for uncollected opt state to keep the same unflat OSD format, and move them to CPU.
             self.uncollected_opt_state = {
@@ -2544,9 +2554,8 @@ class FullyShardedDataParallel(nn.Module):
                 if k in uncollected_ids
             }
 
-        pg = copy.deepcopy(osd["param_groups"])
-        new_dct["param_groups"] = pg
-        return new_dct
+        osd["state"] = new_state_value
+        return osd
 
     def get_shard_from_optim_state_dict(self, full_optim_state_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Get the portion of the optimizer state dict associated with the shard
