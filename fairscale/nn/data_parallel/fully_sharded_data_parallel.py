@@ -1721,8 +1721,8 @@ class FullyShardedDataParallel(nn.Module):
             return  # don't register grad hooks if grad isn't enabled
         for p in self.params:
             if p.requires_grad:
-                if hasattr(p, "_shard_bwd_hook"):
-                    continue
+                #if hasattr(p, "_shard_bwd_hook"):
+                #    continue
                 # Register a hook on the first call, empirically, autograd
                 # fires it at the end for this param, which makes sense.
                 p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
@@ -1952,8 +1952,8 @@ class FullyShardedDataParallel(nn.Module):
                     continue
                 if hasattr(p, "_shard_bwd_hook"):
                     p_assert(len(p._shard_bwd_hook) == 2, f"WFPB: incorrect hook num: {len(p._shard_bwd_hook)}")
-                    p._shard_bwd_hook[1].remove()
-                    delattr(p, "_shard_bwd_hook")
+                    #p._shard_bwd_hook[1].remove()
+                    #delattr(p, "_shard_bwd_hook")
 
                 # Leave the gradient accumulation state as-is if not synchronizing this pass. This ensures p.grad
                 # remains the unsharded gradient accumulated from prior no-sync passes, and p._saved_grad_shard
