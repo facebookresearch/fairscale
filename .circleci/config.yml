@@ -17,9 +17,8 @@
 
 version: 2.1
 
-# Disabled codecov since https://codecov.io/bash seems to be down.
-#orbs:
-#  codecov: codecov/codecov@1.0.2
+orbs:
+  codecov: codecov/codecov@1.0.2
 
 # -------------------------------------------------------------------------------------
 # Environments to run the jobs in
@@ -402,7 +401,8 @@ jobs:
       - store_test_results:
           path: test-results
 
-      - <<: *upload_coverage
+      # Disabled codecov since https://codecov.io/bash seems to be down.
+      #- <<: *upload_coverage
 
   gpu_tests_stable:
     parameters:
