@@ -35,7 +35,6 @@ from typing import (
 import torch
 from torch.autograd import Variable
 import torch.distributed as dist
-from torch.distributed import ProcessGroup
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
@@ -58,6 +57,12 @@ from . import fsdp_optim_utils as ou
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
+
+    # See #1057. On some platform, torch.distributed may not have ProcessGroup
+    # So we only import it during type checking, which is not done on default
+    # import and only done by developer (doing it on supported platforms I presume).
+    from torch.distributed import ProcessGroup
+
 # TODO: Remove the toggle here when github open issue #801 is resolved.
 if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
     enable_nccl_base_collectives = False
@@ -317,7 +322,7 @@ class FullyShardedDataParallel(nn.Module):
     def __init__(
         self,
         module: nn.Module,
-        process_group: Optional[ProcessGroup] = None,
+        process_group: Optional["ProcessGroup"] = None,
         # The type for the process_group_reduce_scatter only can be either ProcessGroup or ProcessGroupName
         process_group_reduce_scatter: Any = ProcessGroupName.reduce_scatter,
         reshard_after_forward: bool = True,
@@ -362,6 +367,9 @@ class FullyShardedDataParallel(nn.Module):
             self.process_group_reduce_scatter = get_process_group_cached(ProcessGroupName.reduce_scatter)
         else:
             # If a specific process group is passed in, the reduce_scatter will use the passed in process group.
+            # Delay the import here since this type may not be available on certain platforms.
+            from torch.distributed import ProcessGroup
+
             if isinstance(process_group_reduce_scatter, ProcessGroup):
                 self.process_group_reduce_scatter = process_group_reduce_scatter
             else:
@@ -2790,7 +2798,7 @@ def _unpad(shard: torch.Tensor, pad: int) -> torch.Tensor:
 def auto_wrap_bn(
     module: nn.Module,
     single_rank_pg: bool = False,
-    process_group: Optional[ProcessGroup] = None,
+    process_group: Optional["ProcessGroup"] = None,
     fsdp_config: Optional[Dict[str, Any]] = None,
     wrap_it: bool = True,
     assert_on_collision: bool = True,

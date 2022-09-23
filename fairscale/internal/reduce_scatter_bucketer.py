@@ -5,12 +5,14 @@
 
 import functools
 import os
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor
 import torch.distributed as dist
-from torch.distributed import ProcessGroup
+
+if TYPE_CHECKING:
+    from torch.distributed import ProcessGroup
 
 # TODO: Remove the toggle-enable_nccl_base_collectives when github open issue #801 is resolved.
 if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
@@ -20,7 +22,7 @@ else:
 
 
 class Bucket:
-    def __init__(self, data: Tensor, group: ProcessGroup):
+    def __init__(self, data: Tensor, group: "ProcessGroup"):
         self.data = data
         self.group = group
         self.offset = 0
@@ -99,13 +101,13 @@ class ReduceScatterBucketer:
 
     def __init__(self, bucket_cap_mb: int = 25):
         self.bucket_cap_mb = bucket_cap_mb
-        self.buckets: Dict[Tuple[torch.dtype, torch.device, ProcessGroup], Bucket] = {}
+        self.buckets: Dict[Tuple[torch.dtype, torch.device, "ProcessGroup"], Bucket] = {}
 
     @torch.no_grad()
     def reduce_scatter_async(
         self,
         input_list: List[Tensor],
-        group: ProcessGroup,
+        group: "ProcessGroup",
         callback_fn: Optional[Callable] = None,
     ) -> None:
         """
@@ -186,7 +188,7 @@ class ReduceScatterBucketer:
         bucket_size = self.bucket_cap_mb * MB / element_size
         return int(bucket_size // num_shards)
 
-    def _get_bucket(self, tensor: Tensor, group: ProcessGroup) -> Bucket:
+    def _get_bucket(self, tensor: Tensor, group: "ProcessGroup") -> Bucket:
         # TODO (Min): the `group` used here in the key is the object hash, not the content
         #     hash. That means if FSDP instances are initialized with different process groups,
         #     even when the group members are in fact the same, we end up creating different
