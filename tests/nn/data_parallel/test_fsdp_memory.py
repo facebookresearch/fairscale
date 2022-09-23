@@ -18,7 +18,7 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel
 import torch.optim as optim
 
-from fair_dev.testing.testing import dist_init, dump_all_tensors, skip_if_single_gpu, teardown, temp_files_ctx
+from fairscale.fair_dev.testing.testing import dist_init, dump_all_tensors, skip_if_single_gpu, teardown, temp_files_ctx
 from fairscale.internal import torch_version
 from fairscale.internal.parallel import get_process_group_cached
 from fairscale.nn import checkpoint_wrapper

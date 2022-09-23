@@ -33,7 +33,7 @@ from torch.nn import (
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD
 
-from fair_dev.testing.testing import (
+from fairscale.fair_dev.testing.testing import (
     dist_init,
     objects_are_equal,
     rmf,

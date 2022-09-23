@@ -10,7 +10,7 @@ import unittest
 
 import torch
 
-from fair_dev.testing.testing import objects_are_equal
+from fairscale.fair_dev.testing.testing import objects_are_equal
 from fairscale.nn import FlattenParamsWrapper
 
 

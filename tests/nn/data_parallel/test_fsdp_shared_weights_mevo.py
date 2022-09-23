@@ -17,7 +17,8 @@ from torch import nn
 import torch.multiprocessing as mp
 from torch.optim import SGD
 
-from fair_dev.testing.testing import (
+from fairscale.experimental.nn import MEVO
+from fairscale.fair_dev.testing.testing import (
     dist_init,
     in_circle_ci,
     objects_are_equal,
@@ -25,7 +26,6 @@ from fair_dev.testing.testing import (
     teardown,
     temp_files_ctx,
 )
-from fairscale.experimental.nn import MEVO
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 
 VOCAB = 4

@@ -5,6 +5,10 @@
 
 ################################################################################
 # Import most common subpackages
+#
+# NOTE: we don't maintain any public APIs in both experimental and fair_dev
+#       sub-modules. Code in them are experimental or for developer only. They
+#       can be changed, removed, anytime.
 ################################################################################
 
 from typing import List

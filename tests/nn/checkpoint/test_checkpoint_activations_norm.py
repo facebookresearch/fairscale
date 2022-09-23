@@ -14,7 +14,7 @@ import torch
 from torch.nn import BatchNorm2d, LayerNorm, Linear, Sequential
 from torch.optim import SGD
 
-from fair_dev.testing.testing import objects_are_equal
+from fairscale.fair_dev.testing.testing import objects_are_equal
 from fairscale.internal import torch_version
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 

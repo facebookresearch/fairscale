@@ -10,12 +10,12 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel
 
-from fair_dev.testing.testing import GPT2, dist_init, skip_if_no_cuda, skip_if_single_gpu, temp_files_ctx
 from fairscale.experimental.tooling.layer_memory_tracker import (
     LayerwiseMemoryTracker,
     ProcessGroupTracker,
     find_best_reset_points,
 )
+from fairscale.fair_dev.testing.testing import GPT2, dist_init, skip_if_no_cuda, skip_if_single_gpu, temp_files_ctx
 from fairscale.nn import FullyShardedDataParallel
 
 

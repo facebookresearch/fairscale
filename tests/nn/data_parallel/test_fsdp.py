@@ -18,7 +18,7 @@ import torch
 from torch import nn
 import torch.distributed
 
-from fair_dev.testing.testing import (
+from fairscale.fair_dev.testing.testing import (
     DeviceAndTypeCheckModule,
     DummyProcessGroup,
     dist_init,

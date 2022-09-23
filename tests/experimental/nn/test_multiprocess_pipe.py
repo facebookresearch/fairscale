@@ -20,8 +20,8 @@ import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 import torch.nn as nn
 
-from fair_dev.testing.testing import skip_due_to_flakyness, skip_if_single_gpu
 from fairscale.experimental.nn.distributed_pipeline import DistributedLoss, DistributedPipeline, PipelineModulesGraph
+from fairscale.fair_dev.testing.testing import skip_due_to_flakyness, skip_if_single_gpu
 from fairscale.internal import torch_version
 
 pytestmark = pytest.mark.skipif(

@@ -17,7 +17,7 @@ import torch.multiprocessing as mp
 from torch.nn import Linear, Module
 from torch.optim import SGD
 
-from fair_dev.testing.testing import dist_init, skip_if_single_gpu, teardown
+from fairscale.fair_dev.testing.testing import dist_init, skip_if_single_gpu, teardown
 from fairscale.internal import torch_version
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import TrainingState

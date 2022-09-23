@@ -16,7 +16,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn import Linear, Sequential
 
-from fair_dev.testing.testing import (
+from fairscale.fair_dev.testing.testing import (
     GPT2,
     SGDWithPausingCompute,
     available_devices,

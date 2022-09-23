@@ -21,7 +21,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from fair_dev.testing.testing import (
+from fairscale.fair_dev.testing.testing import (
     check_same_model_params,
     check_same_models_across_ranks,
     skip_if_no_cuda,

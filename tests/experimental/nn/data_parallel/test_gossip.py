@@ -15,8 +15,8 @@ from torch import nn
 import torch.distributed
 import torch.nn.functional as F
 
-from fair_dev.testing.testing import skip_if_single_gpu, spawn_for_all_world_sizes
 import fairscale.experimental.nn.data_parallel.gossip as gossip
+from fairscale.fair_dev.testing.testing import skip_if_single_gpu, spawn_for_all_world_sizes
 
 # Enfore CUBLAS reproducibility, see https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"

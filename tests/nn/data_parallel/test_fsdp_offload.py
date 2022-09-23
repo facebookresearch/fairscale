@@ -25,7 +25,7 @@ except ImportError as ie:
     pytestmark = pytest.mark.skipif(True, reason=ie.msg)
     pass
 
-from fair_dev.testing.testing import dist_init, spawn_for_all_world_sizes
+from fairscale.fair_dev.testing.testing import dist_init, spawn_for_all_world_sizes
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 from fairscale.nn.data_parallel import FullyShardedDataParallel, OffloadConfig, TrainingState
 
