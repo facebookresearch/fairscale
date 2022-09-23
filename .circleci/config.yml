@@ -16,8 +16,11 @@
 # CACHE_NUMBER value.
 
 version: 2.1
-orbs:
-  codecov: codecov/codecov@1.0.2
+
+# Disabled codecov since https://codecov.io/bash seems to be down.
+#orbs:
+#  codecov: codecov/codecov@1.0.2
+
 # -------------------------------------------------------------------------------------
 # Environments to run the jobs in
 # -------------------------------------------------------------------------------------
