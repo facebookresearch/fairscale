@@ -2581,8 +2581,15 @@ class FullyShardedDataParallel(nn.Module):
         This can be used to get the right sharded optimizer state to be loaded
         into the sharded optimizer for this FSDP rank.
 
+        ..warning:: The input state dict is modified in-place assuming the original
+                    full state isn't going to be used anymore. This is done so that
+                    we don't need to copy extra state in it. It is caller's responsibility
+                    to make copies if it doesn't want the original state dict modified.
+
         Args:
-            full_optim_state_dict (dict): consolidated optimizer state returned by ``gather_full_optim_state``, or loaded from a checkpoint.
+            full_optim_state_dict (dict):
+                consolidated optimizer state returned by ``gather_full_optim_state``,
+                or loaded from a checkpoint.
 
         Returns:
             (dict): a shard of the optimizer state.
@@ -2600,9 +2607,9 @@ class FullyShardedDataParallel(nn.Module):
             ), f'{len(full_optim_state_dict["state"])}, {len(instance_list)}'
 
         # get the portion of dict associated with the shard, in place
-        for id, s in full_optim_state_dict["state"].items():
+        for _id, s in full_optim_state_dict["state"].items():
             for k, v in s.items():
-                if torch.is_tensor(v) and id not in ids_not_to_shard:
+                if torch.is_tensor(v) and _id not in ids_not_to_shard:
                     v_shard, _ = self._get_shard(v)
                 elif isinstance(v, list) and ou.is_singleton_tensor(v[0]):
                     # if we are resuming on larger world size, take first entry
@@ -2610,7 +2617,7 @@ class FullyShardedDataParallel(nn.Module):
                     assert ou.is_singleton_tensor(v_shard)
                 else:
                     v_shard = v  # don't shard entries that are not tensors
-                full_optim_state_dict["state"][id][k] = v_shard
+                full_optim_state_dict["state"][_id][k] = v_shard
 
         return full_optim_state_dict
 

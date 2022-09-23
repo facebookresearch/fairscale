@@ -63,6 +63,9 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
     # update the original sd so that we don't lose extra keys, like loss_scale.
     sd["state"] = new_state
     sd["param_groups"] = new_sd_pg
+    # delete extra keys we have added to match the original state.
+    del sd["uncollected_local_ids"]
+    del sd["param_id_map"]
     return sd
 
 
