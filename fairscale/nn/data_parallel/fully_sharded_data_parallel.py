@@ -2117,11 +2117,17 @@ class FullyShardedDataParallel(nn.Module):
                     # case 1: shared param can be rebuilt multiple times.
                     # A corner case is p._orig_size = (1,), which means the shape equality is
                     # not a perfect check. But we assume we don't share a param with shape (1,).
+                    # We do use size (1,) in unit testing at least.
                     # case 2: with multiple params (like non-flatten, or multiple flatten groups)
                     # we may have pre & post bwd firing order issues. See comments in the
                     # _finalize_parameters function for such case.
-                    if p.data.shape == p._orig_size:
-                        assert p.data.storage().data_ptr() == p._full_param_padded.storage().data_ptr()
+                    if p.data.shape == p._orig_size and p._orig_size != (1,):
+                        assert p.data.storage().data_ptr() == p._full_param_padded.storage().data_ptr(), (
+                            f"p.data {p.data.storage().data_ptr()} "
+                            f"p._fp32_shard {p._fp32_shard.storage().data_ptr()} "
+                            f"p._fp16_shard {p._fp16_shard.storage().data_ptr() if p._fp16_shard is not None else None} "
+                            f"p._full_params_padded {p._full_param_padded.storage().data_ptr()} "
+                        )
                         continue
 
                     # If self.move_params_to_cpu and force_full_precision, we need to cast
