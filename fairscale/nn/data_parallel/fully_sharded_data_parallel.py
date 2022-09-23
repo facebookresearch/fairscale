@@ -1094,7 +1094,8 @@ class FullyShardedDataParallel(nn.Module):
 
         .. note:: Gradient accumulation can be done without this context,
             avoiding the extra GPU memory overhead, but with the extra
-            networking overhead.
+            networking overhead. I.e. the trainer loop should just do
+            multiple fwd/bwd without step() without the no_sync context.
         """
         self._lazy_init()
         assert self._is_root, "no_sync on inner FSDP is not supported"
@@ -1915,7 +1916,7 @@ class FullyShardedDataParallel(nn.Module):
 
         def _finalize_parameters(fsdp_module: FullyShardedDataParallel) -> None:
             """Helper used below on all fsdp modules."""
-            if not fsdp_module._is_root:
+            if not fsdp_module._is_root and self._require_backward_grad_sync:
                 # We make sure to switch to fp32 shards here because there might be
                 # params linger in full_param mode, if the following firing order happens:
                 #   pre-bwd: rebuild and use full for p1 and p2
@@ -1931,6 +1932,11 @@ class FullyShardedDataParallel(nn.Module):
                 # We skip the root because it may have reshard=False, which means
                 # we want to keep the speed benefit of that. I haven't seen a case
                 # where this is needed on the root module.
+                #
+                # We skip also in grad accum steps since we want to keep the full
+                # params since they haven't been updated. See comment of ``no_sync``
+                # for when to use no_sync style grad acc. For FSDP, it is more likely
+                # you want to use grad acc without no_sync.
                 fsdp_module._free_full_params()
                 fsdp_module._use_fp32_param_shard()
             for p in fsdp_module.params:
@@ -1944,7 +1950,7 @@ class FullyShardedDataParallel(nn.Module):
                 # Leave the gradient accumulation state as-is if not synchronizing this pass. This ensures p.grad
                 # remains the unsharded gradient accumulated from prior no-sync passes, and p._saved_grad_shard
                 # remains the sharded gradient from the last synchronized pass. This also allows interleaved no-sync and
-                # sync passes, if desired.
+                # sync passes.
                 if not self._require_backward_grad_sync:
                     continue
 

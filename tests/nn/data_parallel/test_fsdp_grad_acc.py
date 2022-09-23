@@ -189,10 +189,10 @@ class TestGradAccCommunication(DistributedTest):
                         # the sum of the _base and public methods should stay the same.
                         assert (
                             mock_all_gather.call_count + mock_all_gather_base.call_count == expected_all_gather1
-                        ), f"{mock_all_gather.call_count +  mock_all_gather_base.call_count} != {expected_all_gather1}"
+                        ), f"{mock_all_gather.call_count} + {mock_all_gather_base.call_count} != {expected_all_gather1}"
                         assert (
                             mock_reduce_scatter.call_count + mock_reduce_scatter_base.call_count == 0
-                        ), f"{mock_reduce_scatter.call_count +  mock_reduce_scatter_base.call_count} != 0"
+                        ), f"{mock_reduce_scatter.call_count} + {mock_reduce_scatter_base.call_count} != 0"
 
                         output = model(*batch)
                         loss = model.module.get_loss(batch, output)
@@ -200,11 +200,11 @@ class TestGradAccCommunication(DistributedTest):
 
                         assert (
                             mock_all_gather.call_count + mock_all_gather_base.call_count == expected_all_gather2
-                        ), f"{mock_all_gather.call_count + mock_all_gather_base.call_count} != {expected_all_gather2}"
+                        ), f"{mock_all_gather.call_count} + {mock_all_gather_base.call_count} != {expected_all_gather2}"
                         assert (
                             mock_reduce_scatter.call_count + mock_reduce_scatter_base.call_count
                             == expected_reduce_scatter
-                        ), f"{mock_reduce_scatter.call_count + mock_reduce_scatter_base.call_count} != {expected_reduce_scatter}"
+                        ), f"{mock_reduce_scatter.call_count} + {mock_reduce_scatter_base.call_count} != {expected_reduce_scatter}"
 
 
 if __name__ == "__main__":
