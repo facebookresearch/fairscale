@@ -158,7 +158,8 @@ def _dist_worker(rank, world_size, files, wrap_middle, test_fn):
         # We don't raise exceptions in CI since CI's T4 machine seems to be flaky with this test.
         # On devel machines, we do want to catch potential errors. There could be real bugs or
         # system issues behind the flakiness. One example is all-reduce vs. simulated averaging
-        # below.
+        # below. The check also fails on my rtx 20xx. So maybe it only works on devfair with
+        # Quadro GP100 GPUs. TODO (Min): debug this.
         objects_are_equal(sd_after, fsdp_model.state_dict(), raise_exception=not in_circle_ci())
     elif test_fn == "eval":
         _eval(fsdp_model, in_data)
