@@ -16,6 +16,8 @@ import torch
 from torch import nn
 import torch.distributed
 
+pytestmark = pytest.mark.skip(reason="ssd offload to be removed to simplify the code")
+
 try:
     import fairscale.experimental.nn.ssd_offload as so
 except ImportError as ie:
