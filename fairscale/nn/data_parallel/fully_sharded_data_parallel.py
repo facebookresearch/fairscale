@@ -357,6 +357,9 @@ class FullyShardedDataParallel(nn.Module):
             self.process_group_reduce_scatter = get_process_group_cached(ProcessGroupName.reduce_scatter)
         else:
             # If a specific process group is passed in, the reduce_scatter will use the passed in process group.
+            # Delay the import here since this type may not be available on certain platforms.
+            from torch.distributed import ProcessGroup
+
             if isinstance(process_group_reduce_scatter, ProcessGroup):
                 self.process_group_reduce_scatter = process_group_reduce_scatter
             else:
