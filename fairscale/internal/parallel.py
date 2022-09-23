@@ -7,12 +7,15 @@
 
 from enum import Enum
 import sys
-from typing import List, Optional, Sequence
+from typing import TYPE_CHECKING, List, Optional, Sequence
 
 import torch
 import torch.distributed as dist
-from torch.distributed import ProcessGroup
 import torch.nn.functional as F
+
+if TYPE_CHECKING:
+    # See comments in FSDP code for reason of this import.
+    from torch.distributed import ProcessGroup
 
 
 def chunk_and_pad(tensor: torch.Tensor, num_chunks: int) -> List[torch.Tensor]:
@@ -27,7 +30,7 @@ def chunk_and_pad(tensor: torch.Tensor, num_chunks: int) -> List[torch.Tensor]:
     return chunks
 
 
-def validate_process_group(device: torch.device, process_group: ProcessGroup) -> None:
+def validate_process_group(device: torch.device, process_group: "ProcessGroup") -> None:
     """Do a quick test in case user called FSDP without calling torch.cuda.set_device()
     correctly. This can easily happen in cpu_offload case where the model resides on
     the CPU.
@@ -67,7 +70,7 @@ class ProcessGroupName(str, Enum):
 
 def get_process_group_cached(
     name: ProcessGroupName = ProcessGroupName.default, ranks: Optional[Sequence[int]] = None
-) -> ProcessGroup:
+) -> "ProcessGroup":
     """
     Singleton PyTorch distributed group cache. Inspired by the code from fairseq.
 
