@@ -112,6 +112,14 @@ def run_one_step(
         with ddp_model.no_sync() if grad_accumulation else suppress():
             input_tensor = torch.rand((64, 2)).to(device)
             loss = ddp_model(input_tensor).abs().sum()
+
+            # If grad_accumulation, we can check after the forward that the models are different
+            # (not synced)
+            if grad_accumulation:
+                check_same_models_across_ranks(
+                    ddp_model, dist.group.WORLD, params_should_be_equal=False, check_broadcast_buffers=True
+                )
+
             loss.backward()
         return loss
 

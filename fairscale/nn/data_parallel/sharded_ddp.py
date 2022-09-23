@@ -218,7 +218,7 @@ class ShardedDataParallel(nn.Module):
             if needs_setup:
                 self.refresh_trainable()
 
-            if self._enable_broadcast_buffers:
+            if self._enable_broadcast_buffers and not self._should_accumulate_grads:
                 # NCCL communications are on a different stream, needs to be blocking
                 # for the subsequent FW to be correct
                 self.sync_buffers(blocking=True)
