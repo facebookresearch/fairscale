@@ -1165,16 +1165,20 @@ class FullyShardedDataParallel(nn.Module):
         # Call nn.Module's _apply.
         ret = super()._apply(fn)
 
-        # Make sure we update p._full_param_padded according to the new dtype.
-        for p in self.params:
-            if hasattr(p, "_full_param_padded"):
-                allocated = False
-                if p._full_param_padded.storage().size() == 0:
-                    allocated = True
-                    alloc_storage_(p._full_param_padded, size=p._full_param_padded.size())
-                p._full_param_padded = p._full_param_padded.to(dtype=p.data.dtype, device=p.data.device)
-                if allocated:
-                    free_storage_(p._full_param_padded)
+        # Make sure we update p._full_param_padded according to the new dtype if we are
+        # not in mixed_precision. In mixed precision, doing m.half() or m.float() really
+        # don't make much sense. But we need allow it in case user just wanted to temporarily
+        # .half() and then .float() back for some reason.
+        if not self.mixed_precision:
+            for p in self.params:
+                if hasattr(p, "_full_param_padded"):
+                    allocated = False
+                    if p._full_param_padded.storage().size() == 0:
+                        allocated = True
+                        alloc_storage_(p._full_param_padded, size=p._full_param_padded.size())
+                    p._full_param_padded = p._full_param_padded.to(dtype=p.data.dtype, device=p.data.device)
+                    if allocated:
+                        free_storage_(p._full_param_padded)
 
         # Update compute_dtype because otherwise, p._full_param_padded will
         # still be in that dtype.
