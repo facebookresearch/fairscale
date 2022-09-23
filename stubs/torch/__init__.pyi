@@ -32,11 +32,9 @@ from . import utils as utils
 from . import jit as jit
 from . import fft as fft
 
-#MODIFIED BY TORCHGPIPE
 from . import backends
 from . import distributed
 from . import version
-#END
 
 class dtype:
     is_floating_point: builtins.bool
@@ -67,10 +65,8 @@ class device:
     type: str
     index: _int
 
-#MODIFIED BY TORCHGPIPE
     @overload
     def __init__(self, device: device) -> None: ...
-#END
 
     @overload
     def __init__(self, device: Union[_int, str]) -> None: ...
@@ -78,17 +74,14 @@ class device:
     @overload
     def __init__(self, type: str, index: _int) -> None: ...
 
-#MODIFIED BY TORCHGPIPE
 class Size(tuple):
     def numel(self) -> _int: ...
-#END
 
-#MODIFIED BY TORCHGPIPE
 class Storage:
     def size(self) -> _int: ...
     def element_size(self) -> _int: ...
     def resize_(self, int) -> None: ...
-#END
+    def data_ptr(self) -> _int: ...
 
 # See https://github.com/python/mypy/issues/4146 for why these workarounds
 # is necessary
@@ -935,10 +928,8 @@ class Tensor:
     def unique_consecutive(self, sorted=True, return_inverse=False, return_counts=False, dim=None): ...
     def lu(self, pivot=True, get_infos=False): ...
 
-#MODIFIED BY TORCHGPIPE
     from .cuda import Stream
     def record_stream(self, stream: Optional[Stream]) -> None: ...
-#END
 
 @overload
 def __and__(self: Tensor, other: Number) -> Tensor: ...
@@ -1924,7 +1915,5 @@ def clear_autocast_cache() -> None: ...
 # possible to type correctly
 def nonzero(input: Tensor, *, out: Optional[Tensor]=None, as_tuple: Optional[_bool]=None): ...
 
-#MODIFIED BY TORCHGPIPE
 def is_grad_enabled() -> _bool: ...
 __version__: str = ...
-#END

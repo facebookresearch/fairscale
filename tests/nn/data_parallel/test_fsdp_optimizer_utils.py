@@ -2,6 +2,7 @@
 #
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
+import copy
 import functools
 from time import time
 import unittest
@@ -13,7 +14,7 @@ from torch.optim import SGD, Adadelta, Adam  # type: ignore
 
 from fair_dev.testing.testing import dist_init, objects_are_equal, spawn_for_all_world_sizes
 from fairscale.internal.params import recursive_copy_to_device
-from fairscale.nn import FullyShardedDataParallel
+from fairscale.nn.data_parallel import FullyShardedDataParallel, get_fsdp_instances
 from fairscale.nn.data_parallel.fsdp_optim_utils import is_singleton_tensor
 
 from .test_fsdp import (
@@ -158,9 +159,9 @@ class TestOptimizerUtils(DistributedTest):
         unwrapped_sd = optim_unwrapped.state_dict()
 
         if not transformer and not expert_group:
-            no_broadcast_children = [x for x in fsdp._fsdp_instances() if x.no_broadcast_optim_state]
+            no_broadcast_children = [x for x in get_fsdp_instances(fsdp) if x.no_broadcast_optim_state]
             assert len(no_broadcast_children) == 1, f"Length of non shared params {len(no_broadcast_children)}"
-            assert fsdp._fsdp_instances()[-1].no_broadcast_optim_state
+            assert get_fsdp_instances(fsdp)[-1].no_broadcast_optim_state
         torch.cuda.empty_cache()
         cuda_gb_before = torch.cuda.memory_stats(fsdp.rank)["allocated_bytes.all.current"] / 1024**3
         tstart = time()
@@ -196,12 +197,15 @@ class TestOptimizerUtils(DistributedTest):
             )
             return
 
-        unflat_state = sd["state"]
         assert "uncollected_local_ids" in sd
-        shard_sd = fsdp.get_shard_from_optim_state_dict(sd)
+        sd_copy = copy.deepcopy(sd)
+        unflat_state = sd_copy["state"]
+        shard_sd = fsdp.get_shard_from_optim_state_dict(sd_copy)
         shard_sd = recursive_copy_to_device(shard_sd, non_blocking=False, device="cpu")
-        state_after_get_shard = sd["state"]
-        assert objects_are_equal(unflat_state, state_after_get_shard)  # no side effects.
+        state_after_get_shard = sd_copy["state"]
+        # sd is changed in-place in case there are extra states.
+        assert not objects_are_equal(unflat_state, state_after_get_shard)
+        del sd_copy
 
         assert_equal(len(sd["state"]), len(unwrapped_sd["state"]))
         assert_equal(len(sd["param_groups"][0]["params"]), len(unwrapped_sd["param_groups"][0]["params"]))
@@ -223,8 +227,8 @@ class TestOptimizerUtils(DistributedTest):
             [v for k, v in shard_sd["param_groups"][0].items()],
             [v for k, v in original_shard_sd["param_groups"][0].items()],
         )
-        assert objects_are_equal(shard_sd["state"], original_shard_sd["state"])
-        assert objects_are_equal({k: shard_sd[k] for k in original_shard_sd}, original_shard_sd)
+        objects_are_equal(shard_sd["state"], original_shard_sd["state"], raise_exception=True)
+        objects_are_equal({k: shard_sd[k] for k in original_shard_sd}, original_shard_sd, raise_exception=True)
 
     @parameterized.expand(
         [(True,), (False,)],
@@ -260,7 +264,7 @@ class TestOptimizerUtils(DistributedTest):
         model = TransformerWithSharedParams(group)
         named_pars = [p for n, p in model.named_parameters()]
         for i, p in enumerate(model.parameters()):
-            assert objects_are_equal(p, named_pars[i])
+            objects_are_equal(p, named_pars[i], raise_exception=True)
 
     def test_is_singleton_tensor(self):
         """Test is_singleton_tensor function"""

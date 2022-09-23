@@ -500,7 +500,11 @@ class FlattenParamsWrapper(nn.Module):
         # Unflatten the module automatically if the state_dict is non-flat.
         # Note, we check the flat_param_ prefix since custom names can be given and flat_param_0 is
         # not always in the state dict's key list.
-        if self.is_flattened and not any(k.startswith("flat_param_") for k in state_dict.keys()):
+        if (
+            self.num_params_managed > 0
+            and self.is_flattened
+            and not any(k.startswith("flat_param_") for k in state_dict.keys())
+        ):
             # This object is flatten but state_dict is not. So we unflatten and load.
             with self.unflatten_params():
                 return super().load_state_dict(state_dict, strict)
