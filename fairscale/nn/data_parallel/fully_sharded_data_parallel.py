@@ -1712,6 +1712,7 @@ class FullyShardedDataParallel(nn.Module):
         object, so deleting and re-registering still ensured the hook fire
         once after all gradients are generated.
 
+        [XXX update]
         Empirically, keep the first hook register per forward pass seems to
         work the best. We do need to remove the hook at the end of the
         backward pass. Otherwise, the next forward pass will not register
@@ -1721,15 +1722,15 @@ class FullyShardedDataParallel(nn.Module):
             return  # don't register grad hooks if grad isn't enabled
         for p in self.params:
             if p.requires_grad:
-                #if hasattr(p, "_shard_bwd_hook"):
-                #    continue
+                if False and hasattr(p, "_shard_bwd_hook"):
+                    continue
                 # Register a hook on the first call, empirically, autograd
                 # fires it at the end for this param, which makes sense.
                 p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
                 assert p_tmp.grad_fn is not None
                 grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
                 handle = grad_acc.register_hook(functools.partial(self._post_backward_hook, p))
-                p._shard_bwd_hook = (grad_acc, handle)
+                # p._shard_bwd_hook = (grad_acc, handle)
 
     @torch.no_grad()
     def _post_backward_hook(self, param: Parameter, *unused: Any) -> None:
@@ -1756,20 +1757,23 @@ class FullyShardedDataParallel(nn.Module):
         # then subsequent hook callbacks will see POST state.
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         self.training_state = TrainingState.BACKWARD_POST
-        if param.grad is None:
-            return
 
         if hasattr(param, "_linked_param"):
-            # This links to a shared param. We should finalize the linked param here.
+            # This links to a shared param. We should try to finalize the linked param here.
             assert param.shape == (1,), param.shape
             # If the _is_shared flag is set, then this shared weight is indeed being
             # shared between different FSDP wrappers. Otherwise, they are linked but
             # likely in the same FSDP wrapper, which means we shouldn't finalize the
             # linked param..
             if hasattr(param._linked_param, "_is_shared") and param._linked_param._is_shared:
+                # param._linked_param may or may not have .grad since this callback
+                # could happen multiple times to support #918. Since we check `if param.grad is None`
+                # below anyway, this is OK.
                 param = param._linked_param
 
-        assert param.grad is not None, param.shape
+        if param.grad is None:
+            return
+
         if param.grad.requires_grad:
             raise RuntimeError("FSDP only works with gradients that don't require gradients")
 
@@ -1950,10 +1954,10 @@ class FullyShardedDataParallel(nn.Module):
             for p in fsdp_module.params:
                 if not p.requires_grad:
                     continue
-                if hasattr(p, "_shard_bwd_hook"):
+                if False and hasattr(p, "_shard_bwd_hook"):
                     p_assert(len(p._shard_bwd_hook) == 2, f"WFPB: incorrect hook num: {len(p._shard_bwd_hook)}")
-                    #p._shard_bwd_hook[1].remove()
-                    #delattr(p, "_shard_bwd_hook")
+                    p._shard_bwd_hook[1].remove()
+                    delattr(p, "_shard_bwd_hook")
 
                 # Leave the gradient accumulation state as-is if not synchronizing this pass. This ensures p.grad
                 # remains the unsharded gradient accumulated from prior no-sync passes, and p._saved_grad_shard
