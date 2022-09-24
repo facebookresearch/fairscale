@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 # -- Project information -----------------------------------------------------
 
 project = "FairScale"
-copyright = "2020-2021, Facebook/Meta AI Research"
+copyright = "2020-2022, Facebook/Meta AI Research"
 author = "Facebook/Meta AI Research"
 
 # -- General configuration ---------------------------------------------------
@@ -68,7 +68,7 @@ autodoc_inherit_docstrings = False
 autodoc_member_order = "bysource"
 
 intersphinx_mapping = {
-    "python": ("https://docs.python.org/3.6", None),
+    "python": ("https://docs.python.org/3.8", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
     "torch": ("https://pytorch.org/docs/stable/", None),
 }
