@@ -586,7 +586,7 @@ class FullyShardedDataParallel(nn.Module):
 
             p must to be already sharded by the owning module.
 
-            Check the corresponding unit test to see how is it used and tested.
+            Check the corresponding unit tests to see how is it used and tested.
             In particular, the sharing FSDP wrappers are "siblings" not "parent"
             and "child" of each other in the nested module structure.
 
@@ -1712,6 +1712,8 @@ class FullyShardedDataParallel(nn.Module):
         3. The same outer forward can be called multiple times before any backward
            is called (within the no_sync context) for a special way of gradient
            accumulation. (see test_fsdp_fwd_fwd_bwd_bwd.py)
+        4. When a param is shared by multiple FSDP wrapper instances, this can
+           register multiple times. (See test_fsdp_shared_weights.py)
 
         It appears that registering the hook everytime and let them fire and
         hook being removed/freed automatically is the correct thing to do. But this
@@ -1760,7 +1762,10 @@ class FullyShardedDataParallel(nn.Module):
 
         if hasattr(param, "_linked_param"):
             # This links to a shared param. We should try to finalize the linked param here.
-            assert param.shape == (1,), param.shape
+            # This is done by module code to ensure correct gradient computation.
+            # p._is_shared and p._linked_param are closely related but not the same.
+            # See fairscale/experimental/nn/mevo.py.
+            assert param.shape == (1,), param.shape  # This param should have this special dim.
             # If the _is_shared flag is set, then this shared weight is indeed being
             # shared between different FSDP wrappers. Otherwise, they are linked but
             # likely in the same FSDP wrapper, which means we shouldn't finalize the
