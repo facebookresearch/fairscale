@@ -9,7 +9,6 @@ import torch.distributed as dist
 
 from .fully_sharded_data_parallel import (
     FullyShardedDataParallel,
-    OffloadConfig,
     TrainingState,
     auto_wrap_bn,
     get_fsdp_instances,

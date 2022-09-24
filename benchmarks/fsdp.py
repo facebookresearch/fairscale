@@ -25,7 +25,6 @@ from torch.optim import Adam
 from benchmarks.golden_configs.lm_wikitext2 import FSDP as lm_wikitext2
 from fairscale.nn import auto_wrap, default_auto_wrap_policy, enable_wrap
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-from fairscale.nn.data_parallel import OffloadConfig
 
 RPC_PORT = 29501
 
@@ -95,10 +94,7 @@ def get_lm_model(args, device, config):
     nhid = config["nhid"]
     ndecoder = config["num_decoder_layers"]
 
-    if args.ssd_offload:
-        return transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder)
-    else:
-        return transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
+    return transformer_lm.TransformerLM(vocab_size, ninp, nhead, nhid, dropout, initrange, ndecoder).to(device)
 
 
 def get_tensors_by_size_bucket():
@@ -200,7 +196,7 @@ def train(model_config, model, benchmark_config, model_specs, args):
         if i > 0:
             total_tokens += source.numel()
 
-        if args.benchmark_eval or args.ssd_offload:
+        if args.benchmark_eval:
             input = source.cuda()
             target = target.cuda()
             output = model(input)
@@ -250,7 +246,6 @@ def get_number_of_words(data):
 
 
 def benchmark_language_model(model_config, model, benchmark_config, model_specs, args):
-    # TODO(anj): Uncomment and add a check for regression once we have a couple of runs.
     golden_config = get_golden_config(args.model_name, args)
     epoch = benchmark_config["epochs"]
     start_time = time.time()
@@ -358,8 +353,6 @@ def benchmark_fsdp(rank, args, world_size):
     model_config = create_model_config(args, benchmark_config=benchmark_config, model_specs=model_specs)
     model = model_config["model"]
     config = {}
-    if args.ssd_offload:
-        config["offload_config"] = OffloadConfig(offload_type="ssd_offload")
 
     if args.full_fp16:
         config["compute_dtype"] = torch.float16
@@ -386,7 +379,6 @@ parser.add_argument("--max_batch", type=int, default=4, help="Max number of batc
 parser.add_argument("--use_synthetic_data", action="store_true", help="Uses synthetic data for running benchmarks.")
 parser.add_argument("--dry_run", action="store_true", help="Run a sample training run without regression testing.")
 parser.add_argument(
-    # TODO(anj-s): In the process of adding more models and hence the requirement for a flag.
     "--model_name",
     default="lm",
     help="Language Model(LM) used to benchmark FSDP.",
@@ -394,7 +386,6 @@ parser.add_argument(
 parser.add_argument("--debug", action="store_true", default=False, help="Display additional debug information")
 parser.add_argument("--enable_auto_wrap", action="store_true", default=False, help="Use auto_wrap with FSDP")
 parser.add_argument("--benchmark_eval", action="store_true", default=False, help="Benchmark evaluation workflow.")
-parser.add_argument("--ssd_offload", action="store_true", default=False, help="Benchmark ssd_offload workflow.")
 parser.add_argument("--full_fp16", action="store_true", default=False, help="Benchmark in full fp16 mode.")
 
 if __name__ == "__main__":
