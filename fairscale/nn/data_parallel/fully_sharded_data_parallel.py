@@ -1730,7 +1730,7 @@ class FullyShardedDataParallel(nn.Module):
                 assert p_tmp.grad_fn is not None
                 grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
                 handle = grad_acc.register_hook(functools.partial(self._post_backward_hook, p))
-                # p._shard_bwd_hook = (grad_acc, handle)
+                p._shard_bwd_hook = (grad_acc, handle)
 
     @torch.no_grad()
     def _post_backward_hook(self, param: Parameter, *unused: Any) -> None:
