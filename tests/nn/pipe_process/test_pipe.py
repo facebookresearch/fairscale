@@ -26,7 +26,7 @@ import pytest
 import torch
 from torch import nn
 
-from fair_dev.testing.testing import get_worker_map, torch_spawn
+from fairscale.fair_dev.testing.testing import get_worker_map, torch_spawn
 from fairscale.internal import torch_version
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import AsyncPipe

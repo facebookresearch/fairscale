@@ -6,8 +6,8 @@
 import pytest
 import torch
 
-from fair_dev.testing.testing import objects_are_equal
 from fairscale.experimental.wgit.signal_sparsity import SignalSparsity, random_sparse_mask
+from fairscale.fair_dev.testing.testing import objects_are_equal
 
 # Our own tolerance
 ATOL = 1e-6

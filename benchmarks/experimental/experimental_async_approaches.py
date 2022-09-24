@@ -21,8 +21,8 @@ from torch.utils.data import DataLoader
 import torchtext
 from torchtext.data.utils import get_tokenizer
 
-from fair_dev.testing.testing import dist_init, get_worker_map
 from fairscale.experimental.nn.ampnet_pipe import pipe
+from fairscale.fair_dev.testing.testing import dist_init, get_worker_map
 from fairscale.nn.model_parallel import initialize_model_parallel
 from fairscale.nn.model_parallel.initialize import get_pipeline_parallel_group
 from fairscale.nn.pipe import LazyModule

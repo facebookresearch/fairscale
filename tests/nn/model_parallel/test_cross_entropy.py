@@ -23,7 +23,7 @@
 import torch
 import torch.nn.functional as F
 
-from fair_dev.testing.testing import IdentityLayer, dist_init, set_random_seed, spawn_for_all_world_sizes
+from fairscale.fair_dev.testing.testing import IdentityLayer, dist_init, set_random_seed, spawn_for_all_world_sizes
 from fairscale.nn.model_parallel import initialize as mpu
 from fairscale.nn.model_parallel.cross_entropy import vocab_parallel_cross_entropy
 from fairscale.nn.model_parallel.mappings import scatter_to_model_parallel_region

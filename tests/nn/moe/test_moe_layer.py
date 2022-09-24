@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from fair_dev.testing.testing import make_cudnn_deterministic
+from fairscale.fair_dev.testing.testing import make_cudnn_deterministic
 from fairscale.internal import torch_version
 from fairscale.nn import MOELayer, Top2Gate
 

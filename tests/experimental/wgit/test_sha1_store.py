@@ -11,8 +11,8 @@ import pytest
 import torch
 from torch import nn
 
-from fair_dev.testing.testing import objects_are_equal
 from fairscale.experimental.wgit.sha1_store import SHA1_Store
+from fairscale.fair_dev.testing.testing import objects_are_equal
 
 # Get the absolute path of the parent at the beginning before any os.chdir(),
 # so that we can proper clean it up at any CWD.

@@ -22,7 +22,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from fair_dev.testing.testing import skip_if_single_gpu
+from fairscale.fair_dev.testing.testing import skip_if_single_gpu
 from fairscale.nn.pipe import Pipe
 
 

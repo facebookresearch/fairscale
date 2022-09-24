@@ -12,7 +12,7 @@ from unittest.mock import patch
 from parameterized import parameterized
 import torch
 
-from fair_dev.testing.testing import DummyProcessGroup, make_cudnn_deterministic, objects_are_equal
+from fairscale.fair_dev.testing.testing import DummyProcessGroup, make_cudnn_deterministic, objects_are_equal
 from fairscale.nn.data_parallel import FullyShardedDataParallel
 
 from .test_fsdp import DistributedTest, NestedWrappedModule, rename_test, spawn_and_init

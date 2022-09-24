@@ -8,8 +8,8 @@ import time
 import pytest
 import torch
 
-from fair_dev.testing.testing import objects_are_equal, skip_if_no_cuda
 from fairscale.experimental.wgit.signal_sparsity_profiling import EnergyConcentrationProfile as ECP
+from fairscale.fair_dev.testing.testing import objects_are_equal, skip_if_no_cuda
 
 # Our own tolerance
 ATOL = 1e-6

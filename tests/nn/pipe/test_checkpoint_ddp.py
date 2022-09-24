@@ -20,7 +20,7 @@ from torch.nn import Linear, Sequential
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
-from fair_dev.testing.testing import skip_if_no_cuda, skip_if_single_gpu
+from fairscale.fair_dev.testing.testing import skip_if_no_cuda, skip_if_single_gpu
 from fairscale.nn.pipe.checkpoint import Checkpointing, Function, TensorOrTensors
 from fairscale.nn.pipe.microbatch import Batch
 

@@ -19,9 +19,9 @@ from torch.nn import Linear, Sequential
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 
-from fair_dev.testing.golden_testing_data import adascale_test_data
-from fair_dev.testing.testing import make_cudnn_deterministic, skip_if_no_cuda
-from fair_dev.testing.testing_memory import find_tensor_by_shape
+from fairscale.fair_dev.testing.golden_testing_data import adascale_test_data
+from fairscale.fair_dev.testing.testing import make_cudnn_deterministic, skip_if_no_cuda
+from fairscale.fair_dev.testing.testing_memory import find_tensor_by_shape
 from fairscale.optim import AdaScale
 
 

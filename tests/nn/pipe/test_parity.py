@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import torch
 
-from fair_dev.testing.testing import skip_if_single_gpu
+from fairscale.fair_dev.testing.testing import skip_if_single_gpu
 from fairscale.nn import Pipe
 
 

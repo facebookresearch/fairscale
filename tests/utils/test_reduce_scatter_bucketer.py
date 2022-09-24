@@ -12,7 +12,7 @@ from unittest import mock
 from parameterized import parameterized
 import torch
 
-from fair_dev.testing.testing import dist_init, spawn_for_all_world_sizes
+from fairscale.fair_dev.testing.testing import dist_init, spawn_for_all_world_sizes
 from fairscale.internal import torch_version
 from fairscale.internal.reduce_scatter_bucketer import ReduceScatterBucketer
 

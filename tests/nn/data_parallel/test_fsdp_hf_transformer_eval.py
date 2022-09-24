@@ -6,7 +6,7 @@ import unittest
 import torch
 from torch import nn
 
-from fair_dev.testing.testing import dist_init
+from fairscale.fair_dev.testing.testing import dist_init
 from fairscale.nn import FullyShardedDataParallel as FSDP
 from fairscale.nn import auto_wrap, enable_wrap
 

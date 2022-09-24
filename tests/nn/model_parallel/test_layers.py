@@ -24,7 +24,7 @@ import torch
 import torch.nn.init as init
 from torch.nn.parameter import Parameter
 
-from fair_dev.testing.testing import dist_init, set_random_seed, spawn_for_all_world_sizes
+from fairscale.fair_dev.testing.testing import dist_init, set_random_seed, spawn_for_all_world_sizes
 from fairscale.nn.model_parallel import initialize as mpu
 from fairscale.nn.model_parallel import layers
 
