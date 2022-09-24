@@ -51,3 +51,4 @@ tests/nn/pipe/test_stream.py
 tests/nn/moe/test_moe_layer.py
 tests/nn/moe/test_top2gating.py
 tests/nn/data_parallel/test_fsdp_offload.py
+tests/nn/data_parallel/test_fsdp_fwd_fwd_bwd_bwd.py
