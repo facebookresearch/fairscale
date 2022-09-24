@@ -32,11 +32,11 @@ def main(rank, sync_file):
         world_size=2,
         rank=rank,
     )
-    ffn = FFN()
+    ffn = FFN().cuda().half()
 
     with enable_wrap(wrapper_cls=FullyShardedDataParallel):
         model = wrap(
-            ffn.half(),
+            ffn,
             process_group=torch.distributed.new_group(),
             flatten_parameters=True,
             compute_dtype=torch.float16,
@@ -44,17 +44,21 @@ def main(rank, sync_file):
 
     model = model.train()
 
-    x1 = torch.rand((10, 10)).cuda().half()
-    out1 = model(x1)
-    loss1 = out1.sum()
+    # We test this behavior because it might be used by pipelining.
+    # However, we don't check if the speed (compute/comm overlapping)
+    # and memory (necessary all-gather & free) are optimal.
+    losses = []
+    for _ in range(3):
+        x = torch.rand((10, 10)).cuda().half()
+        out = model(x)
+        loss = out.sum()
+        losses.append(loss)
 
-    x2 = torch.rand((10, 10)).cuda().half()
-    out2 = model(x2)
-    loss2 = out2.sum()
-
+    # Only the last bwd can be outside of no_sync context.
     with model.no_sync():
-        loss1.backward()
-        loss2.backward()
+        losses[0].backward()
+        losses[1].backward()
+    losses[2].backward()
 
 
 @skip_if_single_gpu

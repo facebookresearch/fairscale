@@ -1700,36 +1700,36 @@ class FullyShardedDataParallel(nn.Module):
         3. If it fires once but too early or doesn't fire, we leave gradients
         unsharded. (could lead to dimension too large)
 
-        Due to multiple-pass forward, this function can be called on
-        the same parameter multiple times in a single forward pass. If we register
-        the hook multiple time, we end up getting called multiple times. We
-        could try to get a new hook every time and delete the previous one
-        registered. However, due to *unknown reason* (I have debugged it for
-        a long time!), in mixed precision mode, we get two different ``grad_acc``
-        objects below during different calls of this function (in the same
-        forward pass). If we keep the last one, the hook end up firing too
-        early. In full precision mode, we luckily get the *same* ``grad_acc``
-        object, so deleting and re-registering still ensured the hook fire
-        once after all gradients are generated.
+        There are several cases here:
+        1. We can call the same module multiple times in a single outer forward
+           pass. We register multiple hooks but autograd should fire the last
+           one after the total gradient is computed and accumulated. If it does
+           fire multiple times, we may have a crash due to gradient being already
+           sharded and shape mismatch.
+           On the other hand, due to _saved_grad_shard, this case may also work
+           but with extra grad scatter-gather.
+        2. With activation checkpointing and case 1.
+        3. The same outer forward can be called multiple times before any backward
+           is called (within the no_sync context) for a special way of gradient
+           accumulation. (see test_fsdp_fwd_fwd_bwd_bwd.py)
 
-        [XXX update]
-        Empirically, keep the first hook register per forward pass seems to
-        work the best. We do need to remove the hook at the end of the
-        backward pass. Otherwise, the next forward pass will not register
-        a new hook, which is needed for a new forward pass.
+        It appears that registering the hook everytime and let them fire and
+        hook being removed/freed automatically is the correct thing to do. But this
+        is purely based on experiments.
         """
         if not torch.is_grad_enabled():
             return  # don't register grad hooks if grad isn't enabled
         for p in self.params:
             if p.requires_grad:
-                if False and hasattr(p, "_shard_bwd_hook"):
-                    continue
-                # Register a hook on the first call, empirically, autograd
-                # fires it at the end for this param, which makes sense.
+                # Register a hook.
                 p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
                 assert p_tmp.grad_fn is not None
                 grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
                 handle = grad_acc.register_hook(functools.partial(self._post_backward_hook, p))
+                # Important, we need to save the hook, otherwise, it appears to be
+                # deleted/freed/unregistered.
+                # However, we don't free/unhook at the end of bwd (as we used to do it
+                # in _finalize_parameters below). If we do, that may unregister the wrong hook.
                 p._shard_bwd_hook = (grad_acc, handle)
 
     @torch.no_grad()
@@ -1954,10 +1954,6 @@ class FullyShardedDataParallel(nn.Module):
             for p in fsdp_module.params:
                 if not p.requires_grad:
                     continue
-                if False and hasattr(p, "_shard_bwd_hook"):
-                    p_assert(len(p._shard_bwd_hook) == 2, f"WFPB: incorrect hook num: {len(p._shard_bwd_hook)}")
-                    p._shard_bwd_hook[1].remove()
-                    delattr(p, "_shard_bwd_hook")
 
                 # Leave the gradient accumulation state as-is if not synchronizing this pass. This ensures p.grad
                 # remains the unsharded gradient accumulated from prior no-sync passes, and p._saved_grad_shard
@@ -1973,11 +1969,13 @@ class FullyShardedDataParallel(nn.Module):
                 elif hasattr(p, "_saved_grad_shard"):
                     p_assert(
                         p.device == p._saved_grad_shard.device,
-                        f"WFPB: incorrect saved_grad_shard device {p.device} vs {p._saved_grad_shard.device}",
+                        f"WFPB: incorrect saved_grad_shard device p.device={p.device} "
+                        f"vs p._saved_grad_shard.device={p._saved_grad_shard.device}",
                     )
                     p_assert(
                         p.shape == p._saved_grad_shard.shape,
-                        f"WFPB: incorrect saved_grad_shard shape {p.shape} vs {p._saved_grad_shard.shape}",
+                        f"WFPB: incorrect saved_grad_shard shape p.shape={p.shape} "
+                        f"vs p._saved_grad_shard.shape={p._saved_grad_shard.shape}",
                     )
                     p.grad = p._saved_grad_shard
 
