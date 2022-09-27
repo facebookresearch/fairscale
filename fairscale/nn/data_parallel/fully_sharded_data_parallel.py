@@ -349,7 +349,7 @@ class FullyShardedDataParallel(nn.Module):
         module: nn.Module,
         process_group: Optional[ProcessGroup] = None,
         # The type for the process_group_reduce_scatter only can be either ProcessGroup or ProcessGroupName
-        process_group_reduce_scatter: Any = ProcessGroupName.default,
+        process_group_reduce_scatter: Any = ProcessGroupName.reduce_scatter,
         reshard_after_forward: bool = True,
         disable_reshard_on_root: bool = True,
         mixed_precision: bool = False,
