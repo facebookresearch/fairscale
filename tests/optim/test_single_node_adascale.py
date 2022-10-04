@@ -82,14 +82,14 @@ def test_grad_accum(test_case, cpu):
         in_data_0 = Tensor(in_data[0])
         if not cpu:
             in_data_0 = in_data_0.cuda()
-        out = model(in_data_0)
-        out.sum().backward()
+        loss = model(in_data_0).sum() / 2
+        loss.backward()
         # grad pass 2
         in_data_1 = Tensor(in_data[1])
         if not cpu:
             in_data_1 = in_data_1.cuda()
-        out = model(in_data_1)
-        out.sum().backward()
+        loss = model(in_data_1).sum() / 2
+        loss.backward()
         if exp_gain is not None:
             assert np.allclose(optim.gain(), exp_gain), optim.gain()
         # stepping it. Note that if we did more than 2 passes as promised by the
@@ -110,14 +110,14 @@ def test_state_checkpointing():
     a unit test for checkpointing with DDP.
     """
     # Constants.
-    accum_steps = 3
+    num_grads_to_accum = 3
     in_dim = 5
 
     # Setup.
     def make_model_and_optim():
         model = Linear(in_dim, 2, bias=False)
         model = model.cuda()
-        optim = AdaScale(SGD(model.parameters(), lr=0.1, momentum=0.9), num_gradients_to_accumulate=accum_steps)
+        optim = AdaScale(SGD(model.parameters(), lr=0.1, momentum=0.9), num_gradients_to_accumulate=num_grads_to_accum)
         return model, optim
 
     model, optim = make_model_and_optim()
@@ -127,7 +127,7 @@ def test_state_checkpointing():
         data = []
         replay_data_idx = 0
         for _ in range(6):  # run some steps
-            for i in range(accum_steps):
+            for i in range(num_grads_to_accum):
                 if replay_data is None:
                     in_data = torch.rand(in_dim).cuda()
                     data.append(in_data)
@@ -136,7 +136,7 @@ def test_state_checkpointing():
                     replay_data_idx += 1
                 out = model(in_data)
                 out.sum().backward()
-                if i == accum_steps - 1:
+                if i == num_grads_to_accum - 1:
                     optim.step()
                     optim.zero_grad()
         return out, data
@@ -172,13 +172,14 @@ def test_state_checkpointing():
 
 def test_lr_scheduler():
     """Test AdaScale working with torch.optim.lr_scheduler."""
+    num_grads_to_accum = 3
     model = Linear(2, 2, bias=False)
-    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=3)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=num_grads_to_accum)
     # We use 1, not 0.1 here since scheduler.step() is called here first.
     scheduler = LambdaLR(optim, lr_lambda=lambda epoch: 1 / 10**epoch)
     for epoch in range(3):
         for data_idx in range(10):
-            for accumulation in range(3):
+            for accumulation in range(num_grads_to_accum):
                 in_data = torch.rand(2)
                 loss = model(in_data).sum()
                 loss.backward()
@@ -194,8 +195,10 @@ def test_lr_scheduler():
 
 @skip_if_no_cuda
 @pytest.mark.parametrize("debias_ewma", [True, False])
-def test_add_param_group(debias_ewma):
-    """Test AdaScale supports add_param_group() API."""
+@pytest.mark.parametrize("is_scaled_loss", [True, False])
+def test_add_param_group(debias_ewma, is_scaled_loss):
+    """Test AdaScale supports add_param_group() API, with both scaled and unscaled loss cases."""
+    num_grads_to_accum = 2
     model1 = Linear(2, 2, bias=True)
     with torch.no_grad():
         # make weights and bias deterministic, which is needed for
@@ -203,7 +206,12 @@ def test_add_param_group(debias_ewma):
         # parameters from other layers.
         model1.weight.copy_(Tensor([1.0, 2.0, 3.0, 4.0]).reshape(2, 2))
         model1.bias.fill_(0.1)
-    optim = AdaScale(SGD(model1.parameters(), lr=0.1), num_gradients_to_accumulate=2, debias_ewma=debias_ewma)
+    optim = AdaScale(
+        SGD(model1.parameters(), lr=0.1),
+        num_gradients_to_accumulate=2,
+        debias_ewma=debias_ewma,
+        is_scaled_loss=is_scaled_loss,
+    )
     assert len(optim._hook_handles) == 2, len(optim._hook_handles)
 
     model2 = Linear(2, 3, bias=True)
@@ -217,12 +225,16 @@ def test_add_param_group(debias_ewma):
     # make sure we can run the model.
     model = Sequential(model1, model2).cuda()
     in_data_0 = Tensor([1.0, 2.0]).cuda()
-    out = model(in_data_0)
-    out.sum().backward()
+    loss = model(in_data_0).sum()
+    if is_scaled_loss:
+        loss = loss / num_grads_to_accum
+    loss.backward()
 
     in_data_1 = Tensor([3.0, 4.0]).cuda()
-    out = model(in_data_1)
-    out.sum().backward()
+    loss = model(in_data_1).sum()
+    if is_scaled_loss:
+        loss = loss / num_grads_to_accum
+    loss.backward()
 
     # make sure the gains are right and we can step.
     # since this is the first step, debias_ewma doesn't affect the value.
@@ -244,19 +256,23 @@ def test_add_param_group(debias_ewma):
     # make sure we can run the model.
     model = Sequential(model1, model2, model3).cuda()
     in_data_0 = Tensor([1.0, 2.0]).cuda()
-    out = model(in_data_0)
-    out.sum().backward()
+    loss = model(in_data_0).sum()
+    if is_scaled_loss:
+        loss = loss / num_grads_to_accum
+    loss.backward()
 
     in_data_1 = Tensor([3.0, 4.0]).cuda()
-    out = model(in_data_1)
-    out.sum().backward()
+    loss = model(in_data_1).sum()
+    if is_scaled_loss:
+        loss = loss / num_grads_to_accum
+    loss.backward()
 
     # make sure gains are right and we can step.
     # the last PG's gain is not affected by debias_ewma since it is the first step for that PG.
-    assert np.allclose(optim.gain(), 1.1191193589460822 if debias_ewma else 1.1192783954732368), optim.gain()
-    assert np.allclose(optim.gain(0), 1.1428571880897151 if debias_ewma else 1.142857188085096), optim.gain(0)
-    assert np.allclose(optim.gain(1), 1.1167103578364508 if debias_ewma else 1.1167104954034948), optim.gain(1)
-    assert np.allclose(optim.gain(2), 1.117381091722702), optim.gain(2)
+    assert np.allclose(optim.gain(), 1.1382937715383077 if debias_ewma else 1.1391959826562015), optim.gain()
+    assert np.allclose(optim.gain(0), 1.142857206008338 if debias_ewma else 1.142857206006931), optim.gain(0)
+    assert np.allclose(optim.gain(1), 1.1116875516387468 if debias_ewma else 1.1116906378271827), optim.gain(1)
+    assert np.allclose(optim.gain(2), 1.0749164095196344), optim.gain(2)
     optim.step()
     optim.zero_grad()
 
@@ -264,31 +280,38 @@ def test_add_param_group(debias_ewma):
 @pytest.mark.parametrize(
     "test_case",
     [
-        {"new_accum": 3, "exp_gain": 1.2573902104603087},
-        {"new_accum": 6, "exp_gain": 1.0903738977361481},
-        {"new_accum": 9, "exp_gain": 1.0432658660558123},
+        {"num_grads_to_accum": 3, "exp_gain": 2.141385737279438},
+        {"num_grads_to_accum": 6, "exp_gain": 2.9927880097754036},
+        {"num_grads_to_accum": 9, "exp_gain": 3.4461759591877312},
     ],
 )
-def test_set_num_gradients_to_accumulate(test_case):
+@pytest.mark.parametrize("is_scaled_loss", [True, False])
+def test_set_num_gradients_to_accumulate(test_case, is_scaled_loss):
     """Test set_num_gradients_to_accumulate experimental feature."""
-    new_accum = test_case["new_accum"]
+    num_grads_to_accum = test_case["num_grads_to_accum"]
     exp_gain = test_case["exp_gain"]
 
     model = Linear(2, 2, bias=False)
-    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
-    out = model(Tensor([0.0, 1.0]))
-    out.sum().backward()
-    out = model(Tensor([1.0, 0.0]))
-    out.sum().backward()
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2, is_scaled_loss=is_scaled_loss)
+    loss = model(Tensor([0.0, 1.0])).sum()
+    if is_scaled_loss:
+        loss = loss / 2
+    loss.backward()
+    loss = model(Tensor([1.0, 0.0])).sum()
+    if is_scaled_loss:
+        loss = loss / 2
+    loss.backward()
     assert np.allclose(optim.gain(), 2.0)
     optim.step()
     optim.zero_grad()
 
-    optim.set_scale(float(new_accum))
-    optim.set_num_gradients_to_accumulate(new_accum)
-    for _ in range(new_accum):
-        out = model(Tensor([0.0, 1.0]))
-        out.sum().backward()
+    optim.set_scale(float(num_grads_to_accum))
+    optim.set_num_gradients_to_accumulate(num_grads_to_accum)
+    for _ in range(num_grads_to_accum):
+        loss = model(Tensor([0.0, 1.0])).sum() / num_grads_to_accum
+        if is_scaled_loss:
+            loss = loss / num_grads_to_accum
+        loss.backward()
 
     assert np.allclose(optim.gain(), exp_gain), optim.gain()
     optim.step()
