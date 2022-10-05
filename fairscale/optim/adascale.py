@@ -130,7 +130,12 @@ class AdaScale(Optimizer):
             between each optimizer step. This can be changed during
             training as long as the train loop changes gradient accumulation
             accordingly.
+            The loss in each pass can be either scaled or unscaled. See `is_scaled_loss` below.
             Default to 1, which does not accumulate gradients.
+        is_scaled_loss (bool):
+            If True, assume that the loss is scaled by `num_gradients_to_accumulate`.
+            If False, the loss is not scaled.
+            Default: True.
         debias_ewma (bool):
             (experimental) Use debias exponential moving average
             for smoothing and mu and sigma variables. False will
@@ -145,6 +150,7 @@ class AdaScale(Optimizer):
         scale: Optional[float] = None,
         smoothing: float = None,
         num_gradients_to_accumulate: int = 1,
+        is_scaled_loss: bool = True,
         debias_ewma: bool = True,
     ):
         # Init hook_handles list, otherwise, a partial init'ed object may fail in ``__del__``.
@@ -160,6 +166,7 @@ class AdaScale(Optimizer):
         self._last_final_backward_call = 0
         self._num_grads_to_accum = num_gradients_to_accumulate
         self._debias_ewma = debias_ewma
+        self._is_scaled_loss = is_scaled_loss
 
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
         self.param_groups = self._optimizer.param_groups
@@ -453,16 +460,21 @@ class AdaScale(Optimizer):
         total_grad_sqr = np.array(
             [sum(param.grad.pow(2).sum().item() for param in group["params"]) for group in self._optimizer.param_groups]
         )
-        # Divide by (_num_grads_to_accum ** 2) to account for gradient
-        # accumulation.
-        if self._num_grads_to_accum > 1:
-            # np array doesn't support /=.
-            total_grad_sqr = total_grad_sqr / (self._num_grads_to_accum**2)
 
         # Wait for all_reduce to be done and move it to cpu & np.
         if work:
             work.wait()
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
+
+        if self._num_grads_to_accum > 1:
+            # Handle scaling for for gradient accumulation
+            if self._is_scaled_loss:
+                # If loss is scaled down, we need to scale the local gradients back by a factor of _num_grads_to_accum squared;
+                # total_grad_sqr is already scaled by _num_grads_to_accum squared.
+                local_grad_sqr *= self._num_grads_to_accum**2
+            else:
+                # If loss is not scaled, local gradients are correct, but we need to scale the total_grad_sqr down to account for gradient accumulation.
+                total_grad_sqr /= self._num_grads_to_accum**2
 
         # See appendix B.3 of the paper.
         # Modified to handle cases where scale != world_size
@@ -509,7 +521,7 @@ class AdaScale(Optimizer):
         original_lr = []
         for idx, param_group in enumerate(self._optimizer.param_groups):
             original_lr.append(param_group["lr"])
-            param_group["lr"] = self.gain(pg_idx=idx) * param_group["lr"]
+            param_group["lr"] *= self.gain(pg_idx=idx)
 
         # Step it.
         res = self._optimizer.step(*args, **kwargs)
@@ -605,6 +617,18 @@ class AdaScale(Optimizer):
             # When effective world size is large enough, smoothing is probably
             # not needed, so the smoothing factor is 0.
             self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
+
+    def scale_grad_by_num_grads_to_accum(self) -> None:
+        """Scale the gradient down by the number of gradients to accumulate.
+
+        This should be called after the gradient accumulation is done and the unscaled loss is used.
+        """
+        assert self._local_grad_sqr is None, "Only call this after backward"
+        assert self._num_grads_to_accum > 1, "Must be accumulating gradients"
+        assert not self._is_scaled_loss, "Must use unscaled loss"
+        for group in self._optimizer.param_groups:
+            for param in group["params"]:
+                param.grad.div_(self._num_grads_to_accum)
 
     def __getattr__(self, name: str) -> Any:
         """Forward missing attributes to wrapped optimizer."""
