@@ -75,18 +75,25 @@ def _test_basic_func(rank, ddp_cls, world_size, tempfile_name, test_case):
         out.sum().backward()
         if ddp_cls is DDP:
             assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
+            w, b = model.parameters()
+            assert np.allclose(w.grad.cpu(), test_case["expected_grad"]), w.grad
+            assert np.allclose(b.grad.cpu(), test_case["expected_bias_grad"]), b.grad
         optim.step()
         optim.zero_grad()
     else:
         # multiple iters
-        for in_data in test_case["inputs"]:
+        n = len(test_case["inputs"])
+        for i, in_data in enumerate(test_case["inputs"]):
             in_data = Tensor(in_data[rank]).cuda()
             out = model(in_data)
             out.sum().backward()
+            if i == n - 1 and ddp_cls is DDP:
+                assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
+                w, b = model.parameters()
+                assert np.allclose(w.grad.cpu(), test_case["expected_grad"]), w.grad
+                assert np.allclose(b.grad.cpu(), test_case["expected_bias_grad"]), b.grad
             optim.step()
             optim.zero_grad()
-        if ddp_cls is DDP:
-            assert np.allclose(optim.gain(), test_case["expected_gain"]), optim.gain()
 
     dist.destroy_process_group()
 

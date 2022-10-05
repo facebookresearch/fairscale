@@ -61,7 +61,8 @@ def test_loss_accum_cpu():
 
 @pytest.mark.parametrize("cpu", [True, False])
 @pytest.mark.parametrize("test_case", adascale_test_data)
-def test_grad_accum(test_case, cpu):
+@pytest.mark.parametrize("is_scaled_loss", [True, False])
+def test_grad_accum(test_case, cpu, is_scaled_loss):
     """Test the basic functionality on CPU/GPU with gradient accumulation without DDP"""
     make_cudnn_deterministic()
     model = Linear(2, 2, bias=True)
@@ -69,7 +70,7 @@ def test_grad_accum(test_case, cpu):
         if torch.cuda.device_count() < 1:
             pytest.skip("1 GPU is required")
         model = model.cuda()
-    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2)
+    optim = AdaScale(SGD(model.parameters(), lr=0.1), num_gradients_to_accumulate=2, is_scaled_loss=is_scaled_loss)
     expected_gain = test_case["expected_gain"]
     if "input" in test_case:
         data = [test_case["input"]] * 2
@@ -82,16 +83,27 @@ def test_grad_accum(test_case, cpu):
         in_data_0 = Tensor(in_data[0])
         if not cpu:
             in_data_0 = in_data_0.cuda()
-        loss = model(in_data_0).sum() / 2
+        loss = model(in_data_0).sum()
+        if is_scaled_loss:
+            loss = loss / 2
         loss.backward()
         # grad pass 2
         in_data_1 = Tensor(in_data[1])
         if not cpu:
             in_data_1 = in_data_1.cuda()
-        loss = model(in_data_1).sum() / 2
+        loss = model(in_data_1).sum()
+        if is_scaled_loss:
+            loss = loss / 2
         loss.backward()
+
+        if not is_scaled_loss:
+            optim.scale_grad_by_num_grads_to_accum()
+
         if exp_gain is not None:
             assert np.allclose(optim.gain(), exp_gain), optim.gain()
+            w, b = model.parameters()
+            assert np.allclose(w.grad.cpu(), test_case["expected_grad"]), w.grad
+            assert np.allclose(b.grad.cpu(), test_case["expected_bias_grad"]), b.grad
         # stepping it. Note that if we did more than 2 passes as promised by the
         # num_gradients_to_accumulate argument above, AdaScale is not be able to
         # detect that mistake for now. The result will just be wrong in that case.
@@ -197,7 +209,7 @@ def test_lr_scheduler():
 @pytest.mark.parametrize("debias_ewma", [True, False])
 @pytest.mark.parametrize("is_scaled_loss", [True, False])
 def test_add_param_group(debias_ewma, is_scaled_loss):
-    """Test AdaScale supports add_param_group() API, with both scaled and unscaled loss cases."""
+    """Test AdaScale supports add_param_group() API for both scaled and unscaled loss."""
     num_grads_to_accum = 2
     model1 = Linear(2, 2, bias=True)
     with torch.no_grad():
@@ -209,8 +221,8 @@ def test_add_param_group(debias_ewma, is_scaled_loss):
     optim = AdaScale(
         SGD(model1.parameters(), lr=0.1),
         num_gradients_to_accumulate=2,
-        debias_ewma=debias_ewma,
         is_scaled_loss=is_scaled_loss,
+        debias_ewma=debias_ewma,
     )
     assert len(optim._hook_handles) == 2, len(optim._hook_handles)
 
@@ -235,6 +247,9 @@ def test_add_param_group(debias_ewma, is_scaled_loss):
     if is_scaled_loss:
         loss = loss / num_grads_to_accum
     loss.backward()
+
+    if not is_scaled_loss:
+        optim.scale_grad_by_num_grads_to_accum()
 
     # make sure the gains are right and we can step.
     # since this is the first step, debias_ewma doesn't affect the value.
@@ -266,6 +281,9 @@ def test_add_param_group(debias_ewma, is_scaled_loss):
     if is_scaled_loss:
         loss = loss / num_grads_to_accum
     loss.backward()
+
+    if not is_scaled_loss:
+        optim.scale_grad_by_num_grads_to_accum()
 
     # make sure gains are right and we can step.
     # the last PG's gain is not affected by debias_ewma since it is the first step for that PG.
@@ -301,6 +319,10 @@ def test_set_num_gradients_to_accumulate(test_case, is_scaled_loss):
     if is_scaled_loss:
         loss = loss / 2
     loss.backward()
+
+    if not is_scaled_loss:
+        optim.scale_grad_by_num_grads_to_accum()
+
     assert np.allclose(optim.gain(), 2.0)
     optim.step()
     optim.zero_grad()
@@ -312,6 +334,9 @@ def test_set_num_gradients_to_accumulate(test_case, is_scaled_loss):
         if is_scaled_loss:
             loss = loss / num_grads_to_accum
         loss.backward()
+
+    if not is_scaled_loss:
+        optim.scale_grad_by_num_grads_to_accum()
 
     assert np.allclose(optim.gain(), exp_gain), optim.gain()
     optim.step()
