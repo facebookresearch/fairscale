@@ -1,6 +1,7 @@
 # FairScale should only depends on torch, not things higher level than torch.
-# Note1: setup.py automatically reads this file to setup install time dependencies.
+# Note1: setup.py automatically reads this file to setup install-time dependencies.
 # Note2: we use >= in this file but == in requirements-dev.txt for determinism
 #        in testing.
+# Note3: update docs/requirements.txt if you change this file.
 torch >= 1.8.0
 numpy >= 1.22.0
