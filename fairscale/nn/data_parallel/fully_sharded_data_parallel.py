@@ -318,13 +318,6 @@ class FullyShardedDataParallel(nn.Module):
         gradient_predivide_factor: Optional[float] = None,
         allow_reset_parameters: bool = False,
     ):
-        try:
-            import torch._C
-
-            torch._C._log_api_usage_once("fairscale.fsdp")
-        except ImportError:
-            pass
-
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
