@@ -47,3 +47,11 @@ adascale_test_data = [
         "expected_bias_grad": [1.0, 1.0],
     },
 ]
+
+corr_mean_test_data = [
+    {
+        "inputs": [[[1.0, 0, 2.0], [2.0, 0, 1.0]], [[0, 1.0, 2.0], [2.0, 1.0, 0]], [[3, 1.0, 2.0], [2.0, 1.0, -1]]],
+        # expected pearson correlation of two micro-batches
+        "expected_corr": [0.5, -1.0, 0.327327],
+    }
+]

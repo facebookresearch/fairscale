@@ -152,3 +152,36 @@ def test_grad_accum():
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(_test_grad_accum_func, args=(world_size, temp_file_name), nprocs=world_size, join=True)
+
+
+def _test_corr_mean_func(rank, world_size, tempfile_name, test_case):
+    _dist_init(rank, world_size, tempfile_name, backend="gloo")  # Covers gloo
+
+    model = Linear(3, 1, bias=False)
+    model.to("cuda")
+    model = DDP(model, device_ids=[rank])
+    optim = AdaScale(SGD(model.parameters(), lr=0.1))
+    results = []
+    for i, in_data in enumerate(test_case["inputs"]):
+        with model.no_sync():
+            in_data = Tensor(in_data[rank]).cuda()
+            out = model(in_data)
+            out.sum().backward()
+            results.append(optim._compute_corr_mean_between_grads())
+            optim.zero_grad()
+    assert np.allclose(results, test_case["expected_corr"]), results
+
+    dist.destroy_process_group()
+
+
+@skip_if_single_gpu
+def test_corr_mean():
+    """Test adascale with DDP + gradient accumulation using ddp.no_sync()"""
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+
+    from fairscale.fair_dev.testing.golden_testing_data import corr_mean_test_data
+
+    test_case = corr_mean_test_data[0]
+
+    mp.spawn(_test_corr_mean_func, args=(world_size, temp_file_name, test_case), nprocs=world_size, join=True)

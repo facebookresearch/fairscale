@@ -387,6 +387,36 @@ class AdaScale(Optimizer):
             else:
                 self._state[name] = factor * self._state[name] + (1.0 - factor) * value
 
+    def _gather_flat_grad(self) -> torch.Tensor:
+        views = []
+        for param_group in self._optimizer.param_groups:
+            for p in param_group["params"]:
+                if p.grad is None:
+                    view = p.new(p.numel()).zero_()
+                elif p.grad.is_sparse:
+                    view = p.grad.to_dense().view(-1)
+                else:
+                    view = p.grad.view(-1)
+                views.append(view)
+        return torch.cat(views, 0)
+
+    def _compute_corr_mean_between_grads(self) -> float:
+        flat_grad = self._gather_flat_grad()
+        corr_mean = torch.tensor(0.0).cuda()
+        if dist.get_rank() == 0:
+            size = flat_grad.numel()
+            gathered_tensors = [torch.zeros(size, device=0) for _ in range(self._world_size)]
+            dist.gather(flat_grad, gather_list=gathered_tensors, dst=0)
+            # the following requires torch 1.10+
+            corr = torch.stack(gathered_tensors).corrcoef()  # type: ignore
+            # pick out the upper triangular part of the correlation matrix
+            corr = corr[torch.triu(torch.ones_like(corr), diagonal=1) == 1]
+            corr_mean = corr.mean()
+        else:
+            dist.gather(flat_grad, gather_list=None, dst=0)
+        dist.broadcast(corr_mean, src=0)
+        return corr_mean.item()
+
     def _backward_hook(self, pg_idx: int, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
@@ -449,6 +479,9 @@ class AdaScale(Optimizer):
             return
 
         # Since self._local_grad_sqr is FP32, sum shouldn't overflow.
+
+        # TODO: Hongbo says param.grad might be FP16 should do this before converting to FP32.
+
         # This vector has length of # of param_groups, so it is small, but we
         # use async to hide the all_reduce latency, esp when # of nodes is large.
         work = None
