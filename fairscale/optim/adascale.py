@@ -388,6 +388,10 @@ class AdaScale(Optimizer):
                 self._state[name] = factor * self._state[name] + (1.0 - factor) * value
 
     def _gather_flat_grad(self) -> torch.Tensor:
+        """
+        Helper function for gathering all gradients into a single vector.
+        Duplicated from torch.optim.lbfgs.
+        """
         views = []
         for param_group in self._optimizer.param_groups:
             for p in param_group["params"]:
@@ -400,7 +404,11 @@ class AdaScale(Optimizer):
                 views.append(view)
         return torch.cat(views, 0)
 
-    def _compute_corr_mean_between_grads(self) -> float:
+    def _compute_intra_grad_corr_mean(self) -> float:
+        """
+        Helper function for computing average intra correlation among gradients on different GPUs.
+        """
+        assert self._world_size > 1, "Only for distributed training"
         flat_grad = self._gather_flat_grad()
         corr_mean = torch.tensor(0.0).cuda()
         if dist.get_rank() == 0:

@@ -50,8 +50,14 @@ adascale_test_data = [
 
 corr_mean_test_data = [
     {
-        "inputs": [[[1.0, 0, 2.0], [2.0, 0, 1.0]], [[0, 1.0, 2.0], [2.0, 1.0, 0]], [[3, 1.0, 2.0], [2.0, 1.0, -1]]],
+        "inputs": [
+            [[1.0, 0.0, 2.0], [2.0, 0.0, 1.0]],
+            [[0.0, 1.0, 2.0], [2.0, 1.0, 0]],
+            [[3.0, 1.0, 2.0], [2.0, 1.0, -1.0]],
+        ],
+        "expected_grad": [[1.5, 0.0, 1.5], [1.0, 1.0, 1.0], [2.5, 1.0, 0.5]],
         # expected pearson correlation of two micro-batches
         "expected_corr": [0.5, -1.0, 0.327327],
+        "expected_cos_similarity": [float("nan"), 0.8165, 0.8433],
     }
 ]

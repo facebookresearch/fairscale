@@ -162,13 +162,29 @@ def _test_corr_mean_func(rank, world_size, tempfile_name, test_case):
     model = DDP(model, device_ids=[rank])
     optim = AdaScale(SGD(model.parameters(), lr=0.1))
     results = []
+    last_grad = None
     for i, in_data in enumerate(test_case["inputs"]):
+        # use no_sync so we can access nonreduced gradients
         with model.no_sync():
             in_data = Tensor(in_data[rank]).cuda()
             out = model(in_data)
             out.sum().backward()
-            results.append(optim._compute_corr_mean_between_grads())
-            optim.zero_grad()
+            results.append(optim._compute_intra_grad_corr_mean())
+        # sync gradients manually
+        for p in model.parameters():
+            if p.grad is not None:
+                dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+                # divide by world size
+                p.grad.data.div_(world_size)
+        grad = optim._gather_flat_grad()
+        assert np.allclose(grad.cpu(), test_case["expected_grad"][i])
+        optim.step()
+        if last_grad is not None:
+            # compute cosine similarity
+            cos_similarity = torch.dot(grad, last_grad) / (grad.norm() * last_grad.norm())
+            np.allclose(cos_similarity.cpu(), test_case["expected_cos_similarity"][i])
+        last_grad = grad
+        optim.zero_grad()
     assert np.allclose(results, test_case["expected_corr"]), results
 
     dist.destroy_process_group()
@@ -176,7 +192,10 @@ def _test_corr_mean_func(rank, world_size, tempfile_name, test_case):
 
 @skip_if_single_gpu
 def test_corr_mean():
-    """Test adascale with DDP + gradient accumulation using ddp.no_sync()"""
+    """
+    Test _compute_intra_grad_corr_mean and _gather_flat_grad using ddp.no_sync()
+    We also demonstrate how cosine similarity between consecutive gradients can be computed using _gather_flat_grad
+    """
     world_size = 2
     temp_file_name = tempfile.mkstemp()[1]
 
