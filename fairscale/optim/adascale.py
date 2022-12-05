@@ -411,7 +411,7 @@ class AdaScale(Optimizer):
     def _compute_intra_grad_corr_mean(self) -> torch.Tensor:
         """
         Helper function for computing average intra correlation among gradients on different GPUs.
-        This should be called under `torch.no_sync()` context.
+        This should be called under `model.no_sync()` context.
         """
         assert self._world_size > 1, "Only for distributed training"
         flat_grad = self._gather_flat_grad()
