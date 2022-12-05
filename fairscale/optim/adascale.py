@@ -387,26 +387,30 @@ class AdaScale(Optimizer):
             else:
                 self._state[name] = factor * self._state[name] + (1.0 - factor) * value
 
+    def _to_flat_view(self, p: torch.Tensor) -> torch.Tensor:
+        """
+        Helper function for _gather_flat_grad.
+        Returns a flattened view of the input tensor.
+        """
+        if p.grad is None:
+            return p.new(p.numel()).zero_()  # type: ignore
+        elif p.grad.is_sparse:  # type: ignore
+            return p.grad.to_dense().view(-1)
+        else:
+            return p.grad.view(-1)
+
     def _gather_flat_grad(self) -> torch.Tensor:
         """
         Helper function for gathering all gradients into a single vector.
         Duplicated from torch.optim.lbfgs.
         """
-        views = []
-        for param_group in self._optimizer.param_groups:
-            for p in param_group["params"]:
-                if p.grad is None:
-                    view = p.new(p.numel()).zero_()
-                elif p.grad.is_sparse:
-                    view = p.grad.to_dense().view(-1)
-                else:
-                    view = p.grad.view(-1)
-                views.append(view)
+        views = [self._to_flat_view(p) for param_group in self._optimizer.param_groups for p in param_group["params"]]
         return torch.cat(views, 0)
 
-    def _compute_intra_grad_corr_mean(self) -> float:
+    def _compute_intra_grad_corr_mean(self) -> torch.Tensor:
         """
         Helper function for computing average intra correlation among gradients on different GPUs.
+        This should be called under `torch.no_grad()` context.
         """
         assert self._world_size > 1, "Only for distributed training"
         flat_grad = self._gather_flat_grad()
@@ -423,7 +427,7 @@ class AdaScale(Optimizer):
         else:
             dist.gather(flat_grad, gather_list=None, dst=0)
         dist.broadcast(corr_mean, src=0)
-        return corr_mean.item()
+        return corr_mean
 
     def _backward_hook(self, pg_idx: int, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
@@ -487,8 +491,6 @@ class AdaScale(Optimizer):
             return
 
         # Since self._local_grad_sqr is FP32, sum shouldn't overflow.
-
-        # TODO: Hongbo says param.grad might be FP16 should do this before converting to FP32.
 
         # This vector has length of # of param_groups, so it is small, but we
         # use async to hide the all_reduce latency, esp when # of nodes is large.

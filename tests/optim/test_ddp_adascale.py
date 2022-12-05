@@ -169,7 +169,7 @@ def _test_corr_mean_func(rank, world_size, tempfile_name, test_case):
             in_data = Tensor(in_data[rank]).cuda()
             out = model(in_data)
             out.sum().backward()
-            results.append(optim._compute_intra_grad_corr_mean())
+            results.append(optim._compute_intra_grad_corr_mean().item())
         # sync gradients manually
         for p in model.parameters():
             if p.grad is not None:
@@ -191,6 +191,10 @@ def _test_corr_mean_func(rank, world_size, tempfile_name, test_case):
 
 
 @skip_if_single_gpu
+@pytest.mark.skipif(
+    torch.__version__.split("+")[0].split(".") < ["1", "10", "0"],
+    reason="torch.corrcoef available only for torch 1.10 or higher",
+)
 def test_corr_mean():
     """
     Test _compute_intra_grad_corr_mean and _gather_flat_grad using ddp.no_sync()

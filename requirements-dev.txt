@@ -28,11 +28,10 @@ pynvml == 8.0.4
 
 # For mypy typing. It is important to have a fixed version. Otherwise, you
 # may run into mypy errors out differently for different versions.
-# Using 1.21.5 for now because py3.7 only has up to 1.21.5, not 1.22.x.
 numpy == 1.22.0
 
 # For layerwise gradient scaler
-scikit-learn >= 0.0
+scikit-learn == 1.1.3
 
 # For weigit. These are actually user requirements, not developer requirements.
 # However, due to the experimental nature of weigit, we don't expose to the
