@@ -162,6 +162,10 @@ def _distributed_worker(
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("ckpt", ["no_ckpt", "ckpt"])
 @pytest.mark.parametrize("fsdp", ["ddp", "fsdp", "fsdp_amp_default", "fsdp_amp_compute_dtype32"])
+@pytest.mark.skipif(
+    torch_version() >= (1, 14, 0),
+    reason="Tests broke in Pytorch pre-release version 1.14",
+)
 def test_fsdp_memory(fsdp, ckpt):
     expected = {
         ("ddp", "no_ckpt"): {

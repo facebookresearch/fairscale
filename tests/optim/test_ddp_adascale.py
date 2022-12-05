@@ -35,6 +35,7 @@ from torch.optim import SGD
 
 from fairscale.fair_dev.testing.golden_testing_data import adascale_test_data
 from fairscale.fair_dev.testing.testing import skip_if_single_gpu
+from fairscale.internal import torch_version
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import ShardedDataParallel as SDP
 from fairscale.optim import OSS, AdaScale
@@ -152,3 +153,59 @@ def test_grad_accum():
     temp_file_name = tempfile.mkstemp()[1]
 
     mp.spawn(_test_grad_accum_func, args=(world_size, temp_file_name), nprocs=world_size, join=True)
+
+
+def _test_corr_mean_func(rank, world_size, tempfile_name, test_case):
+    _dist_init(rank, world_size, tempfile_name, backend="gloo")  # Covers gloo
+
+    model = Linear(3, 1, bias=False)
+    model.to("cuda")
+    model = DDP(model, device_ids=[rank])
+    optim = AdaScale(SGD(model.parameters(), lr=0.1))
+    results = []
+    last_grad = None
+    for i, in_data in enumerate(test_case["inputs"]):
+        # use no_sync so we can access nonreduced gradients
+        with model.no_sync():
+            in_data = Tensor(in_data[rank]).cuda()
+            out = model(in_data)
+            out.sum().backward()
+            results.append(optim._compute_intra_grad_corr_mean().item())
+        # sync gradients manually
+        for p in model.parameters():
+            if p.grad is not None:
+                dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+                # divide by world size
+                p.grad.data.div_(world_size)
+        grad = optim._gather_flat_grad()
+        assert np.allclose(grad.cpu(), test_case["expected_grad"][i])
+        optim.step()
+        if last_grad is not None:
+            # compute cosine similarity
+            cos_similarity = torch.dot(grad, last_grad) / (grad.norm() * last_grad.norm())
+            np.allclose(cos_similarity.cpu(), test_case["expected_cos_similarity"][i])
+        last_grad = grad
+        optim.zero_grad()
+    assert np.allclose(results, test_case["expected_corr"]), results
+
+    dist.destroy_process_group()
+
+
+@skip_if_single_gpu
+@pytest.mark.skipif(
+    torch_version() < (1, 10, 0),
+    reason="torch.corrcoef available only for torch 1.10 or higher",
+)
+def test_corr_mean():
+    """
+    Test _compute_intra_grad_corr_mean and _gather_flat_grad using ddp.no_sync()
+    We also demonstrate how cosine similarity between consecutive gradients can be computed using _gather_flat_grad
+    """
+    world_size = 2
+    temp_file_name = tempfile.mkstemp()[1]
+
+    from fairscale.fair_dev.testing.golden_testing_data import corr_mean_test_data
+
+    test_case = corr_mean_test_data[0]
+
+    mp.spawn(_test_corr_mean_func, args=(world_size, temp_file_name, test_case), nprocs=world_size, join=True)

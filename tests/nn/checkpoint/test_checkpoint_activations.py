@@ -83,6 +83,10 @@ class BasicModel(nn.Module):
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.skipif(
+    torch_version() >= (1, 13, 0),
+    reason="mem_peak behavior changed for torch 1.13 and above",
+)
 def test_basic(device):
     if "cuda" in device and not torch.cuda.is_available():
         pytest.skip("test requires a GPU")

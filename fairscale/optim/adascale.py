@@ -387,6 +387,49 @@ class AdaScale(Optimizer):
             else:
                 self._state[name] = factor * self._state[name] + (1.0 - factor) * value
 
+    def _gather_flat_grad(self) -> torch.Tensor:
+        """
+        Helper function for gathering all gradients into a single vector.
+        Duplicated from torch.optim.lbfgs.
+        """
+
+        def _to_flat_view(p: torch.Tensor) -> torch.Tensor:
+            """
+            Local helper function for _gather_flat_grad.
+            Returns a flattened view of the input tensor.
+            """
+            if p.grad is None:
+                return p.new(p.numel()).zero_()  # type: ignore
+            elif p.grad.is_sparse:  # type: ignore
+                return p.grad.to_dense().view(-1)
+            else:
+                return p.grad.view(-1)
+
+        views = [_to_flat_view(p) for param_group in self._optimizer.param_groups for p in param_group["params"]]
+        return torch.cat(views, 0)
+
+    def _compute_intra_grad_corr_mean(self) -> torch.Tensor:
+        """
+        Helper function for computing average intra correlation among gradients on different GPUs.
+        This should be called under `model.no_sync()` context.
+        """
+        assert self._world_size > 1, "Only for distributed training"
+        flat_grad = self._gather_flat_grad()
+        corr_mean = torch.tensor(0.0).cuda()
+        if dist.get_rank() == 0:
+            size = flat_grad.numel()
+            gathered_tensors = [torch.zeros(size, device=0) for _ in range(self._world_size)]
+            dist.gather(flat_grad, gather_list=gathered_tensors, dst=0)
+            # the following requires torch 1.10+
+            corr = torch.stack(gathered_tensors).corrcoef()  # type: ignore
+            # pick out the upper triangular part of the correlation matrix
+            corr = corr[torch.triu(torch.ones_like(corr), diagonal=1) == 1]
+            corr_mean = corr.mean()
+        else:
+            dist.gather(flat_grad, gather_list=None, dst=0)
+        dist.broadcast(corr_mean, src=0)
+        return corr_mean
+
     def _backward_hook(self, pg_idx: int, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
@@ -449,6 +492,7 @@ class AdaScale(Optimizer):
             return
 
         # Since self._local_grad_sqr is FP32, sum shouldn't overflow.
+
         # This vector has length of # of param_groups, so it is small, but we
         # use async to hide the all_reduce latency, esp when # of nodes is large.
         work = None

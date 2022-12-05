@@ -303,6 +303,10 @@ def _get_cached_results(
 @pytest.mark.parametrize("wrap_bn", ["auto_wrap_bn", "no_auto_wrap_bn"])
 @pytest.mark.parametrize("model_type", ["model1", "model2"])
 @pytest.mark.parametrize("bn_type", ["bn", "sync_bn"])
+@pytest.mark.skipif(
+    torch_version() >= (1, 14, 0),
+    reason="Tests broke in Pytorch pre-release version 1.14",
+)
 def test_multiple_forward_checkpoint(precision, flatten, wrap_bn, model_type, bn_type):
     mixed_precision = precision == "mixed"
     flatten = flatten == "flatten"
