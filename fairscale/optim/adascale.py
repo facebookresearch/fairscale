@@ -387,30 +387,31 @@ class AdaScale(Optimizer):
             else:
                 self._state[name] = factor * self._state[name] + (1.0 - factor) * value
 
-    def _to_flat_view(self, p: torch.Tensor) -> torch.Tensor:
-        """
-        Helper function for _gather_flat_grad.
-        Returns a flattened view of the input tensor.
-        """
-        if p.grad is None:
-            return p.new(p.numel()).zero_()  # type: ignore
-        elif p.grad.is_sparse:  # type: ignore
-            return p.grad.to_dense().view(-1)
-        else:
-            return p.grad.view(-1)
-
     def _gather_flat_grad(self) -> torch.Tensor:
         """
         Helper function for gathering all gradients into a single vector.
         Duplicated from torch.optim.lbfgs.
         """
-        views = [self._to_flat_view(p) for param_group in self._optimizer.param_groups for p in param_group["params"]]
+
+        def _to_flat_view(p: torch.Tensor) -> torch.Tensor:
+            """
+            Local helper function for _gather_flat_grad.
+            Returns a flattened view of the input tensor.
+            """
+            if p.grad is None:
+                return p.new(p.numel()).zero_()  # type: ignore
+            elif p.grad.is_sparse:  # type: ignore
+                return p.grad.to_dense().view(-1)
+            else:
+                return p.grad.view(-1)
+
+        views = [_to_flat_view(p) for param_group in self._optimizer.param_groups for p in param_group["params"]]
         return torch.cat(views, 0)
 
     def _compute_intra_grad_corr_mean(self) -> torch.Tensor:
         """
         Helper function for computing average intra correlation among gradients on different GPUs.
-        This should be called under `torch.no_grad()` context.
+        This should be called under `torch.no_sync()` context.
         """
         assert self._world_size > 1, "Only for distributed training"
         flat_grad = self._gather_flat_grad()

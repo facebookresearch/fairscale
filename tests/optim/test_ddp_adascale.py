@@ -35,6 +35,7 @@ from torch.optim import SGD
 
 from fairscale.fair_dev.testing.golden_testing_data import adascale_test_data
 from fairscale.fair_dev.testing.testing import skip_if_single_gpu
+from fairscale.internal import torch_version
 from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.nn.data_parallel import ShardedDataParallel as SDP
 from fairscale.optim import OSS, AdaScale
@@ -192,7 +193,7 @@ def _test_corr_mean_func(rank, world_size, tempfile_name, test_case):
 
 @skip_if_single_gpu
 @pytest.mark.skipif(
-    torch.__version__.split("+")[0].split(".") < ["1", "10", "0"],
+    torch_version() < (1, 10, 0),
     reason="torch.corrcoef available only for torch 1.10 or higher",
 )
 def test_corr_mean():
