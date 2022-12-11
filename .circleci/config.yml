@@ -38,6 +38,11 @@ cpu_py310: &cpu_py310
     - image: circleci/python:3.10
   resource_class: large
 
+cpu_py311: &cpu_py311
+  docker:
+    - image: circleci/python:3.11
+  resource_class: large
+
 # Here is the list of GPU images:
 # https://circleci.com/docs/2.0/configuration-reference/#available-linux-gpu-images
 # We need to use multiple gpus for several jobs. The resource_class
@@ -353,6 +358,38 @@ jobs:
           paths:
             - ~/venv
           key: cache-key-cpu-py310-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+
+      - <<: *run_unittests
+      - <<: *run_doc_build
+
+      - store_test_results:
+          path: test-results
+
+  cpu_tests_py311:
+    <<: *cpu_py311
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+      - <<: *check_test_list
+      - <<: *setup_venv
+
+      # Do this first to test repo dependencies. Basic import should work after this
+      # installation. See issue #1042 for an example.
+      - <<: *install_repo
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-cpu-py311-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+
+      - <<: *install_dep_pytorch_stable
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-cpu-py311-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *run_unittests
       - <<: *run_doc_build

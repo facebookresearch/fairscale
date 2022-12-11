@@ -32,10 +32,12 @@ def find_version(version_file_path) -> str:
 
 extensions = []
 cmdclass = {}
+setup_requires = []
 
 if os.getenv("BUILD_CUDA_EXTENSIONS", "0") == "1":
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
+    setup_requires = ["ninja"]
     extensions.extend(
         [
             CUDAExtension(
@@ -58,16 +60,20 @@ if __name__ == "__main__":
         name="fairscale",
         description="FairScale: A PyTorch library for large-scale and high-performance training.",
         version=find_version("fairscale/version.py"),
-        setup_requires=["ninja"],  # ninja is required to build extensions
+        setup_requires=setup_requires,
         install_requires=fetch_requirements(),
         include_package_data=True,
-        packages=setuptools.find_packages(exclude=("tests", "tests.*")),
+        packages=setuptools.find_packages("fairscale"),  # Only include code within fairscale.
         ext_modules=extensions,
         cmdclass=cmdclass,
         python_requires=">=3.8",
         author="Foundational AI Research @ Meta AI",
-        author_email="todo@fb.com",
-        long_description="FairScale is a PyTorch extension library for high performance and large scale training on one or multiple machines/nodes. This library extends basic PyTorch capabilities while adding new experimental ones.",
+        author_email="todo@meta.com",
+        long_description=(
+            "FairScale is a PyTorch extension library for high performance and "
+            "large scale training on one or multiple machines/nodes. This library "
+            "extends basic PyTorch capabilities while adding new experimental ones."
+        ),
         long_description_content_type="text/markdown",
         entry_points={"console_scripts": ["wgit = fairscale.experimental.wgit.__main__:main"]},
         classifiers=[
