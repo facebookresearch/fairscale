@@ -63,7 +63,7 @@ if __name__ == "__main__":
         setup_requires=setup_requires,
         install_requires=fetch_requirements(),
         include_package_data=True,
-        packages=setuptools.find_packages("fairscale"),  # Only include code within fairscale.
+        packages=setuptools.find_packages(include=["fairscale*"]),  # Only include code within fairscale.
         ext_modules=extensions,
         cmdclass=cmdclass,
         python_requires=">=3.8",
