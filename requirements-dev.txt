@@ -36,5 +36,5 @@ scikit-learn == 1.1.3
 # For weigit. These are actually user requirements, not developer requirements.
 # However, due to the experimental nature of weigit, we don't expose to the
 # general users of fairscale yet. We check for them in weigit's init code.
-pygit2==1.9.2
+pygit2==1.11.1
 pgzip==0.3.1
