@@ -40,7 +40,7 @@ cpu_py310: &cpu_py310
 
 cpu_py311: &cpu_py311
   docker:
-    - image: circleci/python:3.11
+    - image: cimg/python:3.11.0
   resource_class: large
 
 # Here is the list of GPU images:
