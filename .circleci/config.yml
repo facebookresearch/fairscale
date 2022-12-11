@@ -520,7 +520,8 @@ jobs:
 
       - <<: *install_repo
 
-      - <<: *run_pipe_benchmark
+      # Skip this benchmark due to some download issue.
+      #- <<: *run_pipe_benchmark
 
       - <<: *run_offload_benchmark
 
