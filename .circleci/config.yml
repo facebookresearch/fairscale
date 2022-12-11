@@ -126,8 +126,8 @@ install_dep_pytorch_stable: &install_dep_pytorch_stable
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.13 && exit 0; fi
         # start installing
-        pip install --progress-bar off torch==1.13.0+cu117 --extra-index-url https://download.pytorch.org/whl/torch
-        pip install --progress-bar off torchvision==0.14.0+cu117 --extra-index-url https://download.pytorch.org/whl/torchvision
+        pip install --progress-bar off torch==1.13.0 --extra-index-url https://download.pytorch.org/whl/cu117
+        pip install --progress-bar off torchvision==0.14.0 --extra-index-url https://download.pytorch.org/whl/cu117
         pip install --progress-bar off -r requirements-dev.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
