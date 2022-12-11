@@ -628,6 +628,7 @@ workflows:
       - cpu_tests_py38
       - cpu_tests_py39
       - cpu_tests_py310
+      - cpu_tests_py311
       - gpu_tests_lts:
           test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_stable:
