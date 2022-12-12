@@ -115,6 +115,8 @@ install_dep_pytorch_stable_cpu: &install_dep_pytorch_stable_cpu
         # torchvision doesn't have cp311 binary whl yet and it is needed by some tests.
         pip install https://github.com/pytorch/vision@677fc939b21a8893f07db4c1f90482b648b6573f
         pip install --progress-bar off -r requirements-dev.txt
+        # numpy for 3.11 needs a newer binary whl.
+        pip install numpy==1.23.5
         python -c 'import torch; print("Torch version:", torch.__version__)'
         python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "13"], f"wrong torch version {torch.__version__}"'
         python -m torch.utils.collect_env
@@ -306,13 +308,13 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py38-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+            - cache-key-cpu-py38-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
       - <<: *install_dep_pytorch_stable_cpu
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py38-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-cpu-py38-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *run_unittests
       - <<: *run_doc_build
