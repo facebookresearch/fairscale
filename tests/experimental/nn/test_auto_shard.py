@@ -8,6 +8,7 @@ Testing Auto Shard functionality of non nn.Sequential models.
 """
 
 import math
+import sys
 
 import pytest
 import torch
@@ -78,6 +79,8 @@ dropout = 0.2  # the dropout value
 
 
 def test_single_run():
+    if sys.version_info.major == 3 and sys.version_info.minor > 10:
+        pytest.skip("torch.fx doesn't seem to work 3.11 yet")
     if torch_version() < (1, 8, 0):
         pytest.skip("requires torch version >= 1.8.0")
     from fairscale.experimental.nn.auto_shard import shard_model

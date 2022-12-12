@@ -38,6 +38,11 @@ cpu_py310: &cpu_py310
     - image: circleci/python:3.10
   resource_class: large
 
+cpu_py311: &cpu_py311
+  docker:
+    - image: cimg/python:3.11.0
+  resource_class: large
+
 # Here is the list of GPU images:
 # https://circleci.com/docs/2.0/configuration-reference/#available-linux-gpu-images
 # We need to use multiple gpus for several jobs. The resource_class
@@ -97,6 +102,22 @@ install_dep_pytorch_lts: &install_dep_pytorch_lts
         python -m torch.utils.collect_env
         wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
 
+# most recent stable version on cpu
+# for testing 3.8/9/10/11, make sure torch has the right whl files.
+install_dep_pytorch_stable_cpu: &install_dep_pytorch_stable_cpu
+  - run:
+      name: Install Dependencies with torch 1.13.0 on CPU
+      command: |
+        # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
+        if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.13 && exit 0; fi
+        # start installing
+        pip install --progress-bar off torch torchvision
+        pip install --progress-bar off -r requirements-dev.txt
+        python -c 'import torch; print("Torch version:", torch.__version__)'
+        python -c 'import torch; assert torch.__version__.split(".")[:2] == ["1", "13"], f"wrong torch version {torch.__version__}"'
+        python -m torch.utils.collect_env
+        wget -O /home/circleci/venv/check_version.py https://raw.githubusercontent.com/min-xu-ai/check_verion/main/check_version.py
+
 # most recent stable version
 install_dep_pytorch_stable: &install_dep_pytorch_stable
   - run:
@@ -105,7 +126,8 @@ install_dep_pytorch_stable: &install_dep_pytorch_stable
         # check if we have restored venv cache (/home/circleci/venv) correctly, if so, just skip
         if [ -f /home/circleci/venv/check_version.py ]; then python /home/circleci/venv/check_version.py torch eq 1.13 && exit 0; fi
         # start installing
-        pip install --progress-bar off torch==1.13.0 torchvision==0.14.0 --extra-index-url https://download.pytorch.org/whl/cu113
+        pip install --progress-bar off torch==1.13.0 --extra-index-url https://download.pytorch.org/whl/cu117
+        pip install --progress-bar off torchvision==0.14.0 --extra-index-url https://download.pytorch.org/whl/cu117
         pip install --progress-bar off -r requirements-dev.txt
         pip install --progress-bar off -r requirements-benchmarks.txt
         python -c 'import torch; print("Torch version:", torch.__version__)'
@@ -282,13 +304,13 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py38-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
-      - <<: *install_dep_pytorch_stable
+            - cache-key-cpu-py38-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+      - <<: *install_dep_pytorch_stable_cpu
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py38-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-cpu-py38-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *run_unittests
       - <<: *run_doc_build
@@ -313,14 +335,14 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py39-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+            - cache-key-cpu-py39-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_pytorch_stable
+      - <<: *install_dep_pytorch_stable_cpu
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py39-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-cpu-py39-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *run_unittests
       - <<: *run_doc_build
@@ -345,14 +367,51 @@ jobs:
       # Cache the venv directory that contains dependencies
       - restore_cache:
           keys:
-            - cache-key-cpu-py310-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+            - cache-key-cpu-py310-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
-      - <<: *install_dep_pytorch_stable
+      - <<: *install_dep_pytorch_stable_cpu
 
       - save_cache:
           paths:
             - ~/venv
-          key: cache-key-cpu-py310-torch-1-11-0-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+          key: cache-key-cpu-py310-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+
+      - <<: *run_unittests
+      - <<: *run_doc_build
+
+      - store_test_results:
+          path: test-results
+
+  cpu_tests_py311:
+    <<: *cpu_py311
+
+    working_directory: ~/fairscale
+
+    steps:
+      - checkout
+      - <<: *check_test_list
+      - <<: *setup_venv
+
+      # Do this first to test repo dependencies. Basic import should work after this
+      # installation. See issue #1042 for an example.
+      - <<: *install_repo
+
+      # Cache the venv directory that contains dependencies
+      - restore_cache:
+          keys:
+            - cache-key-cpu-py311-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
+
+      - <<: *install_dep_pytorch_stable_cpu
+
+      # torchvision doesn't have cp311 binary whl yet and it is needed by some tests.
+      - run: pip install git+https://github.com/pytorch/vision@677fc939b21a8893f07db4c1f90482b648b6573f
+      # numpy for 3.11 needs a newer binary whl.
+      - run: pip install numpy==1.23.5
+
+      - save_cache:
+          paths:
+            - ~/venv
+          key: cache-key-cpu-py311-torch-stable-{{.Environment.CACHE_VERSION}}-{{checksum "setup.py"}}-{{checksum "requirements-dev.txt"}}
 
       - <<: *run_unittests
       - <<: *run_doc_build
@@ -591,6 +650,7 @@ workflows:
       - cpu_tests_py38
       - cpu_tests_py39
       - cpu_tests_py310
+      - cpu_tests_py311
       - gpu_tests_lts:
           test_list_file: tests/ci_test_list_1.txt
       - gpu_tests_stable:

@@ -6,6 +6,7 @@
 import os
 from pathlib import Path
 import shutil
+import sys
 
 import pytest
 import torch
@@ -118,6 +119,9 @@ def test_sha1_add_tensor(sha1_store, compress):
 @pytest.mark.parametrize("compress", [True, False])
 def test_sha1_get(sha1_store, compress):
     """Testing the get() API: normal and exception cases."""
+    if sys.version_info.major == 3 and sys.version_info.minor > 10:
+        pytest.skip("pgzip package doesn't work with 3.11's gzip module")
+
     os.chdir(TESTING_STORE_DIR)
 
     # Add a file, a state dict and a tensor.
