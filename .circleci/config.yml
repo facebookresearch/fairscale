@@ -404,7 +404,7 @@ jobs:
       - <<: *install_dep_pytorch_stable_cpu
 
       # torchvision doesn't have cp311 binary whl yet and it is needed by some tests.
-      - run: pip install https://github.com/pytorch/vision@677fc939b21a8893f07db4c1f90482b648b6573f
+      - run: pip install git+https://github.com/pytorch/vision@677fc939b21a8893f07db4c1f90482b648b6573f
       # numpy for 3.11 needs a newer binary whl.
       - run: pip install numpy==1.23.5
 
