@@ -58,8 +58,8 @@ class FlatParameter(nn.Parameter):
             raise ValueError("List items need to be Parameter types")
 
         # Flattening involves (1) making a tensor flat (i.e. single dimensional) and (2) making a module
-        # heirarchy flat (using a single tensor to replace a tree of tensors). Therefore,
-        # adding back nesting and heirarchy is counter-productive. If nesting is encountered
+        # hierarchy flat (using a single tensor to replace a tree of tensors). Therefore,
+        # adding back nesting and hierarchy is counter-productive. If nesting is encountered
         # in the future, the reasonable thing to do is likely for the top level FlatParameter to
         # absorb the nested one and keep the result flat, free from hierarchy.
         if any(isinstance(p, FlatParameter) for p in params):
