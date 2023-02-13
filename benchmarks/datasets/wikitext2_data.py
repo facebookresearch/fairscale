@@ -93,7 +93,7 @@ def get_real_dataloaders(args, benchmark_config, model_specs, num_replicas=1, ra
     train_dataloader, valid_dataloader, test_dataloader = get_dataloaders(
         dataset_info, benchmark_config, model_specs, num_replicas, rank
     )
-    return dataset_info.ntokens, train_dataloader, valid_dataloder, test_dataloader
+    return dataset_info.ntokens, train_dataloader, valid_dataloader, test_dataloader
 
 
 def get_synthetic_datasets():
