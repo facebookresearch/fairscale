@@ -123,7 +123,7 @@ def log_number_of_parameters(model):
         )
         torch.distributed.barrier()
         if model.group.rank() == 0:
-            print(f"total #prams = {total.item()}")
+            print(f"total #params = {total.item()}")
     else:
         print(f"training model, #params = {num_params/10**6}M")
 
@@ -346,7 +346,6 @@ def benchmark_fsdp(rank, args, world_size):
 
     torch.cuda.set_device(rank)
     init_random_seed(0)
-    logging.basicConfig(level=logging.DEBUG)
 
     benchmark_config = create_benchmark_config(args.model_name)
     model_specs = get_model_specs(args.model_name)
