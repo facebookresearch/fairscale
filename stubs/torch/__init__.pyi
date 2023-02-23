@@ -3,7 +3,7 @@
 # @generated from torch/__init__.pyi.in
 
 from typing import List, Tuple, Optional, Union, Any, ContextManager, Callable, overload, Iterator, Iterable
-from torch._six import inf
+from torch import inf
 
 import builtins
 
