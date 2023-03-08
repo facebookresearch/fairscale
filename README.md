@@ -73,7 +73,7 @@ If you use FairScale in your publication, please cite it by using the following 
 
 ```BibTeX
 @Misc{FairScale2021,
-  author =       {FairScale authors},
+  author =       {{FairScale authors}},
   title =        {FairScale:  A general purpose modular PyTorch library for high performance and large scale training},
   howpublished = {\url{https://github.com/facebookresearch/fairscale}},
   year =         {2021}
