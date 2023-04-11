@@ -76,5 +76,3 @@ Finally, to run the model and compute the loss function, make sure that outputs 
     optimizer.step()
 
 
-
-You can find a complete example under the `examples folder <https://github.com/facebookresearch/fairscale/blob/main/examples/tutorial_pipe.py>`_ in the fairscale repo.
