@@ -149,7 +149,7 @@ for a shard of the model parameters. FairScale implements parameter sharding by 
 Data Parallel (FSDP) API which is heavily inspired by `ZeRO-3 <https://arxiv.org/pdf/1910.02054.pdf>`_. Parameter sharding is possible because of
 two key insights:
 
-1. The allreduce operation can be broken up into reduce and allgather similar to the previous sharding
+1. The allreduce operation can be broken up into reducescatter and allgather similar to the previous sharding
 technologies (optimizer state and gradient).
 
 2. Individual layers can be wrapped with the FSDP API that allows us to bring in all the parameters
