@@ -2235,9 +2235,10 @@ class FullyShardedDataParallel(nn.Module):
         # of synchronization between shards or that all shards buffers are equivalent).
         if with_module_buffers:
             for buffer_name in shard_metadata[0]["buffer_names"]:
-                if buffer_name not in shard_weights[0] and (not strict):
-                    continue
-                consolidated_weights[buffer_name] = shard_weights[0][buffer_name]
+                if buffer_name in shard_weights[0]:
+                    consolidated_weights[buffer_name] = shard_weights[0][buffer_name]
+                else:
+                    logging.info(f"Missing buffer weights: {buffer_name}")
 
         return consolidated_weights
 
