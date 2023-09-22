@@ -775,7 +775,7 @@ class FullyShardedDataParallel(nn.Module):
                 assert p.dtype == torch.float32
 
             # If world_size is 1, then we all-reduce grads instead of sharding.
-            p._is_sharded = self.world_size > 1
+            p._is_sharded = self.world_size > 1 and isinstance(p, FlatParameter)
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
@@ -1159,7 +1159,7 @@ class FullyShardedDataParallel(nn.Module):
                         non_shared_params
                     ), f"{len(full_tensors)} vs. {len(non_shared_params)}"
                     for p, (full_tensor, safe_to_free) in zip(non_shared_params, full_tensors):
-                        if not volatile:
+                        if not volatile and p._is_sharded:
                             # Copy any changes made to the full params back into
                             # the corresponding local shards.
                             local_shard, _ = self._get_shard(full_tensor)
@@ -1773,7 +1773,7 @@ class FullyShardedDataParallel(nn.Module):
                 # Currently the only way for _is_sharded to be False is if
                 # world_size == 1. This could be relaxed in the future, in which
                 # case grads should be all-reduced here.
-                assert self.world_size == 1
+                # assert self.world_size == 1
                 self._post_reduction_hook(param, param.grad.data)
 
             # After _post_backward_hook returns, orig_grad_data will eventually
