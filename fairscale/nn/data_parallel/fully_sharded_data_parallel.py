@@ -5,6 +5,7 @@
 
 import contextlib
 import copy
+import collections
 from dataclasses import dataclass
 from enum import Enum, auto
 import functools
@@ -30,6 +31,7 @@ from typing import (
     Tuple,
     Union,
     cast,
+    Deque,
 )
 
 import torch
@@ -73,6 +75,38 @@ except ImportError:
     # The latest nightly PyTorch version required
     import_ssd_offload = False
     pass
+
+
+from logging import getLogger
+logger = getLogger()
+
+class _FreeEventQueue:
+    """
+    This tracks all pending frees corresponding to inflight all-gathers. The
+    queueing pattern is iterative enqueues with a single dequeue per iteration
+    once the limit ``_max_num_inflight_all_gathers`` is reached.
+    """
+
+    def __init__(self) -> None:
+        self._queue: Deque[torch.cuda.Event] = collections.deque()
+        self._max_num_inflight_all_gathers = 0  # empirically chosen
+
+    def enqueue(self, free_event: torch.cuda.Event) -> None:
+        """Enqueues a free event."""
+        self._queue.append(free_event)
+
+    def dequeue_if_needed(self) -> Optional[torch.cuda.Event]:
+        """Dequeues a single event if the limit is reached."""
+        if len(self._queue) >= self._max_num_inflight_all_gathers:
+            return self._dequeue()
+        return None
+
+    def _dequeue(self) -> Optional[torch.cuda.Event]:
+        """Dequeues a free event if possible."""
+        if self._queue:
+            event = self._queue.popleft()
+            return event
+        return None
 
 
 class TrainingState(Enum):
@@ -332,6 +366,8 @@ class FullyShardedDataParallel(nn.Module):
         offload_config: Optional[OffloadConfig] = None,
         state_dict_on_rank_0_only: bool = False,
         gradient_predivide_factor: Optional[float] = None,
+        limit_all_gather_events: bool = False,
+        limit_reduce_scatter_events: bool = False,
     ):
         try:
             import torch._C
@@ -517,6 +553,10 @@ class FullyShardedDataParallel(nn.Module):
             for m in self.modules():  # includes self
                 if isinstance(m, FullyShardedDataParallel):
                     m._free_ssd_offload()
+
+        self.dont_wait_current_stream_for_post_all_gather = False
+        self._all_gather_free_event_queue = _FreeEventQueue() if limit_all_gather_events else None
+        self._reduce_scatter_free_event_queue = _FreeEventQueue() if limit_reduce_scatter_events else None
 
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
@@ -1330,6 +1370,8 @@ class FullyShardedDataParallel(nn.Module):
                     (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
                 )
                 m._fsdp_forward_ordering = self._fsdp_forward_ordering
+                m._reduce_scatter_free_event_queue = self._reduce_scatter_free_event_queue
+                m._all_gather_free_event_queue = self._all_gather_free_event_queue
 
     def _setup_streams(self) -> None:
         """Create streams to overlap data transfer and computation."""
@@ -1346,7 +1388,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # Helper for bucketing reduce-scatter ops. This is also shared with
         # children instances to improve bucket utilization.
-        self._reducer = ReduceScatterBucketer(self.bucket_cap_mb)
+        self._reducer = ReduceScatterBucketer(self.bucket_cap_mb, self._reduce_scatter_free_event_queue)
         # We share streams with all children instances, which allows them to
         # overlap transfers across the forward pass without synchronizing with
         # the default stream.
@@ -1600,8 +1642,8 @@ class FullyShardedDataParallel(nn.Module):
             return  # don't register grad hooks if grad isn't enabled
         for p in self.params:
             if p.requires_grad:
-                if hasattr(p, "_shard_bwd_hook"):
-                    continue
+                # if hasattr(p, "_shard_bwd_hook"):
+                #     continue
                 # Register a hook on the first call, empirically, autograd
                 # fires it at the end for this param, which makes sense.
                 p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
@@ -1723,6 +1765,11 @@ class FullyShardedDataParallel(nn.Module):
             # are underway in the post_backward stream. See:
             # github.com/NVIDIA/apex/blob/master/apex/parallel/distributed.py
             orig_grad_data.record_stream(self._streams["post_backward"])
+            if self._reduce_scatter_free_event_queue is not None:
+                release_full_grad_event = torch.cuda.Event()
+                release_full_grad_event.record()
+                self._reduce_scatter_free_event_queue.enqueue(release_full_grad_event)
+
 
     def _post_reduction_hook(self, param: Parameter, reduced_grad: torch.Tensor) -> None:
         """Hook to call on each param after the reduce-scatter."""
@@ -1784,6 +1831,9 @@ class FullyShardedDataParallel(nn.Module):
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
 
+        if self.dont_wait_current_stream_for_post_all_gather:
+            return
+
         if self._require_backward_grad_sync:
             # Flush any unreduced buckets in the post_backward stream.
             with torch.cuda.stream(self._streams["post_backward"]):
@@ -1808,8 +1858,8 @@ class FullyShardedDataParallel(nn.Module):
                     continue
                 if hasattr(p, "_shard_bwd_hook"):
                     p_assert(len(p._shard_bwd_hook) == 2, f"WFPB: incorrect hook num: {len(p._shard_bwd_hook)}")
-                    p._shard_bwd_hook[1].remove()
-                    delattr(p, "_shard_bwd_hook")
+                    # p._shard_bwd_hook[1].remove()
+                    # delattr(p, "_shard_bwd_hook")
 
                 # Leave the gradient accumulation state as-is if not synchronizing this pass. This ensures p.grad
                 # remains the unsharded gradient accumulated from prior no-sync passes, and p._saved_grad_shard
@@ -1817,7 +1867,6 @@ class FullyShardedDataParallel(nn.Module):
                 # sync passes, if desired.
                 if not self._require_backward_grad_sync:
                     continue
-
                 # Parameter and gradient devices must match.
                 if hasattr(p, "_cpu_grad"):
                     p_assert(p.device == torch.device("cpu"), f"WFPB: incorrect cpu_grad device {p.device}")
@@ -1867,6 +1916,32 @@ class FullyShardedDataParallel(nn.Module):
                     )
                     assert self._output_pre_backward_hook_registered is not None  # make mypy happy
                     self._output_pre_backward_hook_registered.clear()
+
+
+    @torch.no_grad()
+    def _rebuild_full_params_recursive(self):
+        # if recurse:
+        #     with contextlib.ExitStack() as stack:
+        #         # Summon all params for any nested FSDP instances.
+        #         for module in self.modules():
+        #             if isinstance(module, FullyShardedDataParallel):
+        #                 stack.enter_context(module.summon_full_params(recurse=False, volatile=volatile))
+        #         # Yield to the caller, with full params in all nested instances.
+        #         yield
+        #     # Exiting from the ExitStack will re-shard params.
+        #     return
+        # else:
+        # torch.cuda.synchronize()
+        # self.assert_state(TrainingState.IDLE)
+        # Set the state so that we assert when trying to go into
+        # forward/backward.
+        # full_tensors = self._rebuild_full_params(force_full_precision=True)
+        for module in self.modules():
+            if isinstance(module, FullyShardedDataParallel):
+                module._lazy_init()
+                module._rebuild_full_params(wait_for_all_gather=False)
+
+
 
     @torch.no_grad()
     def _rebuild_full_params(self, force_full_precision: bool = False, wait_for_all_gather = True) -> Optional[List[Tuple[torch.Tensor, bool]]]:
@@ -1946,6 +2021,14 @@ class FullyShardedDataParallel(nn.Module):
 
         self.has_full_params = True
 
+        if self._all_gather_free_event_queue is not None:
+            while self._all_gather_free_event_queue._queue and self._all_gather_free_event_queue._queue[0].query():
+                self._all_gather_free_event_queue._dequeue()
+            event = self._all_gather_free_event_queue.dequeue_if_needed()
+            if event:
+                logger.warning("synching cpu thread for AG limit")
+                event.synchronize()
+
         with torch.cuda.stream(self._streams["all_gather"]):
             if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
                 self._cast_fp32_param_shards_to_fp16()
@@ -2002,8 +2085,15 @@ class FullyShardedDataParallel(nn.Module):
 
                     if self.move_params_to_cpu and (self.params[0].dtype == self.compute_dtype):
                         self._free_fp16_param_shard([p])
+
+            if self._all_gather_free_event_queue is not None:
+                release_params_event = torch.cuda.Event()
+                release_params_event.record()
+                self._all_gather_free_event_queue.enqueue(release_params_event)
+
         if wait_for_all_gather:
             torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
+
         return output_tensors
 
     @torch.no_grad()

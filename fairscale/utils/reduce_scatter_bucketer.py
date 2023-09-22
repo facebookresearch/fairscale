@@ -6,11 +6,13 @@
 import functools
 import os
 from typing import Callable, Dict, List, Optional, Tuple
+from logging import getLogger
 
 import torch
 from torch import Tensor
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
+logger = getLogger()
 
 # TODO: Remove the toggle-enable_nccl_base_collectives when github open issue #801 is resolved.
 if os.getenv("ENABLE_NCCL_BASE_COLLECTIVES", "1") == "0":
@@ -97,9 +99,10 @@ class ReduceScatterBucketer:
             are sub-divided based on world_size. Values <= 0 disable bucketing.
     """
 
-    def __init__(self, bucket_cap_mb: int = 25):
+    def __init__(self, bucket_cap_mb: int = 25, _reduce_scatter_free_event_queue = None):
         self.bucket_cap_mb = bucket_cap_mb
         self.buckets: Dict[Tuple[torch.dtype, torch.device, ProcessGroup], Bucket] = {}
+        self._reduce_scatter_free_event_queue = _reduce_scatter_free_event_queue
 
     @torch.no_grad()
     def reduce_scatter_async(
@@ -137,6 +140,13 @@ class ReduceScatterBucketer:
 
         bucket_shard_size = self._get_shard_size(first_input.element_size(), world_size)
         if first_input_size > bucket_shard_size:
+            if self._reduce_scatter_free_event_queue is not None:
+                while self._reduce_scatter_free_event_queue._queue and self._reduce_scatter_free_event_queue._queue[0].query():
+                    self._reduce_scatter_free_event_queue._dequeue()
+                event = self._reduce_scatter_free_event_queue.dequeue_if_needed()
+                if event:
+                    event.synchronize()
+
             # TODO: investigate how to avoid using torch.cat (because it seems to be slow for CPU tensors)
             # input is too big to fit in the bucket, reduce-scatter directly
             output = torch.zeros_like(input_list[0])
