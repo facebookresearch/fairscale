@@ -444,8 +444,8 @@ class FullyShardedDataParallel(nn.Module):
         self.numel_padded_per_param: List[int] = []
         self._tstart = time.time()
 
-        if self.fp32_reduce_scatter and not self.mixed_precision:
-            raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
+        # if self.fp32_reduce_scatter and not self.mixed_precision:
+        #     raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
 
         if self.ssd_offload and not self.flatten_parameters:
             raise ValueError(f"offload type: '{offload_config.offload_type}' requires flatten_parameters=True")
@@ -1720,9 +1720,9 @@ class FullyShardedDataParallel(nn.Module):
         with torch.cuda.stream(self._streams["post_backward"]):
             orig_grad_data = param.grad.data
 
-            if self.mixed_precision and self.fp32_reduce_scatter:
+            if self.fp32_reduce_scatter:
                 # Cast grad to FP32.
-                param.grad.data = param.grad.data.to(param.dtype)
+                param.grad.data = param.grad.data.float()
 
             if self.gradient_predivide_factor > 1:
                 # Average grad by world_size for consistency with PyTorch DDP.
@@ -1781,7 +1781,7 @@ class FullyShardedDataParallel(nn.Module):
         # Cast grad to param's dtype (typically FP32). Note: we do this
         # before the move_grads_to_cpu step so that this entire hook remains
         # non-blocking. The downside is a bit more D2H transfer in that case.
-        if self.mixed_precision:
+        if self.fp32_reduce_scatter:
             orig_param_grad_data = reduced_grad.data
             reduced_grad.data = reduced_grad.data.to(dtype=param.data.dtype)
             # Don't let this memory get reused until after the transfer.
