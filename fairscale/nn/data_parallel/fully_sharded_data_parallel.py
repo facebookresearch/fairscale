@@ -557,7 +557,6 @@ class FullyShardedDataParallel(nn.Module):
         self.dont_wait_current_stream_for_post_all_gather = False
         self._all_gather_free_event_queue = _FreeEventQueue() if limit_all_gather_events else None
         self._reduce_scatter_free_event_queue = _FreeEventQueue() if limit_reduce_scatter_events else None
-        self._module_fqn = None
 
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
@@ -1221,9 +1220,6 @@ class FullyShardedDataParallel(nn.Module):
             self._set_is_root()
             self._setup_streams()
             self._setup_output_hook_list()
-            for module_name, module in self.named_modules():
-                if isinstance(module, FullyShardedDataParallel):
-                    module._module_fqn = module_name
 
         if self._is_root:
             # Buffers stay on GPU, and don't get sharded. Since _cast_buffers
@@ -1657,7 +1653,7 @@ class FullyShardedDataParallel(nn.Module):
                 if not hasattr(p, "_shard_bwd_hooks"):
                     p._shard_bwd_hooks = []
                 p._shard_bwd_hooks.append((grad_acc, handle))
-                p._shard_bwd_hook = (grad_acc, handle)
+                # p._shard_bwd_hook = (grad_acc, handle)
 
     @torch.no_grad()
     def _post_backward_hook(self, param: Parameter, *unused: Any) -> None:
@@ -1735,9 +1731,9 @@ class FullyShardedDataParallel(nn.Module):
 
             if self.fp32_reduce_scatter:
                 # Cast grad to FP32.
-                orig_grad_data = param.grad.data.float()
-            else:
-                orig_grad_data = param.grad.data
+                param.grad.data = param.grad.data.float()
+
+            orig_grad_data = param.grad.data
 
             if self.gradient_predivide_factor > 1:
                 # Average grad by world_size for consistency with PyTorch DDP.
