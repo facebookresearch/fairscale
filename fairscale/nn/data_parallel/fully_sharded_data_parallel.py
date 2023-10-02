@@ -1751,9 +1751,8 @@ class FullyShardedDataParallel(nn.Module):
                 # unsharded gradients allocated; one for a pending reduction, and one for gradient computation.
                 param.grad = None
                 callback_fn = functools.partial(self._post_reduction_hook, param)
-                grad_chunks = chunk_and_pad(grad, self.process_group_reduce_scatter.size())
                 self._reducer.reduce_scatter_async(
-                    grad_chunks, group=self.process_group_reduce_scatter, callback_fn=callback_fn
+                    grad, group=self.process_group_reduce_scatter, callback_fn=callback_fn
                 )
             else:
                 # Currently the only way for _is_sharded to be False is if
@@ -1882,6 +1881,10 @@ class FullyShardedDataParallel(nn.Module):
                         p.device == p._saved_grad_shard.device,
                         f"WFPB: incorrect saved_grad_shard device {p.device} vs {p._saved_grad_shard.device}",
                     )
+                    # Reshard in case the parameter was inadvertently gathered
+                    # again after post-backward
+                    if p.shape != p._saved_grad_shard.shape:
+                        self._use_fp32_param_shard([p])
                     if p._saved_grad_shard.dtype != p.dtype:
                         p.grad = p._saved_grad_shard.to(p.dtype)
                     else:
