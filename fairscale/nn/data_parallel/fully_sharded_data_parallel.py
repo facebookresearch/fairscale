@@ -366,8 +366,8 @@ class FullyShardedDataParallel(nn.Module):
         offload_config: Optional[OffloadConfig] = None,
         state_dict_on_rank_0_only: bool = False,
         gradient_predivide_factor: Optional[float] = None,
-        limit_all_gather_events: bool = False,
-        limit_reduce_scatter_events: bool = False,
+        limit_all_gather_events: bool = True,
+        limit_reduce_scatter_events: bool = True,
     ):
         try:
             import torch._C
@@ -1730,7 +1730,6 @@ class FullyShardedDataParallel(nn.Module):
             if self.gradient_predivide_factor > 1:
                 # Average grad by world_size for consistency with PyTorch DDP.
                 param.grad.data.div_(self.gradient_predivide_factor)
-
             if param._is_sharded:
                 assert self._reducer is not None
                 # Save the unsharded grad for reduction. We will asynchronously accumulate the reduced gradient into
@@ -2038,8 +2037,9 @@ class FullyShardedDataParallel(nn.Module):
                 self._all_gather_free_event_queue._dequeue()
             event = self._all_gather_free_event_queue.dequeue_if_needed()
             if event:
-                logger.warning("synching cpu thread for AG limit")
-                event.synchronize()
+                # logger.warning("synching cpu thread for AG limit")
+                with torch.profiler.record_function("all_gather_sync"):
+                    event.synchronize()
 
         with torch.cuda.stream(self._streams["all_gather"]):
             if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
@@ -2174,7 +2174,7 @@ class FullyShardedDataParallel(nn.Module):
             # Storage object and unshard it in-place. For now, just resize
             # the Storage to 0 to save memory.
             free_storage_(p._full_param_padded)
-            torch.cuda.current_stream().synchronize()
+            # torch.cuda.current_stream().synchronize()
 
     def local_metadata_dict(self) -> Dict[str, Any]:
         """

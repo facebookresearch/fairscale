@@ -145,7 +145,8 @@ class ReduceScatterBucketer:
                     self._reduce_scatter_free_event_queue._dequeue()
                 event = self._reduce_scatter_free_event_queue.dequeue_if_needed()
                 if event:
-                    event.synchronize()
+                    with torch.profiler.record_function("reduce_scatter_sync"):
+                        event.synchronize()
 
             # TODO: investigate how to avoid using torch.cat (because it seems to be slow for CPU tensors)
             # input is too big to fit in the bucket, reduce-scatter directly
