@@ -12,6 +12,7 @@ import torch
 from torch import Tensor
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
+from fairscale.utils.parallel import chunk_and_pad
 logger = getLogger()
 
 # TODO: Remove the toggle-enable_nccl_base_collectives when github open issue #801 is resolved.
@@ -107,7 +108,7 @@ class ReduceScatterBucketer:
     @torch.no_grad()
     def reduce_scatter_async(
         self,
-        input_list: List[Tensor],
+        grad: Tensor,
         group: ProcessGroup,
         callback_fn: Optional[Callable] = None,
     ) -> None:
@@ -121,16 +122,15 @@ class ReduceScatterBucketer:
         may also flush the relevant bucket to make room for ``input_list``.
 
         Args:
-            input_list (List[Tensor]): list of tensors to reduce-scatter. List
-                should contain ``group.size()`` tensors and each tensor should
-                have identical shape, dtype and device.
+            grad (Tensor): full gradient to reduce-scatter.
             group (ProcessGroup): process group for reduction
             callback_fn (Callable, Optional): callback function to call after
                 the reduction executes. Function will be called with a single
                 argument corresponding to the reduced result.
         """
         world_size = group.size()
-
+        needs_padding = grad.numel() % world_size != 0
+        input_list = chunk_and_pad(grad, world_size)  # copies last chunk if needs padding
         assert (
             len(input_list) == world_size
         ), f"reduce_scatter received {len(input_list)} inputs, expected group.size() ({world_size})"
@@ -151,8 +151,10 @@ class ReduceScatterBucketer:
             # input is too big to fit in the bucket, reduce-scatter directly
             output = torch.zeros_like(input_list[0])
             if hasattr(dist, "_reduce_scatter_base") and enable_nccl_base_collectives:
-                input_flattened = torch.cat(input_list)
-                dist._reduce_scatter_base(output, input_flattened, group=group)
+                # For the no-padding + `flatten_parameters=True` case, this
+                # avoids an unnecessary cat
+                input = grad if not needs_padding and grad.ndim == 1 else torch.cat(input_list)
+                dist._reduce_scatter_base(output, input, group=group)
             else:
                 # fallback
                 dist.reduce_scatter(output, input_list, group=group)
