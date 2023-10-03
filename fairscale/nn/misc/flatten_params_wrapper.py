@@ -227,6 +227,7 @@ class FlattenParamsWrapper(nn.Module):
                 flat_param.set_file_params(fname, 0)
             else:
                 flat_param = FlatParameter(params, params[0].requires_grad)
+            flat_param.main_grad = torch.zeros_like(flat_param, dtype=torch.float32)
             flat_param._param_infos = param_infos
             flat_param._shared_param_infos = shared_param_infos
             self.flat_params.append(flat_param)
@@ -369,10 +370,11 @@ class FlattenParamsWrapper(nn.Module):
         self.flat_param unchanged.
         """
         assert self.is_flattened
-        ps = self.get_param_views()
+        ps, ps_main_grad = self.get_param_views()
         param_views = []
-        for (_, m, n), p in zip(self._param_infos, ps):
+        for (_, m, n), p, p_main_grad in zip(self._param_infos, ps, ps_main_grad):
             setattr(p, '_fsdp_weight', True)
+            p.main_grad = p_main_grad
             setattr(m, n, p)  # This will set as plain attr
             param_views.append(p)
 
@@ -499,10 +501,12 @@ class FlattenParamsWrapper(nn.Module):
         ), f"Incorrect external data list: {len(external_data_list)} vs. {len(params)}"
 
         gens = []
+        gens_main_grad = []
         for p, data in zip(params, external_data_list):
             gens.append(p.get_param_views(data))
+            gens_main_grad.append(p.get_param_views(p.main_grad))
 
-        return chain(*gens)
+        return chain(*gens), chain(*gens_main_grad)
 
     def metadata(self, flat_param_idx: int) -> Tuple[List[str], Sequence[torch.Size], List[int]]:
         """Return metadata for a flat param given its index in the flat_params list."""
