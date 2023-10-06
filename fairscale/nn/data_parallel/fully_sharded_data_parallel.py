@@ -688,7 +688,7 @@ class FullyShardedDataParallel(nn.Module):
     @property
     def params_with_grad(self) -> List[Parameter]:
         """[p for p in self.parameters() if p.grad is not None]"""
-        return [p for p in self.parameters() if p.grad is not None]
+        return [p for p in self.parameters() if p.grad is not None or getattr(p, "main_grad", None) is not None]
 
     @torch.no_grad()
     def clip_grad_norm_(
@@ -1802,7 +1802,7 @@ class FullyShardedDataParallel(nn.Module):
         # non-blocking. The downside is a bit more D2H transfer in that case.
         if self.fp32_reduce_scatter:
             orig_param_grad_data = reduced_grad.data
-            reduced_grad.data = reduced_grad.data.to(dtype=param.data.dtype)
+            # reduced_grad.data = reduced_grad.data.to(dtype=param.data.dtype)
             # Don't let this memory get reused until after the transfer.
             orig_param_grad_data.record_stream(torch.cuda.current_stream())
 
@@ -1904,7 +1904,7 @@ class FullyShardedDataParallel(nn.Module):
                     if p.shape != p._saved_grad_shard.shape:
                         self._use_fp32_param_shard([p])
                     if p._saved_grad_shard.dtype != p.dtype:
-                        p.grad = p._saved_grad_shard.to(p.dtype)
+                        p.main_grad = p._saved_grad_shard
                     else:
                         p.grad = p._saved_grad_shard
 
@@ -2153,12 +2153,6 @@ class FullyShardedDataParallel(nn.Module):
         right shape, device, accumulated values, etc.
         """
         for p in self.params:
-            if isinstance(p, FlatParameter):
-                if getattr(p, "main_grad", None) is None:
-                    p.main_grad = torch.zeros_like(p.data, dtype=torch.float32)
-                    main_grad_views = p.get_param_views(p.main_grad)
-                    for (_, m, n), main_grad in zip(p._param_infos, main_grad_views):
-                        getattr(m, n).main_grad = main_grad
             if p.grad is not None:
                 if p.grad.device != p.data.device:
                     p.grad = None

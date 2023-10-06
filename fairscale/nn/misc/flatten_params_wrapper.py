@@ -227,7 +227,6 @@ class FlattenParamsWrapper(nn.Module):
                 flat_param.set_file_params(fname, 0)
             else:
                 flat_param = FlatParameter(params, params[0].requires_grad)
-            flat_param.main_grad = torch.zeros_like(flat_param, dtype=torch.float32)
             flat_param._param_infos = param_infos
             flat_param._shared_param_infos = shared_param_infos
             self.flat_params.append(flat_param)
@@ -370,6 +369,9 @@ class FlattenParamsWrapper(nn.Module):
         self.flat_param unchanged.
         """
         assert self.is_flattened
+        for p in self.flat_params:
+            if not hasattr(p, 'main_grad') or p.main_grad.shape != p.shape:
+                p.main_grad = torch.zeros_like(p, dtype=torch.float32)
         ps, ps_main_grad = self.get_param_views()
         param_views = []
         for (_, m, n), p, p_main_grad in zip(self._param_infos, ps, ps_main_grad):
