@@ -370,7 +370,7 @@ class FlattenParamsWrapper(nn.Module):
         """
         assert self.is_flattened
         for p in self.flat_params:
-            if not hasattr(p, 'main_grad') or p.main_grad.shape != p.shape:
+            if getattr(p, 'main_grad', None) is None or p.main_grad.shape != p.shape:
                 p.main_grad = torch.zeros_like(p, dtype=torch.float32)
         ps, ps_main_grad = self.get_param_views()
         param_views = []
