@@ -1930,6 +1930,16 @@ class FullyShardedDataParallel(nn.Module):
                     assert self._output_pre_backward_hook_registered is not None  # make mypy happy
                     self._output_pre_backward_hook_registered.clear()
 
+    def _run_all_post_backward_hooks(self) -> None:
+        for module in self.modules():
+            if isinstance(module, FullyShardedDataParallel):
+                for param in module.params:
+                    module._post_backward_hook(param)
+
+    def _free_all_full_params(self) -> None:
+        for module in self.modules():
+            if isinstance(module, FullyShardedDataParallel):
+                module._free_full_params(module.params)
 
     @torch.no_grad()
     def _rebuild_full_params_recursive(self):
@@ -2039,8 +2049,9 @@ class FullyShardedDataParallel(nn.Module):
                 self._all_gather_free_event_queue._dequeue()
             event = self._all_gather_free_event_queue.dequeue_if_needed()
             if event:
-                logger.warning("synching cpu thread for AG limit")
-                event.synchronize()
+                # logger.warning("synching cpu thread for AG limit")
+                with torch.profiler.record_function(f"FSDP all-gather sync"):
+                    event.synchronize()
 
         with torch.cuda.stream(self._streams["all_gather"]):
             if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
@@ -2165,6 +2176,8 @@ class FullyShardedDataParallel(nn.Module):
                 if self.mixed_precision or self.move_params_to_cpu:
                     self._free_fp16_param_shard([p])
                 continue
+            if p._full_param_padded.untyped_storage().size() == 0:  # already freed
+                continue
             # Don't let PyTorch reuse this memory until all work in the current
             # stream is complete.
             p._full_param_padded.record_stream(current_stream)
@@ -2175,7 +2188,15 @@ class FullyShardedDataParallel(nn.Module):
             # Storage object and unshard it in-place. For now, just resize
             # the Storage to 0 to save memory.
             free_storage_(p._full_param_padded)
-            torch.cuda.current_stream().synchronize()
+            # Skip the stream synchronization if limiting both all-gathers and
+            # reduce-scatters with CUDA event synchronization to avoid blocking
+            # the CPU thread until later when needed
+            if (
+                self._all_gather_free_event_queue is None
+                or self._reduce_scatter_free_event_queue is None
+            ):
+                with torch.profiler.record_function("FSDP stream sync"):
+                    torch.cuda.current_stream().synchronize()
 
     def local_metadata_dict(self) -> Dict[str, Any]:
         """
