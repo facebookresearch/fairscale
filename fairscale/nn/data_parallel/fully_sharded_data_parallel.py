@@ -43,6 +43,7 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 from fairscale.nn.misc import FlattenParamsWrapper
+from fairscale.nn.misc.flatten_params_wrapper import FlatParameter
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import (
@@ -687,7 +688,7 @@ class FullyShardedDataParallel(nn.Module):
     @property
     def params_with_grad(self) -> List[Parameter]:
         """[p for p in self.parameters() if p.grad is not None]"""
-        return [p for p in self.parameters() if p.grad is not None]
+        return [p for p in self.parameters() if p.grad is not None or getattr(p, "main_grad", None) is not None]
 
     @torch.no_grad()
     def clip_grad_norm_(
@@ -1680,7 +1681,7 @@ class FullyShardedDataParallel(nn.Module):
         # then subsequent hook callbacks will see POST state.
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         self.training_state = TrainingState.BACKWARD_POST
-        if param.grad is None:
+        if param.grad is None and getattr(param, "main_grad", None) is None:
             return
 
         if hasattr(param, "_linked_param"):
@@ -1693,9 +1694,9 @@ class FullyShardedDataParallel(nn.Module):
             if hasattr(param._linked_param, "_is_shared") and param._linked_param._is_shared:
                 param = param._linked_param
 
-        assert param.grad is not None, param.shape
-        if param.grad.requires_grad:
-            raise RuntimeError("FSDP only works with gradients that don't require gradients")
+        # assert param.grad is not None, param.shape
+        # if param.grad.requires_grad:
+        #     raise RuntimeError("FSDP only works with gradients that don't require gradients")
 
         if self._require_backward_grad_sync or self.reshard_after_forward:
             # Free full params. As a special case, we don't free the full params
@@ -1721,15 +1722,24 @@ class FullyShardedDataParallel(nn.Module):
         # reductions in post_backward stream.
         self._streams["post_backward"].wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self._streams["post_backward"]):
-            orig_grad_data = param.grad.data
+            if param.main_grad is not None and not param.main_grad.eq(0).all():
+                orig_grad_data = param.main_grad
+                param.grad = None
+            else:
+                orig_grad_data = param.grad
 
             if self.fp32_reduce_scatter:
-                # Cast grad to FP32.
-                param.grad.data = param.grad.data.float()
+                if param.grad is not None:
+                    param.main_grad.copy_(param.grad)
+                    param.grad = None
 
             if self.gradient_predivide_factor > 1:
                 # Average grad by world_size for consistency with PyTorch DDP.
-                param.grad.data.div_(self.gradient_predivide_factor)
+                # param.grad.data.div_(self.gradient_predivide_factor)
+                if param.grad is not None:
+                    param.grad.div_(self.gradient_predivide_factor)
+                else:
+                    param.main_grad.div_(self.gradient_predivide_factor)
 
             if param._is_sharded:
                 assert self._reducer is not None
@@ -1737,19 +1747,23 @@ class FullyShardedDataParallel(nn.Module):
                 # param._saved_grad_shard. If this FSDP module was called multiple times it's possible that multiple
                 # gradient reductions will happen in an undefined order. But addition commutes, so this order doesn't
                 # matter, neglecting rounding.
-                grad = param.grad.data
-                # Clear grad on the tensor, so any repeated gradient computations do not interfere with this reduction.
-                #
-                # The effect on memory consumption is not usually significant. No extra memory is allocated if this
-                # module is called only once, reduction happens quickly, or the tensor is bucketed. If the module is
-                # called multiple times, and the backwards pass runs far enough ahead of the `post_backward` stream,
-                # then we can end up with multiple unsharded gradients allocated and queued for reduction.
-                #
-                # We could guard against this by using CUDA events (see record_event, wait_event in torch.cuda.Stream).
-                # This ensures the `default` stream will wait for the `post_backward` stream to complete the last
-                # reduction for this module, before scheduling additional reduction work. Then at most there are two
-                # unsharded gradients allocated; one for a pending reduction, and one for gradient computation.
-                param.grad = None
+                if param.grad is not None:
+                    grad = param.grad
+                    # Clear grad on the tensor, so any repeated gradient computations do not interfere with this reduction.
+                    #
+                    # The effect on memory consumption is not usually significant. No extra memory is allocated if this
+                    # module is called only once, reduction happens quickly, or the tensor is bucketed. If the module is
+                    # called multiple times, and the backwards pass runs far enough ahead of the `post_backward` stream,
+                    # then we can end up with multiple unsharded gradients allocated and queued for reduction.
+                    #
+                    # We could guard against this by using CUDA events (see record_event, wait_event in torch.cuda.Stream).
+                    # This ensures the `default` stream will wait for the `post_backward` stream to complete the last
+                    # reduction for this module, before scheduling additional reduction work. Then at most there are two
+                    # unsharded gradients allocated; one for a pending reduction, and one for gradient computation.
+                    param.grad = None
+                else:
+                    grad = param.main_grad
+                    param.main_grad = None
                 callback_fn = functools.partial(self._post_reduction_hook, param)
                 self._reducer.reduce_scatter_async(
                     grad, group=self.process_group_reduce_scatter, callback_fn=callback_fn
@@ -1759,7 +1773,10 @@ class FullyShardedDataParallel(nn.Module):
                 # world_size == 1. This could be relaxed in the future, in which
                 # case grads should be all-reduced here.
                 assert self.world_size == 1
-                self._post_reduction_hook(param, param.grad.data)
+                if param.grad is not None:
+                    self._post_reduction_hook(param, param.grad)
+                else:
+                    self._post_reduction_hook(param, param.main_grad)
 
             # After _post_backward_hook returns, orig_grad_data will eventually
             # go out of scope, at which point it could otherwise be freed for
@@ -1785,7 +1802,7 @@ class FullyShardedDataParallel(nn.Module):
         # non-blocking. The downside is a bit more D2H transfer in that case.
         if self.fp32_reduce_scatter:
             orig_param_grad_data = reduced_grad.data
-            reduced_grad.data = reduced_grad.data.to(dtype=param.data.dtype)
+            # reduced_grad.data = reduced_grad.data.to(dtype=param.data.dtype)
             # Don't let this memory get reused until after the transfer.
             orig_param_grad_data.record_stream(torch.cuda.current_stream())
 
@@ -1887,7 +1904,7 @@ class FullyShardedDataParallel(nn.Module):
                     if p.shape != p._saved_grad_shard.shape:
                         self._use_fp32_param_shard([p])
                     if p._saved_grad_shard.dtype != p.dtype:
-                        p.grad = p._saved_grad_shard.to(p.dtype)
+                        p.main_grad = p._saved_grad_shard
                     else:
                         p.grad = p._saved_grad_shard
 
