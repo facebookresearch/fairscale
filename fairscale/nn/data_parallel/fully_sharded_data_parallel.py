@@ -1865,6 +1865,7 @@ class FullyShardedDataParallel(nn.Module):
                 if hasattr(p, "_shard_bwd_hooks") and self._require_backward_grad_sync:
                     for _, handle in p._shard_bwd_hooks:
                         handle.remove()
+                    p._shard_bwd_hooks.clear()
 
                 # Leave the gradient accumulation state as-is if not synchronizing this pass. This ensures p.grad
                 # remains the unsharded gradient accumulated from prior no-sync passes, and p._saved_grad_shard
