@@ -209,7 +209,9 @@ def serialize_tensors(inputs: Any) -> Tuple[Tuple[torch.Tensor], Any]:
 
 def deserialize_tensors(tensors: Tuple[torch.Tensor], non_tensors: Any) -> Any:
     """
-    the reverse function of the serialize_tensors
+    the reverse function of the serialize_tensors, given a tuple of tensors and
+    a container with tensor index, it returns a container with the tensor index
+    replaced with the corresponding tensor
     """
     def dfs(entity):
         # check SimpleEntity first, since it is a subclass of Tuple
