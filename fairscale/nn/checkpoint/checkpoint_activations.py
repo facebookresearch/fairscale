@@ -162,6 +162,10 @@ def checkpoint_wrapper(
 
 
 def dfs_simplified(entity):
+    """
+    a helper function that takes a python container (tuple, list, dict) and replace
+    any tensor with its shape; the main purpose is for printing and debugging
+    """
     if isinstance(entity, tuple):
         return tuple(dfs_simplified(value) for value in entity)
     elif isinstance(entity, list):
@@ -178,6 +182,11 @@ SimpleEntity = collections.namedtuple("SimpleEntity", ["is_tensor", "value"])
 
 
 def serialize_tensors(inputs: Any) -> Tuple[Tuple[torch.Tensor], Any]:
+    """
+    given a python container inputs (tuple, list, dict), which may contain tensors
+    this function extract the tensors in the container as a tuple, while returning
+    another container with the tensors replaced with the indices in the tuple
+    """
     tensors = []
 
     def dfs(entity):
@@ -199,7 +208,11 @@ def serialize_tensors(inputs: Any) -> Tuple[Tuple[torch.Tensor], Any]:
 
 
 def deserialize_tensors(tensors: Tuple[torch.Tensor], non_tensors: Any) -> Any:
+    """
+    the reverse function of the serialize_tensors
+    """
     def dfs(entity):
+        # check SimpleEntity first, since it is a subclass of Tuple
         if isinstance(entity, SimpleEntity):
             if entity.is_tensor:
                 return tensors[entity.value]
