@@ -486,7 +486,9 @@ class FlattenParamsWrapper(nn.Module):
             return super().load_state_dict(state_dict, strict)
 
     def forward(self, *inputs: Any, **kwinputs: Any) -> Any:
-        self._unflatten_params_as_views()
+        is_first_batch = self.is_first_batch if hasattr(self, "is_first_batch") else False
+        if is_first_batch:
+            self._unflatten_params_as_views()
         return self.module(*inputs, **kwinputs)
 
     def get_param_views(self, external_data_list: Optional[List[Optional[Tensor]]] = None) -> Iterator[Tensor]:
