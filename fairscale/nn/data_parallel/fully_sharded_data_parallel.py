@@ -2096,6 +2096,8 @@ class FullyShardedDataParallel(nn.Module):
         """Free up storage for full parameters."""
         if params is None:
             params = self.params
+        if not self.has_full_params:
+            return
         self.has_full_params = False
         current_stream = torch.cuda.current_stream()
         for p in params:
