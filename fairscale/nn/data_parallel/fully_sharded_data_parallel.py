@@ -1669,8 +1669,8 @@ class FullyShardedDataParallel(nn.Module):
         for p in self.params:
             # requires_grad = False means frozen
             if not p.requires_grad:
-                # if hasattr(p, "_shard_bwd_hook"):
-                #     continue
+                if hasattr(p, "_reshard_bwd_hook"):
+                    continue
                 # Register a hook on the first call, empirically, autograd
                 # fires it at the end for this param, which makes sense.
                 # p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
@@ -1686,11 +1686,11 @@ class FullyShardedDataParallel(nn.Module):
                     inp_tensors, functools.partial(self._post_backward_reshard, p)
                 )
 
-                if not hasattr(p, "_shard_bwd_hooks"):
-                    p._shard_bwd_hooks = []
-                p._shard_bwd_hooks.append((handle,))
+                # if not hasattr(p, "_shard_bwd_hooks"):
+                #     p._shard_bwd_hooks = []
+                # p._shard_bwd_hooks.append((handle,))
 
-                # p._shard_bwd_hook = (handle,)
+                p._reshard_bwd_hook = (handle,)
 
 
 
