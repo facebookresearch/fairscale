@@ -80,6 +80,10 @@ except ImportError:
 from logging import getLogger
 logger = getLogger()
 
+from torch.utils import _pytree as pytree
+from torch.autograd.graph import register_multi_grad_hook
+
+
 class _FreeEventQueue:
     """
     This tracks all pending frees corresponding to inflight all-gathers. The
@@ -1457,6 +1461,8 @@ class FullyShardedDataParallel(nn.Module):
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
         self._register_post_backward_hooks()
+        # If param is frozen, then special hook needs to be used for param reshard.
+        self._register_post_backward_reshard_only_hooks(*args, **kwargs)
 
         outputs = self.module(*args, **kwargs)
 
@@ -1655,6 +1661,39 @@ class FullyShardedDataParallel(nn.Module):
                 p._shard_bwd_hooks.append((grad_acc, handle))
                 # p._shard_bwd_hook = (grad_acc, handle)
 
+
+    def _register_post_backward_reshard_only_hooks(self, *args: Any, **kwargs: Any) -> None:
+        # logger.info("Register hook")
+        if not torch.is_grad_enabled():
+            return  # don't register grad hooks if grad isn't enabled
+        for p in self.params:
+            # requires_grad = False means frozen
+            if not p.requires_grad:
+                # if hasattr(p, "_shard_bwd_hook"):
+                #     continue
+                # Register a hook on the first call, empirically, autograd
+                # fires it at the end for this param, which makes sense.
+                # p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
+                # assert p_tmp.grad_fn is not None
+                # grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
+                # handle = grad_acc.register_hook(functools.partial(self._post_backward_hook, p))
+
+                args_flat = pytree.arg_tree_leaves(*args, **kwargs)
+                inp_tensors = [
+                    obj for obj in args_flat if torch.is_tensor(obj) and obj.requires_grad
+                ]
+                handle = register_multi_grad_hook(
+                    inp_tensors, functools.partial(self._post_backward_reshard, p)
+                )
+
+                if not hasattr(p, "_shard_bwd_hooks"):
+                    p._shard_bwd_hooks = []
+                p._shard_bwd_hooks.append((handle,))
+
+                # p._shard_bwd_hook = (handle,)
+
+
+
     @torch.no_grad()
     def _post_backward_hook(self, param: Parameter, *unused: Any) -> None:
         """
@@ -1697,19 +1736,7 @@ class FullyShardedDataParallel(nn.Module):
         if param.grad.requires_grad:
             raise RuntimeError("FSDP only works with gradients that don't require gradients")
 
-        if self._require_backward_grad_sync or self.reshard_after_forward:
-            # Free full params. As a special case, we don't free the full params
-            # when in a ``no_sync`` context (as inversely indicated by
-            # ``self._require_backward_grad_sync``), since the params will not
-            # get updated before the next forward. This saves networking
-            # bandwidth but uses more GPU memory.
-            self._free_full_params([param])
-
-        if self.mixed_precision:
-            # This is a no-op if reshard_after_forward is True, since we already
-            # free the param shard when rebuilding the full params in the
-            # pre_backward_hook.
-            self._free_fp16_param_shard([param])
+        self._post_backward_reshard(param)
 
         # Switch to FP32 shard after backward.
         self._use_fp32_param_shard([param])
@@ -1771,6 +1798,23 @@ class FullyShardedDataParallel(nn.Module):
                 release_full_grad_event = torch.cuda.Event()
                 release_full_grad_event.record()
                 self._reduce_scatter_free_event_queue.enqueue(release_full_grad_event)
+
+
+    @torch.no_grad()
+    def _post_backward_reshard(self, param: Parameter, *unused: Any) -> None:
+        if self._require_backward_grad_sync or self.reshard_after_forward:
+            # Free full params. As a special case, we don't free the full params
+            # when in a ``no_sync`` context (as inversely indicated by
+            # ``self._require_backward_grad_sync``), since the params will not
+            # get updated before the next forward. This saves networking
+            # bandwidth but uses more GPU memory.
+            self._free_full_params([param])
+
+        if self.mixed_precision:
+            # This is a no-op if reshard_after_forward is True, since we already
+            # free the param shard when rebuilding the full params in the
+            # pre_backward_hook.
+            self._free_fp16_param_shard([param])
 
 
     def _post_reduction_hook(self, param: Parameter, reduced_grad: torch.Tensor) -> None:
