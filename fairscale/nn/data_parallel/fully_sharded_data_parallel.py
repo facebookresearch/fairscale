@@ -1759,7 +1759,7 @@ class FullyShardedDataParallel(nn.Module):
                 # world_size == 1. This could be relaxed in the future, in which
                 # case grads should be all-reduced here.
                 assert self.world_size == 1
-                self._post_reduction_hook(param, param.grad.data)
+                self._post_reduction_hook(param, param.grad)
 
             # After _post_backward_hook returns, orig_grad_data will eventually
             # go out of scope, at which point it could otherwise be freed for
