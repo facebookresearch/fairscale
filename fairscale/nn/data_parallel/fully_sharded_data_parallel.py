@@ -1819,6 +1819,8 @@ class FullyShardedDataParallel(nn.Module):
                 ), f"{param._saved_grad_shard.shape} vs {reduced_grad.shape}"
                 param._saved_grad_shard.data += reduced_grad.data
             reduced_grad = param._saved_grad_shard.data
+        elif (param.grad is None) and self.fp32_reduce_scatter:
+            param.main_grad = reduced_grad.data
 
         # Optionally move gradients to CPU, typically used if one is running the optimizer on the CPU. Once the full
         # backwards pass completes, we will set `.grad` to the CPU copy.
