@@ -371,6 +371,7 @@ class FullyShardedDataParallel(nn.Module):
         limit_all_gather_events: bool = False,
         limit_reduce_scatter_events: bool = False,
         cast_input: bool = True,
+        should_validate_process_group: bool = True,
     ):
         try:
             import torch._C
@@ -455,7 +456,7 @@ class FullyShardedDataParallel(nn.Module):
             raise ValueError(f"offload type: '{offload_config.offload_type}' requires flatten_parameters=True")
 
         # skip validation if the process group was created above
-        if process_group:
+        if process_group and should_validate_process_group:
             validate_process_group(self.compute_device, self.process_group)
 
         # enable pytorch sync_bn just in case model contains sync_bn layers.
