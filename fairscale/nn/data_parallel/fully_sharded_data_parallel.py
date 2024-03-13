@@ -3,23 +3,24 @@
 # This source code is licensed under the BSD license found in the
 # LICENSE file in the root directory of this source tree.
 
+import collections
 import contextlib
 import copy
-import collections
-from dataclasses import dataclass
-from enum import Enum, auto
 import functools
 import logging
-from math import inf
 import os
 import tempfile
 import time
 import traceback
 import typing
+from dataclasses import dataclass
+from enum import auto, Enum
+from math import inf
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
+    cast,
+    Deque,
     Dict,
     Generator,
     Iterator,
@@ -29,32 +30,31 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    TYPE_CHECKING,
     Union,
-    cast,
-    Deque,
 )
 
 import torch
-from torch.autograd import Variable
 import torch.distributed as dist
-from torch.distributed import ProcessGroup
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.parameter import Parameter
 
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import (
-    ProcessGroupName,
     chunk_and_pad,
     enable_pytorch_sync_bn,
     get_process_group_cached,
+    ProcessGroupName,
     validate_process_group,
 )
 from fairscale.utils.params import calc_grad_norm, recursive_copy_to_device
 from fairscale.utils.reduce_scatter_bucketer import ReduceScatterBucketer
 from fairscale.utils.state_dict import replace_by_prefix_
+from torch.autograd import Variable
+from torch.distributed import ProcessGroup
+from torch.nn.parameter import Parameter
 
 from . import fsdp_optim_utils as ou
 
@@ -78,7 +78,9 @@ except ImportError:
 
 
 from logging import getLogger
+
 logger = getLogger()
+
 
 class _FreeEventQueue:
     """
@@ -138,6 +140,7 @@ class TrainingState(Enum):
 
 
 # Data classes containing FSDP parameter constructs
+
 
 # Offload config for specifying SSD options (initially at least)
 @dataclass
@@ -387,7 +390,9 @@ class FullyShardedDataParallel(nn.Module):
         # If ProcessGroupName.reduce_scatter is passed in, the reduce_scatter use a seperate process group
         # so that the overlap feature in the backward propagagion is enabled.
         elif process_group_reduce_scatter == ProcessGroupName.reduce_scatter:
-            self.process_group_reduce_scatter = get_process_group_cached(ProcessGroupName.reduce_scatter)
+            self.process_group_reduce_scatter = get_process_group_cached(
+                ProcessGroupName.reduce_scatter
+            )
         else:
             # If a specific process group is passed in, the reduce_scatter will use the passed in process group.
             if isinstance(process_group_reduce_scatter, ProcessGroup):
@@ -416,15 +421,21 @@ class FullyShardedDataParallel(nn.Module):
                     f"world size {self.world_size}. Please make sure the process_group "
                     "parameter uses all the available ranks for the optimal performance."
                 )
-        self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
+        self.reshard_after_forward = self._orig_reshard_after_forward = (
+            reshard_after_forward
+        )
         self.disable_reshard_on_root = disable_reshard_on_root
         self.mixed_precision = mixed_precision
         self.fp32_reduce_scatter = fp32_reduce_scatter
         self.flatten_parameters = flatten_parameters
         self.move_params_to_cpu = move_params_to_cpu or cpu_offload
-        self.compute_dtype = compute_dtype or (torch.float16 if mixed_precision else torch.float32)
+        self.compute_dtype = compute_dtype or (
+            torch.float16 if mixed_precision else torch.float32
+        )
         self.buffer_dtype = buffer_dtype or self.compute_dtype
-        self.move_grads_to_cpu = self.move_params_to_cpu if move_grads_to_cpu is None else move_grads_to_cpu
+        self.move_grads_to_cpu = (
+            self.move_params_to_cpu if move_grads_to_cpu is None else move_grads_to_cpu
+        )
         self.bucket_cap_mb = bucket_cap_mb
         self.compute_device = compute_device or _get_default_cuda_device(module)
         self.uncollected_opt_state: Dict[int, Dict] = {}
@@ -435,12 +446,19 @@ class FullyShardedDataParallel(nn.Module):
         self.verbose = verbose
         self.state_dict_on_rank_0_only = state_dict_on_rank_0_only
         # Experimental feature for now. Use at your own risk.
-        self.ssd_offload = True if offload_config and offload_config.offload_type == "ssd_offload" else False
-
-        self.gradient_predivide_factor: float = gradient_predivide_factor or self._get_gradient_predivide_factor(
-            self.world_size
+        self.ssd_offload = (
+            True
+            if offload_config and offload_config.offload_type == "ssd_offload"
+            else False
         )
-        self.gradient_postdivide_factor: float = self.world_size / self.gradient_predivide_factor
+
+        self.gradient_predivide_factor: float = (
+            gradient_predivide_factor
+            or self._get_gradient_predivide_factor(self.world_size)
+        )
+        self.gradient_postdivide_factor: float = (
+            self.world_size / self.gradient_predivide_factor
+        )
 
         self.numel_padded_per_param: List[int] = []
         self._tstart = time.time()
@@ -449,7 +467,9 @@ class FullyShardedDataParallel(nn.Module):
         #     raise ValueError("fp32_reduce_scatter requires mixed_precision=True")
 
         if self.ssd_offload and not self.flatten_parameters:
-            raise ValueError(f"offload type: '{offload_config.offload_type}' requires flatten_parameters=True")
+            raise ValueError(
+                f"offload type: '{offload_config.offload_type}' requires flatten_parameters=True"
+            )
 
         # skip validation if the process group was created above
         if process_group and should_validate_process_group:
@@ -476,7 +496,9 @@ class FullyShardedDataParallel(nn.Module):
         self.buffer_size = sum(p.numel() for p in params)
         self.ssd_directory = tempfile.gettempdir()
         if self.ssd_offload:
-            assert import_ssd_offload, "We need to import ssd_offload.py to enable the `ssd_offload` feature."
+            assert (
+                import_ssd_offload
+            ), "We need to import ssd_offload.py to enable the `ssd_offload` feature."
             if offload_config and offload_config.dir:
                 self.ssd_directory = offload_config.dir
             self.move_grads_to_cpu = True
@@ -494,7 +516,10 @@ class FullyShardedDataParallel(nn.Module):
         del param_names
 
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
-            module, param_list=to_be_flatten_params, ssd_offload=self.ssd_offload, ssd_directory=self.ssd_directory
+            module,
+            param_list=to_be_flatten_params,
+            ssd_offload=self.ssd_offload,
+            ssd_directory=self.ssd_directory,
         )
         del module  # free original module in case it helps garbage collection
 
@@ -505,7 +530,10 @@ class FullyShardedDataParallel(nn.Module):
         # The self._num_flatten_params and self._param_name_groups are computed
         # and kept here to support summon_full_params and shard-to-full weight
         # consolidation.
-        self.params = cast(List[Parameter], self._fsdp_wrapped_module.flat_params) + non_flatten_params
+        self.params = (
+            cast(List[Parameter], self._fsdp_wrapped_module.flat_params)
+            + non_flatten_params
+        )
         self._num_flatten_params = len(self._fsdp_wrapped_module.flat_params)
         self._param_name_groups = param_name_groups
 
@@ -514,7 +542,9 @@ class FullyShardedDataParallel(nn.Module):
 
         # Make sure all parameters are sharded.
         for n, p in self.named_parameters():
-            assert hasattr(p, "_is_sharded"), f"found unsharded parameter: {n} ; {p.size()}"
+            assert hasattr(
+                p, "_is_sharded"
+            ), f"found unsharded parameter: {n} ; {p.size()}"
 
         self._reset_lazy_init()
 
@@ -530,7 +560,9 @@ class FullyShardedDataParallel(nn.Module):
 
         # Register hook after state_dict() to remove the "_fsdp_wrapped_module."
         # prefix and before load_state_dict() to add it back.
-        self._register_state_dict_hook(functools.partial(_post_state_dict_hook, self.state_dict_on_rank_0_only))
+        self._register_state_dict_hook(
+            functools.partial(_post_state_dict_hook, self.state_dict_on_rank_0_only)
+        )
         self._register_load_state_dict_pre_hook(_pre_load_state_dict_hook)
 
         # Flag to indicate whether state_dict() should automatically summon the
@@ -556,8 +588,12 @@ class FullyShardedDataParallel(nn.Module):
                     m._free_ssd_offload()
 
         self.dont_wait_current_stream_for_post_all_gather = False
-        self._all_gather_free_event_queue = _FreeEventQueue() if limit_all_gather_events else None
-        self._reduce_scatter_free_event_queue = _FreeEventQueue() if limit_reduce_scatter_events else None
+        self._all_gather_free_event_queue = (
+            _FreeEventQueue() if limit_all_gather_events else None
+        )
+        self._reduce_scatter_free_event_queue = (
+            _FreeEventQueue() if limit_reduce_scatter_events else None
+        )
 
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
@@ -565,7 +601,9 @@ class FullyShardedDataParallel(nn.Module):
             factor *= 2
         return float(factor)
 
-    def set_gradient_divide_factors(self, pre: float, post: float, recursive: bool) -> None:
+    def set_gradient_divide_factors(
+        self, pre: float, post: float, recursive: bool
+    ) -> None:
         """Allowing user to override the pre and post divide factors.
 
         Args:
@@ -610,7 +648,15 @@ class FullyShardedDataParallel(nn.Module):
         assert p._is_sharded
         p._is_shared = True
         assert (
-            len(list(filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params))) > 0
+            len(
+                list(
+                    filter(
+                        lambda p: not (hasattr(p, "_is_shared") and p._is_shared),
+                        self.params,
+                    )
+                )
+            )
+            > 0
         ), "Must have at least 1 non-shared param."
         self.params.append(p)
         self._has_shared_params = True
@@ -618,7 +664,12 @@ class FullyShardedDataParallel(nn.Module):
     def non_shared_params(self) -> List[nn.Parameter]:
         """Return the list of non-shared parameters."""
         if self._has_shared_params:
-            return list(filter(lambda p: not (hasattr(p, "_is_shared") and p._is_shared), self.params))
+            return list(
+                filter(
+                    lambda p: not (hasattr(p, "_is_shared") and p._is_shared),
+                    self.params,
+                )
+            )
         else:
             return self.params
 
@@ -652,7 +703,10 @@ class FullyShardedDataParallel(nn.Module):
         return return_value
 
     def _cast_buffers(
-        self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None, memo: Optional[Set] = None
+        self,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+        memo: Optional[Set] = None,
     ) -> None:
         """Move all buffers to the given *device* and *dtype*.
 
@@ -688,7 +742,11 @@ class FullyShardedDataParallel(nn.Module):
     @property
     def params_with_grad(self) -> List[Parameter]:
         """[p for p in self.parameters() if p.grad is not None]"""
-        return [p for p in self.parameters() if (p.grad is not None or p.main_grad is not None)]
+        return [
+            p
+            for p in self.parameters()
+            if (p.grad is not None or p.main_grad is not None)
+        ]
 
     @torch.no_grad()
     def clip_grad_norm_(
@@ -725,7 +783,9 @@ class FullyShardedDataParallel(nn.Module):
         # _lazy_init should be sufficient, since it will force the other streams
         # to sync with the default stream (via _wait_for_previous_optim_step).
         self._lazy_init()
-        assert self._is_root, "clip_grad_norm should only be called on the root (parent) instance"
+        assert (
+            self._is_root
+        ), "clip_grad_norm should only be called on the root (parent) instance"
         self.assert_state(TrainingState.IDLE)
 
         max_norm = float(max_norm)
@@ -739,7 +799,9 @@ class FullyShardedDataParallel(nn.Module):
         local_norm = calc_grad_norm(params_with_grad, norm_type).cuda()
         if norm_type == inf:
             total_norm = local_norm
-            dist.all_reduce(total_norm, op=torch.distributed.ReduceOp.MAX, group=self.process_group)
+            dist.all_reduce(
+                total_norm, op=torch.distributed.ReduceOp.MAX, group=self.process_group
+            )
         else:
             total_norm = local_norm**norm_type
             dist.all_reduce(total_norm, group=self.process_group)
@@ -749,7 +811,9 @@ class FullyShardedDataParallel(nn.Module):
             total_norm = total_norm.cpu()
 
         # Now multiply each grad by (max_norm/total_norm), same as torch 1.7 https://tinyurl.com/3wtxhhqq)
-        clip_coef = torch.tensor(max_norm, dtype=total_norm.dtype, device=total_norm.device) / (total_norm + 1e-6)
+        clip_coef = torch.tensor(
+            max_norm, dtype=total_norm.dtype, device=total_norm.device
+        ) / (total_norm + 1e-6)
         if clip_coef < 1:
             # multiply by clip_coef
             for p in params_with_grad:
@@ -841,7 +905,9 @@ class FullyShardedDataParallel(nn.Module):
         if self.verbose:
             repr = (
                 f"self={id(self)} is_root={self._is_root}, "
-                f"rank={self.rank}, " + repr + f"reshard_after_forward={self.reshard_after_forward}, "
+                f"rank={self.rank}, "
+                + repr
+                + f"reshard_after_forward={self.reshard_after_forward}, "
                 f"compute_dtype={self.compute_dtype}, "
                 f"buffer_dtype={self.buffer_dtype}, "
                 f"fp32_reduce_scatter={self.fp32_reduce_scatter}, "
@@ -873,7 +939,9 @@ class FullyShardedDataParallel(nn.Module):
         if state["process_group"] is not None:
             state["process_group"] = "MISSING"  # process_group isn't pickleable
         if state["process_group_reduce_scatter"] is not None:
-            state["process_group_reduce_scatter"] = "MISSING"  # process_group_reduce_scatter isn't pickleable
+            state["process_group_reduce_scatter"] = (
+                "MISSING"  # process_group_reduce_scatter isn't pickleable
+            )
         self._reset_lazy_init()
         return state
 
@@ -889,7 +957,10 @@ class FullyShardedDataParallel(nn.Module):
             return p
 
         self.params = [
-            fixup(p, is_sharded, size) for p, is_sharded, size in zip(self.params, self.is_sharded, self.orig_sizes)
+            fixup(p, is_sharded, size)
+            for p, is_sharded, size in zip(
+                self.params, self.is_sharded, self.orig_sizes
+            )
         ]
         del self.is_sharded
         del self.orig_sizes
@@ -902,7 +973,9 @@ class FullyShardedDataParallel(nn.Module):
 
         return super().parameters(recurse=recurse)
 
-    def named_parameters(self, *args: Any, **kwargs: Any) -> Iterator[Tuple[str, Parameter]]:
+    def named_parameters(
+        self, *args: Any, **kwargs: Any
+    ) -> Iterator[Tuple[str, Parameter]]:
         """Returns an iterator over the module parameters, yielding both the name of the
         parameter as well as the parameter.
 
@@ -931,13 +1004,16 @@ class FullyShardedDataParallel(nn.Module):
 
     @typing.overload
     def state_dict(
-        self, destination: Mapping[str, torch.Tensor], prefix: str = ..., keep_vars: bool = ...
-    ) -> Mapping[str, torch.Tensor]:
-        ...
+        self,
+        destination: Mapping[str, torch.Tensor],
+        prefix: str = ...,
+        keep_vars: bool = ...,
+    ) -> Mapping[str, torch.Tensor]: ...
 
     @typing.overload
-    def state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> "OrderedDict[str, torch.Tensor]":
-        ...
+    def state_dict(
+        self, prefix: str = ..., keep_vars: bool = ...
+    ) -> "OrderedDict[str, torch.Tensor]": ...
 
     # Since we have overloads above, we can use Any here.
     def state_dict(self, *args: Any, **kwargs: Any) -> Any:
@@ -952,7 +1028,9 @@ class FullyShardedDataParallel(nn.Module):
         """
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        is_uninitialized = self._is_root is None  # See comment below on why we use this.
+        is_uninitialized = (
+            self._is_root is None
+        )  # See comment below on why we use this.
         self._lazy_init()
 
         def maybe_cast_buffers(dtype: Optional[torch.dtype] = None) -> None:
@@ -987,13 +1065,16 @@ class FullyShardedDataParallel(nn.Module):
 
     @typing.overload
     def local_state_dict(
-        self, destination: Mapping[str, torch.Tensor], prefix: str = ..., keep_vars: bool = ...
-    ) -> Mapping[str, torch.Tensor]:
-        ...
+        self,
+        destination: Mapping[str, torch.Tensor],
+        prefix: str = ...,
+        keep_vars: bool = ...,
+    ) -> Mapping[str, torch.Tensor]: ...
 
     @typing.overload
-    def local_state_dict(self, prefix: str = ..., keep_vars: bool = ...) -> "OrderedDict[str, torch.Tensor]":
-        ...
+    def local_state_dict(
+        self, prefix: str = ..., keep_vars: bool = ...
+    ) -> "OrderedDict[str, torch.Tensor]": ...
 
     # Since we have overloads above, we can use Any here.
     def local_state_dict(self, *args: Any, **kwargs: Any) -> Any:
@@ -1032,7 +1113,9 @@ class FullyShardedDataParallel(nn.Module):
             p.to_tensor()
 
     def _load_state_dict(
-        self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
+        self,
+        state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"],
+        strict: bool = True,
     ) -> NamedTuple:
         """
         Load a whole (unsharded) state_dict.
@@ -1049,9 +1132,13 @@ class FullyShardedDataParallel(nn.Module):
             return self.module.load_state_dict(state_dict, strict)
 
     def load_state_dict(
-        self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
+        self,
+        state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"],
+        strict: bool = True,
     ) -> NamedTuple:
-        is_uninitialized = self._is_root is None  # See comment below on why we use this.
+        is_uninitialized = (
+            self._is_root is None
+        )  # See comment below on why we use this.
         sd = self._load_state_dict(state_dict, strict)
         # We shouldn't change the init state in case this was an inner module and
         # users simply wanted to load_state_dict before training.
@@ -1062,7 +1149,9 @@ class FullyShardedDataParallel(nn.Module):
         return sd
 
     def load_local_state_dict(
-        self, state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], strict: bool = True
+        self,
+        state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"],
+        strict: bool = True,
     ) -> NamedTuple:
         """Load a local (sharded) state_dict."""
         with contextlib.ExitStack() as stack:
@@ -1107,7 +1196,9 @@ class FullyShardedDataParallel(nn.Module):
                 m._require_backward_grad_sync = old_flag
 
     @contextlib.contextmanager
-    def summon_full_params(self, recurse: bool = True, volatile: bool = False) -> Generator:
+    def summon_full_params(
+        self, recurse: bool = True, volatile: bool = False
+    ) -> Generator:
         """
         A context manager to expose full params for the current FSDP instance.
         Can be useful *after* forward/backward for a model to get the params for
@@ -1139,7 +1230,9 @@ class FullyShardedDataParallel(nn.Module):
                 # Summon all params for any nested FSDP instances.
                 for module in self.modules():
                     if isinstance(module, FullyShardedDataParallel):
-                        stack.enter_context(module.summon_full_params(recurse=False, volatile=volatile))
+                        stack.enter_context(
+                            module.summon_full_params(recurse=False, volatile=volatile)
+                        )
                 # Yield to the caller, with full params in all nested instances.
                 yield
             # Exiting from the ExitStack will re-shard params.
@@ -1160,7 +1253,9 @@ class FullyShardedDataParallel(nn.Module):
                     # latter may contain padding.
                     stack.enter_context(
                         self.module.unflatten_params(
-                            flat_params=[p.data for p in self.params[: self._num_flatten_params]]
+                            flat_params=[
+                                p.data for p in self.params[: self._num_flatten_params]
+                            ]
                         )
                     )
                 try:
@@ -1174,7 +1269,9 @@ class FullyShardedDataParallel(nn.Module):
                     assert len(full_tensors) == len(
                         non_shared_params
                     ), f"{len(full_tensors)} vs. {len(non_shared_params)}"
-                    for p, (full_tensor, safe_to_free) in zip(non_shared_params, full_tensors):
+                    for p, (full_tensor, safe_to_free) in zip(
+                        non_shared_params, full_tensors
+                    ):
                         if not volatile:
                             # Copy any changes made to the full params back into
                             # the corresponding local shards.
@@ -1295,7 +1392,9 @@ class FullyShardedDataParallel(nn.Module):
             # storage to size 0 at init (here) and re-materialize (by copying
             # from _fp32_shard) as needed. If offloading params to CPU, the
             # dtype of the fp16 shard will depend on the *`compute_dtype`*.
-            p._fp16_shard = torch.zeros_like(p._fp32_shard, device=self.compute_device, dtype=self.compute_dtype)
+            p._fp16_shard = torch.zeros_like(
+                p._fp32_shard, device=self.compute_device, dtype=self.compute_dtype
+            )
             free_storage_(p._fp16_shard)
 
         if self.mixed_precision:
@@ -1314,7 +1413,9 @@ class FullyShardedDataParallel(nn.Module):
         # relevant computation.
         if p._is_sharded:
             p._full_param_padded = torch.zeros(
-                p.data.numel() * self.world_size, device=self.compute_device, dtype=self.compute_dtype
+                p.data.numel() * self.world_size,
+                device=self.compute_device,
+                dtype=self.compute_dtype,
             )
             free_storage_(p._full_param_padded)
 
@@ -1327,7 +1428,9 @@ class FullyShardedDataParallel(nn.Module):
                 assert isinstance(p, SsdFlatParameter)
                 # Gradients also need to be offloaded to SSD otherwise it can result in
                 # OOMs when the memory requirements of a model are larger than host memory.
-                p._cpu_grad = ssd_offload.SsdTensorHandle.from_tensor(torch.zeros_like(p.data, device="cpu"))
+                p._cpu_grad = ssd_offload.SsdTensorHandle.from_tensor(
+                    torch.zeros_like(p.data, device="cpu")
+                )
                 p._cpu_grad.set_file_params(p.filename + "_grad", 0)
                 p._cpu_grad.to_file()
             else:
@@ -1359,7 +1462,9 @@ class FullyShardedDataParallel(nn.Module):
             if n != "" and isinstance(m, FullyShardedDataParallel):
                 # We relax the assert for non-root instance, when the nested inialized module is wrapped
                 # again in FSDP later, for example after training to run inference.
-                assert m._is_root is None or not m._is_root, f"offending FSDP instance is {id(m)}, {m}"
+                assert (
+                    m._is_root is None or not m._is_root
+                ), f"offending FSDP instance is {id(m)}, {m}"
                 if m._is_root is None:
                     m._is_root = False
                 if m.process_group != self.process_group:
@@ -1368,10 +1473,14 @@ class FullyShardedDataParallel(nn.Module):
                 # if child instance in its own (smaller) world, that was probably an attempt to avoid OOM.
                 # Therefore gathering this child's optim state will probably cause OOM, so we won't do it.
                 m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
-                    (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
+                    (m.world_size == 1)
+                    and (m.world_size < self.world_size)
+                    and (m.process_group != self.process_group)
                 )
                 m._fsdp_forward_ordering = self._fsdp_forward_ordering
-                m._reduce_scatter_free_event_queue = self._reduce_scatter_free_event_queue
+                m._reduce_scatter_free_event_queue = (
+                    self._reduce_scatter_free_event_queue
+                )
                 m._all_gather_free_event_queue = self._all_gather_free_event_queue
 
     def _setup_streams(self) -> None:
@@ -1389,7 +1498,9 @@ class FullyShardedDataParallel(nn.Module):
 
         # Helper for bucketing reduce-scatter ops. This is also shared with
         # children instances to improve bucket utilization.
-        self._reducer = ReduceScatterBucketer(self.bucket_cap_mb, self._reduce_scatter_free_event_queue)
+        self._reducer = ReduceScatterBucketer(
+            self.bucket_cap_mb, self._reduce_scatter_free_event_queue
+        )
         # We share streams with all children instances, which allows them to
         # overlap transfers across the forward pass without synchronizing with
         # the default stream.
@@ -1406,7 +1517,9 @@ class FullyShardedDataParallel(nn.Module):
         self._output_pre_backward_hook_registered = []
         for n, m in self.named_modules():
             if n != "" and isinstance(m, FullyShardedDataParallel):
-                m._output_pre_backward_hook_registered = self._output_pre_backward_hook_registered
+                m._output_pre_backward_hook_registered = (
+                    self._output_pre_backward_hook_registered
+                )
 
     def _wait_for_previous_optim_step(self) -> None:
         """
@@ -1431,7 +1544,9 @@ class FullyShardedDataParallel(nn.Module):
         # the conversion).
         is_bf16 = self.compute_dtype == torch.bfloat16
         if self._is_root and self.mixed_precision:
-            args, kwargs = cast_floats_to_right_precision(True, True, is_bf16, *args, **kwargs)
+            args, kwargs = cast_floats_to_right_precision(
+                True, True, is_bf16, *args, **kwargs
+            )
 
         if self not in self._fsdp_forward_ordering:
             self._my_fsdp_instance_idx = len(self._fsdp_forward_ordering)
@@ -1441,7 +1556,9 @@ class FullyShardedDataParallel(nn.Module):
         # no_grad is not used because the input might be for a non-root instance,
         # which mean autograd needs to go through the conversion.
         if self.force_input_to_fp32 and not self.mixed_precision:
-            args, kwargs = cast_floats_to_right_precision(False, False, is_bf16, *args, **kwargs)
+            args, kwargs = cast_floats_to_right_precision(
+                False, False, is_bf16, *args, **kwargs
+            )
 
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
@@ -1449,11 +1566,12 @@ class FullyShardedDataParallel(nn.Module):
 
         if (
             self._fsdp_forward_ordering is not None
-            and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx < len(self._fsdp_forward_ordering) - 1
+            and self._my_fsdp_instance_idx is not None
+            and self._my_fsdp_instance_idx < len(self._fsdp_forward_ordering) - 1
         ):
-            self._fsdp_forward_ordering[self._my_fsdp_instance_idx + 1]._rebuild_full_params(
-                wait_for_all_gather=False
-            )
+            self._fsdp_forward_ordering[
+                self._my_fsdp_instance_idx + 1
+            ]._rebuild_full_params(wait_for_all_gather=False)
 
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
@@ -1546,9 +1664,12 @@ class FullyShardedDataParallel(nn.Module):
                 if (
                     self.reshard_after_forward
                     and self._fsdp_forward_ordering is not None
-                    and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
+                    and self._my_fsdp_instance_idx is not None
+                    and self._my_fsdp_instance_idx > 0
                 ):
-                    self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params(wait_for_all_gather=False)
+                    self._fsdp_forward_ordering[
+                        self._my_fsdp_instance_idx - 1
+                    ]._rebuild_full_params(wait_for_all_gather=False)
             else:
                 self._use_full_params()
 
@@ -1593,7 +1714,10 @@ class FullyShardedDataParallel(nn.Module):
             # detached.
             nonlocal _registered
             assert self._output_pre_backward_hook_registered is not None
-            if t.requires_grad and (_registered == 0 or id(t) not in self._output_pre_backward_hook_registered):
+            if t.requires_grad and (
+                _registered == 0
+                or id(t) not in self._output_pre_backward_hook_registered
+            ):
                 t.register_hook(_pre_backward_hook)
                 self._output_pre_backward_hook_registered.append(id(t))
                 _registered += 1
@@ -1649,8 +1773,12 @@ class FullyShardedDataParallel(nn.Module):
                 # fires it at the end for this param, which makes sense.
                 p_tmp = p.expand_as(p)  # Get a grad_fn on p_tmp.
                 assert p_tmp.grad_fn is not None
-                grad_acc = p_tmp.grad_fn.next_functions[0][0]  # Gets its GradAccumulation object.
-                handle = grad_acc.register_hook(functools.partial(self._post_backward_hook, p))
+                grad_acc = p_tmp.grad_fn.next_functions[0][
+                    0
+                ]  # Gets its GradAccumulation object.
+                handle = grad_acc.register_hook(
+                    functools.partial(self._post_backward_hook, p)
+                )
                 if not hasattr(p, "_shard_bwd_hooks"):
                     p._shard_bwd_hooks = []
                 p._shard_bwd_hooks.append((grad_acc, handle))
@@ -1691,12 +1819,17 @@ class FullyShardedDataParallel(nn.Module):
             # shared between different FSDP wrappers. Otherwise, they are linked but
             # likely in the same FSDP wrapper, which means we shouldn't finalize the
             # linked param..
-            if hasattr(param._linked_param, "_is_shared") and param._linked_param._is_shared:
+            if (
+                hasattr(param._linked_param, "_is_shared")
+                and param._linked_param._is_shared
+            ):
                 param = param._linked_param
 
         assert param.grad is not None, param.shape
         if param.grad.requires_grad:
-            raise RuntimeError("FSDP only works with gradients that don't require gradients")
+            raise RuntimeError(
+                "FSDP only works with gradients that don't require gradients"
+            )
 
         if self._require_backward_grad_sync or self.reshard_after_forward:
             # Free full params. As a special case, we don't free the full params
@@ -1770,7 +1903,9 @@ class FullyShardedDataParallel(nn.Module):
                 # unsharded gradients allocated; one for a pending reduction, and one for gradient computation.
                 callback_fn = functools.partial(self._post_reduction_hook, param)
                 self._reducer.reduce_scatter_async(
-                    grad, group=self.process_group_reduce_scatter, callback_fn=callback_fn
+                    grad,
+                    group=self.process_group_reduce_scatter,
+                    callback_fn=callback_fn,
                 )
             else:
                 # Currently the only way for _is_sharded to be False is if
@@ -1793,8 +1928,9 @@ class FullyShardedDataParallel(nn.Module):
                 release_full_grad_event.record()
                 self._reduce_scatter_free_event_queue.enqueue(release_full_grad_event)
 
-
-    def _post_reduction_hook(self, param: Parameter, reduced_grad: torch.Tensor) -> None:
+    def _post_reduction_hook(
+        self, param: Parameter, reduced_grad: torch.Tensor
+    ) -> None:
         """Hook to call on each param after the reduce-scatter."""
         assert torch.cuda.current_stream() == self._streams["post_backward"]
         self.assert_state(TrainingState.BACKWARD_POST)
@@ -1882,7 +2018,10 @@ class FullyShardedDataParallel(nn.Module):
                 if not p.requires_grad:
                     continue
                 if hasattr(p, "_shard_bwd_hook"):
-                    p_assert(len(p._shard_bwd_hook) == 2, f"WFPB: incorrect hook num: {len(p._shard_bwd_hook)}")
+                    p_assert(
+                        len(p._shard_bwd_hook) == 2,
+                        f"WFPB: incorrect hook num: {len(p._shard_bwd_hook)}",
+                    )
                     # p._shard_bwd_hook[1].remove()
                     # delattr(p, "_shard_bwd_hook")
                 if hasattr(p, "_shard_bwd_hooks") and self._require_backward_grad_sync:
@@ -1898,7 +2037,10 @@ class FullyShardedDataParallel(nn.Module):
                     continue
                 # Parameter and gradient devices must match.
                 if hasattr(p, "_cpu_grad"):
-                    p_assert(p.device == torch.device("cpu"), f"WFPB: incorrect cpu_grad device {p.device}")
+                    p_assert(
+                        p.device == torch.device("cpu"),
+                        f"WFPB: incorrect cpu_grad device {p.device}",
+                    )
                     p.grad = p._cpu_grad
                 elif hasattr(p, "_saved_grad_shard"):
                     p_assert(
@@ -1950,9 +2092,10 @@ class FullyShardedDataParallel(nn.Module):
                         self._output_pre_backward_hook_registered is not None,
                         "WFPB: self._output_pre_backward_hook_registered should not be None",
                     )
-                    assert self._output_pre_backward_hook_registered is not None  # make mypy happy
+                    assert (
+                        self._output_pre_backward_hook_registered is not None
+                    )  # make mypy happy
                     self._output_pre_backward_hook_registered.clear()
-
 
     @torch.no_grad()
     def _rebuild_full_params_recursive(self):
@@ -1977,10 +2120,10 @@ class FullyShardedDataParallel(nn.Module):
                 module._lazy_init()
                 module._rebuild_full_params(wait_for_all_gather=False)
 
-
-
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False, wait_for_all_gather = True) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(
+        self, force_full_precision: bool = False, wait_for_all_gather=True
+    ) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -2015,7 +2158,9 @@ class FullyShardedDataParallel(nn.Module):
                 p.data = custom_output_tensor
                 output_tensors.append((p.data, True))
             elif not p._is_sharded:
-                if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
+                if (
+                    self.mixed_precision or self.move_params_to_cpu
+                ) and not force_full_precision:
                     assert p._fp16_shard is not None
                     p.data = p._fp16_shard
                     output_tensors.append((p.data, True))
@@ -2045,7 +2190,9 @@ class FullyShardedDataParallel(nn.Module):
             # has_full_params flag.
             #
             # Therefore, we update the flag accordingly here.
-            self.has_full_params = not any(p._full_param_padded.storage().size() == 0 for p in self.params)
+            self.has_full_params = not any(
+                p._full_param_padded.storage().size() == 0 for p in self.params
+            )
 
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
@@ -2058,7 +2205,10 @@ class FullyShardedDataParallel(nn.Module):
         self.has_full_params = True
 
         if self._all_gather_free_event_queue is not None:
-            while self._all_gather_free_event_queue._queue and self._all_gather_free_event_queue._queue[0].query():
+            while (
+                self._all_gather_free_event_queue._queue
+                and self._all_gather_free_event_queue._queue[0].query()
+            ):
                 self._all_gather_free_event_queue._dequeue()
             event = self._all_gather_free_event_queue.dequeue_if_needed()
             if event:
@@ -2066,7 +2216,9 @@ class FullyShardedDataParallel(nn.Module):
                 event.synchronize()
 
         with torch.cuda.stream(self._streams["all_gather"]):
-            if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
+            if (
+                self.mixed_precision or self.move_params_to_cpu
+            ) and not force_full_precision:
                 self._cast_fp32_param_shards_to_fp16()
 
             if self.move_params_to_cpu:
@@ -2087,7 +2239,11 @@ class FullyShardedDataParallel(nn.Module):
                     # Skip if already built. Only shared param can be rebuilt multiple times.
                     # A corner case is p._orig_size = (1,), which means the shape equality is
                     # not a perfect check. But we assume we don't share a param with shape (1,).
-                    if p.data.shape == p._orig_size and hasattr(p, "_is_shared") and p._is_shared:
+                    if (
+                        p.data.shape == p._orig_size
+                        and hasattr(p, "_is_shared")
+                        and p._is_shared
+                    ):
                         continue
                     # If self.move_params_to_cpu and force_full_precision, we need to cast
                     # the FP32 CPU param to CUDA for the all-gather.
@@ -2106,9 +2262,14 @@ class FullyShardedDataParallel(nn.Module):
                         output_tensor = p._full_param_padded
 
                     # Fill output_tensor with (p.data for each shard in self.world_size)
-                    if hasattr(dist, "_all_gather_base") and enable_nccl_base_collectives:
+                    if (
+                        hasattr(dist, "_all_gather_base")
+                        and enable_nccl_base_collectives
+                    ):
                         # New version of PyTorch has all_gather_base, which is faster than chunk and then all_gather.
-                        dist._all_gather_base(output_tensor, p_data, group=self.process_group)
+                        dist._all_gather_base(
+                            output_tensor, p_data, group=self.process_group
+                        )
                     else:
                         chunks = list(output_tensor.chunk(self.world_size))
                         dist.all_gather(chunks, p_data, group=self.process_group)
@@ -2116,10 +2277,14 @@ class FullyShardedDataParallel(nn.Module):
                     # Set p.data = output_tensor (with padding trimmed)
                     update_p_data(output_tensor)
 
-                    if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
+                    if (
+                        self.mixed_precision or self.move_params_to_cpu
+                    ) and not force_full_precision:
                         self._free_fp16_param_shard([p])
 
-                    if self.move_params_to_cpu and (self.params[0].dtype == self.compute_dtype):
+                    if self.move_params_to_cpu and (
+                        self.params[0].dtype == self.compute_dtype
+                    ):
                         self._free_fp16_param_shard([p])
 
             if self._all_gather_free_event_queue is not None:
@@ -2150,7 +2315,9 @@ class FullyShardedDataParallel(nn.Module):
                     assert p._fp16_shard.storage().size() != 0
                     p.data = p._fp16_shard
             else:
-                assert p._full_param_padded.storage().size() != 0, f"{p._orig_size} {id(self)}"
+                assert (
+                    p._full_param_padded.storage().size() != 0
+                ), f"{p._orig_size} {id(self)}"
                 p.data = p._full_param_padded[: p._orig_size.numel()].view(p._orig_size)
 
     @torch.no_grad()
@@ -2215,9 +2382,20 @@ class FullyShardedDataParallel(nn.Module):
 
                 metadata["no_broadcast_optim_state"] = m.no_broadcast_optim_state
                 shared_param_info = []
-                for (mpath_dst, mpath_src, _, src_name, _, dst_name) in m._shared_param_infos:
-                    src_param_path = _clean_path(mpath_src + "." + src_name if mpath_src else src_name)
-                    dst_param_path = _clean_path(mpath_dst + "." + dst_name if mpath_dst else dst_name)
+                for (
+                    mpath_dst,
+                    mpath_src,
+                    _,
+                    src_name,
+                    _,
+                    dst_name,
+                ) in m._shared_param_infos:
+                    src_param_path = _clean_path(
+                        mpath_src + "." + src_name if mpath_src else src_name
+                    )
+                    dst_param_path = _clean_path(
+                        mpath_dst + "." + dst_name if mpath_dst else dst_name
+                    )
                     shared_param_info.append((src_param_path, dst_param_path))
                 metadata["shared_param_info"] = shared_param_info
 
@@ -2236,11 +2414,16 @@ class FullyShardedDataParallel(nn.Module):
                         "names": [_clean_path(n) for n in names],  # A list of str.
                         "shapes": shapes,  # A list of torch.Size.
                         "numels": numels,  # A list of int.
-                        "padding": m.numel_padded_per_param[i],  # An int for padding added to the backing parameter.
+                        "padding": m.numel_padded_per_param[
+                            i
+                        ],  # An int for padding added to the backing parameter.
                     }
                 param_metadata.append(metadata)
 
-        buffer_names = [_clean_path(buffer_name) for buffer_name, _ in self.named_buffers(recurse=True)]
+        buffer_names = [
+            _clean_path(buffer_name)
+            for buffer_name, _ in self.named_buffers(recurse=True)
+        ]
         return dict(param_metadata=param_metadata, buffer_names=buffer_names)
 
     @staticmethod
@@ -2292,14 +2475,20 @@ class FullyShardedDataParallel(nn.Module):
             params = metadata["params"]
             # For every this-FSDP-owned param, flattened or not.
             for backing_param_name, v in params.items():
-                in_state_dict_key = ".".join([fsdp_path, backing_param_name]) if fsdp_path else backing_param_name
+                in_state_dict_key = (
+                    ".".join([fsdp_path, backing_param_name])
+                    if fsdp_path
+                    else backing_param_name
+                )
                 # Get full param back with pad removed.
                 if in_state_dict_key not in shard_weights[0] and (not strict):
                     continue
                 shards = []
                 for rank in range(original_world_size):
                     shard = shard_weights[rank][in_state_dict_key]
-                    pad = shard_metadata[rank]["param_metadata"][fsdp_obj_idx]["params"][backing_param_name]["padding"]
+                    pad = shard_metadata[rank]["param_metadata"][fsdp_obj_idx][
+                        "params"
+                    ][backing_param_name]["padding"]
                     shards.append(_unpad(shard, pad))
                     if metadata["no_broadcast_optim_state"]:
                         break
@@ -2335,7 +2524,9 @@ class FullyShardedDataParallel(nn.Module):
             p.data = p._fp32_shard
 
     @torch.no_grad()
-    def _cast_fp32_param_shards_to_fp16(self, params: Optional[List[Parameter]] = None) -> None:
+    def _cast_fp32_param_shards_to_fp16(
+        self, params: Optional[List[Parameter]] = None
+    ) -> None:
         """Cast FP32 param shard to FP16 for a list of params."""
         if params is None:
             params = self.params
@@ -2372,7 +2563,10 @@ class FullyShardedDataParallel(nn.Module):
         if isinstance(state, TrainingState):
             state = [state]
         if self.training_state not in state:
-            msg = f"expected to be in states {state} but current state " f"is {self.training_state}"
+            msg = (
+                f"expected to be in states {state} but current state "
+                f"is {self.training_state}"
+            )
             # In case we are failing in the context of autograd hook, asserting
             # may not generate useful msg. So, let's print it to be sure.
             if self.rank == 0:
@@ -2383,8 +2577,12 @@ class FullyShardedDataParallel(nn.Module):
 
     def _broadcast_pad_info_to_r0(self) -> List[List[List[int]]]:
         """Collect [x.numel_padded_per_param for x in self._fsdp_instances] from each rank."""
-        world_pad_info: List[List[List[int]]] = []  # this will contain values from the whole world.
-        my_pad_info: List[List[int]] = [cast(List[int], m.numel_padded_per_param) for m in self._fsdp_instances]
+        world_pad_info: List[List[List[int]]] = (
+            []
+        )  # this will contain values from the whole world.
+        my_pad_info: List[List[int]] = [
+            cast(List[int], m.numel_padded_per_param) for m in self._fsdp_instances
+        ]
         for rank in range(self.world_size):
             if rank == self.rank:
                 pad_info = my_pad_info
@@ -2407,7 +2605,9 @@ class FullyShardedDataParallel(nn.Module):
             # For shared params, we are not flattening. We have only 1 non-shared
             # param that has the optimizer state. So we handle it with the correct
             # parameter list.
-            non_shared_params = cast(FullyShardedDataParallel, self._fsdp_instances[k]).non_shared_params()
+            non_shared_params = cast(
+                FullyShardedDataParallel, self._fsdp_instances[k]
+            ).non_shared_params()
             # This is the world size and process group of the FSDP submodule which can be
             # different than the parent module. For example, when FSDP is used with MoE.
             non_shared_world_size = self._fsdp_instances[k].world_size
@@ -2425,14 +2625,26 @@ class FullyShardedDataParallel(nn.Module):
 
                 if ou.is_singleton_tensor(t):
                     if singleton_buffer is None:
-                        singleton_buffer = list(t.new_zeros(non_shared_world_size).chunk(non_shared_world_size))
+                        singleton_buffer = list(
+                            t.new_zeros(non_shared_world_size).chunk(
+                                non_shared_world_size
+                            )
+                        )
                     dist.all_gather(singleton_buffer, t, group=non_shared_process_group)
                     if self.rank == 0:
-                        singleton_state[k][buffer_name] = [x.cpu().squeeze() for x in singleton_buffer]
-                        assert ou.is_singleton_tensor(singleton_state[k][buffer_name][0])
+                        singleton_state[k][buffer_name] = [
+                            x.cpu().squeeze() for x in singleton_buffer
+                        ]
+                        assert ou.is_singleton_tensor(
+                            singleton_state[k][buffer_name][0]
+                        )
                 elif torch.is_tensor(t):
                     if buffer is None:
-                        buffer = list(t.new_zeros(*desired_buffer_size).chunk(non_shared_world_size))
+                        buffer = list(
+                            t.new_zeros(*desired_buffer_size).chunk(
+                                non_shared_world_size
+                            )
+                        )
                     dist.all_gather(buffer, t, group=non_shared_process_group)
                     if self.rank == 0:
                         gathered_state[k][buffer_name] = [x.cpu() for x in buffer]
@@ -2441,7 +2653,9 @@ class FullyShardedDataParallel(nn.Module):
 
         return gathered_state, singleton_state
 
-    def gather_full_optim_state_dict(self, optim: torch.optim.Optimizer, **ignored: Dict) -> Optional[Dict[str, Any]]:
+    def gather_full_optim_state_dict(
+        self, optim: torch.optim.Optimizer, **ignored: Dict
+    ) -> Optional[Dict[str, Any]]:
         """Return the last known global optimizer state. The returned state is compatible with Pytorch, in that the
         sharded properties are not exposed. Multiple parameter groups are not yet supported.
 
@@ -2462,11 +2676,16 @@ class FullyShardedDataParallel(nn.Module):
 
         """
         if not self.flatten_parameters:
-            raise NotImplementedError("optim state dict requires flatten_parameters=True")
+            raise NotImplementedError(
+                "optim state dict requires flatten_parameters=True"
+            )
 
         self._lazy_init()
         sd = self._remove_uncollectable_params_from_optim_state_dict(optim.state_dict())
-        assert set(sd.keys()) == {"param_groups", "state"}, f'{set(sd.keys())} != {"param_groups", "state"}'
+        assert set(sd.keys()) == {
+            "param_groups",
+            "state",
+        }, f'{set(sd.keys())} != {"param_groups", "state"}'
         assert len(sd["param_groups"]) == 1, "Param groups are not supported"
         # We use all_gather to consolidate OSD['state'] and broadcast to consolidate the other keys (like param_groups)
         state, singleton_state = self._gather_optim_state(sd.pop("state"))
@@ -2475,7 +2694,12 @@ class FullyShardedDataParallel(nn.Module):
             return None
         # Unify the shard states by concatenating tensors and unflattening params
         new_state_dict = ou.build_unflat_state_dict(
-            self._fsdp_instances, pad_info, state, singleton_state, self.uncollected_opt_state, sd["param_groups"]
+            self._fsdp_instances,
+            pad_info,
+            state,
+            singleton_state,
+            self.uncollected_opt_state,
+            sd["param_groups"],
         )
         self.uncollected_opt_state = {}
         assert "uncollected_local_ids" in new_state_dict
@@ -2501,12 +2725,18 @@ class FullyShardedDataParallel(nn.Module):
                 if ou.is_singleton_tensor(bufs["step"]):
                     bufs["step"] = bufs["step"].item()
         # Get uncollected_ids.
-        uncollected_ids = [i for i, m in enumerate(self._fsdp_instances) if m.no_broadcast_optim_state]
-        new_dct = {"state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}}
+        uncollected_ids = [
+            i for i, m in enumerate(self._fsdp_instances) if m.no_broadcast_optim_state
+        ]
+        new_dct = {
+            "state": {k: v for k, v in osd["state"].items() if k not in uncollected_ids}
+        }
         if self.rank == 0:
             # Save placeholders for uncollected opt state to keep the same unflat OSD format, and move them to CPU.
             self.uncollected_opt_state = {
-                k: recursive_copy_to_device(v, non_blocking=False, device=torch.device("cpu"))
+                k: recursive_copy_to_device(
+                    v, non_blocking=False, device=torch.device("cpu")
+                )
                 for k, v in osd["state"].items()
                 if k in uncollected_ids
             }
@@ -2515,7 +2745,9 @@ class FullyShardedDataParallel(nn.Module):
         new_dct["param_groups"] = pg
         return new_dct
 
-    def get_shard_from_optim_state_dict(self, full_optim_state_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def get_shard_from_optim_state_dict(
+        self, full_optim_state_dict: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Get the portion of the optimizer state dict associated with the shard
 
         This can be used to get the right sharded optimizer state to be loaded
@@ -2589,7 +2821,9 @@ def _get_default_cuda_device(module: nn.Module) -> torch.device:
     return torch.device("cuda")
 
 
-def cast_floats_to_right_precision(to_fp16: bool, no_grad: bool, is_bf16: bool, *args: Any, **kwargs: Any) -> Tuple[Any, Any]:
+def cast_floats_to_right_precision(
+    to_fp16: bool, no_grad: bool, is_bf16: bool, *args: Any, **kwargs: Any
+) -> Tuple[Any, Any]:
     """
     Cast floating point Tensors in *args or **kwargs to FP16 or FP32 if they are not.
     We also retain the requires_grad flag so that casting doesn't affect the autograd graph.
@@ -2659,7 +2893,9 @@ def _post_state_dict_hook(
     # most once. Thus we add an attribute on the tensor called "_has_been_cloned"
     # which keeps track of tensors that are no longer at risk of being freed.
     for key in state_dict.keys():
-        if not key.startswith(prefix) or getattr(state_dict[key], "_has_been_cloned", False):
+        if not key.startswith(prefix) or getattr(
+            state_dict[key], "_has_been_cloned", False
+        ):
             continue
         if state_dict[key].device.type != module.state_dict_device.type:
             state_dict[key] = state_dict[key].to(device=module.state_dict_device)
@@ -2676,14 +2912,22 @@ def _post_state_dict_hook(
 
 
 def _pre_load_state_dict_hook(
-    state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"], prefix: str, *args: Any
+    state_dict: Union[Dict[str, torch.Tensor], "OrderedDict[str, torch.Tensor]"],
+    prefix: str,
+    *args: Any,
 ) -> None:
     replace_by_prefix_(state_dict, prefix, prefix + "_fsdp_wrapped_module.")
 
 
 def _clean_path(path: str) -> str:
     """Remove FSDP related wrapper modules from a given state dict key str path."""
-    return ".".join([split for split in path.split(".") if split not in {"_fsdp_wrapped_module", "_fpw_module"}])
+    return ".".join(
+        [
+            split
+            for split in path.split(".")
+            if split not in {"_fsdp_wrapped_module", "_fpw_module"}
+        ]
+    )
 
 
 def _unpad(shard: torch.Tensor, pad: int) -> torch.Tensor:
@@ -2769,6 +3013,8 @@ def auto_wrap_bn(
 
     # Wrap it.
     with (
-        enable_wrap(config_auto_wrap_policy, wrapper_cls=FullyShardedDataParallel) if wrap_it else contextlib.suppress()
+        enable_wrap(config_auto_wrap_policy, wrapper_cls=FullyShardedDataParallel)
+        if wrap_it
+        else contextlib.suppress()
     ):
         return auto_wrap(module)
