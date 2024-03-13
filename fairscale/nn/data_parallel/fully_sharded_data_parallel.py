@@ -42,8 +42,11 @@ from torch.distributed import ProcessGroup
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
+import transformer_engine.pytorch as te
+from transformer_engine.pytorch.cpp_extensions import cast_to_fp8, DType, FP8FwdTensors
+from transformer_engine.pytorch.fp8 import amax_and_scale_update, FP8GlobalStateManager
 
-from fairscale.nn.misc import FlattenParamsWrapper
+from fairscale.nn.misc import FlatParameter, FlattenParamsWrapper
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import (
@@ -148,6 +151,14 @@ class OffloadConfig:
     offload_type: Optional[str] = None
     # Path to the directory for storing parameters offloaded to disk.
     dir: Optional[str] = None
+
+
+def _is_fp8_dtype(dtype: torch.dtype) -> bool:
+    return dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+
+
+def _is_te_module_with_weights(m: nn.Module) -> bool:
+    return isinstance(m, (te.Linear, te.LayerNormLinear, te.LayerNormMLP))
 
 
 class FullyShardedDataParallel(nn.Module):
@@ -369,6 +380,7 @@ class FullyShardedDataParallel(nn.Module):
         limit_all_gather_events: bool = False,
         limit_reduce_scatter_events: bool = False,
         should_validate_process_group: bool = True,
+        fp8_allgather: bool = False,
     ):
         try:
             import torch._C
@@ -434,6 +446,7 @@ class FullyShardedDataParallel(nn.Module):
         self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
         self.state_dict_on_rank_0_only = state_dict_on_rank_0_only
+        self.fp8_allgather = fp8_allgather
         # Experimental feature for now. Use at your own risk.
         self.ssd_offload = True if offload_config and offload_config.offload_type == "ssd_offload" else False
 
@@ -488,9 +501,22 @@ class FullyShardedDataParallel(nn.Module):
         non_flatten_params = params
         param_name_groups = [[n] for n in param_names]
         if self.flatten_parameters:
-            to_be_flatten_params = [params]
-            non_flatten_params = []
-            param_name_groups = [param_names]
+            to_be_flatten_params = [
+                [
+                    params[i]
+                    for i in range(len(params))
+                    if "norm_weight" not in param_names[i]
+                ]
+            ]
+            non_flatten_params = [
+                params[i]
+                for i in range(len(params))
+                if "norm_weight" in param_names[i]
+            ]
+            param_name_groups = [
+                [n for n in param_names if "norm_weight" not in n],
+                [n for n in param_names if "norm_weight" in n],
+            ]
         del param_names
 
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
@@ -558,6 +584,10 @@ class FullyShardedDataParallel(nn.Module):
         self.dont_wait_current_stream_for_post_all_gather = False
         self._all_gather_free_event_queue = _FreeEventQueue() if limit_all_gather_events else None
         self._reduce_scatter_free_event_queue = _FreeEventQueue() if limit_reduce_scatter_events else None
+
+    @property
+    def _is_fp8_compute(self) -> bool:
+        return _is_fp8_dtype(self.compute_dtype)
 
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
@@ -688,7 +718,11 @@ class FullyShardedDataParallel(nn.Module):
     @property
     def params_with_grad(self) -> List[Parameter]:
         """[p for p in self.parameters() if p.grad is not None]"""
-        return [p for p in self.parameters() if (p.grad is not None or p.main_grad is not None)]
+        return [
+            p
+            for p in self.parameters()
+            if (p.grad is not None or getattr(p, "main_grad", None) is not None)
+        ]
 
     @torch.no_grad()
     def clip_grad_norm_(
@@ -791,7 +825,9 @@ class FullyShardedDataParallel(nn.Module):
                 assert p.dtype == torch.float32
 
             # If world_size is 1, then we all-reduce grads instead of sharding.
-            p._is_sharded = self.world_size > 1
+            p._is_sharded = (self.world_size > 1) and (
+                not self._is_fp8_compute or isinstance(p, FlatParameter)
+            )
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
@@ -1175,7 +1211,7 @@ class FullyShardedDataParallel(nn.Module):
                         non_shared_params
                     ), f"{len(full_tensors)} vs. {len(non_shared_params)}"
                     for p, (full_tensor, safe_to_free) in zip(non_shared_params, full_tensors):
-                        if not volatile:
+                        if not volatile and p._is_sharded:
                             # Copy any changes made to the full params back into
                             # the corresponding local shards.
                             local_shard, _ = self._get_shard(full_tensor)
@@ -1237,6 +1273,20 @@ class FullyShardedDataParallel(nn.Module):
             # ``optim.step()`` is done before we all-gather parameters.
             self._wait_for_previous_optim_step()
 
+    def _shard_dtype(self, p: Parameter) -> torch.dtype:
+        """
+        Return the dtype to use for the sharded parameters.
+
+        Returns:
+            The dtype to use for the sharded parameters.
+        """
+        if self._is_fp8_compute and not isinstance(p, FlatParameter):
+            # Assume non flattened are precision critical like norm
+            assert not p._is_sharded
+            return torch.bfloat16
+        else:
+            return self.compute_dtype
+
     @torch.no_grad()
     def _init_param_attributes(self, p: Parameter) -> None:
         """
@@ -1295,7 +1345,9 @@ class FullyShardedDataParallel(nn.Module):
             # storage to size 0 at init (here) and re-materialize (by copying
             # from _fp32_shard) as needed. If offloading params to CPU, the
             # dtype of the fp16 shard will depend on the *`compute_dtype`*.
-            p._fp16_shard = torch.zeros_like(p._fp32_shard, device=self.compute_device, dtype=self.compute_dtype)
+            p._fp16_shard = torch.zeros_like(
+                p._fp32_shard, device=self.compute_device, dtype=self._shard_dtype(p)
+            )
             free_storage_(p._fp16_shard)
 
         if self.mixed_precision:
@@ -1314,7 +1366,9 @@ class FullyShardedDataParallel(nn.Module):
         # relevant computation.
         if p._is_sharded:
             p._full_param_padded = torch.zeros(
-                p.data.numel() * self.world_size, device=self.compute_device, dtype=self.compute_dtype
+                p.data.numel() * self.world_size,
+                device=self.compute_device,
+                dtype=self._shard_dtype(p),
             )
             free_storage_(p._full_param_padded)
 
@@ -1429,7 +1483,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # For root and mixed precision, we convert the input to FP16 (no_grad is needed for
         # the conversion).
-        is_bf16 = self.compute_dtype == torch.bfloat16
+        is_bf16 = (self.compute_dtype == torch.bfloat16) or self._is_fp8_compute
         if self._is_root and self.mixed_precision:
             args, kwargs = cast_floats_to_right_precision(True, True, is_bf16, *args, **kwargs)
 
@@ -1443,9 +1497,13 @@ class FullyShardedDataParallel(nn.Module):
         if self.force_input_to_fp32 and not self.mixed_precision:
             args, kwargs = cast_floats_to_right_precision(False, False, is_bf16, *args, **kwargs)
 
+        self.module.is_first_batch = not getattr(self, "is_not_first_batch", False)
+        self.is_not_first_batch = True
+
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
         self._rebuild_full_params()
+        self.is_full_params_first_rebuilt = False
 
         if (
             self._fsdp_forward_ordering is not None
@@ -1713,8 +1771,7 @@ class FullyShardedDataParallel(nn.Module):
         # then subsequent hook callbacks will see POST state.
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         self.training_state = TrainingState.BACKWARD_POST
-        if param.grad is None:
-            return
+
 
         if hasattr(param, "_linked_param"):
             # This links to a shared param. We should finalize the linked param here.
@@ -1726,7 +1783,9 @@ class FullyShardedDataParallel(nn.Module):
             if hasattr(param._linked_param, "_is_shared") and param._linked_param._is_shared:
                 param = param._linked_param
 
-        assert param.grad is not None, param.shape
+        if param.grad is None:
+            return
+
         if param.grad.requires_grad:
             raise RuntimeError("FSDP only works with gradients that don't require gradients")
 
@@ -1734,7 +1793,7 @@ class FullyShardedDataParallel(nn.Module):
             # Free full params.
             self._free_full_params([param])
 
-        if self.mixed_precision and (self._require_backward_grad_sync or self.reshard_after_forward):
+        if self.mixed_precision and (self._require_backward_grad_sync or self.reshard_after_forward) and not self.fp8_allgather:
             # This is a no-op if reshard_after_forward is True, since we already
             # free the param shard when rebuilding the full params in the
             # pre_backward_hook.
@@ -1748,11 +1807,11 @@ class FullyShardedDataParallel(nn.Module):
                 param.unsharded_main_grad = param.grad.to(torch.float32)
             else:
                 param.unsharded_main_grad.add_(param.grad.data)
-
             param.grad = None
 
         if not self._require_backward_grad_sync:
             return
+
 
         # Wait for all work in the current stream to finish, then start the
         # reductions in post_backward stream.
@@ -1800,6 +1859,19 @@ class FullyShardedDataParallel(nn.Module):
                 self._reducer.reduce_scatter_async(
                     grad, group=self.process_group_reduce_scatter, callback_fn=callback_fn
                 )
+            elif self.fp8_allgather:
+                if param.grad is not None:
+                    if self.fp32_reduce_scatter:
+                        param.unsharded_main_grad = param.grad.to(torch.float32)
+                    else:
+                        param.unsharded_main_grad = param.grad
+                    param.grad = None
+
+                    torch.distributed.all_reduce(
+                        param.unsharded_main_grad,
+                        group=self.process_group_reduce_scatter,
+                    )
+                    self._post_reduction_hook(param, param.unsharded_main_grad)
             else:
                 # Currently the only way for _is_sharded to be False is if
                 # world_size == 1. This could be relaxed in the future, in which
@@ -1848,8 +1920,17 @@ class FullyShardedDataParallel(nn.Module):
                 ), f"{param._saved_grad_shard.shape} vs {reduced_grad.shape}"
                 param._saved_grad_shard.data += reduced_grad.data
             reduced_grad = param._saved_grad_shard.data
-        elif (param.grad is None) and self.fp32_reduce_scatter:
-            param.main_grad = reduced_grad.data
+
+            if getattr(param, "unsharded_main_grad", None) is not None:
+                free_storage_(param.unsharded_main_grad.data)
+                param.unsharded_main_grad = None
+
+        elif param.grad is None:
+        # TODO(shikaili): Still having missing grad/main_grad issue.
+            if self.fp32_reduce_scatter:
+                param.main_grad = reduced_grad.data
+            else:
+                param.grad = reduced_grad.data
 
         # Optionally move gradients to CPU, typically used if one is running the optimizer on the CPU. Once the full
         # backwards pass completes, we will set `.grad` to the CPU copy.
@@ -1961,6 +2042,7 @@ class FullyShardedDataParallel(nn.Module):
                     # again after post-backward
                     if p.shape != p._saved_grad_shard.shape:
                         self._use_fp32_param_shard([p])
+                    assert getattr(p, "unsharded_main_grad", None) is None
                     if p._saved_grad_shard.dtype != p.dtype:
                         p.main_grad = p._saved_grad_shard
                     else:
@@ -2027,12 +2109,19 @@ class FullyShardedDataParallel(nn.Module):
         for module in self.modules():
             if isinstance(module, FullyShardedDataParallel):
                 module._lazy_init()
-                module._rebuild_full_params(wait_for_all_gather=False)
+                module._rebuild_full_params(
+                    wait_for_all_gather=False, not_from_recursive=False
+                )
 
 
 
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False, wait_for_all_gather = True) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(
+        self,
+        force_full_precision: bool = False,
+        wait_for_all_gather=True,
+        not_from_recursive=True,
+    ) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -2052,6 +2141,41 @@ class FullyShardedDataParallel(nn.Module):
             caller to free the full-sized param. This will be ``None`` if
             ``force_full_precision=False`` and the full params are already gathered.
         """
+        if self._is_fp8_compute:
+            # Need to use fp32_to_fp16 stream since _cast_fp32_param_shards_to_fp16 depends on this block.
+            with torch.no_grad(), torch.cuda.stream(self._streams["fp32_to_fp16"]):
+                for p in self.params:
+                    if not isinstance(p, FlatParameter):
+                        continue
+                    d = {info[0]: info[1] for info in p._param_infos}
+                    for n, m in d.items():
+                        # Previous iteration was grad_enabled
+                        if not m.fp8_initialized:
+                            m.fp8_init(
+                                num_gemms=2 if isinstance(m, te.LayerNormMLP) else 1
+                            )
+                        if m.fp8_meta.get("update_amax_and_scale_fwd", False):
+                            if m.fp8_meta["recipe"].reduce_amax:
+                                FP8GlobalStateManager.copy_amax_from_global_buffer(
+                                    m.fp8_meta, forward=True
+                                )
+                            amax_and_scale_update(
+                                m.fp8_meta,
+                                True,
+                                update_weight_scale_inv=self.is_full_params_first_rebuilt,
+                            )
+                            if not_from_recursive:
+                                FP8GlobalStateManager.set_amax_buffer_key_deletion(
+                                    m.fp8_meta, forward=True
+                                )
+                        else:
+                            amax_and_scale_update(
+                                m.fp8_meta,
+                                True,
+                                update_weight_scale_inv=self.is_full_params_first_rebuilt,
+                            )
+                torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
+
         output_tensors: List[Tuple[torch.Tensor, bool]] = []
 
         def update_p_data(custom_output_tensor: Optional[torch.Tensor] = None) -> None:
@@ -2062,6 +2186,7 @@ class FullyShardedDataParallel(nn.Module):
                 custom_output_tensor (torch.Tensor, Optional): if not None, this
                 tensor contains the data we just gathered.
             """
+            p_fp16_shard_size = -1
             if custom_output_tensor is not None:
                 assert p._is_sharded
                 p.data = custom_output_tensor
@@ -2070,6 +2195,7 @@ class FullyShardedDataParallel(nn.Module):
                 if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
                     assert p._fp16_shard is not None
                     p.data = p._fp16_shard
+                    p_fp16_shard_size = p._fp16_shard.storage().size()
                     output_tensors.append((p.data, True))
                 else:
                     # Here p.data == p._fp32_shard, so it's not safe to free.
@@ -2211,6 +2337,14 @@ class FullyShardedDataParallel(nn.Module):
         right shape, device, accumulated values, etc.
         """
         for p in self.params:
+            if isinstance(p, FlatParameter) and all(
+                _is_te_module_with_weights(info[1]) for info in p._param_infos
+            ):
+                if getattr(p, "main_grad", None) is None:
+                    p.main_grad = torch.empty_like(p, dtype=torch.float)
+                main_grad_views = p.get_param_views(p.main_grad)
+                for (_, m, n), main_grad in zip(p._param_infos, main_grad_views):
+                    getattr(m, n).main_grad = main_grad
             if p.grad is not None:
                 if p.grad.device != p.data.device:
                     p.grad = None
@@ -2232,6 +2366,8 @@ class FullyShardedDataParallel(nn.Module):
         """Free up storage for full parameters."""
         if params is None:
             params = self.params
+        self.is_not_first_batch = False
+        self.is_full_params_first_rebuilt = True
         self.has_full_params = False
 
         current_stream = torch.cuda.current_stream()
@@ -2278,8 +2414,11 @@ class FullyShardedDataParallel(nn.Module):
                         backing_param_name = m.module.flat_param_names[i]
                         names, shapes, numels = m.module.metadata(i)
                     else:
+                        # TODO(shikaili): Understand this change.
                         assert len(m._param_name_groups[i]) == 1
-                        backing_param_name = m._param_name_groups[i][0]
+                        backing_param_name = m._param_name_groups[
+                            m._num_flatten_params
+                        ][i - m._num_flatten_params]
                         names = [backing_param_name]
                         shapes = [p._orig_size]
                         numels = [p._orig_size.numel()]
@@ -2395,12 +2534,50 @@ class FullyShardedDataParallel(nn.Module):
             for p in params:
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
-                p._fp16_shard.copy_(
-                    # If move_params_to_cpu is True, this will be non-blocking
-                    # because _fp32_shard is pinned, otherwise it's a no-op.
-                    p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
-                )
-                p.data = p._fp16_shard
+                if self._is_fp8_compute and _is_fp8_dtype(p._fp16_shard.dtype):
+                    assert isinstance(p, FlatParameter)
+                    assert len(p._param_infos) == len(p._param_numels)
+                    numel_per_shard = p.numel()
+                    offset = -numel_per_shard * self.rank
+                    for i in range(len(p._param_infos)):
+                        _, m, n = p._param_infos[i]
+                        numel = p._param_numels[i]
+                        if offset + numel <= 0 or offset >= numel_per_shard:
+                            offset += numel
+                            continue
+                        fp8_dtype_forward = te.fp8.get_fp8_te_dtype(
+                            m.fp8_meta["recipe"], fprop_tensor=True
+                        )
+                        if not m.fp8_initialized:
+                            m.fp8_init(
+                                num_gemms=2 if isinstance(m, te.LayerNormMLP) else 1
+                            )
+                        begin = max(offset, 0)
+                        end = min(offset + numel, numel_per_shard)
+                        cast_to_fp8(
+                            p._fp32_shard[begin:end].bfloat16(),
+                            m.fp8_meta["scaling_fwd"],
+                            (
+                                FP8FwdTensors.GEMM2_WEIGHT
+                                if n == "fc2_weight"
+                                else FP8FwdTensors.GEMM1_WEIGHT
+                            ),
+                            fp8_dtype_forward,
+                            out=p._fp16_shard[begin:end],
+                        )
+                        offset += numel
+                    p.data = p._fp16_shard.view(
+                            torch.float8_e4m3fn
+                            if fp8_dtype_forward == DType.kFloat8E4M3
+                            else torch.float8_e5m2
+                    )
+                else:
+                    p._fp16_shard.copy_(
+                        # If move_params_to_cpu is True, this will be non-blocking
+                        # because _fp32_shard is pinned, otherwise it's a no-op.
+                        p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
+                    )
+                    p.data = p._fp16_shard
         torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
 
     @torch.no_grad()
