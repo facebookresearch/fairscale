@@ -369,6 +369,7 @@ class FullyShardedDataParallel(nn.Module):
         limit_all_gather_events: bool = False,
         limit_reduce_scatter_events: bool = False,
         should_validate_process_group: bool = True,
+        tensor_parallel_group: Optional[ProcessGroup] = None,
     ):
         try:
             import torch._C
@@ -380,6 +381,7 @@ class FullyShardedDataParallel(nn.Module):
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
+        self.tensor_parallel_group = tensor_parallel_group
         # If ProcessGroupName.default is passed in, the reduce_scatter will use the same process group with
         # the rest of operations. The overlap feature in the backward propagation is disabled.
         if process_group_reduce_scatter == ProcessGroupName.default:
@@ -1725,6 +1727,17 @@ class FullyShardedDataParallel(nn.Module):
 
         if not self._require_backward_grad_sync:
             return
+
+        # run allreduce on param if necessary
+        if self.tensor_parallel_group.size() > 1:
+            if self.fp32_reduce_scatter:
+                orig_grad_data = param.unsharded_main_grad.data
+            else:
+                orig_grad_data = param.grad.data
+            for idx_pair in param._param_require_tp_allreduce:
+                param_allreduce = orig_grad_data[idx_pair[0]:idx_pair[1]].contiguous()
+                torch.distributed.all_reduce(param_allreduce, group=self.tensor_parallel_group)
+                orig_grad_data[idx_pair[0]:idx_pair[1]].copy_(param_allreduce)
 
         # Wait for all work in the current stream to finish, then start the
         # reductions in post_backward stream.

@@ -70,6 +70,13 @@ class FlatParameter(nn.Parameter):
     def __init__(self, params: Sequence[nn.Parameter], requires_grad: bool = True):
         """Initialize the _param_numels and _param_shapes lists."""
         self._param_numels = [p.numel() for p in params]
+        self._param_require_tp_allreduce = []
+        for idx in range(len(params)):
+            p = params[idx]
+            if hasattr(p, "norm_allreduce_last_microbatch") and p.norm_allreduce_last_microbatch:
+                self._param_require_tp_allreduce.append(
+                    [sum(self._param_numels[0:idx]), sum(self._param_numels[0:idx+1])]
+                )
         assert self.numel() <= sum(
             self._param_numels
         ), f"Something wrong with __new__ method, {self.numel()} vs. {sum(self._param_numels)}"
