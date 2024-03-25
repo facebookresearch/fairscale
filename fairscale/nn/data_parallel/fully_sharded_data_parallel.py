@@ -687,7 +687,7 @@ class FullyShardedDataParallel(nn.Module):
     @property
     def params_with_grad(self) -> List[Parameter]:
         """[p for p in self.parameters() if p.grad is not None]"""
-        return [p for p in self.parameters() if (p.grad is not None or p.main_grad is not None)]
+        return [p for p in self.parameters() if (p.requires_grad and (p.grad is not None or p.main_grad is not None))]
 
     @torch.no_grad()
     def clip_grad_norm_(
