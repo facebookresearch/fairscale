@@ -46,7 +46,8 @@ import transformer_engine.pytorch as te
 from transformer_engine.pytorch.cpp_extensions import cast_to_fp8, DType, FP8FwdTensors
 from transformer_engine.pytorch.fp8 import amax_and_scale_update, FP8GlobalStateManager
 
-from fairscale.nn.misc import FlatParameter, FlattenParamsWrapper
+from fairscale.nn.misc import FlattenParamsWrapper
+from fairscale.nn.misc.flatten_params_wrapper import FlatParameter
 from fairscale.nn.wrap import auto_wrap, config_auto_wrap_policy, enable_wrap
 from fairscale.utils.containers import apply_to_tensors
 from fairscale.utils.parallel import (
@@ -1273,7 +1274,7 @@ class FullyShardedDataParallel(nn.Module):
             # ``optim.step()`` is done before we all-gather parameters.
             self._wait_for_previous_optim_step()
 
-    def _shard_dtype(self, p: Parameter) -> torch.dtype:
+    def _param_dtype(self, p: Parameter) -> torch.dtype:
         """
         Return the dtype to use for the sharded parameters.
 
@@ -1346,7 +1347,7 @@ class FullyShardedDataParallel(nn.Module):
             # from _fp32_shard) as needed. If offloading params to CPU, the
             # dtype of the fp16 shard will depend on the *`compute_dtype`*.
             p._fp16_shard = torch.zeros_like(
-                p._fp32_shard, device=self.compute_device, dtype=self._shard_dtype(p)
+                p._fp32_shard, device=self.compute_device, dtype=self._param_dtype(p)
             )
             free_storage_(p._fp16_shard)
 
@@ -1368,7 +1369,7 @@ class FullyShardedDataParallel(nn.Module):
             p._full_param_padded = torch.zeros(
                 p.data.numel() * self.world_size,
                 device=self.compute_device,
-                dtype=self._shard_dtype(p),
+                dtype=self._param_dtype(p),
             )
             free_storage_(p._full_param_padded)
 
@@ -1783,11 +1784,19 @@ class FullyShardedDataParallel(nn.Module):
             if hasattr(param._linked_param, "_is_shared") and param._linked_param._is_shared:
                 param = param._linked_param
 
-        if param.grad is None:
+        # Prefer to use `param.main_grad` with higher precision in reduction than
+        # `param.grad` with equal or lower precision.
+        grad = param.grad
+        main_grad = getattr(param, "main_grad", None)
+        to_reduce_grad = main_grad if (main_grad is not None and not param.main_grad.eq(0.0).all()) else grad
+
+        if to_reduce_grad is None:
             return
 
-        if param.grad.requires_grad:
-            raise RuntimeError("FSDP only works with gradients that don't require gradients")
+        if to_reduce_grad.requires_grad:
+            raise RuntimeError(
+                    "FSDP only works with gradients that don't require gradients"
+                    )
 
         if self._should_free_in_backward():
             # Free full params.
@@ -1802,49 +1811,52 @@ class FullyShardedDataParallel(nn.Module):
         # Switch to FP32 shard after backward.
         self._use_fp32_param_shard([param])
 
+        # Accumulate gradients manually if in FP32 instead of default precision.
         if self.fp32_reduce_scatter:
-            if getattr(param, "unsharded_main_grad", None) is None:
-                param.unsharded_main_grad = param.grad.to(torch.float32)
-            else:
-                param.unsharded_main_grad.add_(param.grad.data)
-            param.grad = None
+            # If `param.grad` is `None`, then fp32 reduction is already happening at
+            # `param.main_grad`, nothing need to be done here.
+            if param.grad is not None:
+                if getattr(param, "unsharded_main_grad", None) is None:
+                    param.unsharded_main_grad = param.grad.to(torch.float32)
+                else:
+                    param.unsharded_main_grad.add_(param.grad.to(torch.float32))
+                # Resets `param.grad` to avoid PyTorch accumulation.
+                param.grad = None
 
         if not self._require_backward_grad_sync:
             return
-
 
         # Wait for all work in the current stream to finish, then start the
         # reductions in post_backward stream.
         self._streams["post_backward"].wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self._streams["post_backward"]):
 
-            if self.fp32_reduce_scatter:
-                # Cast grad to FP32.
-                orig_grad_data = param.unsharded_main_grad.data
-            else:
-                orig_grad_data = param.grad.data
+            # Prefer to use "unsharded_main_grad" with higher precision if exsits.
+            unsharded_main_grad = getattr(param, "unsharded_main_grad", None)
+            to_reduce_grad = unsharded_main_grad if unsharded_main_grad is not None else to_reduce_grad
+
+            # Clear grad on the tensor, so any repeated gradient computations do not interfere with this reduction.
+            # 1. For sharded parameters, we will asynchronously accumulate the reduced gradient into
+            # `param._saved_grad_shard` which will be re-sharded to `param.grad`/`param.main_grad` later after
+            # finalization.
+            # 2. For unsharded parameters, we will directly asynchronously accumulate the reduce gradient into
+            # `param.grad`/`param.main_grad`.
+            param.grad = None
+            param.main_grad = None
+            # `param.unsharded_main_grad` is no longer usefual and will be created again inside
+            # `_post_backward_hook` in the next first microbatch.
+            param.unsharded_main_grad = None
 
             if self.gradient_predivide_factor > 1:
                 # Average grad by world_size for consistency with PyTorch DDP.
-                if getattr(param, "unsharded_main_grad", None) is not None:
-                    param.unsharded_main_grad.data.div_(self.gradient_predivide_factor)
-                else:
-                    param.grad.data.div_(self.gradient_predivide_factor)
+                to_reduce_grad.data.div_(self.gradient_predivide_factor)
 
             if param._is_sharded:
                 assert self._reducer is not None
-                # Save the unsharded grad for reduction. We will asynchronously accumulate the reduced gradient into
-                # param._saved_grad_shard. If this FSDP module was called multiple times it's possible that multiple
-                # gradient reductions will happen in an undefined order. But addition commutes, so this order doesn't
-                # matter, neglecting rounding.
-                if getattr(param, "unsharded_main_grad", None) is not None:
-                    grad = param.unsharded_main_grad.data
-                    param.unsharded_main_grad = None
-                else:
-                    grad = param.grad.data
-                    param.grad = None
 
-                # Clear grad on the tensor, so any repeated gradient computations do not interfere with this reduction.
+                # If this FSDP module was called multiple times it's possible that multiple gradient reductions will
+                # happen in an undefined order. But addition commutes, so this order doesn't matter, neglecting
+                # rounding.
                 #
                 # The effect on memory consumption is not usually significant. No extra memory is allocated if this
                 # module is called only once, reduction happens quickly, or the tensor is bucketed. If the module is
@@ -1857,37 +1869,29 @@ class FullyShardedDataParallel(nn.Module):
                 # unsharded gradients allocated; one for a pending reduction, and one for gradient computation.
                 callback_fn = functools.partial(self._post_reduction_hook, param)
                 self._reducer.reduce_scatter_async(
-                    grad, group=self.process_group_reduce_scatter, callback_fn=callback_fn
+                    to_reduce_grad,
+                    group=self.process_group_reduce_scatter,
+                    callback_fn=callback_fn,
                 )
-            elif self.fp8_allgather:
-                if param.grad is not None:
-                    if self.fp32_reduce_scatter:
-                        param.unsharded_main_grad = param.grad.to(torch.float32)
-                    else:
-                        param.unsharded_main_grad = param.grad
-                    param.grad = None
-
+            else:
+                # Unsharded parameters only happens for word_size == 1 or fp8_allgather
+                assert self.world_size == 1 or (self._is_fp8_compute and not isinstance(param, FlatParameter))
+                if self.world_size > 1:
                     torch.distributed.all_reduce(
-                        param.unsharded_main_grad,
+                        to_reduce_grad,
                         group=self.process_group_reduce_scatter,
                     )
-                    self._post_reduction_hook(param, param.unsharded_main_grad)
-            else:
-                # Currently the only way for _is_sharded to be False is if
-                # world_size == 1. This could be relaxed in the future, in which
-                # case grads should be all-reduced here.
-                assert self.world_size == 1
-                if getattr(param, "unsharded_main_grad", None) is not None:
-                    self._post_reduction_hook(param, param.unsharded_main_grad)
-                else:
-                    self._post_reduction_hook(param, param.grad)
+                self._post_reduction_hook(param, to_reduce_grad)
 
             # After _post_backward_hook returns, orig_grad_data will eventually
             # go out of scope, at which point it could otherwise be freed for
             # further reuse by the main stream while the div/reduce_scatter/copy
             # are underway in the post_backward stream. See:
             # github.com/NVIDIA/apex/blob/master/apex/parallel/distributed.py
-            orig_grad_data.record_stream(self._streams["post_backward"])
+            for g in (grad, main_grad, unsharded_main_grad):
+                if g is not None:
+                    g.data.record_stream(self._streams["post_backward"])
+
             if self._reduce_scatter_free_event_queue is not None:
                 release_full_grad_event = torch.cuda.Event()
                 release_full_grad_event.record()
@@ -1898,17 +1902,12 @@ class FullyShardedDataParallel(nn.Module):
         """Hook to call on each param after the reduce-scatter."""
         assert torch.cuda.current_stream() == self._streams["post_backward"]
         self.assert_state(TrainingState.BACKWARD_POST)
+
+        assert not (self.fp32_reduce_scatter and reduced_grad.dtype != param.dtype)
+
         if self.gradient_postdivide_factor > 1:
             # Average grad by world_size for consistency with PyTorch DDP.
             reduced_grad.data.div_(self.gradient_postdivide_factor)
-        # Cast grad to param's dtype (typically FP32). Note: we do this
-        # before the move_grads_to_cpu step so that this entire hook remains
-        # non-blocking. The downside is a bit more D2H transfer in that case.
-        if self.fp32_reduce_scatter:
-            orig_param_grad_data = reduced_grad.data
-            # reduced_grad.data = reduced_grad.data.to(dtype=param.data.dtype)
-            # Don't let this memory get reused until after the transfer.
-            orig_param_grad_data.record_stream(torch.cuda.current_stream())
 
         if param._is_sharded:
             # Accumulate into the gradient shard.
@@ -1921,16 +1920,9 @@ class FullyShardedDataParallel(nn.Module):
                 param._saved_grad_shard.data += reduced_grad.data
             reduced_grad = param._saved_grad_shard.data
 
-            if getattr(param, "unsharded_main_grad", None) is not None:
-                free_storage_(param.unsharded_main_grad.data)
-                param.unsharded_main_grad = None
-
         elif param.grad is None:
-        # TODO(shikaili): Still having missing grad/main_grad issue.
             if self.fp32_reduce_scatter:
                 param.main_grad = reduced_grad.data
-            else:
-                param.grad = reduced_grad.data
 
         # Optionally move gradients to CPU, typically used if one is running the optimizer on the CPU. Once the full
         # backwards pass completes, we will set `.grad` to the CPU copy.
@@ -2150,6 +2142,7 @@ class FullyShardedDataParallel(nn.Module):
                     d = {info[0]: info[1] for info in p._param_infos}
                     for n, m in d.items():
                         # Previous iteration was grad_enabled
+                        # assert m.fp8_initialized
                         if not m.fp8_initialized:
                             m.fp8_init(
                                 num_gemms=2 if isinstance(m, te.LayerNormMLP) else 1
@@ -2159,22 +2152,22 @@ class FullyShardedDataParallel(nn.Module):
                                 FP8GlobalStateManager.copy_amax_from_global_buffer(
                                     m.fp8_meta, forward=True
                                 )
-                            amax_and_scale_update(
-                                m.fp8_meta,
-                                True,
-                                update_weight_scale_inv=self.is_full_params_first_rebuilt,
-                            )
-                            if not_from_recursive:
-                                FP8GlobalStateManager.set_amax_buffer_key_deletion(
-                                    m.fp8_meta, forward=True
+                                amax_and_scale_update(
+                                    m.fp8_meta,
+                                    True,
+                                    update_weight_scale_inv=self.is_full_params_first_rebuilt,
                                 )
-                        else:
-                            amax_and_scale_update(
-                                m.fp8_meta,
-                                True,
-                                update_weight_scale_inv=self.is_full_params_first_rebuilt,
-                            )
-                torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
+                                if not_from_recursive:
+                                    FP8GlobalStateManager.set_amax_buffer_key_deletion(
+                                        m.fp8_meta, forward=True
+                                    )
+                            else:
+                                amax_and_scale_update(
+                                    m.fp8_meta,
+                                    True,
+                                    update_weight_scale_inv=self.is_full_params_first_rebuilt,
+                                )
+            torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
 
         output_tensors: List[Tuple[torch.Tensor, bool]] = []
 
@@ -2341,7 +2334,7 @@ class FullyShardedDataParallel(nn.Module):
                 _is_te_module_with_weights(info[1]) for info in p._param_infos
             ):
                 if getattr(p, "main_grad", None) is None:
-                    p.main_grad = torch.empty_like(p, dtype=torch.float)
+                    p.main_grad = torch.empty_like(p, dtype=torch.float32)
                 main_grad_views = p.get_param_views(p.main_grad)
                 for (_, m, n), main_grad in zip(p._param_infos, main_grad_views):
                     getattr(m, n).main_grad = main_grad
@@ -2414,8 +2407,6 @@ class FullyShardedDataParallel(nn.Module):
                         backing_param_name = m.module.flat_param_names[i]
                         names, shapes, numels = m.module.metadata(i)
                     else:
-                        # TODO(shikaili): Understand this change.
-                        assert len(m._param_name_groups[i]) == 1
                         backing_param_name = m._param_name_groups[
                             m._num_flatten_params
                         ][i - m._num_flatten_params]
@@ -2545,6 +2536,7 @@ class FullyShardedDataParallel(nn.Module):
                         if offset + numel <= 0 or offset >= numel_per_shard:
                             offset += numel
                             continue
+                        assert _is_te_module_with_weights(m)
                         fp8_dtype_forward = te.fp8.get_fp8_te_dtype(
                             m.fp8_meta["recipe"], fprop_tensor=True
                         )
