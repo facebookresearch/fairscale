@@ -2824,26 +2824,27 @@ def auto_wrap_bn(
         return auto_wrap(module)
 
 
+class Handle(RemovableHandle):
+    handles: Tuple[RemovableHandle, ...]
+
+    def __init__(self, handles: Tuple[RemovableHandle, ...]):
+        self.handles = handles
+
+    def remove(self):
+        for handle in self.handles:
+            handle.remove()
+
+    def __getstate__(self):
+        return self.handles
+
+    def __setstate__(self, state):
+        self.handles = state
+
+
 def register_multi_grad_hook(
     tensors: Sequence[torch.Tensor],
     fn: Callable[[Sequence[Optional[torch.Tensor]]], None]
 ):
-    class Handle(RemovableHandle):
-        handles: Tuple[RemovableHandle, ...]
-
-        def __init__(self, handles: Tuple[RemovableHandle, ...]):
-            self.handles = handles
-
-        def remove(self):
-            for handle in self.handles:
-                handle.remove()
-
-        def __getstate__(self):
-            return self.handles
-
-        def __setstate__(self, state):
-            self.handles = state
-
     count: Dict[int, int] = dict()
     nb_calls = None
     buffer: Dict[int, List[Optional[torch.Tensor]]] = dict()
