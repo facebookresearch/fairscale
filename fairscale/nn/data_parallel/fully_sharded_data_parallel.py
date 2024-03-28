@@ -2133,42 +2133,6 @@ class FullyShardedDataParallel(nn.Module):
             caller to free the full-sized param. This will be ``None`` if
             ``force_full_precision=False`` and the full params are already gathered.
         """
-        if self._is_fp8_compute:
-            # Need to use fp32_to_fp16 stream since _cast_fp32_param_shards_to_fp16 depends on this block.
-            with torch.no_grad(), torch.cuda.stream(self._streams["fp32_to_fp16"]):
-                for p in self.params:
-                    if not isinstance(p, FlatParameter):
-                        continue
-                    d = {info[0]: info[1] for info in p._param_infos}
-                    for n, m in d.items():
-                        # Previous iteration was grad_enabled
-                        # assert m.fp8_initialized
-                        if not m.fp8_initialized:
-                            m.fp8_init(
-                                num_gemms=2 if isinstance(m, te.LayerNormMLP) else 1
-                            )
-                        if m.fp8_meta.get("update_amax_and_scale_fwd", False):
-                            if m.fp8_meta["recipe"].reduce_amax:
-                                FP8GlobalStateManager.copy_amax_from_global_buffer(
-                                    m.fp8_meta, forward=True
-                                )
-                                amax_and_scale_update(
-                                    m.fp8_meta,
-                                    True,
-                                    update_weight_scale_inv=self.is_full_params_first_rebuilt,
-                                )
-                                if not_from_recursive:
-                                    FP8GlobalStateManager.set_amax_buffer_key_deletion(
-                                        m.fp8_meta, forward=True
-                                    )
-                            else:
-                                amax_and_scale_update(
-                                    m.fp8_meta,
-                                    True,
-                                    update_weight_scale_inv=self.is_full_params_first_rebuilt,
-                                )
-            torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
-
         output_tensors: List[Tuple[torch.Tensor, bool]] = []
 
         def update_p_data(custom_output_tensor: Optional[torch.Tensor] = None) -> None:
@@ -2179,7 +2143,6 @@ class FullyShardedDataParallel(nn.Module):
                 custom_output_tensor (torch.Tensor, Optional): if not None, this
                 tensor contains the data we just gathered.
             """
-            p_fp16_shard_size = -1
             if custom_output_tensor is not None:
                 assert p._is_sharded
                 p.data = custom_output_tensor
@@ -2188,7 +2151,6 @@ class FullyShardedDataParallel(nn.Module):
                 if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
                     assert p._fp16_shard is not None
                     p.data = p._fp16_shard
-                    p_fp16_shard_size = p._fp16_shard.storage().size()
                     output_tensors.append((p.data, True))
                 else:
                     # Here p.data == p._fp32_shard, so it's not safe to free.
@@ -2237,8 +2199,10 @@ class FullyShardedDataParallel(nn.Module):
                 event.synchronize()
 
         with torch.cuda.stream(self._streams["all_gather"]):
-            if (self.mixed_precision or self.move_params_to_cpu) and not force_full_precision:
-                self._cast_fp32_param_shards_to_fp16()
+            if (
+                self.mixed_precision or self.move_params_to_cpu
+            ) and not force_full_precision:
+                self._cast_fp32_param_shards_to_fp16(not_from_recursive=not_from_recursive)
 
             if self.move_params_to_cpu:
                 if force_full_precision:
@@ -2246,7 +2210,7 @@ class FullyShardedDataParallel(nn.Module):
                     # use pinned memory. Otherwise move p.data to the compute
                     # device.
                     if self.params[0].dtype == self.compute_dtype:
-                        self._cast_fp32_param_shards_to_fp16()
+                        self._cast_fp32_param_shards_to_fp16(not_from_recursive=not_from_recursive)
                     else:
                         for p in self.params:
                             p.data = p.data.to(self.compute_device)
@@ -2517,33 +2481,64 @@ class FullyShardedDataParallel(nn.Module):
             p.data = p._fp32_shard
 
     @torch.no_grad()
-    def _cast_fp32_param_shards_to_fp16(self, params: Optional[List[Parameter]] = None) -> None:
+    def _cast_fp32_param_shards_to_fp16(
+        self, params: Optional[List[Parameter]] = None,
+        not_from_recursive: bool = False,
+    ) -> None:
         """Cast FP32 param shard to FP16 for a list of params."""
         if params is None:
             params = self.params
+
         with torch.cuda.stream(self._streams["fp32_to_fp16"]):
             for p in params:
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
+
                 if self._is_fp8_compute and _is_fp8_dtype(p._fp16_shard.dtype):
                     assert isinstance(p, FlatParameter)
                     assert len(p._param_infos) == len(p._param_numels)
+
                     numel_per_shard = p.numel()
                     offset = -numel_per_shard * self.rank
                     for i in range(len(p._param_infos)):
                         _, m, n = p._param_infos[i]
-                        numel = p._param_numels[i]
-                        if offset + numel <= 0 or offset >= numel_per_shard:
-                            offset += numel
-                            continue
                         assert _is_te_module_with_weights(m)
-                        fp8_dtype_forward = te.fp8.get_fp8_te_dtype(
-                            m.fp8_meta["recipe"], fprop_tensor=True
-                        )
+
                         if not m.fp8_initialized:
                             m.fp8_init(
                                 num_gemms=2 if isinstance(m, te.LayerNormMLP) else 1
                             )
+
+                        if self.is_full_params_first_rebuilt:
+                            if m.fp8_meta.get("update_amax_and_scale_fwd", False):
+                                if m.fp8_meta["recipe"].reduce_amax:
+                                    FP8GlobalStateManager.copy_amax_from_global_buffer(
+                                        m.fp8_meta, forward=True
+                                    )
+                                    amax_and_scale_update(
+                                        m.fp8_meta,
+                                        True,
+                                        update_weight_scale_inv=True,
+                                    )
+                                    if not_from_recursive:
+                                        FP8GlobalStateManager.set_amax_buffer_key_deletion(
+                                            m.fp8_meta, forward=True
+                                        )
+                                else:
+                                    amax_and_scale_update(
+                                        m.fp8_meta,
+                                        True,
+                                        update_weight_scale_inv=True,
+                                    )
+
+                        numel = p._param_numels[i]
+                        if offset + numel <= 0 or offset >= numel_per_shard:
+                            offset += numel
+                            continue
+
+                        fp8_dtype_forward = te.fp8.get_fp8_te_dtype(
+                            m.fp8_meta["recipe"], fprop_tensor=True
+                        )
                         begin = max(offset, 0)
                         end = min(offset + numel, numel_per_shard)
                         cast_to_fp8(
@@ -2570,7 +2565,8 @@ class FullyShardedDataParallel(nn.Module):
                         p._fp32_shard.to(p._fp16_shard.device, non_blocking=True)
                     )
                     p.data = p._fp16_shard
-        torch.cuda.current_stream().wait_stream(self._streams["fp32_to_fp16"])
+
+        self._streams["all_gather"].wait_stream(self._streams["fp32_to_fp16"])
 
     @torch.no_grad()
     def _free_fp16_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
