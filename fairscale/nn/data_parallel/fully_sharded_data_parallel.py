@@ -267,6 +267,9 @@ class FullyShardedDataParallel(nn.Module):
         fp32_reduce_scatter (bool, Optional):
             if ``True``, then reduce-scatter gradients in FP32. This is only
             relevant when *``mixed_precision``* is ``True``.
+        fp8_all_gather (bool, Optional):
+            if ``True``, then all-gather weights/gradients in FP8. This is only
+            relevant when *``mixed_precision``* is ``True``.
         flatten_parameters (bool, Optional):
             if ``True``, flatten parameters into a single contiguous tensor,
             which improves training speed.
@@ -362,6 +365,7 @@ class FullyShardedDataParallel(nn.Module):
         disable_reshard_on_root: bool = True,
         mixed_precision: bool = False,
         fp32_reduce_scatter: bool = False,
+        fp8_all_gather: bool = False,
         flatten_parameters: bool = True,
         move_params_to_cpu: bool = False,
         compute_dtype: Optional[torch.dtype] = None,
@@ -381,7 +385,6 @@ class FullyShardedDataParallel(nn.Module):
         limit_all_gather_events: bool = False,
         limit_reduce_scatter_events: bool = False,
         should_validate_process_group: bool = True,
-        fp8_allgather: bool = False,
     ):
         try:
             import torch._C
@@ -433,6 +436,7 @@ class FullyShardedDataParallel(nn.Module):
         self.disable_reshard_on_root = disable_reshard_on_root
         self.mixed_precision = mixed_precision
         self.fp32_reduce_scatter = fp32_reduce_scatter
+        self.fp8_all_gather = fp8_all_gather
         self.flatten_parameters = flatten_parameters
         self.move_params_to_cpu = move_params_to_cpu or cpu_offload
         self.compute_dtype = compute_dtype or (torch.float16 if mixed_precision else torch.float32)
@@ -447,7 +451,6 @@ class FullyShardedDataParallel(nn.Module):
         self.force_input_to_fp32 = force_input_to_fp32
         self.verbose = verbose
         self.state_dict_on_rank_0_only = state_dict_on_rank_0_only
-        self.fp8_allgather = fp8_allgather
         # Experimental feature for now. Use at your own risk.
         self.ssd_offload = True if offload_config and offload_config.offload_type == "ssd_offload" else False
 
@@ -585,6 +588,7 @@ class FullyShardedDataParallel(nn.Module):
         self.dont_wait_current_stream_for_post_all_gather = False
         self._all_gather_free_event_queue = _FreeEventQueue() if limit_all_gather_events else None
         self._reduce_scatter_free_event_queue = _FreeEventQueue() if limit_reduce_scatter_events else None
+        self.is_full_params_first_rebuilt = True
 
     @property
     def _is_fp8_compute(self) -> bool:
@@ -1281,9 +1285,8 @@ class FullyShardedDataParallel(nn.Module):
         Returns:
             The dtype to use for the sharded parameters.
         """
-        if self._is_fp8_compute and not isinstance(p, FlatParameter):
-            # Assume non flattened are precision critical like norm
-            assert not p._is_sharded
+        if self._is_fp8_compute and (not self.fp8_all_gather or
+                                     not isinstance(p, FlatParameter)):
             return torch.bfloat16
         else:
             return self.compute_dtype
@@ -1300,13 +1303,13 @@ class FullyShardedDataParallel(nn.Module):
             ``_orig_size``: the size of the original Parameter (before sharding)
 
         The remaining attributes are set here:
-            ``_fp32_shard``: a single shard of the parameters in full precision
-                (typically FP32, but this is dependent on the dtype of the model
-                as it's passed in by the user). This can be on CPU or GPU
+            ``_fp32_shard``: This will be a single shard of the parameters in
+                full precision (typically FP32, but this is dependent on the dtype of
+                the model as it's passed in by the user). This can be on CPU or GPU
                 depending on the value of *``move_params_to_cpu``*.
-            ``_fp16_shard``: This will be a single shard of the parameters in FP16, used for all-gather.
-                This can be in FP16 or FP32 depending on the value of *``compute_dtype``* and
-                if params are offloaded to CPU.
+            ``_fp16_shard``: This will be a single shard of the parameters
+                used for all-gather. This can be in FP8, FP16 or FP32 depending on the value
+                of *``compute_dtype``*, *``fp8_all_gather``*, *``move_params_to_cpu``*..
             ``_full_param_padded``: the full weight (padded to be evenly
                 divisible by ``world_size``), used for computation in the
                 forward and backward pass. This will be resized in place and
@@ -1326,6 +1329,7 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.mixed_precision:
             assert p._fp32_shard.dtype == torch.float32
+
         if self.move_params_to_cpu:
             assert p._fp32_shard.device == torch.device("cpu")
 
@@ -1339,7 +1343,6 @@ class FullyShardedDataParallel(nn.Module):
                 p.data = p._fp32_shard
 
         if self.move_params_to_cpu or self.mixed_precision:
-
             # In mixed precision mode, we maintain a reduced precision
             # (typically FP16) parameter shard on compute_device for performing
             # the computation in the forward/backward pass. We resize the
@@ -1350,11 +1353,7 @@ class FullyShardedDataParallel(nn.Module):
                 p._fp32_shard, device=self.compute_device, dtype=self._param_dtype(p)
             )
             free_storage_(p._fp16_shard)
-
-        if self.mixed_precision:
-            assert p._fp32_shard.dtype == torch.float32
-
-        if not self.mixed_precision and not self.move_params_to_cpu:
+        else:
             # use _fp32_shard if you are not in using mixed precision or
             # offloading params and grads to CPU.
             p._fp16_shard = None
@@ -1435,8 +1434,8 @@ class FullyShardedDataParallel(nn.Module):
             return
 
         if torch.cuda.is_available():
-            # Stream to move main FP32 params (may be on CPU) to FP16 for forward.
-            self._streams["fp32_to_fp16"] = torch.cuda.Stream()
+            # Stream to move main FP32 params (may be on CPU) to FP32/FP16/FP8 for forward.
+            self._streams["cast_param"] = torch.cuda.Stream()
             # Stream for all-gathering parameters.
             self._streams["all_gather"] = torch.cuda.Stream()
             # Stream for overlapping grad reduction with the backward pass.
@@ -1472,7 +1471,7 @@ class FullyShardedDataParallel(nn.Module):
         if not torch.cuda.is_available():
             return
         if self.mixed_precision or self.move_params_to_cpu:
-            self._streams["fp32_to_fp16"].wait_stream(torch.cuda.current_stream())
+            self._streams["cast_param"].wait_stream(torch.cuda.current_stream())
         else:
             self._streams["all_gather"].wait_stream(torch.cuda.current_stream())
 
@@ -1802,7 +1801,7 @@ class FullyShardedDataParallel(nn.Module):
             # Free full params.
             self._free_full_params([param])
 
-        if self.mixed_precision and (self._require_backward_grad_sync or self.reshard_after_forward) and not self.fp8_allgather:
+        if self.mixed_precision and (self._require_backward_grad_sync or self.reshard_after_forward) and not self.fp8_all_gather:
             # This is a no-op if reshard_after_forward is True, since we already
             # free the param shard when rebuilding the full params in the
             # pre_backward_hook.
@@ -1819,7 +1818,7 @@ class FullyShardedDataParallel(nn.Module):
                 if getattr(param, "unsharded_main_grad", None) is None:
                     param.unsharded_main_grad = param.grad.to(torch.float32)
                 else:
-                    param.unsharded_main_grad.add_(param.grad.to(torch.float32))
+                    param.unsharded_main_grad.data.add_(param.grad.to(torch.float32))
                 # Resets `param.grad` to avoid PyTorch accumulation.
                 param.grad = None
 
@@ -1874,7 +1873,7 @@ class FullyShardedDataParallel(nn.Module):
                     callback_fn=callback_fn,
                 )
             else:
-                # Unsharded parameters only happens for word_size == 1 or fp8_allgather
+                # Unsharded parameters only happens for word_size == 1 or fp8_all_gather
                 assert self.world_size == 1 or (self._is_fp8_compute and not isinstance(param, FlatParameter))
                 if self.world_size > 1:
                     torch.distributed.all_reduce(
@@ -1888,9 +1887,7 @@ class FullyShardedDataParallel(nn.Module):
             # further reuse by the main stream while the div/reduce_scatter/copy
             # are underway in the post_backward stream. See:
             # github.com/NVIDIA/apex/blob/master/apex/parallel/distributed.py
-            for g in (grad, main_grad, unsharded_main_grad):
-                if g is not None:
-                    g.data.record_stream(self._streams["post_backward"])
+            to_reduce_grad.data.record_stream(self._streams["post_backward"])
 
             if self._reduce_scatter_free_event_queue is not None:
                 release_full_grad_event = torch.cuda.Event()
@@ -1903,7 +1900,7 @@ class FullyShardedDataParallel(nn.Module):
         assert torch.cuda.current_stream() == self._streams["post_backward"]
         self.assert_state(TrainingState.BACKWARD_POST)
 
-        assert not (self.fp32_reduce_scatter and reduced_grad.dtype != param.dtype)
+        # assert not (self.fp32_reduce_scatter and reduced_grad.dtype != param.dtype)
 
         if self.gradient_postdivide_factor > 1:
             # Average grad by world_size for consistency with PyTorch DDP.
@@ -1917,12 +1914,14 @@ class FullyShardedDataParallel(nn.Module):
                 assert (
                     param._saved_grad_shard.shape == reduced_grad.shape
                 ), f"{param._saved_grad_shard.shape} vs {reduced_grad.shape}"
-                param._saved_grad_shard.data += reduced_grad.data
+                param._saved_grad_shard.data.add_(reduced_grad.data)
             reduced_grad = param._saved_grad_shard.data
 
         elif param.grad is None:
             if self.fp32_reduce_scatter:
                 param.main_grad = reduced_grad.data
+            else:
+                param.grad = reduced_grad.data
 
         # Optionally move gradients to CPU, typically used if one is running the optimizer on the CPU. Once the full
         # backwards pass completes, we will set `.grad` to the CPU copy.
@@ -2202,7 +2201,7 @@ class FullyShardedDataParallel(nn.Module):
             if (
                 self.mixed_precision or self.move_params_to_cpu
             ) and not force_full_precision:
-                self._cast_fp32_param_shards_to_fp16(not_from_recursive=not_from_recursive)
+                self._cast_params_for_all_gather(not_from_recursive=not_from_recursive)
 
             if self.move_params_to_cpu:
                 if force_full_precision:
@@ -2210,7 +2209,7 @@ class FullyShardedDataParallel(nn.Module):
                     # use pinned memory. Otherwise move p.data to the compute
                     # device.
                     if self.params[0].dtype == self.compute_dtype:
-                        self._cast_fp32_param_shards_to_fp16(not_from_recursive=not_from_recursive)
+                        self._cast_params_for_all_gather(not_from_recursive=not_from_recursive)
                     else:
                         for p in self.params:
                             p.data = p.data.to(self.compute_device)
@@ -2481,7 +2480,7 @@ class FullyShardedDataParallel(nn.Module):
             p.data = p._fp32_shard
 
     @torch.no_grad()
-    def _cast_fp32_param_shards_to_fp16(
+    def _cast_params_for_all_gather(
         self, params: Optional[List[Parameter]] = None,
         not_from_recursive: bool = False,
     ) -> None:
@@ -2489,7 +2488,7 @@ class FullyShardedDataParallel(nn.Module):
         if params is None:
             params = self.params
 
-        with torch.cuda.stream(self._streams["fp32_to_fp16"]):
+        with torch.cuda.stream(self._streams["cast_param"]):
             for p in params:
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
@@ -2566,7 +2565,7 @@ class FullyShardedDataParallel(nn.Module):
                     )
                     p.data = p._fp16_shard
 
-        self._streams["all_gather"].wait_stream(self._streams["fp32_to_fp16"])
+        self._streams["all_gather"].wait_stream(self._streams["cast_param"])
 
     @torch.no_grad()
     def _free_fp16_param_shard(self, params: Optional[List[Parameter]] = None) -> None:
@@ -2576,7 +2575,7 @@ class FullyShardedDataParallel(nn.Module):
         current_stream = torch.cuda.current_stream()
         for p in params:
             if p._fp16_shard is not None:
-                # _fp16_shard is allocated in "fp32_to_fp16" stream, so we can't
+                # _fp16_shard is allocated in "cast_param" stream, so we can't
                 # free it until the work in the current stream completes.
                 p._fp16_shard.record_stream(current_stream)
                 free_storage_(p._fp16_shard)
