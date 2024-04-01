@@ -281,7 +281,7 @@ class ColumnParallelLinear(torch.nn.Module):
         )
 
     def get_master_weight(self) -> torch.Tensor:
-        return gather_from_model_parallel_region(self.weight.data.transpose(0, 1)).transpose_(0, 1)
+        return gather_from_model_parallel_region(self.weight.data.transpose(0, 1).contiguous()).transpose_(0, 1)
 
     def forward(self, input_: torch.Tensor) -> torch.Tensor:  # type: ignore
         # Set up backprop all-reduce.
