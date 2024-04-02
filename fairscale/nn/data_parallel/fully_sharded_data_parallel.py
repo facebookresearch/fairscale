@@ -505,26 +505,27 @@ class FullyShardedDataParallel(nn.Module):
 
         # For now, it is either all flatten or none flatten. This will be extended to
         # multiple flatten groups in my next PR.
-        to_be_flatten_params: List[List[Parameter]] = [[]]
-        non_flatten_params = params
-        param_name_groups = [[n] for n in param_names]
-        if self.flatten_parameters:
-            to_be_flatten_params = [
-                [
-                    params[i]
-                    for i in range(len(params))
-                    if "norm_weight" not in param_names[i]
-                ]
-            ]
-            non_flatten_params = [
-                params[i]
-                for i in range(len(params))
-                if "norm_weight" in param_names[i]
-            ]
-            param_name_groups = [
-                [n for n in param_names if "norm_weight" not in n],
-                [n for n in param_names if "norm_weight" in n],
-            ]
+        def should_flatten(name: str) -> bool:
+            # `*_norm_weights` are numerics-sensitive and cannot be quantized to fp8.
+            return self.flatten_parameters and (not self.fp8_all_gather or "norm_weight" not in name)
+
+        to_be_flatten_params: List[List[Parameter]] = [
+            param
+            for param, name in zip(params, param_names)
+            if should_flatten(name)
+        ]
+        if to_be_flatten_params:
+            to_be_flatten_params = [to_be_flatten_params]
+        non_flatten_params: List[List[Parameter]] = [
+            param
+            for param, name in zip(params, param_names)
+            if not should_flatten(name)
+        ]
+        param_name_groups: List[List[str]] = [
+            [n for n in param_names if should_flatten(n)]
+        ] + [
+            [n] for n in param_names if not should_flatten(n)
+        ]
         del param_names
 
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
@@ -1769,7 +1770,6 @@ class FullyShardedDataParallel(nn.Module):
         self.assert_state([TrainingState.BACKWARD_PRE, TrainingState.BACKWARD_POST])
         self.training_state = TrainingState.BACKWARD_POST
 
-
         if hasattr(param, "_linked_param"):
             # This links to a shared param. We should finalize the linked param here.
             assert param.shape == (1,), param.shape
@@ -1780,11 +1780,13 @@ class FullyShardedDataParallel(nn.Module):
             if hasattr(param._linked_param, "_is_shared") and param._linked_param._is_shared:
                 param = param._linked_param
 
-        # Prefer to use `param.main_grad` with higher precision in reduction than
-        # `param.grad` with equal or lower precision.
         grad = param.grad
         main_grad = getattr(param, "main_grad", None)
-        to_reduce_grad = main_grad if (main_grad is not None and not param.main_grad.eq(0.0).all()) else grad
+        # Only one of `grad` or `main_grad` can exists. Whenever `main_grad is used for accumulation,
+        # grad should be set as `None`.
+        assert not (grad is not None and main_grad is not None)
+        # Use `grad` or `main_grad` that is not None and avoid invoking a kernel to check all zeros.
+        to_reduce_grad = grad if grad is not None else main_grad
 
         if to_reduce_grad is None:
             return
@@ -1870,8 +1872,8 @@ class FullyShardedDataParallel(nn.Module):
                     callback_fn=callback_fn,
                 )
             else:
-                # Unsharded parameters only happens for word_size == 1 or fp8_all_gather
-                assert self.world_size == 1 or (self._is_fp8_compute and not isinstance(param, FlatParameter))
+                # Unsharded parameters only happens for word_size == 1 or self.fp8_all_gather
+                assert self.world_size == 1 or (self._is_fp8_compute and self.fp8_all_gather and not isinstance(param, FlatParameter))
                 if self.world_size > 1:
                     torch.distributed.all_reduce(
                         to_reduce_grad,
@@ -2290,9 +2292,10 @@ class FullyShardedDataParallel(nn.Module):
         right shape, device, accumulated values, etc.
         """
         for p in self.params:
-            if isinstance(p, FlatParameter) and all(
-                _is_te_module_with_weights(info[1]) for info in p._param_infos
-            ):
+            fused_wgard_accumulation = (self.fp8_all_gather
+                and isinstance(p, FlatParameter)
+                and all(_is_te_module_with_weights(info[1]) for info in p._param_infos))
+            if fused_wgard_accumulation:
                 if getattr(p, "main_grad", None) is None:
                     p.main_grad = torch.empty_like(p, dtype=torch.float32)
                 main_grad_views = p.get_param_views(p.main_grad)
@@ -2367,9 +2370,7 @@ class FullyShardedDataParallel(nn.Module):
                         backing_param_name = m.module.flat_param_names[i]
                         names, shapes, numels = m.module.metadata(i)
                     else:
-                        backing_param_name = m._param_name_groups[
-                            m._num_flatten_params
-                        ][i - m._num_flatten_params]
+                        backing_param_name = m._param_name_groups[i][0]
                         names = [backing_param_name]
                         shapes = [p._orig_size]
                         numels = [p._orig_size.numel()]
