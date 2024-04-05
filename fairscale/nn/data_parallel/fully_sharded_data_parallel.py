@@ -370,6 +370,7 @@ class FullyShardedDataParallel(nn.Module):
         gradient_predivide_factor: Optional[float] = None,
         limit_all_gather_events: bool = False,
         limit_reduce_scatter_events: bool = False,
+        cast_input: bool = True,
     ):
         try:
             import torch._C
@@ -420,6 +421,7 @@ class FullyShardedDataParallel(nn.Module):
         self.reshard_after_forward = self._orig_reshard_after_forward = reshard_after_forward
         self.disable_reshard_on_root = disable_reshard_on_root
         self.mixed_precision = mixed_precision
+        self.cast_input = cast_input
         self.fp32_reduce_scatter = fp32_reduce_scatter
         self.flatten_parameters = flatten_parameters
         self.move_params_to_cpu = move_params_to_cpu or cpu_offload
@@ -1431,7 +1433,7 @@ class FullyShardedDataParallel(nn.Module):
         # For root and mixed precision, we convert the input to FP16 (no_grad is needed for
         # the conversion).
         is_bf16 = self.compute_dtype == torch.bfloat16
-        if self._is_root and self.mixed_precision:
+        if self._is_root and self.mixed_precision and self.cast_input:
             args, kwargs = cast_floats_to_right_precision(True, True, is_bf16, *args, **kwargs)
 
         if self not in self._fsdp_forward_ordering:
