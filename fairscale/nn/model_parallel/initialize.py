@@ -159,6 +159,12 @@ def get_context_parallel_group() -> torch.distributed.ProcessGroup:
     return _CONTEXT_PARALLEL_GROUP
 
 
+def get_context_parallel_ranks() -> List[int]:
+    """Return context parallel ranks for the context parallel group."""
+    assert _CONTEXT_PARALLEL_GROUP_RANKS is not None, "context parallel group is not initialized"
+    return _CONTEXT_PARALLEL_GROUP_RANKS
+
+
 def get_context_parallel_world_size() -> int:
     """Return world size for the context parallel group."""
     return torch.distributed.get_world_size(group=get_context_parallel_group())
