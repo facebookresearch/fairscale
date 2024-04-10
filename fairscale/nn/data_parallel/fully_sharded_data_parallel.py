@@ -440,7 +440,7 @@ class FullyShardedDataParallel(nn.Module):
         self.flatten_parameters = flatten_parameters
         self.move_params_to_cpu = move_params_to_cpu or cpu_offload
         self.compute_dtype = compute_dtype or (torch.float16 if mixed_precision else torch.float32)
-        self.buffer_dtype = buffer_dtype or self.compute_dtype
+        self.buffer_dtype = buffer_dtype or (torch.bfloat16 if _is_fp8_dtype(self.compute_dtype) else self.compute_dtype)
         self.move_grads_to_cpu = self.move_params_to_cpu if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
         self.compute_device = compute_device or _get_default_cuda_device(module)
@@ -2517,7 +2517,6 @@ class FullyShardedDataParallel(nn.Module):
 
                         if m.fp8_meta.get("update_amax_and_scale_fwd", False):
                             if m.fp8_meta["recipe"].reduce_amax:
-                                logging.warning(f"Reduce amax! {is_first_microbatch_fwd}")
                                 FP8GlobalStateManager.copy_amax_from_global_buffer(
                                     m.fp8_meta, forward=True
                                 )
@@ -2530,7 +2529,6 @@ class FullyShardedDataParallel(nn.Module):
                                     m.fp8_meta, forward=True
                                 )
                             else:
-                                logging.warning("Not reduce amax! {is_first_microbatch_fwd}")
                                 amax_and_scale_update(
                                     m.fp8_meta,
                                     True,
@@ -2555,28 +2553,38 @@ class FullyShardedDataParallel(nn.Module):
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
 
                 if self.fp8_compute and _is_fp8_dtype(p._fp16_shard.dtype):
+                    assert p._is_sharded
                     assert isinstance(p, FlatParameter), "FP8 parameters should be all flatten"
                     assert len(p._param_infos) == len(p._param_numels)
 
                     numel_per_shard = p.numel()
-                    offset = -numel_per_shard * self.rank
+
+                    flat_index = 0
+                    flat_begin = numel_per_shard * self.rank
+                    flat_end = flat_begin + numel_per_shard
+
                     for i in range(len(p._param_infos)):
                         _, m, n = p._param_infos[i]
+
                         assert _is_te_module_with_weights(m), "Modules with FP8 parameters shoule be TE modules"
                         assert m.fp8_initialized, "Modules with FP8 parameters should be initialized with scales"
 
                         numel = p._param_numels[i]
-                        if offset + numel <= 0 or offset >= numel_per_shard:
-                            offset += numel
+
+                        if flat_index >= flat_end:
+                            break
+                        shard_begin = max(flat_index - flat_begin, 0)
+
+                        flat_index += numel
+                        if flat_index <= flat_begin:
                             continue
+                        shard_end = min(flat_index - flat_begin, numel_per_shard)
 
                         fp8_dtype_forward = te.fp8.get_fp8_te_dtype(
                             m.fp8_meta["recipe"], fprop_tensor=True
                         )
-                        begin = max(offset, 0)
-                        end = min(offset + numel, numel_per_shard)
                         cast_to_fp8(
-                            p._fp32_shard[begin:end].bfloat16(),
+                            p._fp32_shard[shard_begin:shard_end].bfloat16().contiguous(),
                             m.fp8_meta["scaling_fwd"],
                             (
                                 FP8FwdTensors.GEMM2_WEIGHT
@@ -2584,9 +2592,9 @@ class FullyShardedDataParallel(nn.Module):
                                 else FP8FwdTensors.GEMM1_WEIGHT
                             ),
                             fp8_dtype_forward,
-                            out=p._fp16_shard[begin:end],
+                            out=p._fp16_shard[shard_begin:shard_end],
                         )
-                        offset += numel
+                    # Doesn't need to set padding elements.
                     p.data = p._fp16_shard.view(
                             torch.float8_e4m3fn
                             if fp8_dtype_forward == DType.kFloat8E4M3
