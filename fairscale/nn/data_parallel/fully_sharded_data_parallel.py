@@ -487,10 +487,21 @@ class FullyShardedDataParallel(nn.Module):
         to_be_flatten_params: List[List[Parameter]] = [[]]
         non_flatten_params = params
         param_name_groups = [[n] for n in param_names]
+ 
         if self.flatten_parameters:
-            to_be_flatten_params = [params]
-            non_flatten_params = []
-            param_name_groups = [param_names]
+            if isinstance(module, nn.ModuleList):
+                to_be_flatten_params = [[] for _ in len(module)]
+                non_flatten_params = []
+                param_name_groups = [[] for _ in len(module)]
+                for i, m in enumerate(module):
+                    for param_name, param in module.named_parameters():
+                        if not hasattr(param, "_is_sharded"):
+                            to_be_flatten_params[i].append(param)
+                            param_name_groups[i].append(param_name)
+            else:
+                to_be_flatten_params = [params]
+                non_flatten_params = []
+                param_name_groups = [param_names]
         del param_names
 
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
@@ -1443,16 +1454,18 @@ class FullyShardedDataParallel(nn.Module):
         if self.force_input_to_fp32 and not self.mixed_precision:
             args, kwargs = cast_floats_to_right_precision(False, False, is_bf16, *args, **kwargs)
 
+        rebuilt_module_id = kwargs.get("mlp_id", None)
         # All-gather full parameters. This will also transfer FP32 parameters to
         # ``self.compute_dtype`` (e.g., FP16 if *mixed_precision* is ``True``).
-        self._rebuild_full_params()
+        self._rebuild_full_params(rebuild_module_id=rebuild_module_id)
 
         if (
             self._fsdp_forward_ordering is not None
             and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx < len(self._fsdp_forward_ordering) - 1
         ):
             self._fsdp_forward_ordering[self._my_fsdp_instance_idx + 1]._rebuild_full_params(
-                wait_for_all_gather=False
+                wait_for_all_gather=False,
+                rebuild_module_id=rebuild_module_id,
             )
 
         # Register backward hooks to reshard params and reduce-scatter grads.
@@ -1481,7 +1494,7 @@ class FullyShardedDataParallel(nn.Module):
         # pre-backward hook on every output since the last output's hook has to
         # fire first to setup for backward. However, we use ``self._pre_backward_hook_has_run``
         # to prevent repeated overhead from multiple hook callbacks.
-        outputs = self._register_pre_backward_hooks(outputs)
+        outputs = self._register_pre_backward_hooks(outputs, rebuild_module_id=rebuild_module_id)
 
         # Done with a forward pass.
         self.training_state = TrainingState.IDLE
@@ -1503,7 +1516,7 @@ class FullyShardedDataParallel(nn.Module):
                 assert isinstance(p, SsdFlatParameter)
                 p.to_file(permit_when_tensor_none=True)
 
-    def _register_pre_backward_hooks(self, outputs: Any) -> Any:
+    def _register_pre_backward_hooks(self, outputs: Any, rebuild_module_id: Optional[int] = None) -> Any:
         """Register pre-backward hook to run before the wrapped module's
         backward. Hooks should be attached to all outputs from the forward.
 
@@ -1542,13 +1555,13 @@ class FullyShardedDataParallel(nn.Module):
             # idempotent.  So in case they are called unnecessarily, they don't incur much
             # overhead.
             if self.reshard_after_forward:
-                self._rebuild_full_params()
+                self._rebuild_full_params(rebuild_module_id=rebuild_module_id)
                 if (
                     self.reshard_after_forward
                     and self._fsdp_forward_ordering is not None
                     and self._my_fsdp_instance_idx is not None and self._my_fsdp_instance_idx > 0
                 ):
-                    self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params(wait_for_all_gather=False)
+                    self._fsdp_forward_ordering[self._my_fsdp_instance_idx - 1]._rebuild_full_params(wait_for_all_gather=False, rebuild_module_id=rebuild_module_id)
             else:
                 self._use_full_params()
 
@@ -1980,7 +1993,7 @@ class FullyShardedDataParallel(nn.Module):
 
 
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False, wait_for_all_gather = True) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(self, force_full_precision: bool = False, wait_for_all_gather = True, rebuild_module_id: Optional[int] = None) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -2080,10 +2093,13 @@ class FullyShardedDataParallel(nn.Module):
                         for p in self.params:
                             p.data = p.data.to(self.compute_device)
 
-            for p in self.params:
+            for i, p in enumerate(self.params):
                 if not p._is_sharded:  # e.g., when world_size == 1
                     update_p_data()
                 else:
+                    # Don't rebuild the module as it is not selected.
+                    if rebuild_module_id is not None and rebuild_module_id != i:
+                        continue
                     # Skip if already built. Only shared param can be rebuilt multiple times.
                     # A corner case is p._orig_size = (1,), which means the shape equality is
                     # not a perfect check. But we assume we don't share a param with shape (1,).
