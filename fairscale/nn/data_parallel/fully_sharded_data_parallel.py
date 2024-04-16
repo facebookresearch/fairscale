@@ -443,8 +443,8 @@ class FullyShardedDataParallel(nn.Module):
         self.fp8_all_gather = fp8_all_gather
         self.flatten_parameters = flatten_parameters
         self.move_params_to_cpu = move_params_to_cpu or cpu_offload
-        self.compute_dtype = compute_dtype or (torch.float16 if mixed_precision else torch.float32)
-        self.buffer_dtype = buffer_dtype or (torch.bfloat16 if _is_fp8_dtype(self.compute_dtype) else self.compute_dtype)
+        self.compute_dtype = compute_dtype or (torch.bfloat16 if mixed_precision else torch.float32)
+        self.buffer_dtype = buffer_dtype or self.compute_dtype
         self.move_grads_to_cpu = self.move_params_to_cpu if move_grads_to_cpu is None else move_grads_to_cpu
         self.bucket_cap_mb = bucket_cap_mb
         self.compute_device = compute_device or _get_default_cuda_device(module)
@@ -489,6 +489,11 @@ class FullyShardedDataParallel(nn.Module):
                 param_names.append(param_name)
                 params.append(param)
 
+        for m in module.modules():
+            for param in m.parameters():
+                if not getattr(param, "_is_te_param", False):
+                    param._is_te_param = _is_te_module_with_weights(m)
+
         self._has_params = len(params) > 0
         self._has_shared_params = False
 
@@ -505,33 +510,43 @@ class FullyShardedDataParallel(nn.Module):
 
         # For now, it is either all flatten or none flatten. This will be extended to
         # multiple flatten groups in my next PR.
-        def should_flatten(name: str) -> bool:
+        no_te_params = not any(p._is_te_param for p in params)
+        def should_flatten(name: str, param: Parameter) -> bool:
+            if not self.flatten_parameters:
+                return False
+            # If no TE weights or no FP8 AllGather, then flatten them all. Shard as compute dtype.
+            if no_te_params or not self.fp8_all_gather:
+                return True
             # `*_norm_weights` are numerics-sensitive and cannot be quantized to fp8.
-            return self.flatten_parameters and (not self.fp8_all_gather or "norm_weight" not in name)
+            return  param._is_te_param and "norm_weight" not in name
 
-        to_be_flatten_params: List[List[Parameter]] = [
-            param
-            for param, name in zip(params, param_names)
-            if should_flatten(name)
-        ]
+        to_be_flatten_param_names = []
+        to_be_flatten_params = []
+        non_flatten_param_names = []
+        non_flatten_params = []
+        for name, param in zip(param_names, params):
+            if should_flatten(name, param):
+                to_be_flatten_param_names.append(name)
+                to_be_flatten_params.append(param)
+            else:
+                non_flatten_param_names.append(name)
+                non_flatten_params.append(param)
+
         if to_be_flatten_params:
             to_be_flatten_params = [to_be_flatten_params]
-        non_flatten_params: List[List[Parameter]] = [
-            param
-            for param, name in zip(params, param_names)
-            if not should_flatten(name)
-        ]
-        param_name_groups: List[List[str]] = [
-            [n for n in param_names if should_flatten(n)]
-        ] + [
-            [n] for n in param_names if not should_flatten(n)
-        ]
+
+        param_name_groups: List[List[str]] = [to_be_flatten_param_names] + [[n] for n in non_flatten_param_names]
+
+        logging.info(f"param_names: {param_name_groups}")
         del param_names
 
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
             module, param_list=to_be_flatten_params, ssd_offload=self.ssd_offload, ssd_directory=self.ssd_directory
         )
         del module  # free original module in case it helps garbage collection
+
+        for param in self._fsdp_wrapped_module.flat_params:
+            param._is_fp8_param = not no_te_params and self.fp8_all_gather
 
         # Now, in this FSDP wrapper class, we keep a list of to-be-flatten and not-to-be-flatten
         # params for doing sharding, gradient hooks, etc. Note, the ordering of the
@@ -593,10 +608,6 @@ class FullyShardedDataParallel(nn.Module):
         self.dont_wait_current_stream_for_post_all_gather = False
         self._all_gather_free_event_queue = _FreeEventQueue() if limit_all_gather_events else None
         self._reduce_scatter_free_event_queue = _FreeEventQueue() if limit_reduce_scatter_events else None
-
-    @property
-    def fp8_compute(self) -> bool:
-        return _is_fp8_dtype(self.compute_dtype)
 
     def _get_gradient_predivide_factor(self, world_size: int) -> float:
         factor: int = 1
@@ -830,9 +841,7 @@ class FullyShardedDataParallel(nn.Module):
                 assert p.dtype == torch.float32
 
             # If world_size is 1, then we all-reduce grads instead of sharding.
-            p._is_sharded = (self.world_size > 1) and (
-                not self.fp8_compute or isinstance(p, FlatParameter)
-            )
+            p._is_sharded = (self.world_size > 1) and isinstance(p, FlatParameter)
             p._orig_size = p.data.size()
 
             if not p._is_sharded:
@@ -1289,11 +1298,9 @@ class FullyShardedDataParallel(nn.Module):
         Returns:
             The dtype to use for the sharded parameters.
         """
-        if self.fp8_compute and (not self.fp8_all_gather or
-                                 not isinstance(p, FlatParameter)):
-            return torch.bfloat16
-        else:
-            return self.compute_dtype
+        if getattr(p, "_is_fp8_param", False):
+            return torch.float8_e4m3fn
+        return self.compute_dtype
 
     @torch.no_grad()
     def _init_param_attributes(self, p: Parameter) -> None:
@@ -1482,7 +1489,7 @@ class FullyShardedDataParallel(nn.Module):
 
         # For root and mixed precision, we convert the input to FP16 (no_grad is needed for
         # the conversion).
-        is_bf16 = (self.compute_dtype == torch.bfloat16) or self.fp8_compute
+        is_bf16 = self.compute_dtype == torch.bfloat16
         if self._is_root and self.mixed_precision and self.cast_input:
             args, kwargs = cast_floats_to_right_precision(True, True, is_bf16, *args, **kwargs)
 
@@ -1514,7 +1521,6 @@ class FullyShardedDataParallel(nn.Module):
                 wait_for_all_gather=False,
                 is_first_microbatch_fwd=is_first_microbatch_fwd
             )
-
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
         self._register_post_backward_hooks()
@@ -1880,7 +1886,7 @@ class FullyShardedDataParallel(nn.Module):
                 )
             else:
                 # Unsharded parameters only happens for word_size == 1 or self.fp8_all_gather
-                assert self.world_size == 1 or (self.fp8_compute and self.fp8_all_gather and not isinstance(param, FlatParameter))
+                assert self.world_size == 1 or not isinstance(param, FlatParameter)
                 if self.world_size > 1:
                     torch.distributed.all_reduce(
                         to_reduce_grad,
@@ -2173,7 +2179,7 @@ class FullyShardedDataParallel(nn.Module):
 
             self.has_full_params = False
 
-        if self.fp8_compute and self.fp8_all_gather:
+        if self.fp8_all_gather:
             self._update_amax_and_scale_fwd(is_first_microbatch_fwd=is_first_microbatch_fwd)
 
         if self._has_shared_params:
@@ -2499,7 +2505,7 @@ class FullyShardedDataParallel(nn.Module):
 
         with torch.cuda.stream(self._streams["all_gather"]):
             for p in params:
-                if self.fp8_compute and _is_fp8_dtype(p._fp16_shard.dtype):
+                if _is_fp8_dtype(p._fp16_shard.dtype):
                     assert isinstance(p, FlatParameter)
                     assert len(p._param_infos) == len(p._param_numels)
 
@@ -2549,7 +2555,7 @@ class FullyShardedDataParallel(nn.Module):
                 assert p._fp16_shard is not None
                 alloc_storage_(p._fp16_shard, size=p._fp32_shard.size())
 
-                if self.fp8_compute and _is_fp8_dtype(p._fp16_shard.dtype):
+                if _is_fp8_dtype(p._fp16_shard.dtype):
                     assert p._is_sharded
                     assert isinstance(p, FlatParameter), "FP8 parameters should be all flatten"
                     assert len(p._param_infos) == len(p._param_numels)
@@ -2563,7 +2569,7 @@ class FullyShardedDataParallel(nn.Module):
                     for i in range(len(p._param_infos)):
                         _, m, n = p._param_infos[i]
 
-                        assert _is_te_module_with_weights(m), "Modules with FP8 parameters shoule be TE modules"
+                        assert _is_te_module_with_weights(m), f"Modules {m} with FP8 parameters shoule be TE modules"
                         assert m.fp8_initialized, "Modules with FP8 parameters should be initialized with scales"
 
                         numel = p._param_numels[i]
