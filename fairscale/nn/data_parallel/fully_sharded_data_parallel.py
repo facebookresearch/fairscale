@@ -511,7 +511,7 @@ class FullyShardedDataParallel(nn.Module):
             if not self.flatten_parameters:
                 return False
             # If no TE weights or no FP8 AllGather, then flatten them all. Shard as compute dtype.
-            if no_te_params or not self.fp8_all_gather:
+            if no_te_params: #or not self.fp8_all_gather:
                 return True
             # `*_norm_weights` are numerics-sensitive and cannot be quantized to fp8.
             return  param._is_te_param and "norm_weight" not in name
