@@ -389,9 +389,15 @@ class FlattenParamsWrapper(nn.Module):
         def _post_accumulation_hook(new_param_stop_grad, new_param):
             # TODO: make it only call backward() only for last microbatch (within FSDP no_sync)
             # if not mpu.get_data_parallel_no_sync():
-            logger.info(
-                f"CHRISLOG: _post_accumulation_hook() called {new_param=} {new_param_stop_grad=} {new_param_stop_grad.grad=}"
-            )
+            # logger.info(
+            #     f"CHRISLOG: _post_accumulation_hook() {new_param=}"
+            # )
+            # logger.info(
+            #     f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad=} "
+            # )
+            # logger.info(
+            #     f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.grad=}"
+            # )
             new_param.backward(gradient=new_param_stop_grad.grad)
 
         gens = []
