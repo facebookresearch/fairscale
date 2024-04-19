@@ -371,6 +371,7 @@ class FullyShardedDataParallel(nn.Module):
         limit_all_gather_events: bool = False,
         limit_reduce_scatter_events: bool = False,
         cast_input: bool = True,
+        process_group_pp_allreduce: Optional[ProcessGroup] = None,
     ):
         try:
             import torch._C
@@ -382,6 +383,7 @@ class FullyShardedDataParallel(nn.Module):
         init_start = time.time()
         super().__init__()
         self.process_group = process_group or get_process_group_cached()
+        self.process_group_pp_allreduce = process_group_pp_allreduce
         # If ProcessGroupName.default is passed in, the reduce_scatter will use the same process group with
         # the rest of operations. The overlap feature in the backward propagation is disabled.
         if process_group_reduce_scatter == ProcessGroupName.default:
@@ -1744,10 +1746,19 @@ class FullyShardedDataParallel(nn.Module):
         self._use_fp32_param_shard([param])
 
         if self.fp32_reduce_scatter:
-            if getattr(param, "unsharded_main_grad", None) is None:
-                param.unsharded_main_grad = param.grad.to(torch.float32)
+            if getattr(param, "require_pp_allreduce", None) is True:
+                grad_fp32 = param.grad.detach().to(torch.float32).contiguous()
+                torch.distributed.all_reduce(grad_fp32, group=self.process_group_pp_allreduce)
+                grad_fp32 = grad_fp32.bfloat16().contiguous().float().contiguous()
+                if getattr(param, "unsharded_main_grad", None) is None:
+                    param.unsharded_main_grad = grad_fp32
+                else:
+                    param.unsharded_main_grad.add_(grad_fp32)
             else:
-                param.unsharded_main_grad.add_(param.grad.data)
+                if getattr(param, "unsharded_main_grad", None) is None:
+                    param.unsharded_main_grad = param.grad.to(torch.float32)
+                else:
+                    param.unsharded_main_grad.add_(param.grad.data)
 
             param.grad = None
 
