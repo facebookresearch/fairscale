@@ -245,6 +245,8 @@ class FlattenParamsWrapper(nn.Module):
         # explicitly requests a flat state dict via flat_state_dict().
         self._auto_unflatten_state_dict = True
 
+        self._new_params = []
+
     @property
     def module(self) -> Any:
         """Support fpw.module in case we are immitating DDP, which has .module
@@ -386,9 +388,10 @@ class FlattenParamsWrapper(nn.Module):
         # Post accumulation hook so we can call backward() on original leaf params at last microbatch
         import functools
 
-        def _post_accumulation_hook(new_param_stop_grad, new_param):
+        def _post_accumulation_hook(new_param_stop_grad, new_params, index):
             # TODO: make it only call backward() only for last microbatch (within FSDP no_sync)
             # if not mpu.get_data_parallel_no_sync():
+            new_param = new_params[index]
             logger.info(
                 f"CHRISLOG: _post_accumulation_hook() {new_param=}"
             )
@@ -400,6 +403,7 @@ class FlattenParamsWrapper(nn.Module):
             )
             new_param.backward(gradient=new_param_stop_grad.grad)
 
+        self._new_params = []
         gens = []
         for p, data in zip(params, external_data_list):
             # Sanity check
@@ -417,6 +421,7 @@ class FlattenParamsWrapper(nn.Module):
             for t, s in zip(data.split(p._param_numels), p._param_shapes):
                 # Create unflattened view for the param.
                 new_param = t.view(s)
+                self._new_params.append(new_param)
                 # Create a new_param_stop_grad param via detaching original leaf params after .view()
                 # as the new leaf nodes so that autograd.backward() won't call
                 # grad_fn of view() (which will be cat())
@@ -426,7 +431,7 @@ class FlattenParamsWrapper(nn.Module):
                 # to propogate gradients to the original leaf params, e.g. after last_microbatch
                 # backward()
                 new_param_stop_grad.register_post_accumulate_grad_hook(
-                    functools.partial(_post_accumulation_hook, new_param=new_param)
+                    functools.partial(_post_accumulation_hook, new_params=self._new_params, index=len(self._new_params) - 1)
                 )
                 param_views_stop_grad.append(new_param_stop_grad)
 
