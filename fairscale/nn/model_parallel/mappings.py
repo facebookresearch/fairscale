@@ -77,12 +77,36 @@ def _gather(input_: torch.Tensor) -> torch.Tensor:
     rank = torch.distributed.get_rank(group=group)
     world_size = torch.distributed.get_world_size(group=group)
 
-    tensor_list = [torch.empty_like(input_) for _ in range(world_size)]
-    tensor_list[rank] = input_
-    torch.distributed.all_gather(tensor_list, input_, group=group)
+    if hasattr(torch.distributed, "all_gather_into_tensor"):
+        contiguous_input = input_.contiguous()
+        contiguous_input_size = contiguous_input.size()
+        contiguous_input_stride = contiguous_input.stride()
+        flat_input = contiguous_input.view(-1)
+        flat_output = flat_input.new_empty((world_size * flat_input.numel()))
+        torch.distributed.all_gather_into_tensor(
+            flat_output, flat_input, group=group
+        )
+        # Chunk into `world_size`-many chunks and view each chunk from 1D to ND
+        # using `torch.as_strided` to avoid extra view ops
+        output_chunks = []
+        flat_output_offset = 0
+        for i in range(world_size):
+            output_chunk = torch.as_strided(
+                flat_output,
+                contiguous_input_size,
+                contiguous_input_stride,
+                flat_output_offset,
+            )
+            output_chunks.append(output_chunk)
+            flat_output_offset += contiguous_input_size.numel()
+        output = torch.cat(output_chunks, dim=last_dim)
+    else:
+        tensor_list = [torch.empty_like(input_) for _ in range(world_size)]
+        tensor_list[rank] = input_
+        torch.distributed.all_gather(tensor_list, input_, group=group)
 
-    # Note: torch.cat already creates a contiguous tensor.
-    output = torch.cat(tensor_list, dim=last_dim).contiguous()
+        # Note: torch.cat already creates a contiguous tensor.
+        output = torch.cat(tensor_list, dim=last_dim).contiguous()
 
     return output
 
