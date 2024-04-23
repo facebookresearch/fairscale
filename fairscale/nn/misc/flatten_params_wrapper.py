@@ -393,18 +393,27 @@ class FlattenParamsWrapper(nn.Module):
             # if not mpu.get_data_parallel_no_sync():
             new_param = new_params[index]
             logger.info(
-                f"CHRISLOG: _post_accumulation_hook() {new_param=}"
+                f"CHRISLOG: _post_accumulation_hook() {index=} {new_param.size()=}"
+            )
+            # logger.info(
+            #     f"CHRISLOG: _post_accumulation_hook() {new_param=}"
+            # )
+            logger.info(
+                f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.size()=} "
             )
             logger.info(
-                f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad=} "
-            )
-            logger.info(
-                f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.grad=}"
+                f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.grad.size()=}"
             )
             new_param.backward(gradient=new_param_stop_grad.grad)
+            logger.info(
+                f"CHRISLOG: _post_accumulation_hook() backward() called on {index=} {new_param.size()=}"
+            )
 
         self._new_params = []
         gens = []
+        logger.info(
+            f"CHRISLOG: {len(params)=}"
+        )
         for p, data in zip(params, external_data_list):
             # Sanity check
             assert p.data.numel() <= sum(
@@ -425,7 +434,7 @@ class FlattenParamsWrapper(nn.Module):
                 # Create a new_param_stop_grad param via detaching original leaf params after .view()
                 # as the new leaf nodes so that autograd.backward() won't call
                 # grad_fn of view() (which will be cat())
-                new_param_stop_grad = new_param.detach().requires_grad_(True)
+                new_param_stop_grad = new_param.detach().clone().requires_grad_(True)
                 # Register post-accumulation hook to the new_param_stop_grad parameters so that
                 # we can still manually call backward() function
                 # to propogate gradients to the original leaf params, e.g. after last_microbatch
@@ -435,17 +444,22 @@ class FlattenParamsWrapper(nn.Module):
                 )
                 param_views_stop_grad.append(new_param_stop_grad)
 
+            logger.info(
+                f"CHRISLOG: appending {len(param_views_stop_grad)=}"
+            )
             gens.append(param_views_stop_grad)
         ps = chain(*gens)
 
+        param_index = 0
         # Set the param with unflattened view as the new attribute
         # under original param name
         param_views = []
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(p, "_fsdp_weight", True)
             setattr(m, n, p)  # This will set as plain attr
-            # logger.info(f"CHRISLOG: {n=} {p.is_leaf=}")
+            logger.info(f"CHRISLOG: {m.__class__.__module__=} {n=} {p.is_leaf=} {p.size()=} {param_index=}")
             param_views.append(p)
+            param_index += 1
 
         # Save param views for easy access if anyone still wants to access
         # parameters of the module.
