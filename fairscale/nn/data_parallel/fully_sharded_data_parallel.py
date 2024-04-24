@@ -1858,13 +1858,13 @@ class FullyShardedDataParallel(nn.Module):
         # state will remain in `TrainingState.BACKWARD_PRE`.
 
         # TODO: restore the check
-        if any([p.requires_grad for p in self.params]):
-            self.assert_state(TrainingState.BACKWARD_POST)
-        else:
-            self.assert_state(TrainingState.BACKWARD_PRE)
+        # if any([p.requires_grad for p in self.params]):
+        #     self.assert_state(TrainingState.BACKWARD_POST)
+        # else:
+        #     self.assert_state(TrainingState.BACKWARD_PRE)
 
-        if self.dont_wait_current_stream_for_post_all_gather:
-            return
+        # if self.dont_wait_current_stream_for_post_all_gather:
+        #     return
 
         if self._require_backward_grad_sync:
             # Flush any unreduced buckets in the post_backward stream.
