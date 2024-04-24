@@ -389,33 +389,30 @@ class FlattenParamsWrapper(nn.Module):
         # Post accumulation hook so we can call backward() on original leaf params at last microbatch
         import functools
 
-        def _post_accumulation_hook(new_param_stop_grad, new_params, index):
+        def _post_accumulation_hook(new_param_stop_grad, new_params, new_param_index):
             # TODO: make it only call backward() only for last microbatch (within FSDP no_sync)
             if self._require_backward_grad_sync:
-                new_param = new_params[index]
-                logger.info(
-                    f"CHRISLOG: _post_accumulation_hook() {self._require_backward_grad_sync=}, param {index=} {new_param.size()=}"
-                )
-                # logger.info(
-                #     f"CHRISLOG: _post_accumulation_hook() {new_param=}"
-                # )
-                logger.info(
-                    f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.size()=} "
-                )
-                logger.info(
-                    f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.grad.size()=}"
-                )
-                new_param.backward(gradient=new_param_stop_grad.grad)
-                logger.info(
-                    f"CHRISLOG: _post_accumulation_hook() backward() called on {index=} {new_param.size()=}"
-                )
+                new_params[new_param_index][1] = new_param_stop_grad.grad
+                if any([t[1] is None for t in new_params]):
+                    logger.info(
+                        f"CHRISLOG: _post_accumulation_hook() not the last parameter in current FSDP module, param {new_param_index=} {len(new_params)=}"
+                    )
+                else:
+                    logger.info(
+                        f"CHRISLOG: _post_accumulation_hook() all grads are generated, param {new_param_index=} {len(new_params)=}"
+                    )
+                    torch.autograd.backward([t[0] for t in new_params], grad_tensors=[t[1] for t in new_params])
+                    logger.info(
+                        f"CHRISLOG: _post_accumulation_hook() torch.autograd.backward() called with {len(new_params)=}"
+                    )
             else:
                 logger.info(
-                    f"CHRISLOG: _post_accumulation_hook() {self._require_backward_grad_sync=} skipping calling backward() on param with {index=}"
+                    f"CHRISLOG: _post_accumulation_hook() {self._require_backward_grad_sync=} skipping calling backward() on param with {new_param_index=}, {len(new_params)=}"
                 )
 
 
-        self._new_params = []
+        self._new_params_and_new_params_stop_grad_tuples = []
+
         gens = []
         logger.info(
             f"CHRISLOG: {len(params)=}"
@@ -436,7 +433,7 @@ class FlattenParamsWrapper(nn.Module):
             for t, s in zip(data.split(p._param_numels), p._param_shapes):
                 # Create unflattened view for the param.
                 new_param = t.view(s)
-                self._new_params.append(new_param)
+                self._new_params_and_new_params_stop_grad_tuples.append([new_param, None])
                 # Create a new_param_stop_grad param via detaching original leaf params after .view()
                 # as the new leaf nodes so that autograd.backward() won't call
                 # grad_fn of view() (which will be cat())
@@ -447,7 +444,9 @@ class FlattenParamsWrapper(nn.Module):
                 # to propogate gradients to the original leaf params, e.g. after last_microbatch
                 # backward()
                 new_param_stop_grad.register_post_accumulate_grad_hook(
-                    functools.partial(_post_accumulation_hook, new_params=self._new_params, index=len(self._new_params) - 1)
+                    functools.partial(_post_accumulation_hook,
+                    new_params=self._new_params_and_new_params_stop_grad_tuples,
+                    new_param_index=len(self._new_params_and_new_params_stop_grad_tuples) - 1)
                 )
                 param_views_stop_grad.append(new_param_stop_grad)
 
