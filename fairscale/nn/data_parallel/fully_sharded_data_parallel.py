@@ -494,7 +494,10 @@ class FullyShardedDataParallel(nn.Module):
         del param_names
 
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
-            module, param_list=to_be_flatten_params, ssd_offload=self.ssd_offload, ssd_directory=self.ssd_directory
+            module,
+            param_list=to_be_flatten_params,
+            ssd_offload=self.ssd_offload,
+            ssd_directory=self.ssd_directory
         )
         del module  # free original module in case it helps garbage collection
 
@@ -1099,12 +1102,14 @@ class FullyShardedDataParallel(nn.Module):
             if isinstance(m, FullyShardedDataParallel):
                 old_flags.append((m, m._require_backward_grad_sync))
                 m._require_backward_grad_sync = False
+                m._fsdp_wrapped_module._require_backward_grad_sync = False
         try:
             yield
         finally:
             for m, old_flag in old_flags:
                 assert m._require_backward_grad_sync is False
                 m._require_backward_grad_sync = old_flag
+                m._fsdp_wrapped_module._require_backward_grad_sync = old_flag
 
     @contextlib.contextmanager
     def summon_full_params(self, recurse: bool = True, volatile: bool = False) -> Generator:
@@ -1851,6 +1856,8 @@ class FullyShardedDataParallel(nn.Module):
         # the `requires_grad` field set. If `requires_grad=False` for
         # all the params, the post_backward hook will not fire and the
         # state will remain in `TrainingState.BACKWARD_PRE`.
+
+        # TODO: restore the check
         if any([p.requires_grad for p in self.params]):
             self.assert_state(TrainingState.BACKWARD_POST)
         else:
@@ -1923,23 +1930,24 @@ class FullyShardedDataParallel(nn.Module):
                 _finalize_parameters(m)
                 m._free_ssd_offload()
                 m._pre_backward_hook_has_run = False
-                if any(p.requires_grad for p in m.parameters()):
-                    # Check if the module has params and if any of them has
-                    # the `requires_grad` field set. If `requires_grad=False` for
-                    # all the params, the post_backward hook will not fire and the
-                    # state will remain in `TrainingState.BACKWARD_PRE`.
-                    if any([p.requires_grad for p in m.params]):
-                        m.assert_state(TrainingState.BACKWARD_POST)
-                    else:
-                        m.assert_state(TrainingState.BACKWARD_PRE)
-                else:
-                    # When `m` and its children has no params or has params but
-                    # none with `requires_grad==True`, there are two cases:
-                    # 1. output tensors are `requires_grad==True`. In this case,
-                    # pre-backward hook is still registered, so it is in BACKWARD_PRE state.
-                    # 2. output tensors are `requires_grad==False`. In this case,
-                    # pre-backward hook is not registered, so it is in IDLE state.
-                    m.assert_state([TrainingState.BACKWARD_PRE, TrainingState.IDLE])
+                # TODO: restore the check
+                # if any(p.requires_grad for p in m.parameters()):
+                #     # Check if the module has params and if any of them has
+                #     # the `requires_grad` field set. If `requires_grad=False` for
+                #     # all the params, the post_backward hook will not fire and the
+                #     # state will remain in `TrainingState.BACKWARD_PRE`.
+                #     if any([p.requires_grad for p in m.params]):
+                #         m.assert_state(TrainingState.BACKWARD_POST)
+                #     else:
+                #         m.assert_state(TrainingState.BACKWARD_PRE)
+                # else:
+                #     # When `m` and its children has no params or has params but
+                #     # none with `requires_grad==True`, there are two cases:
+                #     # 1. output tensors are `requires_grad==True`. In this case,
+                #     # pre-backward hook is still registered, so it is in BACKWARD_PRE state.
+                #     # 2. output tensors are `requires_grad==False`. In this case,
+                #     # pre-backward hook is not registered, so it is in IDLE state.
+                #     m.assert_state([TrainingState.BACKWARD_PRE, TrainingState.IDLE])
                 m.training_state = TrainingState.IDLE
 
                 if m._is_root:

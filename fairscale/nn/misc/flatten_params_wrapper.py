@@ -164,6 +164,7 @@ class FlattenParamsWrapper(nn.Module):
         self._fpw_module = module
         self.is_flattened = False
 
+        self._require_backward_grad_sync = True
         # Handle param_list being None.
         if param_list is None:
             param_list = list(module.parameters())
@@ -390,24 +391,29 @@ class FlattenParamsWrapper(nn.Module):
 
         def _post_accumulation_hook(new_param_stop_grad, new_params, index):
             # TODO: make it only call backward() only for last microbatch (within FSDP no_sync)
-            # if not mpu.get_data_parallel_no_sync():
-            new_param = new_params[index]
-            logger.info(
-                f"CHRISLOG: _post_accumulation_hook() {index=} {new_param.size()=}"
-            )
-            # logger.info(
-            #     f"CHRISLOG: _post_accumulation_hook() {new_param=}"
-            # )
-            logger.info(
-                f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.size()=} "
-            )
-            logger.info(
-                f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.grad.size()=}"
-            )
-            new_param.backward(gradient=new_param_stop_grad.grad)
-            logger.info(
-                f"CHRISLOG: _post_accumulation_hook() backward() called on {index=} {new_param.size()=}"
-            )
+            if self._require_backward_grad_sync:
+                new_param = new_params[index]
+                logger.info(
+                    f"CHRISLOG: _post_accumulation_hook() {self._require_backward_grad_sync=}, param {index=} {new_param.size()=}"
+                )
+                # logger.info(
+                #     f"CHRISLOG: _post_accumulation_hook() {new_param=}"
+                # )
+                logger.info(
+                    f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.size()=} "
+                )
+                logger.info(
+                    f"CHRISLOG: _post_accumulation_hook() {new_param_stop_grad.grad.size()=}"
+                )
+                new_param.backward(gradient=new_param_stop_grad.grad)
+                logger.info(
+                    f"CHRISLOG: _post_accumulation_hook() backward() called on {index=} {new_param.size()=}"
+                )
+            else:
+                logger.info(
+                    f"CHRISLOG: _post_accumulation_hook() {self._require_backward_grad_sync=} skipping calling backward() on param with {index=}"
+                )
+
 
         self._new_params = []
         gens = []
@@ -434,6 +440,7 @@ class FlattenParamsWrapper(nn.Module):
                 # Create a new_param_stop_grad param via detaching original leaf params after .view()
                 # as the new leaf nodes so that autograd.backward() won't call
                 # grad_fn of view() (which will be cat())
+                # TODO: need to figure out how to remove the clone()
                 new_param_stop_grad = new_param.detach().clone().requires_grad_(True)
                 # Register post-accumulation hook to the new_param_stop_grad parameters so that
                 # we can still manually call backward() function
