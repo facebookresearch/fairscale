@@ -1,7 +1,7 @@
 ![FairScale Logo](./docs/source/_static/img/fairscale-logo.png)
 
 [![Support Ukraine](https://img.shields.io/badge/Support-Ukraine-FFD500?style=flat&labelColor=005BBB)](https://opensource.facebook.com/support-ukraine)
-![PyPI](https://img.shields.io/pypi/v/fairscale)
+![PyPI](https://pypi.org/project/fairscale/)
 [![Documentation Status](https://readthedocs.org/projects/fairscale/badge/?version=latest)](https://fairscale.readthedocs.io/en/latest/?badge=latest)
 [![CircleCI](https://circleci.com/gh/facebookresearch/fairscale.svg?style=shield)](https://app.circleci.com/pipelines/github/facebookresearch/fairscale/) ![PyPI - License](https://img.shields.io/pypi/l/fairscale) [![Downloads](https://pepy.tech/badge/fairscale)](https://pepy.tech/project/fairscale) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/facebookresearch/fairscale/blob/main/CONTRIBUTING.md)
 --------------------------------------------------------------------------------
