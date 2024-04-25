@@ -389,25 +389,24 @@ class FlattenParamsWrapper(nn.Module):
         # Post accumulation hook so we can call backward() on original leaf params at last microbatch
         import functools
 
-        def _post_accumulation_hook(new_param_stop_grad, new_params, new_param_index):
-            # TODO: make it only call backward() only for last microbatch (within FSDP no_sync)
+        def _post_accumulation_hook(new_param_stop_grad, param_tuples, new_param_index):
             if self._require_backward_grad_sync:
-                new_params[new_param_index][1] = new_param_stop_grad.grad
-                if any([t[1] is None for t in new_params]):
+                param_tuples[new_param_index][1] = new_param_stop_grad.grad
+                if any([t[1] is None for t in param_tuples]):
                     logger.info(
-                        f"CHRISLOG: _post_accumulation_hook() not the last parameter in current FSDP module, param {new_param_index=} {len(new_params)=}"
+                        f"CHRISLOG: _post_accumulation_hook() not the last parameter in current FSDP module, param {new_param_index=} {len(param_tuples)=}"
                     )
                 else:
                     logger.info(
-                        f"CHRISLOG: _post_accumulation_hook() all grads are generated, param {new_param_index=} {len(new_params)=}"
+                        f"CHRISLOG: _post_accumulation_hook() all grads are generated, param {new_param_index=} {len(param_tuples)=}"
                     )
-                    torch.autograd.backward([t[0] for t in new_params], grad_tensors=[t[1] for t in new_params])
+                    torch.autograd.backward([t[0] for t in param_tuples], grad_tensors=[t[1] for t in param_tuples])
                     logger.info(
-                        f"CHRISLOG: _post_accumulation_hook() torch.autograd.backward() called with {len(new_params)=}"
+                        f"CHRISLOG: _post_accumulation_hook() torch.autograd.backward() called with {len(param_tuples)=}"
                     )
             else:
                 logger.info(
-                    f"CHRISLOG: _post_accumulation_hook() {self._require_backward_grad_sync=} skipping calling backward() on param with {new_param_index=}, {len(new_params)=}"
+                    f"CHRISLOG: _post_accumulation_hook() {self._require_backward_grad_sync=} skipping calling backward() on param with {new_param_index=}, {len(param_tuples)=}"
                 )
 
 
@@ -445,7 +444,7 @@ class FlattenParamsWrapper(nn.Module):
                 # backward()
                 new_param_stop_grad.register_post_accumulate_grad_hook(
                     functools.partial(_post_accumulation_hook,
-                    new_params=self._new_params_and_new_params_stop_grad_tuples,
+                    param_tuples=self._new_params_and_new_params_stop_grad_tuples,
                     new_param_index=len(self._new_params_and_new_params_stop_grad_tuples) - 1)
                 )
                 param_views_stop_grad.append(new_param_stop_grad)
