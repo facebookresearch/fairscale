@@ -410,7 +410,7 @@ class FlattenParamsWrapper(nn.Module):
                 )
 
 
-        self._new_params_and_new_params_stop_grad_tuples = []
+        _new_params_and_new_params_stop_grad_tuples = []
 
         gens = []
         logger.info(
@@ -432,20 +432,20 @@ class FlattenParamsWrapper(nn.Module):
             for t, s in zip(data.split(p._param_numels), p._param_shapes):
                 # Create unflattened view for the param.
                 new_param = t.view(s)
-                self._new_params_and_new_params_stop_grad_tuples.append([new_param, None])
+                _new_params_and_new_params_stop_grad_tuples.append([new_param, None])
                 # Create a new_param_stop_grad param via detaching original leaf params after .view()
                 # as the new leaf nodes so that autograd.backward() won't call
                 # grad_fn of view() (which will be cat())
                 # TODO: need to figure out how to remove the clone()
-                new_param_stop_grad = new_param.detach().clone().requires_grad_(True)
+                new_param_stop_grad = new_param.detach().requires_grad_(True)
                 # Register post-accumulation hook to the new_param_stop_grad parameters so that
                 # we can still manually call backward() function
                 # to propogate gradients to the original leaf params, e.g. after last_microbatch
                 # backward()
                 new_param_stop_grad.register_post_accumulate_grad_hook(
                     functools.partial(_post_accumulation_hook,
-                    param_tuples=self._new_params_and_new_params_stop_grad_tuples,
-                    new_param_index=len(self._new_params_and_new_params_stop_grad_tuples) - 1)
+                    param_tuples=_new_params_and_new_params_stop_grad_tuples,
+                    new_param_index=len(_new_params_and_new_params_stop_grad_tuples) - 1)
                 )
                 param_views_stop_grad.append(new_param_stop_grad)
 
