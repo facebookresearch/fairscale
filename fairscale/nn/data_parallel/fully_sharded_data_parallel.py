@@ -494,7 +494,10 @@ class FullyShardedDataParallel(nn.Module):
         del param_names
 
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
-            module, param_list=to_be_flatten_params, ssd_offload=self.ssd_offload, ssd_directory=self.ssd_directory
+            module,
+            param_list=to_be_flatten_params,
+            ssd_offload=self.ssd_offload,
+            ssd_directory=self.ssd_directory
         )
         del module  # free original module in case it helps garbage collection
 
@@ -1099,12 +1102,14 @@ class FullyShardedDataParallel(nn.Module):
             if isinstance(m, FullyShardedDataParallel):
                 old_flags.append((m, m._require_backward_grad_sync))
                 m._require_backward_grad_sync = False
+                m._fsdp_wrapped_module._require_backward_grad_sync = False
         try:
             yield
         finally:
             for m, old_flag in old_flags:
                 assert m._require_backward_grad_sync is False
                 m._require_backward_grad_sync = old_flag
+                m._fsdp_wrapped_module._require_backward_grad_sync = old_flag
 
     @contextlib.contextmanager
     def summon_full_params(self, recurse: bool = True, volatile: bool = False) -> Generator:
@@ -1851,7 +1856,10 @@ class FullyShardedDataParallel(nn.Module):
         # the `requires_grad` field set. If `requires_grad=False` for
         # all the params, the post_backward hook will not fire and the
         # state will remain in `TrainingState.BACKWARD_PRE`.
-        if any([p.requires_grad for p in self.params]):
+
+        # TODO(chriscai): find a better way to handle the state transition check
+        # when we need to skip FSDP flatten parameter backward()
+        if any([p.requires_grad for p in self.params]) and self._fsdp_wrapped_module._require_backward_grad_sync:
             self.assert_state(TrainingState.BACKWARD_POST)
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
@@ -1923,12 +1931,14 @@ class FullyShardedDataParallel(nn.Module):
                 _finalize_parameters(m)
                 m._free_ssd_offload()
                 m._pre_backward_hook_has_run = False
+                # TODO(chriscai): find a better way to handle the state transition check
+                # when we need to skip FSDP flatten parameter backward()
                 if any(p.requires_grad for p in m.parameters()):
                     # Check if the module has params and if any of them has
                     # the `requires_grad` field set. If `requires_grad=False` for
                     # all the params, the post_backward hook will not fire and the
                     # state will remain in `TrainingState.BACKWARD_PRE`.
-                    if any([p.requires_grad for p in m.params]):
+                    if any([p.requires_grad for p in m.params]) and self._fsdp_wrapped_module._require_backward_grad_sync:
                         m.assert_state(TrainingState.BACKWARD_POST)
                     else:
                         m.assert_state(TrainingState.BACKWARD_PRE)
