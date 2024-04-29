@@ -372,13 +372,13 @@ class FlattenParamsWrapper(nn.Module):
         self.flat_param unchanged.
         """
         assert self.is_flattened
-        logger.info(f"CHRISLOG: {self._require_backward_grad_sync=}")
+        #logger.info(f"CHRISLOG: {self._require_backward_grad_sync=}")
         if self._require_backward_grad_sync:
-            logger.info("CHRISLOG: calling self.get_param_views() without torch.no_grad()")
+            #logger.info("CHRISLOG: calling self.get_param_views() without torch.no_grad()")
             ps = self.get_param_views()
         else:
             with torch.no_grad():
-                logger.info("CHRISLOG: calling self.get_param_views() with torch.no_grad()")
+                #logger.info("CHRISLOG: calling self.get_param_views() with torch.no_grad()")
                 ps = self.get_param_views()
 
         param_views = []
