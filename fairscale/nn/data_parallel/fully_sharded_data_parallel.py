@@ -1099,12 +1099,14 @@ class FullyShardedDataParallel(nn.Module):
             if isinstance(m, FullyShardedDataParallel):
                 old_flags.append((m, m._require_backward_grad_sync))
                 m._require_backward_grad_sync = False
+                m._fsdp_wrapped_module._require_backward_grad_sync = False
         try:
             yield
         finally:
             for m, old_flag in old_flags:
                 assert m._require_backward_grad_sync is False
                 m._require_backward_grad_sync = old_flag
+                m._fsdp_wrapped_module._require_backward_grad_sync = old_flag
 
     @contextlib.contextmanager
     def summon_full_params(self, recurse: bool = True, volatile: bool = False) -> Generator:
@@ -1458,7 +1460,6 @@ class FullyShardedDataParallel(nn.Module):
         # Register backward hooks to reshard params and reduce-scatter grads.
         # These need to be re-registered every forward pass.
         self._register_post_backward_hooks()
-
         outputs = self.module(*args, **kwargs)
 
         if self.reshard_after_forward:
@@ -1851,7 +1852,7 @@ class FullyShardedDataParallel(nn.Module):
         # the `requires_grad` field set. If `requires_grad=False` for
         # all the params, the post_backward hook will not fire and the
         # state will remain in `TrainingState.BACKWARD_PRE`.
-        if any([p.requires_grad for p in self.params]):
+        if any([p.requires_grad for p in self.params]) and self._fsdp_wrapped_module._require_backward_grad_sync:
             self.assert_state(TrainingState.BACKWARD_POST)
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
@@ -1928,7 +1929,7 @@ class FullyShardedDataParallel(nn.Module):
                     # the `requires_grad` field set. If `requires_grad=False` for
                     # all the params, the post_backward hook will not fire and the
                     # state will remain in `TrainingState.BACKWARD_PRE`.
-                    if any([p.requires_grad for p in m.params]):
+                    if any([p.requires_grad for p in m.params]) and self._fsdp_wrapped_module._require_backward_grad_sync:
                         m.assert_state(TrainingState.BACKWARD_POST)
                     else:
                         m.assert_state(TrainingState.BACKWARD_PRE)

@@ -37,6 +37,8 @@ from fairscale.utils.state_dict import replace_by_prefix_
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
 
+from logging import getLogger
+logger = getLogger()
 
 class FlatParameter(nn.Parameter):
     """A parameter that is initialized from a list of parameters and can be
@@ -161,6 +163,7 @@ class FlattenParamsWrapper(nn.Module):
         super().__init__()
         self._fpw_module = module
         self.is_flattened = False
+        self._require_backward_grad_sync = True
 
         # Handle param_list being None.
         if param_list is None:
@@ -369,7 +372,15 @@ class FlattenParamsWrapper(nn.Module):
         self.flat_param unchanged.
         """
         assert self.is_flattened
-        ps = self.get_param_views()
+        logger.info(f"CHRISLOG: {self._require_backward_grad_sync=}")
+        if self._require_backward_grad_sync:
+            logger.info("CHRISLOG: calling self.get_param_views() without torch.no_grad()")
+            ps = self.get_param_views()
+        else:
+            with torch.no_grad():
+                logger.info("CHRISLOG: calling self.get_param_views() with torch.no_grad()")
+                ps = self.get_param_views()
+
         param_views = []
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(p, '_fsdp_weight', True)
