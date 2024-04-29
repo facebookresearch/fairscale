@@ -7,7 +7,7 @@ that aim to tackle the tradeoff between using Data Parallel training and Model P
 When using Data Parallel training, you tradeoff memory for computation/communication efficiency.
 On the other hand, when using Model Parallel training, you tradeoff computation/communication
 efficiency for memory. ZeRO attempts to solve this problem. Model training generally involves memory
-footprints that falls into two categories:
+footprints that fall into two categories:
 
 1. Model states - optimizer states, gradients, parameters
 
