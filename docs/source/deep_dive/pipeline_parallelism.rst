@@ -12,7 +12,7 @@ Gpipe first shards the model across different devices where each device hosts a 
 A shard can be a single layer or a series of layers. However Gpipe splits a mini-batch of data into
 micro-batches and feeds it to the device hosting the first shard. The layers on each device process
 the micro-batches and send the output to the following shard/device. In the meantime it is ready to
-process the micro batch from the previous shard/device. By pipepling the input in this way, Gpipe is
+process the micro batch from the previous shard/device. By pipelining the input in this way, Gpipe is
 able to reduce the idle time of devices.
 
 Best practices for using `fairscale.nn.Pipe`
