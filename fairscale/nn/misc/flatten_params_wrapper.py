@@ -385,6 +385,7 @@ class FlattenParamsWrapper(nn.Module):
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(p, '_fsdp_weight', True)
             setattr(m, n, p)  # This will set as plain attr
+            #logger.info(f"CHRISLOG: {n=}, {p.requires_grad=}")
             param_views.append(p)
 
         # Save param views for easy access if anyone still wants to access
