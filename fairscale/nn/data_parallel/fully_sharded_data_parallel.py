@@ -1729,6 +1729,8 @@ class FullyShardedDataParallel(nn.Module):
             # else:
             #     param.unsharded_main_grad.add_(param.grad.data)
             param.unsharded_main_grad = new_unsharded_main_grad_in_fp32
+            # Clean up accumulated grads between data batches
+            self._fsdp_wrapped_module.fp32_grads = []
             param.grad = None
 
         if not self._require_backward_grad_sync:
