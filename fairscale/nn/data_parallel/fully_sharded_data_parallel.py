@@ -1723,7 +1723,7 @@ class FullyShardedDataParallel(nn.Module):
             # logger.info(f"CHRISLOG:{grad_sizes=}")
 
             new_unsharded_main_grad_in_fp32 = torch.cat([grad.flatten() for grad in self._fsdp_wrapped_module.fp32_grads])
-            logger.info(f"CHRISLOG: assigning new unsharded_main_grad with size {new_unsharded_main_grad_in_fp32.size()}, type:{new_unsharded_main_grad_in_fp32.dtype}, original grad size {param.grad.size()}")
+            # logger.info(f"CHRISLOG: assigning new unsharded_main_grad with size {new_unsharded_main_grad_in_fp32.size()}, type:{new_unsharded_main_grad_in_fp32.dtype}, original grad size {param.grad.size()}")
             # if getattr(param, "unsharded_main_grad", None) is None:
             #     param.unsharded_main_grad = param.grad.to(torch.float32)
             # else:

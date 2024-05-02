@@ -92,9 +92,9 @@ class FlatParameter(nn.Parameter):
             raise ValueError(
                 f"Incorrect numel of supplied data: got {data.numel()} but expected {sum(self._param_numels)}"
             )
-        logger.info(f"CHRISLOG: {data.numel()=}")
-        logger.info(f"CHRISLOG: {self._param_numels=}")
-        logger.info(f"CHRISLOG: {self._param_shapes=}")
+        # logger.info(f"CHRISLOG: {data.numel()=}")
+        # logger.info(f"CHRISLOG: {self._param_numels=}")
+        # logger.info(f"CHRISLOG: {self._param_shapes=}")
         return (t.view(s) for (t, s) in zip(data.split(self._param_numels), self._param_shapes))
 
     def metadata(self) -> Tuple[List[str], List[torch.Size], List[int]]:
@@ -377,12 +377,12 @@ class FlattenParamsWrapper(nn.Module):
         grad,
         param_index,
     ):
-        logger.info(f"CHRISLOG: before post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
+        #logger.info(f"CHRISLOG: before post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
         if self.fp32_grads[param_index] is None:
             self.fp32_grads[param_index] = grad.to(torch.float32)
         else:
             self.fp32_grads[param_index].add_(grad.data)
-        logger.info(f"CHRISLOG: after post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
+        #logger.info(f"CHRISLOG: after post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
 
     def _unflatten_params_as_views(self) -> None:
         """Unlike ``_unflatten_params``, this function unflatten into views and keep
