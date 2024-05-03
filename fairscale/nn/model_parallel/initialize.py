@@ -23,6 +23,7 @@
 from typing import List, Optional
 
 import torch
+from datetime import timedelta
 
 from .utils import ensure_divisibility
 
@@ -47,6 +48,7 @@ def initialize_model_parallel(
     pipeline_backend: Optional[str] = None,
     cp_backend: Optional[str] = None,
     ddp_backend: Optional[str] = None,
+    timeout: Optional[timedelta] = None,
 ) -> None:
     """
     Initialize model data parallel groups.
@@ -112,7 +114,7 @@ def initialize_model_parallel(
     for i in range(pipeline_length):
         for j in range(context_parallel_size):
             for k in range(model_parallel_size):
-                group = torch.distributed.new_group(groups[:, i, j, k].tolist(), backend=ddp_backend)
+                group = torch.distributed.new_group(groups[:, i, j, k].tolist(), backend=ddp_backend, timeout=timeout)
                 if i == found[1] and j == found[2] and k == found[3]:
                     _DATA_PARALLEL_GROUP = group
 
@@ -123,7 +125,7 @@ def initialize_model_parallel(
     for i in range(data_parallel_size):
         for j in range(pipeline_length):
             for k in range(context_parallel_size):
-                group = torch.distributed.new_group(groups[i, j, k, :].tolist(), backend=model_parallel_backend)
+                group = torch.distributed.new_group(groups[i, j, k, :].tolist(), backend=model_parallel_backend, timeout=timeout)
                 if i == found[0] and j == found[1] and k == found[2]:
                     _MODEL_PARALLEL_GROUP = group
 
@@ -136,7 +138,7 @@ def initialize_model_parallel(
         for j in range(context_parallel_size):
             for k in range(model_parallel_size):
                 ranks = groups[i, :, j, k].tolist()
-                group = torch.distributed.new_group(ranks, backend=pipeline_backend)
+                group = torch.distributed.new_group(ranks, backend=pipeline_backend, timeout=timeout)
                 if i == found[0] and j == found[2] and k == found[3]:
                     _PIPELINE_PARALLEL_GROUP = group
                     _PIPELINE_PARALLEL_RANKS = ranks
@@ -153,7 +155,7 @@ def initialize_model_parallel(
         for j in range(pipeline_length):
             for k in range(model_parallel_size):
                 ranks = groups[i, j, :, k].tolist()
-                group = torch.distributed.new_group(ranks, backend=cp_backend)
+                group = torch.distributed.new_group(ranks, backend=cp_backend, timeout=timeout)
                 if i == found[0] and j == found[1] and k == found[3]:
                     _CONTEXT_PARALLEL_GROUP = group
                     _CONTEXT_PARALLEL_GROUP_RANKS = ranks
