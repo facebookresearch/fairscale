@@ -411,8 +411,8 @@ class FlattenParamsWrapper(nn.Module):
             self.fp32_grads[param_index] = grad.to(torch.float32)
         else:
             self.fp32_grads[param_index].add_(grad.data)
-
         #logger.info(f"CHRISLOG: after post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
+        return grad
 
     def _unflatten_params_as_views(self) -> None:
         """Unlike ``_unflatten_params``, this function unflatten into views and keep
