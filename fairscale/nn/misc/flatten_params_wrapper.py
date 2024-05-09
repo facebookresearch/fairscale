@@ -406,12 +406,12 @@ class FlattenParamsWrapper(nn.Module):
         grad,
         param_index,
     ):
-        #logger.info(f"CHRISLOG: before post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
+        logger.info(f"CHRISLOG: {param_index=} before post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
         if self.fp32_grads[param_index] is None:
             self.fp32_grads[param_index] = grad.to(torch.float32)
         else:
             self.fp32_grads[param_index].add_(grad.data)
-        #logger.info(f"CHRISLOG: after post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
+        logger.info(f"CHRISLOG: {param_index=} after post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
         return grad
 
     def _unflatten_params_as_views(self) -> None:
@@ -434,10 +434,12 @@ class FlattenParamsWrapper(nn.Module):
             setattr(m, n, p)  # This will set as plain attr
             #logger.info(f"CHRISLOG: {n=}, {p.requires_grad=}, {p.grad_fn=}, {p.grad=}")
             import functools
+            param_index = len(param_views)
+            logger.info(f"CHRISLOG: {param_index=}")
             p.register_hook(
                 functools.partial(
                     self._hook,
-                    param_index=len(param_views) - 1
+                    param_index=param_index
                 )
             )
             param_views.append(p)
