@@ -1726,9 +1726,9 @@ class FullyShardedDataParallel(nn.Module):
             baseline_grad = param.grad.to(torch.float32)
 
 
-            logger.info(f"CHRISLOG: baseline grad {baseline_grad=}, {baseline_grad.size()=}")
-            logger.info(f"CHRISLOG: new grad {new_unsharded_main_grad_in_fp32=}, {new_unsharded_main_grad_in_fp32.size()=}")
-            torch.allclose(baseline_grad, new_unsharded_main_grad_in_fp32, atol=0, rtol=0)
+            logger.info(f"CHRISLOG: baseline grad {baseline_grad=}, {baseline_grad.size()=}, {baseline_grad.dtype=}")
+            logger.info(f"CHRISLOG: new grad {new_unsharded_main_grad_in_fp32=}, {new_unsharded_main_grad_in_fp32.size()=}, {new_unsharded_main_grad_in_fp32.dtype=}")
+            torch.testing.assert_allclose(baseline_grad, new_unsharded_main_grad_in_fp32, atol=0, rtol=0)
             logger.info(f"CHRISLOG: baseline grad and new grad passed allclose check")
 
             # logger.info(f"CHRISLOG: assigning new unsharded_main_grad with size {new_unsharded_main_grad_in_fp32.size()}, type:{new_unsharded_main_grad_in_fp32.dtype}, original grad size {param.grad.size()}")
@@ -1737,6 +1737,9 @@ class FullyShardedDataParallel(nn.Module):
             # else:
             #     param.unsharded_main_grad.add_(param.grad.data)
             param.unsharded_main_grad = new_unsharded_main_grad_in_fp32
+            logger.info(f"CHRISLOG: {param.unsharded_main_grad.dtype=}")
+
+
             # Clean up accumulated grads between data batches
             self._fsdp_wrapped_module.fp32_grads = []
             param.grad = None
