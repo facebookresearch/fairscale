@@ -435,7 +435,7 @@ class FlattenParamsWrapper(nn.Module):
             #logger.info(f"CHRISLOG: {n=}, {p.requires_grad=}, {p.grad_fn=}, {p.grad=}")
             import functools
             param_index = len(param_views)
-            logger.info(f"CHRISLOG: {param_index=}")
+            #logger.info(f"CHRISLOG: {param_index=}")
             p.register_hook(
                 functools.partial(
                     self._hook,
