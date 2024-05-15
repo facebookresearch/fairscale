@@ -369,6 +369,7 @@ class FullyShardedDataParallel(nn.Module):
         limit_all_gather_events: bool = False,
         limit_reduce_scatter_events: bool = False,
         should_validate_process_group: bool = True,
+        optimize_backward_concat: bool = False,
     ):
         try:
             import torch._C
@@ -493,8 +494,12 @@ class FullyShardedDataParallel(nn.Module):
             param_name_groups = [param_names]
         del param_names
 
+        self.optimize_backward_concat = optimize_backward_concat
+        if self.optimize_backward_concat:
+            assert self.fp32_reduce_scatter, f"{optimize_backward_concat=} requires self.fp32_reduce_scatter=True"
+
         self._fsdp_wrapped_module: nn.Module = FlattenParamsWrapper(
-            module, param_list=to_be_flatten_params, ssd_offload=self.ssd_offload, ssd_directory=self.ssd_directory
+            module, param_list=to_be_flatten_params, ssd_offload=self.ssd_offload, ssd_directory=self.ssd_directory, optimize_backward_concat=self.optimize_backward_concat,
         )
         del module  # free original module in case it helps garbage collection
 
@@ -851,6 +856,7 @@ class FullyShardedDataParallel(nn.Module):
                 f"bucket_cap_mb={self.bucket_cap_mb}, "
                 f"clear_autocast_cache={self.clear_autocast_cache}"
                 f"force_input_to_fp32={self.force_input_to_fp32}"
+                f"optimize_backward_concat={self.optimize_backward_concat}"
             )
         return repr
 
@@ -1717,16 +1723,17 @@ class FullyShardedDataParallel(nn.Module):
         self._use_fp32_param_shard([param])
 
         if self.fp32_reduce_scatter:
-            new_unsharded_main_grad_in_fp32 = torch.cat([grad.flatten() for grad in self._fsdp_wrapped_module.fp32_grads])
-            # logger.info(f"CHRISLOG: assigning new unsharded_main_grad with size {new_unsharded_main_grad_in_fp32.size()}, type:{new_unsharded_main_grad_in_fp32.dtype}, original grad size {param.grad.size()}")
-            # if getattr(param, "unsharded_main_grad", None) is None:
-            #     param.unsharded_main_grad = param.grad.to(torch.float32)
-            # else:
-            #     param.unsharded_main_grad.add_(param.grad.data)
-            param.unsharded_main_grad = new_unsharded_main_grad_in_fp32
 
-            # Clean up accumulated grads between data batches
-            self._fsdp_wrapped_module.fp32_grads = []
+            if self.optimize_backward_concat:
+                param.unsharded_main_grad = torch.cat([grad.flatten() for grad in self._fsdp_wrapped_module.fp32_grads])
+                # Clean up accumulated grads between data batches
+                self._fsdp_wrapped_module.fp32_grads = []
+            else:
+                if getattr(param, "unsharded_main_grad", None) is None:
+                    param.unsharded_main_grad = param.grad.to(torch.float32)
+                else:
+                    param.unsharded_main_grad.add_(param.grad.data)
+
             param.grad = None
 
         if not self._require_backward_grad_sync:
@@ -1857,8 +1864,14 @@ class FullyShardedDataParallel(nn.Module):
         # the `requires_grad` field set. If `requires_grad=False` for
         # all the params, the post_backward hook will not fire and the
         # state will remain in `TrainingState.BACKWARD_PRE`.
-        if any([p.requires_grad for p in self.params]) and self._fsdp_wrapped_module._require_backward_grad_sync:
-            self.assert_state(TrainingState.BACKWARD_POST)
+        if any([p.requires_grad for p in self.params]):
+            if self.optimize_backward_concat:
+                if self._fsdp_wrapped_module._require_backward_grad_sync:
+                    self.assert_state(TrainingState.BACKWARD_POST)
+                else:
+                    self.assert_state(TrainingState.BACKWARD_PRE)
+            else:
+                self.assert_state(TrainingState.BACKWARD_POST)
         else:
             self.assert_state(TrainingState.BACKWARD_PRE)
 
@@ -1934,8 +1947,14 @@ class FullyShardedDataParallel(nn.Module):
                     # the `requires_grad` field set. If `requires_grad=False` for
                     # all the params, the post_backward hook will not fire and the
                     # state will remain in `TrainingState.BACKWARD_PRE`.
-                    if any([p.requires_grad for p in m.params]) and self._fsdp_wrapped_module._require_backward_grad_sync:
-                        m.assert_state(TrainingState.BACKWARD_POST)
+                    if any([p.requires_grad for p in m.params]):
+                        if self.optimize_backward_concat:
+                            if self._fsdp_wrapped_module._require_backward_grad_sync:
+                                m.assert_state(TrainingState.BACKWARD_POST)
+                            else:
+                                m.assert_state(TrainingState.BACKWARD_PRE)
+                        else:
+                            m.assert_state(TrainingState.BACKWARD_POST)
                     else:
                         m.assert_state(TrainingState.BACKWARD_PRE)
                 else:

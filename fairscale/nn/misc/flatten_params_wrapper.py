@@ -35,6 +35,7 @@ import torch.nn as nn
 
 from fairscale.experimental.nn.ssd_offload import SsdFlatParameter
 from fairscale.utils.state_dict import replace_by_prefix_
+import functools
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
@@ -191,10 +192,13 @@ class FlattenParamsWrapper(nn.Module):
         flat_param_names: Optional[List[str]] = None,
         ssd_offload: bool = False,
         ssd_directory: str = "",
+        optimize_backward_concat: bool = False,
     ):
         super().__init__()
         self._fpw_module = module
         self.is_flattened = False
+
+        self.optimize_backward_concat = optimize_backward_concat
         self._require_backward_grad_sync = True
         self.fp32_grads = []
 
@@ -401,17 +405,15 @@ class FlattenParamsWrapper(nn.Module):
         self.flat_params = []
 
 
-    def _hook(
+    def _grad_accumulation_hook(
         self,
         grad,
         param_index,
     ):
-        logger.info(f"CHRISLOG: {param_index=} before post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
         if self.fp32_grads[param_index] is None:
             self.fp32_grads[param_index] = grad.to(torch.float32)
         else:
             self.fp32_grads[param_index].add_(grad.data)
-        logger.info(f"CHRISLOG: {param_index=} after post-backward hook, self.fp32_grads[param_index] is None: {self.fp32_grads[param_index] is None}")
         return grad
 
     def _unflatten_params_as_views(self) -> None:
@@ -419,31 +421,30 @@ class FlattenParamsWrapper(nn.Module):
         self.flat_param unchanged.
         """
         assert self.is_flattened
-        # logger.info(f"CHRISLOG: {self._require_backward_grad_sync=}")
-        if self._require_backward_grad_sync:
-            #logger.info("CHRISLOG: calling self.get_param_views() without torch.no_grad()")
-            ps = self.get_param_views(require_backward_grad_sync=self._require_backward_grad_sync)
+        if self.optimize_backward_concat:
+            if self._require_backward_grad_sync:
+                ps = self.get_param_views()
+            else:
+                with torch.no_grad():
+                    ps = self.get_param_views()
         else:
-            with torch.no_grad():
-                #logger.info("CHRISLOG: calling self.get_param_views() with torch.no_grad()")
-                ps = self.get_param_views(require_backward_grad_sync=self._require_backward_grad_sync)
+            ps = self.get_param_views()
 
         param_views = []
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(p, '_fsdp_weight', True)
             setattr(m, n, p)  # This will set as plain attr
-            #logger.info(f"CHRISLOG: {n=}, {p.requires_grad=}, {p.grad_fn=}, {p.grad=}")
-            import functools
             param_index = len(param_views)
-            #logger.info(f"CHRISLOG: {param_index=}")
-            p.register_hook(
-                functools.partial(
-                    self._hook,
-                    param_index=param_index
+            if self.optimize_backward_concat:
+                p.register_hook(
+                    functools.partial(
+                        self._grad_accumulation_hook,
+                        param_index=param_index
+                    )
                 )
-            )
             param_views.append(p)
-        if len(self.fp32_grads) == 0:
+
+        if self.optimize_backward_concat and len(self.fp32_grads) == 0:
             self.fp32_grads = [None] * len(param_views)
 
         # Save param views for easy access if anyone still wants to access
@@ -559,7 +560,7 @@ class FlattenParamsWrapper(nn.Module):
         self._unflatten_params_as_views()
         return self.module(*inputs, **kwinputs)
 
-    def get_param_views(self, require_backward_grad_sync, external_data_list: Optional[List[Optional[Tensor]]] = None) -> Iterator[Tensor]:
+    def get_param_views(self, external_data_list: Optional[List[Optional[Tensor]]] = None) -> Iterator[Tensor]:
         """Used to get a generator over all views from a list of external data list."""
         params = self.flat_params
         if external_data_list is None:
@@ -570,7 +571,7 @@ class FlattenParamsWrapper(nn.Module):
 
         gens = []
         for p, data in zip(params, external_data_list):
-            gens.append(p.get_param_views(require_backward_grad_sync, data))
+            gens.append(p.get_param_views(data))
 
         return chain(*gens)
 
