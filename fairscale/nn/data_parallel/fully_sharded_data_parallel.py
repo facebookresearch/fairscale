@@ -339,9 +339,9 @@ class FullyShardedDataParallel(nn.Module):
             skip the GPU -> CPU copy on non-rank 0 altogether and prevent OOM.
             Default: False
         optimize_backward_concat (bool):
-            If True, only trigger the self._fsdp_wrapped_module.flat_params backward(), which will
-            invoke the _post_backward_hook() and concat() op,
-            when self._require_backward_grad_sync is True (e.g. last microbatch)
+            If True, only let backward pass propagate to self.params, which will
+            invoke the _post_backward_hook() and concat() op, when self._require_backward_grad_sync
+            is True (e.g. last microbatch)
             NOTE: this likely will incur more GPU memory usage
     """
 

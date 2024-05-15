@@ -151,9 +151,9 @@ class FlattenParamsWrapper(nn.Module):
             originally, give each flat_param a unique name. Note a "flat_param_"
             prefix will be added to those names.
         optimize_backward_concat (bool):
-            If True, only trigger the self.flat_params backward(), which will
-            invoke the parent FSDP module's _post_backward_hook() and concat() op,
-            when self._require_backward_grad_sync is True (e.g. last microbatch)
+            If True, only let backward pass propagate to the corresponding FSDP.params, which will
+            invoke the FSDP._post_backward_hook() and concat() op, when _require_backward_grad_sync
+            is True (e.g. last microbatch)
             NOTE: this likely will incur more GPU memory usage
     """
 
@@ -170,10 +170,10 @@ class FlattenParamsWrapper(nn.Module):
         self._fpw_module = module
         self.is_flattened = False
         self.optimize_backward_concat = optimize_backward_concat
-        # If self.optimize_backward_concat == True, used to propagate the
-        # parent FSDP modules's _require_backward_grad_sync flag
+        # If optimize_backward_concat == True, used to propagate the
+        # corresponding FSDP modules's _require_backward_grad_sync flag
         self._require_backward_grad_sync = True
-        # If self.optimize_backward_concat == True, used to accumulate the
+        # If optimize_backward_concat == True, used to accumulate the
         # fp32 gradients for the flattened parameters
         self.fp32_grads = []
 
