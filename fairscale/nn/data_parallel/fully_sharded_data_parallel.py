@@ -1105,14 +1105,20 @@ class FullyShardedDataParallel(nn.Module):
             if isinstance(m, FullyShardedDataParallel):
                 old_flags.append((m, m._require_backward_grad_sync))
                 m._require_backward_grad_sync = False
-                m._fsdp_wrapped_module._require_backward_grad_sync = False
+                if self.optimize_backward_concat:
+                    # Set the flag on the wrapped FlattenParamsWrapper module as well,
+                    # so that FlattenParamsWrapper could accumulate grads at corresponding
+                    # leaf nodes without triggering concat operations when gradient
+                    # synchronization is not needed.
+                    m._fsdp_wrapped_module._require_backward_grad_sync = False
         try:
             yield
         finally:
             for m, old_flag in old_flags:
                 assert m._require_backward_grad_sync is False
                 m._require_backward_grad_sync = old_flag
-                m._fsdp_wrapped_module._require_backward_grad_sync = old_flag
+                if self.optimize_backward_concat:
+                    m._fsdp_wrapped_module._require_backward_grad_sync = old_flag
 
     @contextlib.contextmanager
     def summon_full_params(self, recurse: bool = True, volatile: bool = False) -> Generator:
@@ -1723,8 +1729,9 @@ class FullyShardedDataParallel(nn.Module):
         self._use_fp32_param_shard([param])
 
         if self.fp32_reduce_scatter:
-
             if self.optimize_backward_concat:
+                # Flatten and concat the accumulated fp32 grads
+                # and assign them to param.unsharded_main_grad
                 param.unsharded_main_grad = torch.cat([grad.flatten() for grad in self._fsdp_wrapped_module.fp32_grads])
                 # Clean up accumulated grads between data batches
                 self._fsdp_wrapped_module.fp32_grads = []
@@ -1866,6 +1873,9 @@ class FullyShardedDataParallel(nn.Module):
         # state will remain in `TrainingState.BACKWARD_PRE`.
         if any([p.requires_grad for p in self.params]):
             if self.optimize_backward_concat:
+                # If self.optimize_backward_concat==True, FSDP backward should
+                # only be triggered (which will invoke concat())
+                # when self._fsdp_wrapped_module._require_backward_grad_sync = True
                 if self._fsdp_wrapped_module._require_backward_grad_sync:
                     self.assert_state(TrainingState.BACKWARD_POST)
                 else:
@@ -1949,6 +1959,9 @@ class FullyShardedDataParallel(nn.Module):
                     # state will remain in `TrainingState.BACKWARD_PRE`.
                     if any([p.requires_grad for p in m.params]):
                         if self.optimize_backward_concat:
+                            # If self.optimize_backward_concat==True, FSDP backward should
+                            # only be triggered (which will invoke concat())
+                            # when self._fsdp_wrapped_module._require_backward_grad_sync = True
                             if self._fsdp_wrapped_module._require_backward_grad_sync:
                                 m.assert_state(TrainingState.BACKWARD_POST)
                             else:

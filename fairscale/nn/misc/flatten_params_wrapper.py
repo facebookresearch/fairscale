@@ -9,7 +9,6 @@
 from contextlib import contextmanager
 import functools
 from itertools import chain
-from re import split
 import tempfile
 import typing
 from typing import (
@@ -35,13 +34,9 @@ import torch.nn as nn
 
 from fairscale.experimental.nn.ssd_offload import SsdFlatParameter
 from fairscale.utils.state_dict import replace_by_prefix_
-import functools
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
-
-from logging import getLogger
-logger = getLogger()
 
 class FlatParameter(nn.Parameter):
     """A parameter that is initialized from a list of parameters and can be
@@ -95,36 +90,8 @@ class FlatParameter(nn.Parameter):
             raise ValueError(
                 f"Incorrect numel of supplied data: got {data.numel()} but expected {sum(self._param_numels)}"
             )
-        # logger.info(f"CHRISLOG: {data.numel()=}")
-        # logger.info(f"CHRISLOG: {self._param_numels=}")
-        # logger.info(f"CHRISLOG: {self._param_shapes=}")
-
-        # logger.info(f"CHRISLOG: {data.is_leaf=}, {data.grad_fn=}")
-
-        # def post_accumulate_grad_hook(
-        #     param
-        # ):
-        #     logger.info(f"CHRISLOG: cleaning up {param.grad=}")
-        #     param.grad = None
-
-        # data.register_post_accumulate_grad_hook(
-        #     functools.partial(
-        #         post_accumulate_grad_hook
-        #     )
-        # )
-        # logger.info("CHRISLOG: registered post_accumulate_grad_hook for bf16 grad cleanup on data")
 
         split_outputs = data.split(self._param_numels)
-        # for split_output in split_outputs:
-        #     logger.info(f"CHRISLOG: {require_backward_grad_sync=} {split_output.is_leaf=}, {split_output.grad_fn=}, {split_output.grad=}")        #
-            # if not require_backward_grad_sync:
-            #     split_output.register_hook(
-            #         functools.partial(
-            #             post_accumulate_grad_hook
-            #         )
-            #     )
-            #     logger.info("CHRISLOG: registered post_accumulate_grad_hook for bf16 grad cleanup on split_output")
-
         return (t.view(s) for (t, s) in zip(split_outputs, self._param_shapes))
 
     def metadata(self) -> Tuple[List[str], List[torch.Size], List[int]]:
@@ -183,6 +150,11 @@ class FlattenParamsWrapper(nn.Module):
         flat_param_names (Optional[List[str]]):
             originally, give each flat_param a unique name. Note a "flat_param_"
             prefix will be added to those names.
+        optimize_backward_concat (bool):
+            If True, only trigger the self.flat_params backward(), which will
+            invoke the parent FSDP module's _post_backward_hook() and concat() op,
+            when self._require_backward_grad_sync is True (e.g. last microbatch)
+            NOTE: this likely will incur more GPU memory usage
     """
 
     def __init__(
@@ -197,9 +169,12 @@ class FlattenParamsWrapper(nn.Module):
         super().__init__()
         self._fpw_module = module
         self.is_flattened = False
-
         self.optimize_backward_concat = optimize_backward_concat
+        # If self.optimize_backward_concat == True, used to propagate the
+        # parent FSDP modules's _require_backward_grad_sync flag
         self._require_backward_grad_sync = True
+        # If self.optimize_backward_concat == True, used to accumulate the
+        # fp32 gradients for the flattened parameters
         self.fp32_grads = []
 
         # Handle param_list being None.
@@ -404,7 +379,7 @@ class FlattenParamsWrapper(nn.Module):
             delattr(self, n)
         self.flat_params = []
 
-
+    # The post backward hook used to accumulate fp32 gradients
     def _grad_accumulation_hook(
         self,
         grad,
@@ -434,8 +409,12 @@ class FlattenParamsWrapper(nn.Module):
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(p, '_fsdp_weight', True)
             setattr(m, n, p)  # This will set as plain attr
+            # The param_index of p used to accumulate the correspnding
+            # gradients in self.fp32_grads
             param_index = len(param_views)
             if self.optimize_backward_concat:
+                # Register post backward hook to accumulate the gradients
+                # in self.fp32_grads
                 p.register_hook(
                     functools.partial(
                         self._grad_accumulation_hook,
@@ -445,6 +424,7 @@ class FlattenParamsWrapper(nn.Module):
             param_views.append(p)
 
         if self.optimize_backward_concat and len(self.fp32_grads) == 0:
+            # Allocate self.fp32_grads at the beginning of each data batch's forward()
             self.fp32_grads = [None] * len(param_views)
 
         # Save param views for easy access if anyone still wants to access
