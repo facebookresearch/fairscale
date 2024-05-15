@@ -7,6 +7,7 @@
 # Licensed under the MIT License.
 
 from contextlib import contextmanager
+import functools
 from itertools import chain
 import tempfile
 import typing
@@ -33,10 +34,10 @@ import torch.nn as nn
 
 from fairscale.experimental.nn.ssd_offload import SsdFlatParameter
 from fairscale.utils.state_dict import replace_by_prefix_
+import functools
 
 if TYPE_CHECKING:
     from collections import OrderedDict  # noqa: F401
-
 
 class FlatParameter(nn.Parameter):
     """A parameter that is initialized from a list of parameters and can be
@@ -90,7 +91,9 @@ class FlatParameter(nn.Parameter):
             raise ValueError(
                 f"Incorrect numel of supplied data: got {data.numel()} but expected {sum(self._param_numels)}"
             )
-        return (t.view(s) for (t, s) in zip(data.split(self._param_numels), self._param_shapes))
+
+        split_outputs = data.split(self._param_numels)
+        return (t.view(s) for (t, s) in zip(split_outputs, self._param_shapes))
 
     def metadata(self) -> Tuple[List[str], List[torch.Size], List[int]]:
         """Return tuple of (names, shapes, numels) metadata for this flat parameter."""
@@ -148,6 +151,11 @@ class FlattenParamsWrapper(nn.Module):
         flat_param_names (Optional[List[str]]):
             originally, give each flat_param a unique name. Note a "flat_param_"
             prefix will be added to those names.
+        optimize_backward_concat (bool):
+            If True, only let backward pass propagate to the corresponding FSDP.params, which will
+            invoke the FSDP._post_backward_hook() and concat() op, when _require_backward_grad_sync
+            is True (e.g. last microbatch)
+            NOTE: this likely will incur more GPU memory usage
     """
 
     def __init__(
@@ -157,10 +165,18 @@ class FlattenParamsWrapper(nn.Module):
         flat_param_names: Optional[List[str]] = None,
         ssd_offload: bool = False,
         ssd_directory: str = "",
+        optimize_backward_concat: bool = False,
     ):
         super().__init__()
         self._fpw_module = module
         self.is_flattened = False
+        self.optimize_backward_concat = optimize_backward_concat
+        # If optimize_backward_concat == True, used to propagate the
+        # corresponding FSDP modules's _require_backward_grad_sync flag
+        self._require_backward_grad_sync = True
+        # If optimize_backward_concat == True, used to accumulate the
+        # fp32 gradients for the flattened parameters
+        self.fp32_grads = []
 
         # Handle param_list being None.
         if param_list is None:
@@ -364,17 +380,59 @@ class FlattenParamsWrapper(nn.Module):
             delattr(self, n)
         self.flat_params = []
 
+    # The post backward hook used to accumulate fp32 gradients
+    def _grad_accumulation_hook(
+        self,
+        grad,
+        param_index,
+    ):
+        if self.fp32_grads[param_index] is None:
+            self.fp32_grads[param_index] = grad.to(torch.float32)
+        else:
+            self.fp32_grads[param_index].add_(grad)
+        return grad
+
     def _unflatten_params_as_views(self) -> None:
         """Unlike ``_unflatten_params``, this function unflatten into views and keep
         self.flat_param unchanged.
         """
         assert self.is_flattened
-        ps = self.get_param_views()
+        if self.optimize_backward_concat:
+            # If self._require_backward_grad_sync == True (e.g. last microbatch),
+            # we use the original flat_params as autograd leaf nodes and backward
+            # pass should propagate all the way back to FSDP module and thus invoke
+            # FSDP post_backward() hook and concat() op
+            # Otherwise we stop the backward propagation before FSDP module to avoid
+            # invoking concat() and store the accumulated fp32 grads
+            if self._require_backward_grad_sync:
+                ps = self.get_param_views()
+            else:
+                with torch.no_grad():
+                    ps = self.get_param_views()
+        else:
+            ps = self.get_param_views()
+
         param_views = []
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(p, '_fsdp_weight', True)
             setattr(m, n, p)  # This will set as plain attr
+            # The param_index of p used to accumulate the correspnding
+            # gradients in self.fp32_grads
+            param_index = len(param_views)
+            if self.optimize_backward_concat:
+                # Register post backward hook to accumulate the gradients
+                # in self.fp32_grads
+                p.register_hook(
+                    functools.partial(
+                        self._grad_accumulation_hook,
+                        param_index=param_index
+                    )
+                )
             param_views.append(p)
+
+        if self.optimize_backward_concat and len(self.fp32_grads) == 0:
+            # Allocate self.fp32_grads at the beginning of each data batch's forward()
+            self.fp32_grads = [None] * len(param_views)
 
         # Save param views for easy access if anyone still wants to access
         # parameters of the module.

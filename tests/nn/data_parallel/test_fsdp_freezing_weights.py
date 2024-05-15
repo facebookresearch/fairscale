@@ -12,6 +12,8 @@
 
 from enum import Enum
 from itertools import product
+from unittest import mock
+import copy
 import tempfile
 
 import pytest
@@ -275,3 +277,97 @@ def test_freezing_weights(temp_files, nested_trunk):
             nprocs=world_size,
         )
         temp_file_idx += 3
+
+
+@skip_if_single_gpu
+def test_reshard_frozen_weights():
+    world_size = 2
+    for flatten_parameters, reshard_after_forward, inp_requires_grad in product(
+        [False, True], [False, True], [False, True]
+    ):
+        print(
+            "Testing FSDP reshard frozen weights with "
+            f"flatten_parameters={flatten_parameters}, "
+            f"reshard_after_forward={reshard_after_forward}, "
+            f"inp_requires_grad={inp_requires_grad}"
+        )
+        mp.spawn(
+            _distributed_worker_reshard,
+            (world_size, flatten_parameters, reshard_after_forward, inp_requires_grad),
+            nprocs=world_size,
+        )
+
+
+def _distributed_worker_reshard(
+    rank: int,
+    world_size: int,
+    flatten_parameters: bool,
+    reshard_after_forward: bool,
+    inp_requires_grad: bool,
+):
+    import os
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    torch.cuda.set_device(rank)
+    torch.distributed.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+
+    torch.manual_seed(0)
+
+    num_linears = 6
+    modules = []
+    for _ in range(num_linears):
+        modules += [nn.Linear(5, 5, device="cuda"), nn.ReLU()]
+    model = nn.Sequential(*modules)
+    # Freeze every other linear
+    for i in range(num_linears):
+        if i % 2 == 0:
+            for param in model[i * 2].parameters(recurse=False):
+                param.requires_grad = False
+    num_frozen_linears = num_linears // 2
+
+    ref_model = DistributedDataParallel(copy.deepcopy(model), device_ids=[rank])
+    ref_optim = torch.optim.AdamW(ref_model.parameters(), lr=1e-2)
+
+    for i, module in enumerate(model):
+        if isinstance(module, nn.Linear):
+            model[i] = FSDP(
+                module,
+                flatten_parameters=flatten_parameters,
+                reshard_after_forward=reshard_after_forward,
+            )
+    fsdp_model = FSDP(
+        model,
+        flatten_parameters=flatten_parameters,
+        reshard_after_forward=reshard_after_forward,
+    )
+    fsdp_optim = torch.optim.AdamW(fsdp_model.parameters(), lr=1e-2)
+
+    orig_post_backward_reshard_hook = FSDP._post_backward_reshard_hook
+    reshard_hook_count = 0
+
+    def post_backward_reshard_hook_with_count(*args, **kwargs):
+        nonlocal reshard_hook_count
+        reshard_hook_count += 1
+        return orig_post_backward_reshard_hook(*args, **kwargs)
+
+    with mock.patch(
+        "fairscale.nn.data_parallel.FullyShardedDataParallel._post_backward_reshard_hook",
+        post_backward_reshard_hook_with_count,
+    ):
+        inp = torch.randn((8, 5), device="cuda", requires_grad=inp_requires_grad)
+        for i in range(6):
+            losses = []
+            for model, optim in ((fsdp_model, fsdp_optim), (ref_model, ref_optim)):
+                optim.zero_grad()
+                loss = model(inp).sum()
+                losses.append(loss)
+                loss.backward()
+                optim.step()
+            expected_reshard_hook_count = num_frozen_linears
+            if not flatten_parameters:
+                expected_reshard_hook_count *= 2  # weight and bias per linear
+            assert (
+                reshard_hook_count == expected_reshard_hook_count
+            ), f"Expected {expected_reshard_hook_count} but got {reshard_hook_count}"
+            assert losses[0].eq(losses[1]).all().item(), f"Expected {losses[1]} but got {losses[0]}"
+            reshard_hook_count = 0
