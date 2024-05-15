@@ -79,7 +79,7 @@ class FlatParameter(nn.Parameter):
         self._param_infos: List[Tuple[str, nn.Module, str]] = []
         self._shared_param_infos: List[Tuple[str, str, nn.Module, str, nn.Module, str]] = []
 
-    def get_param_views(self, require_backward_grad_sync, external_data: Optional[Tensor] = None) -> Iterator[Tensor]:
+    def get_param_views(self, external_data: Optional[Tensor] = None) -> Iterator[Tensor]:
         """Return a generator of views that map to the original parameters."""
         # Note, self.data could be sharded, so its numel is <= to the sum.
         assert self.data.numel() <= sum(
