@@ -388,7 +388,7 @@ class FlattenParamsWrapper(nn.Module):
         if self.fp32_grads[param_index] is None:
             self.fp32_grads[param_index] = grad.to(torch.float32)
         else:
-            self.fp32_grads[param_index].add_(grad.data)
+            self.fp32_grads[param_index].add_(grad)
         return grad
 
     def _unflatten_params_as_views(self) -> None:
