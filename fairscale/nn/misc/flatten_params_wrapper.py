@@ -380,11 +380,7 @@ class FlattenParamsWrapper(nn.Module):
             delattr(self, n)
         self.flat_params = []
 
-<<<<<<< HEAD
     # The post backward hook used to accumulate fp32 gradients
-=======
-
->>>>>>> cbc3b89 (honor optimize_backward_concat flag)
     def _grad_accumulation_hook(
         self,
         grad,
@@ -393,11 +389,7 @@ class FlattenParamsWrapper(nn.Module):
         if self.fp32_grads[param_index] is None:
             self.fp32_grads[param_index] = grad.to(torch.float32)
         else:
-<<<<<<< HEAD
             self.fp32_grads[param_index].add_(grad)
-=======
-            self.fp32_grads[param_index].add_(grad.data)
->>>>>>> cbc3b89 (honor optimize_backward_concat flag)
         return grad
 
     def _unflatten_params_as_views(self) -> None:
@@ -406,15 +398,12 @@ class FlattenParamsWrapper(nn.Module):
         """
         assert self.is_flattened
         if self.optimize_backward_concat:
-<<<<<<< HEAD
             # If self._require_backward_grad_sync == True (e.g. last microbatch),
             # we use the original flat_params as autograd leaf nodes and backward
             # pass should propagate all the way back to FSDP module and thus invoke
             # FSDP post_backward() hook and concat() op
             # Otherwise we stop the backward propagation before FSDP module to avoid
             # invoking concat() and store the accumulated fp32 grads
-=======
->>>>>>> cbc3b89 (honor optimize_backward_concat flag)
             if self._require_backward_grad_sync:
                 ps = self.get_param_views()
             else:
@@ -427,17 +416,12 @@ class FlattenParamsWrapper(nn.Module):
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(p, '_fsdp_weight', True)
             setattr(m, n, p)  # This will set as plain attr
-<<<<<<< HEAD
             # The param_index of p used to accumulate the correspnding
             # gradients in self.fp32_grads
             param_index = len(param_views)
             if self.optimize_backward_concat:
                 # Register post backward hook to accumulate the gradients
                 # in self.fp32_grads
-=======
-            param_index = len(param_views)
-            if self.optimize_backward_concat:
->>>>>>> cbc3b89 (honor optimize_backward_concat flag)
                 p.register_hook(
                     functools.partial(
                         self._grad_accumulation_hook,
@@ -447,10 +431,7 @@ class FlattenParamsWrapper(nn.Module):
             param_views.append(p)
 
         if self.optimize_backward_concat and len(self.fp32_grads) == 0:
-<<<<<<< HEAD
             # Allocate self.fp32_grads at the beginning of each data batch's forward()
-=======
->>>>>>> cbc3b89 (honor optimize_backward_concat flag)
             self.fp32_grads = [None] * len(param_views)
 
         # Save param views for easy access if anyone still wants to access
