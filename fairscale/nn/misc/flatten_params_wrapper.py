@@ -397,6 +397,12 @@ class FlattenParamsWrapper(nn.Module):
         """
         assert self.is_flattened
         if self.optimize_backward_concat:
+            # If self._require_backward_grad_sync == True (e.g. last microbatch),
+            # we use the original flat_params as autograd leaf nodes and backward
+            # pass should propagate all the way back to FSDP module and thus invoke
+            # FSDP post_backward() hook and concat() op
+            # Otherwise we stop the backward propagation before FSDP module to avoid
+            # invoking concat() and store the accumulated fp32 grads
             if self._require_backward_grad_sync:
                 ps = self.get_param_views()
             else:
