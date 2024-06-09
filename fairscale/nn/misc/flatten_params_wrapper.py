@@ -431,7 +431,7 @@ class FlattenParamsWrapper(nn.Module):
 
         if self.optimize_backward_concat and self.fp32_grads is None:
             total_numels = sum([torch.numel(p) for p in param_views])
-            self.fp32_grads = torch.zeros(total_numels, dtype=torch.float32).cuda()
+            self.fp32_grads = torch.zeros(total_numels, dtype=torch.float32, device=torch.cuda.current_device())
 
 
         # Save param views for easy access if anyone still wants to access
