@@ -1765,12 +1765,6 @@ class FullyShardedDataParallel(nn.Module):
 
         if self.fp32_reduce_scatter:
             if self.optimize_backward_concat:
-                # Flatten and concat the accumulated fp32 grads
-                # and assign them to param.unsharded_main_grad
-                # for idx in range(len(self._fsdp_wrapped_module.fp32_grads)):
-                #     self._fsdp_wrapped_module.fp32_grads[idx] = torch.flatten(self._fsdp_wrapped_module.fp32_grads[idx])
-                # param.unsharded_main_grad = torch.cat([grad for grad in self._fsdp_wrapped_module.fp32_grads])
-                
                 param.unsharded_main_grad = self._fsdp_wrapped_module.fp32_grads
                 # Clean up accumulated grads between data batches
                 self._fsdp_wrapped_module.fp32_grads = None

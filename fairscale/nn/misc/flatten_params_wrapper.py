@@ -386,11 +386,7 @@ class FlattenParamsWrapper(nn.Module):
         start,
         end,
     ):
-        # if self.fp32_grads[param_index] is None:
-        #     self.fp32_grads[param_index] = grad.to(torch.float32)
-        # else:
-        #     self.fp32_grads[param_index].add_(grad)
-        #print(f"CHRISLOG:{start=}, {end=}")
+        assert self.fp32_grads is not None
         self.fp32_grads[start:end].add_(grad.flatten())
         return grad
 
@@ -415,32 +411,24 @@ class FlattenParamsWrapper(nn.Module):
             ps = self.get_param_views()
 
         param_views = []
-        start = 0
-        end = 0
+        param_start = 0
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(p, '_fsdp_weight', True)
             setattr(m, n, p)  # This will set as plain attr
             if self.optimize_backward_concat:
-                # The param_index of parameter p used to accumulate the correspnding
-                # gradients in self.fp32_grads
-                param_index = len(param_views)
                 # Register post backward hook to accumulate the gradients
                 # in self.fp32_grads
+                param_end = param_start + torch.numel(p)
                 p.register_hook(
                     functools.partial(
                         self._grad_accumulation_hook,
-                        #param_index=param_index
-                        start=start, 
-                        end=start + torch.numel(p),
+                        start=param_start, 
+                        end=param_end,
                     )
                 )
-                #print(f"CHRISLOG: {start=}, {start + torch.numel(p) =}")
-                start = start + torch.numel(p)
+                param_start = param_end
             param_views.append(p)
 
-        # if self.optimize_backward_concat and len(self.fp32_grads) == 0:
-        #     # Allocate self.fp32_grads at the beginning of each data batch's forward()
-        #     self.fp32_grads = [None] * len(param_views)
         if self.optimize_backward_concat and self.fp32_grads is None:
             total_numels = sum([torch.numel(p) for p in param_views])
             self.fp32_grads = torch.zeros(total_numels, dtype=torch.float32).cuda()
