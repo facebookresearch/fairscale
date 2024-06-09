@@ -382,10 +382,14 @@ class FlattenParamsWrapper(nn.Module):
     def _grad_accumulation_hook(
         self,
         grad,
-        #param_index,
         start,
         end,
     ):
+        """
+            start: int, the starting index(inclusive) of the grad of this parameter in self.fp32_grads
+            end: int, the ending index(exclusive) of the grad of this parameter in self.fp32_grads
+        """
+
         assert self.fp32_grads is not None
         self.fp32_grads[start:end].add_(grad.flatten())
         return grad
@@ -430,6 +434,7 @@ class FlattenParamsWrapper(nn.Module):
             param_views.append(p)
 
         if self.optimize_backward_concat and self.fp32_grads is None:
+            # Allocate GPU memory for flattened fp32 grad accumulation 
             total_numels = sum([torch.numel(p) for p in param_views])
             self.fp32_grads = torch.zeros(total_numels, dtype=torch.float32, device=torch.cuda.current_device())
 
