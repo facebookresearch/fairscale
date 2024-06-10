@@ -153,7 +153,6 @@ class FlattenParamsWrapper(nn.Module):
             If True, only let backward pass propagate to the corresponding FSDP.params, which will
             invoke the FSDP._post_backward_hook() and concat() op, when _require_backward_grad_sync
             is True (e.g. last microbatch)
-            NOTE: this likely will incur more GPU memory usage
     """
 
     def __init__(
@@ -174,7 +173,7 @@ class FlattenParamsWrapper(nn.Module):
         self._require_backward_grad_sync = True
         # If optimize_backward_concat == True, used to accumulate the
         # fp32 gradients for the flattened parameters
-        self.fp32_grads = []
+        self.fp32_flat_grad = None
 
         # Handle param_list being None.
         if param_list is None:
@@ -382,12 +381,16 @@ class FlattenParamsWrapper(nn.Module):
     def _grad_accumulation_hook(
         self,
         grad,
-        param_index,
+        start,
+        end,
     ):
-        if self.fp32_grads[param_index] is None:
-            self.fp32_grads[param_index] = grad.to(torch.float32)
-        else:
-            self.fp32_grads[param_index].add_(grad)
+        """
+            start: int, the starting index(inclusive) of the grad of this parameter in self.fp32_flat_grad
+            end: int, the ending index(exclusive) of the grad of this parameter in self.fp32_flat_grad
+        """
+
+        assert self.fp32_flat_grad is not None
+        self.fp32_flat_grad[start:end].add_(grad.flatten())
         return grad
 
     def _unflatten_params_as_views(self) -> None:
@@ -411,26 +414,29 @@ class FlattenParamsWrapper(nn.Module):
             ps = self.get_param_views()
 
         param_views = []
+        param_start = 0
         for (_, m, n), p in zip(self._param_infos, ps):
             setattr(p, '_fsdp_weight', True)
             setattr(m, n, p)  # This will set as plain attr
             if self.optimize_backward_concat:
-                # The param_index of parameter p used to accumulate the correspnding
-                # gradients in self.fp32_grads
-                param_index = len(param_views)
                 # Register post backward hook to accumulate the gradients
-                # in self.fp32_grads
+                # in self.fp32_flat_grad
+                param_end = param_start + torch.numel(p)
                 p.register_hook(
                     functools.partial(
                         self._grad_accumulation_hook,
-                        param_index=param_index
+                        start=param_start, 
+                        end=param_end,
                     )
                 )
+                param_start = param_end
             param_views.append(p)
 
-        if self.optimize_backward_concat and len(self.fp32_grads) == 0:
-            # Allocate self.fp32_grads at the beginning of each data batch's forward()
-            self.fp32_grads = [None] * len(param_views)
+        if self.optimize_backward_concat and self.fp32_flat_grad is None:
+            # Allocate GPU memory for flattened fp32 grad accumulation 
+            total_numels = sum([torch.numel(p) for p in param_views])
+            self.fp32_flat_grad = torch.zeros(total_numels, dtype=torch.float32, device=torch.cuda.current_device())
+
 
         # Save param views for easy access if anyone still wants to access
         # parameters of the module.
