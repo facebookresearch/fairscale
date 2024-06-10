@@ -153,7 +153,6 @@ class FlattenParamsWrapper(nn.Module):
             If True, only let backward pass propagate to the corresponding FSDP.params, which will
             invoke the FSDP._post_backward_hook() and concat() op, when _require_backward_grad_sync
             is True (e.g. last microbatch)
-            NOTE: this likely will incur more GPU memory usage
     """
 
     def __init__(
