@@ -31,7 +31,7 @@ pynvml == 8.0.4
 numpy == 1.22.0
 
 # For layerwise gradient scaler
-scikit-learn == 1.1.3
+scikit-learn == 1.5.0
 
 # For weigit. These are actually user requirements, not developer requirements.
 # However, due to the experimental nature of weigit, we don't expose to the
