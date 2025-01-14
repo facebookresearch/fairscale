@@ -6,7 +6,7 @@
 #     function typing with mypy.
 #   - if you change versions below, please make sure it is in-sync with
 #     .pre-commit-config.yaml for pre-commit.
-black == 22.3.0
+black == 24.3.0
 flake8 == 4.0.1
 flake8-annotations == 2.7.0
 isort == 5.10.1
