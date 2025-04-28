@@ -1210,6 +1210,8 @@ class FullyShardedDataParallel(nn.Module):
         self._is_root: Optional[bool] = None
         self._streams: Dict[str, torch.cuda.Stream] = {}
         self._reducer: Optional[ReduceScatterBucketer] = None
+        self._forward_ordering: List[FullyShardedDataParallel] = []
+        self._backward_rebuild_ordering: List[FullyShardedDataParallel] = []
         for p in self.params:
             if hasattr(p, "_fp32_shard"):
                 del p._fp32_shard  # reset _init_param_attributes
@@ -1364,6 +1366,8 @@ class FullyShardedDataParallel(nn.Module):
                 m.no_broadcast_optim_state = m.no_broadcast_optim_state or (
                     (m.world_size == 1) and (m.world_size < self.world_size) and (m.process_group != self.process_group)
                 )
+                m._forward_ordering = self._forward_ordering
+                m._backward_rebuild_ordering = self._backward_rebuild_ordering
 
     def _setup_streams(self) -> None:
         """Create streams to overlap data transfer and computation."""
@@ -1439,6 +1443,13 @@ class FullyShardedDataParallel(nn.Module):
 
         outputs = self.module(*args, **kwargs)
 
+        # In the first forward pass, track the order that modules are computed.
+        # In the following passes, we assume that the order remains the same to
+        # to kick off the all-gather for the next module in the list, in case we
+        # are waiting for the computation to finish.
+        if self not in self._forward_ordering:
+            self._forward_ordering.append(self)
+
         if self.reshard_after_forward:
             self._free_full_params()
             if self.mixed_precision or self.move_params_to_cpu:
@@ -1493,6 +1504,7 @@ class FullyShardedDataParallel(nn.Module):
             # that final backward callback is attached to the outer most
             # backward graph task and called after all the backward
             # calls are completed.
+
             if self._is_root:
                 self._queue_wait_for_post_backward()
 
@@ -1512,6 +1524,13 @@ class FullyShardedDataParallel(nn.Module):
             # overhead.
             if self.reshard_after_forward:
                 self._rebuild_full_params()
+
+                # Similar to _forward_ordering, in the first backward pass we track the order
+                # that weights were gathered for modules in the backward pass. Then, we use
+                # this order in future passes to kick off the all-gather for the next module
+                # in case we are waiting for the computation of the current module to finish.
+                if self not in self._backward_rebuild_ordering:
+                    self._backward_rebuild_ordering.append(self)
             else:
                 self._use_full_params()
 
@@ -1907,7 +1926,9 @@ class FullyShardedDataParallel(nn.Module):
                 self._output_pre_backward_hook_registered.clear()
 
     @torch.no_grad()
-    def _rebuild_full_params(self, force_full_precision: bool = False) -> Optional[List[Tuple[torch.Tensor, bool]]]:
+    def _rebuild_full_params(
+        self, force_full_precision: bool = False, wait_for_all_gather: bool = True
+    ) -> Optional[List[Tuple[torch.Tensor, bool]]]:
         """
         Gather all shards of params.
 
@@ -1969,6 +1990,9 @@ class FullyShardedDataParallel(nn.Module):
 
         # Early exit if we already have full params and don't need full precision.
         if self.has_full_params and not force_full_precision:
+            if not wait_for_all_gather:
+                return None
+            torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
             for p in self.params:
                 update_p_data()
             return output_tensors
@@ -2044,7 +2068,8 @@ class FullyShardedDataParallel(nn.Module):
 
                     if self.move_params_to_cpu and (self.params[0].dtype == self.compute_dtype):
                         self._free_fp16_param_shard([p])
-
+        if not wait_for_all_gather:
+            return None
         torch.cuda.current_stream().wait_stream(self._streams["all_gather"])
         return output_tensors
 
@@ -2099,6 +2124,9 @@ class FullyShardedDataParallel(nn.Module):
         self.has_full_params = False
         current_stream = torch.cuda.current_stream()
         for p in params:
+            # Shared params are not owned by this FSDP instance.
+            if hasattr(p, "_is_shared") and p._is_shared:
+                continue
             if not p._is_sharded:  # e.g., world_size == 1
                 if self.mixed_precision or self.move_params_to_cpu:
                     self._free_fp16_param_shard([p])
@@ -2113,6 +2141,42 @@ class FullyShardedDataParallel(nn.Module):
             # Storage object and unshard it in-place. For now, just resize
             # the Storage to 0 to save memory.
             free_storage_(p._full_param_padded)
+
+        # When we are memory bound (which is the case here as we are freeing up
+        # params), we are not able to let the CPU run completely free because
+        # it will end up scheduling GPU operations required to compute all
+        # future modules. This causes significant increases in GPU reserved
+        # memory and potential thrashing.
+        # So instead, we simply schedule the all-gather for the next module
+        # to be executed and wait for the computations of the current module
+        # to finish before moving forward.
+        self._schedule_next_all_gather_and_synchronize()
+
+    @torch.no_grad()
+    def _schedule_next_all_gather_and_synchronize(self) -> None:
+        self.assert_state([TrainingState.FORWARD, TrainingState.BACKWARD_POST])
+        ordering = self._forward_ordering
+        if self.training_state == TrainingState.BACKWARD_POST:
+            ordering = self._backward_rebuild_ordering
+        # Not all modules require rebuilding in backward pass, so this check is required.
+        if self in ordering:
+            next_idx = ordering.index(self) + 1
+            if next_idx < len(ordering):
+                next_module = ordering[next_idx]
+                # _pre_backward_hook_has_run prevents us from kicking off all-gather on a forward pass happening due to activation
+                # checkpointing. In these scenarios, forward only runs up until the module that already ran their backward hook.
+                # In addition, if the module to be scheduled has a shared param, there is a potential race condition where params for
+                # the current module are freed and all gather for the next module is happening. Similarly, modules with ssd_offload
+                # are not supported because ssd_offload happens before every all-gather call. So we just skip such modules.
+                if (
+                    not next_module._pre_backward_hook_has_run
+                    and not next_module._has_shared_params
+                    and not next_module.ssd_offload
+                ):
+                    # Kick-off all gather for the next module without waiting.
+                    next_module._rebuild_full_params(wait_for_all_gather=False)
+        # Wait for computation kernels to finish running.
+        torch.cuda.current_stream().synchronize()
 
     def local_metadata_dict(self) -> Dict[str, Any]:
         """

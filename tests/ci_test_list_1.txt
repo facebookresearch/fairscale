@@ -9,4 +9,5 @@ tests/nn/data_parallel/test_fsdp_input.py
 tests/nn/data_parallel/test_fsdp_optimizer_utils.py
 tests/nn/data_parallel/test_fsdp.py
 tests/nn/data_parallel/test_fsdp_with_checkpoint_wrapper.py
+tests/nn/data_parallel/test_fsdp_prefetch_order.py
 tests/optim/test_layerwise_gradient_scaler.py
