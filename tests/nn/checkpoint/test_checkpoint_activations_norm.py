@@ -70,14 +70,14 @@ def test_norm(device, norm_type, mixed_precision):
     in_data.requires_grad = True
     for model in (m_ref, m_cpt):
         optim = SGD(model.parameters(), lr=0.1)
-        if device == "cpu" and mixed_precision != "fp32":
-            # Got: RuntimeError: "batch_norm"/"layer_norm" not implemented for 'Half'.
-            with pytest.raises(RuntimeError):
-                out = model(in_data)
-            return
-        else:
-            # Everything else work.
-            out = model(in_data)
+        # if device == "cpu" and mixed_precision != "fp32":
+        #     # Got: RuntimeError: "batch_norm"/"layer_norm" not implemented for 'Half'.
+        #     with pytest.raises(RuntimeError):
+        #         out = model(in_data)
+        #     return
+        # else:
+        # Everything else work.
+        out = model(in_data)
         out.sum().backward()
         optim.step()
 

@@ -129,8 +129,8 @@ class BranchedNetwork(torch.nn.Module):
         self.net = torch.nn.ModuleList([Branch(features) for _ in range(10)])
 
     def forward(self, x):
-        for module in self.net:
-            x = module(x)
+        for i in range(len(self.net)):
+            x = self.net[i](x)
         return x
 
 

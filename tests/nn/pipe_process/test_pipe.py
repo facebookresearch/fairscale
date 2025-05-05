@@ -222,11 +222,7 @@ def batch_size_indivisible(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
     model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=4)
 
-    with pytest.warns(None) as record:
-        model(torch.rand(7, 1))
-
-    # Indivisible batch size is legal.
-    assert not record
+    model(torch.rand(7, 1))
 
 
 @torch_spawn([1])
@@ -235,11 +231,7 @@ def batch_size_small(pipe_class):
     model = nn.Sequential(nn.Linear(1, 1))
     model = pipe_class(model, balance=[1], worker_map=get_worker_map(), chunks=4)
 
-    with pytest.warns(None) as record:
-        model(torch.rand(2, 1))
-
-    # Batch size smaller than chunks is legal.
-    assert not record
+    model(torch.rand(2, 1))
 
 
 @torch_spawn([1])

@@ -7,9 +7,16 @@
 from pathlib import Path
 import shutil
 
+try:
+    import pygit2
+except ImportError:
+    pygit2 = None
+
 import pytest
 
 from fairscale.experimental.wgit.pygit import PyGit
+
+pytestmark = pytest.mark.skipif(pygit2 is None, reason="pygit2 is not installed")
 
 
 @pytest.fixture
