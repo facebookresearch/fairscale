@@ -170,7 +170,7 @@ def test_state_checkpointing():
 
         # Load back the checkpoint.
         model, optim = make_model_and_optim()  # They both need to start afresh.
-        ckpt = torch.load(temp_file_name)
+        ckpt = torch.load(temp_file_name, weights_only=False)
         model.load_state_dict(ckpt["model"])
         optim.load_state_dict(ckpt["optim"])
 
@@ -377,7 +377,7 @@ def test_gradient_value():
     optim.step()
     assert np.allclose(model.weight.grad.numpy(), [[0.0, 2.0], [0.0, 2.0]]), model.weight.grad
     optim.zero_grad()
-    assert np.allclose(model.weight.grad.numpy(), [[0.0, 0.0], [0.0, 0.0]]), model.weight.grad
+    assert not model.weight.grad
 
 
 @pytest.mark.parametrize(

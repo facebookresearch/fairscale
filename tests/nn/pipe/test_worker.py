@@ -37,13 +37,19 @@ class fake_device:
     index = None
 
 
-def test_join_running_workers():
+@pytest.fixture
+def count_lock():
+    return threading.Lock()
+
+
+def test_join_running_workers(count_lock):
     count = 0
 
     def counter():
         nonlocal count
+        with count_lock:
+            count += 1
         time.sleep(0.1)
-        count += 1
         return Batch((), 0)
 
     with spawn_workers([fake_device() for _ in range(10)]) as (in_queues, out_queues):
@@ -60,7 +66,7 @@ def test_join_running_workers():
     assert count == 10
 
 
-def test_join_running_workers_with_exception():
+def test_join_running_workers_with_exception(count_lock):
     class ExpectedException(Exception):
         pass
 
@@ -69,7 +75,8 @@ def test_join_running_workers_with_exception():
     def counter():
         nonlocal count
         time.sleep(0.1)
-        count += 1
+        with count_lock:
+            count += 1
         return Batch((), 0)
 
     with pytest.raises(ExpectedException):

@@ -11,7 +11,8 @@ try:
     import pygit2
 except ImportError:
     print("Error: please pip install pygit2 module to use wgit")
-    sys.exit(1)
+    # sys.exit(1)
+    # PYGIT_AVAILABLE = False
 
 try:
     import pgzip

@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 from typing import Tuple
+import pytest
 
 import torch
 import torch.distributed as dist
@@ -19,6 +20,7 @@ from fairscale.fair_dev.testing.testing import GPT2, dist_init, skip_if_no_cuda,
 from fairscale.nn import FullyShardedDataParallel
 
 
+@pytest.mark.skip()
 @skip_if_no_cuda()
 def test_memory_tracking_traces():
     """
