@@ -52,13 +52,15 @@ def flatten_optim_state_dict(sd: Dict) -> Dict:
 
     # Now make a new param_groups copy and update it.
     new_sd_pg = copy.deepcopy(sd["param_groups"])
+    local_param_ids = sorted(
+            {lid for lid in param_id_map.values() if lid is not None}
+        )
     # add pointers from the `params` dict.
     for pg_id, _ in enumerate(sd["param_groups"]):
         # The values() list may look like [0,0,None,None,2,2]. We use
         # groupby to remove the duplicates and then count the length of
         # resulting iter.
-        num_local_params = sum(1 for _ in groupby(param_id_map.values()))
-        new_sd_pg[pg_id]["params"] = list(range(num_local_params))
+        new_sd_pg[pg_id]["params"] = local_param_ids
 
     # update the original sd so that we don't lose extra keys, like loss_scale.
     sd["state"] = new_state
