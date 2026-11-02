@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from contextlib import contextmanager
+import copy
 from dataclasses import dataclass
 import functools
 import threading
@@ -30,6 +31,13 @@ class ThreadLocalCheckpointingState(threading.local):
 
 
 thread_local = ThreadLocalCheckpointingState()
+
+
+class _CheckpointWeakRef(weakref.ref):
+    def __deepcopy__(self, memo: Dict[int, Any]) -> "_CheckpointWeakRef":
+        # A copied module must checkpoint its own forward, not the original's.
+        # deepcopy's memo already contains the new module during module copying.
+        return _CheckpointWeakRef(copy.deepcopy(self(), memo))
 
 
 @contextmanager
@@ -156,7 +164,7 @@ def checkpoint_wrapper(
     # We prefer this over a class wrapper since the class wrapper would have to
     # proxy a lot of fields and methods.
     module.forward = functools.partial(  # type: ignore
-        _checkpointed_forward, type(module).forward, weakref.ref(module), offload_to_cpu
+        _checkpointed_forward, type(module).forward, _CheckpointWeakRef(module), offload_to_cpu
     )
     return module
 

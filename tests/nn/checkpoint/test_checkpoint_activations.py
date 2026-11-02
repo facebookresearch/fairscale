@@ -5,6 +5,9 @@
 
 """Test fairscale.nn.misc.checkpoint_activations API."""
 
+import copy
+import weakref
+
 import pytest
 import torch
 import torch.nn as nn
@@ -15,6 +18,89 @@ from fairscale.internal import torch_version
 from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper, disable_checkpointing
 from fairscale.nn.misc import FlattenParamsWrapper
 from fairscale.nn.misc import checkpoint_wrapper as deprecated_checkpoint_wrapper
+
+
+@pytest.mark.parametrize("offload_to_cpu", [False, True])
+def test_checkpoint_deepcopy(offload_to_cpu):
+    original = checkpoint_wrapper(nn.Linear(2, 1), offload_to_cpu=offload_to_cpu)
+    copied = copy.deepcopy(original)
+    reference = nn.Linear(2, 1)
+    with torch.no_grad():
+        copied.weight.fill_(3)
+        copied.bias.fill_(2)
+    reference.load_state_dict(copied.state_dict())
+    original_state = copy.deepcopy(original.state_dict())
+
+    inputs = torch.tensor([[1.0, 2.0]], requires_grad=True)
+    reference_inputs = inputs.detach().clone().requires_grad_()
+    output = copied(inputs)
+    reference_output = reference(reference_inputs)
+    torch.testing.assert_allclose(output, reference_output)
+    output.square().sum().backward()
+    reference_output.square().sum().backward()
+    torch.testing.assert_allclose(inputs.grad, reference_inputs.grad)
+    for parameter, reference_parameter in zip(copied.parameters(), reference.parameters()):
+        torch.testing.assert_allclose(parameter.grad, reference_parameter.grad)
+    assert all(parameter.grad is None for parameter in original.parameters())
+
+    torch.optim.SGD(copied.parameters(), lr=0.01).step()
+    torch.optim.SGD(reference.parameters(), lr=0.01).step()
+    torch.testing.assert_allclose(copied(inputs), reference(inputs))
+    for name, parameter in original.state_dict().items():
+        torch.testing.assert_allclose(parameter, original_state[name])
+
+
+@pytest.mark.parametrize("offload_to_cpu", [False, True])
+def test_checkpoint_deepcopy_lifetime(offload_to_cpu):
+    original = checkpoint_wrapper(nn.Linear(1, 1, bias=False), offload_to_cpu=offload_to_cpu)
+    with torch.no_grad():
+        original.weight.fill_(2)
+    original_ref = weakref.ref(original)
+    copied = copy.deepcopy(original)
+    del original
+    assert original_ref() is None
+    output = copied(torch.tensor([3.0], requires_grad=True))
+    torch.testing.assert_allclose(output, torch.tensor([6.0]))
+    output.sum().backward()
+    torch.testing.assert_allclose(copied.weight.grad, torch.tensor([[3.0]]))
+
+    copied_ref = weakref.ref(copied)
+    forward = copied.forward
+    del copied, output
+    assert copied_ref() is None
+    # Keeping the forward callable alive must not keep its module alive.
+    assert forward is not None
+
+
+def test_checkpoint_deepcopy_shared_module():
+    shared = checkpoint_wrapper(nn.Linear(1, 1, bias=False))
+    original = nn.Sequential(shared, shared)
+    copied = copy.deepcopy(original)
+    assert copied[0] is copied[1]
+    assert copied[0] is not shared
+    with torch.no_grad():
+        shared.weight.fill_(2)
+        copied[0].weight.fill_(5)
+    output = copied(torch.tensor([3.0], requires_grad=True))
+    torch.testing.assert_allclose(output, torch.tensor([75.0]))
+    output.sum().backward()
+    torch.testing.assert_allclose(copied[0].weight.grad, torch.tensor([[30.0]]))
+    assert shared.weight.grad is None
+
+
+def test_checkpoint_swa_averaged_model():
+    model = checkpoint_wrapper(nn.Linear(1, 1, bias=False))
+    averaged = torch.optim.swa_utils.AveragedModel(model, device=torch.device("cpu"))
+    with torch.no_grad():
+        model.weight.fill_(4)
+    averaged.update_parameters(model)
+    with torch.no_grad():
+        model.weight.fill_(8)
+    averaged.update_parameters(model)
+    # SWA has averaged the two weights to 6; inference must use those weights.
+    torch.testing.assert_allclose(averaged.module.weight, torch.tensor([[6.0]]))
+    with torch.no_grad():
+        torch.testing.assert_allclose(averaged(torch.tensor([3.0])), torch.tensor([18.0]))
 
 
 def get_cuda_mem_allocated():
