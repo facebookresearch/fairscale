@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.11] - TBD
 
+- activation checkpointing: preserve copied module weights and gradients after `deepcopy`
+
 - cleaned up some old issues and fixed a few bug in FSDP
 - removing SSD offload to simplify the FSDP code
 
